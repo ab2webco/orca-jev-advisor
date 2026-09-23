@@ -4,3 +4,8 @@ node_modules/
 
 # Measurement data: calibration knowledge, kept out of the published repo.
 .private/
+.screenshots/
+# Left out deliberately: Orca clones this repo onto every user's machine and
+# never installs anything, so a lockfile for a dev-only screenshot tool is
+# weight every user carries for a tool no user runs.
+package-lock.json

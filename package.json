@@ -8,6 +8,12 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "test": "node --test --experimental-strip-types",
+    "shots": "node scripts/screenshot-panels.mjs",
+    "check": "npm run test && npm run shots",
     "self-check": "node src/supervisor.ts --self-check"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
   }
 }
