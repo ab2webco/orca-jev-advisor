@@ -32,6 +32,7 @@
  */
 
 import { execFile } from 'node:child_process'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -48,6 +49,32 @@ import { getBoard, getCatalog, getConfig, getPolicies, setBoard } from '../../sr
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
+import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
+import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
+
+// Every sidecar below (write-secret-mirror.mjs, install-claude-integration.mjs,
+// read-measurements.mjs) is spawned with an explicit `--permission` sandbox
+// instead of relying on whatever this worker process itself happens to run
+// under: measured live, a sidecar spawned with no explicit grants of its own
+// inherits a permission model scoped to PLUGIN_ROOT only, and every one of
+// these sidecars touches paths outside it (the cache dir, the config dir,
+// `~/.claude`, Orca's per-account Claude config roots) -- so without this it
+// fails with "Access to this API has been restricted", not a clean error, a
+// silent-looking one instead ({ok:false, reason:'exception', detail: the
+// permission message}). Being explicit here is also just correct least
+// privilege: each sidecar gets exactly the directories its own docstring
+// says it touches, on purpose, rather than by accident of inheritance.
+const PLATFORM = normalizePlatform(process.platform)
+const HOME_PATHS = { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA }
+const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
+const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
+// Claude Code's own config roots the install sidecar writes into -- see
+// src/core/orca_accounts.ts. `claudeAccountsDir` is one parent directory
+// covering every Orca-managed account, so granting it once is enough; the
+// sidecar itself discovers which account subdirectories actually exist.
+const CLAUDE_HOME_DIR = homeConfigTarget(PLATFORM, HOME_PATHS.home).configDir
+const ORCA_USER_DATA_DIR = resolveOrcaUserDataDir(PLATFORM, { home: HOME_PATHS.home, appDataDir: HOME_PATHS.appDataDir, xdgConfigHome: process.env.XDG_CONFIG_HOME, orcaUserDataPath: process.env[ORCA_USER_DATA_ENV] }).path
+const CLAUDE_ACCOUNTS_DIR = claudeAccountsDir(PLATFORM, ORCA_USER_DATA_DIR)
 
 const DEFAULT_CONTEXT = 'Worktree de Orca gestionado por orca-jev-advisor.'
 
@@ -85,10 +112,14 @@ function sidecarEnv (extra = {}) {
   return env
 }
 
+const SECRET_MIRROR_READ_ONLY_MODES = new Set(['read', 'locale-read', 'stat'])
+
 function runSecretMirrorScript (mode, stdin, extraArgs = []) {
   return new Promise((resolve) => {
     try {
-      const child = execFile(process.execPath, [SECRET_MIRROR_SCRIPT, mode, ...extraArgs], {
+      const permissionArgs = ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CONFIG_DIR}`]
+      if (!SECRET_MIRROR_READ_ONLY_MODES.has(mode)) permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`)
+      const child = execFile(process.execPath, [...permissionArgs, SECRET_MIRROR_SCRIPT, mode, ...extraArgs], {
         timeout: SECRET_MIRROR_TIMEOUT_MS,
         maxBuffer: 64 * 1024,
         // The worker may be Electron's helper binary acting as `process.execPath`;
@@ -102,7 +133,7 @@ function runSecretMirrorScript (mode, stdin, extraArgs = []) {
           result = null
         }
         if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') {
-          resolve({ ok: false, reason: 'sin-json', detail: String(error?.message ?? 'el script no devolvió JSON').slice(0, 200) })
+          resolve({ ok: false, reason: 'no-json', detail: String(error?.message ?? "the script didn't return JSON").slice(0, 200) })
           return
         }
         resolve(result)
@@ -113,7 +144,7 @@ function runSecretMirrorScript (mode, stdin, extraArgs = []) {
       // The permission sandbox refuses `execFile` in the act, not through the
       // callback, when process:spawn is missing -- same shape orca-wa-inbox
       // already had to guard against.
-      resolve({ ok: false, reason: 'no-se-pudo-lanzar', detail: String(error?.message ?? error).slice(0, 200) })
+      resolve({ ok: false, reason: 'launch-failed', detail: String(error?.message ?? error).slice(0, 200) })
     }
   })
 }
@@ -124,7 +155,7 @@ async function mirrorSecretToEnvFile (orca, key) {
   const mode = key === null ? 'clear' : 'save'
   const result = await runSecretMirrorScript(mode, mode === 'save' ? key : undefined)
   if (!result.ok) {
-    orca.log(`secret mirror (${mode}) falló: ${String(result.reason ?? 'desconocido')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+    orca.log(`secret mirror (${mode}) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }
   return result
 }
@@ -150,7 +181,7 @@ async function statSecretMirror () {
 async function saveLocale (orca, locale) {
   const result = await runSecretMirrorScript('locale-save', undefined, [locale])
   if (!result.ok) {
-    orca.log(`locale mirror (save) falló: ${String(result.reason ?? 'desconocido')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+    orca.log(`locale mirror (save) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }
   return result
 }
@@ -183,7 +214,17 @@ const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 function runClaudeIntegrationScript (mode) {
   return new Promise((resolve) => {
     try {
-      execFile(process.execPath, [CLAUDE_INTEGRATION_SCRIPT, mode, PLUGIN_ROOT], {
+      const permissionArgs = [
+        '--permission',
+        `--allow-fs-read=${PLUGIN_ROOT}`,
+        `--allow-fs-read=${CONFIG_DIR}`,
+        `--allow-fs-read=${CLAUDE_HOME_DIR}`,
+        `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
+      ]
+      if (mode !== 'status') {
+        permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
+      }
+      execFile(process.execPath, [...permissionArgs, CLAUDE_INTEGRATION_SCRIPT, mode, PLUGIN_ROOT], {
         timeout: CLAUDE_INTEGRATION_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
         env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
@@ -195,13 +236,13 @@ function runClaudeIntegrationScript (mode) {
           result = null
         }
         if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') {
-          resolve({ ok: false, reason: 'sin-json', detail: String(error?.message ?? 'el script no devolvió JSON').slice(0, 200) })
+          resolve({ ok: false, reason: 'no-json', detail: String(error?.message ?? "the script didn't return JSON").slice(0, 200) })
           return
         }
         resolve(result)
       })
     } catch (error) {
-      resolve({ ok: false, reason: 'no-se-pudo-lanzar', detail: String(error?.message ?? error).slice(0, 200) })
+      resolve({ ok: false, reason: 'launch-failed', detail: String(error?.message ?? error).slice(0, 200) })
     }
   })
 }
@@ -209,7 +250,7 @@ function runClaudeIntegrationScript (mode) {
 async function installClaudeIntegration (orca) {
   const result = await runClaudeIntegrationScript('install')
   if (!result.ok) {
-    orca.log(`claude integration install falló: ${String(result.reason ?? 'desconocido')} -- ${String(result.detail ?? '').slice(0, 200)}`)
+    orca.log(`claude integration install failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 200)}`)
   } else if (result.modLinkWarning) {
     orca.log(`claude integration install: ${result.modLinkWarning}`)
   }
@@ -219,7 +260,7 @@ async function installClaudeIntegration (orca) {
 async function uninstallClaudeIntegration (orca) {
   const result = await runClaudeIntegrationScript('uninstall')
   if (!result.ok) {
-    orca.log(`claude integration uninstall falló: ${String(result.reason ?? 'desconocido')} -- ${String(result.detail ?? '').slice(0, 200)}`)
+    orca.log(`claude integration uninstall failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 200)}`)
   }
   return result
 }
@@ -246,7 +287,7 @@ const MEASUREMENTS_REFRESH_MS = 15 * 1000
 async function readMeasurementsSummary () {
   return new Promise((resolve) => {
     try {
-      execFile(process.execPath, [MEASUREMENTS_SCRIPT], {
+      execFile(process.execPath, ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CACHE_DIR}`, MEASUREMENTS_SCRIPT], {
         timeout: MEASUREMENTS_TIMEOUT_MS,
         maxBuffer: 4 * 1024 * 1024,
         env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
@@ -258,13 +299,13 @@ async function readMeasurementsSummary () {
           result = null
         }
         if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') {
-          resolve({ ok: false, reason: 'sin-json', detail: String(error?.message ?? 'el script no devolvió JSON').slice(0, 200) })
+          resolve({ ok: false, reason: 'no-json', detail: String(error?.message ?? "the script didn't return JSON").slice(0, 200) })
           return
         }
         resolve(result)
       })
     } catch (error) {
-      resolve({ ok: false, reason: 'no-se-pudo-lanzar', detail: String(error?.message ?? error).slice(0, 200) })
+      resolve({ ok: false, reason: 'launch-failed', detail: String(error?.message ?? error).slice(0, 200) })
     }
   })
 }
@@ -272,7 +313,7 @@ async function readMeasurementsSummary () {
 async function publishMeasurementsSummary (orca, storageHost) {
   const summary = await readMeasurementsSummary()
   if (!summary.ok) {
-    orca.log(`measurements summary falló: ${String(summary.reason ?? 'desconocido')} -- ${String(summary.detail ?? '').slice(0, 200)}`)
+    orca.log(`measurements summary failed: ${String(summary.reason ?? 'unknown')} -- ${String(summary.detail ?? '').slice(0, 200)}`)
   }
   await storageHost.set(MEASUREMENTS_STATUS_KEY, { ...summary, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`measurements summary publish failed: ${error.message}`))
@@ -400,34 +441,45 @@ async function attendSecretRequest (orca, storageHost, secretsHost) {
   const age = Date.now() - Date.parse(request.at)
   if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) return
 
+  // `reason` is a stable code, never prose: the config panel translates it
+  // through its own catalog rather than surfacing whatever language this
+  // worker happens to log in (see i18n.ts's module comment, and the config
+  // panel's own note on `waitForSecretResult`). `detail` stays a plain,
+  // English, best-effort diagnostic -- useful for `orca.log`, never shown to
+  // the user as the primary message.
   let ok = false
-  let error = null
+  let reason = null
+  let detail = null
   try {
     if (request.intent === 'save') {
       if (typeof request.value !== 'string' || request.value.trim().length === 0) {
-        throw new Error('La clave no puede estar vacia.')
+        reason = 'empty-key'
+        detail = 'the key cannot be empty.'
+      } else {
+        const value = request.value.trim()
+        await secretsHost.set(SECRET_KEY_NAME, value)
+        ok = true
+        // Best-effort: the panel's save already succeeded against `secrets`,
+        // which is the source of truth. A mirror failure is logged, not
+        // reported -- it must never turn a successful save into a reported
+        // failure the user would try to "fix" by retyping the same key.
+        await mirrorSecretToEnvFile(orca, value)
       }
-      const value = request.value.trim()
-      await secretsHost.set(SECRET_KEY_NAME, value)
-      ok = true
-      // Best-effort: the panel's save already succeeded against `secrets`,
-      // which is the source of truth. A mirror failure is logged, not
-      // thrown -- it must never turn a successful save into a reported
-      // failure the user would try to "fix" by retyping the same key.
-      await mirrorSecretToEnvFile(orca, value)
     } else if (request.intent === 'clear') {
       await secretsHost.delete(SECRET_KEY_NAME)
       ok = true
       await mirrorSecretToEnvFile(orca, null)
     } else {
-      throw new Error(`Intento de secreto desconocido: ${String(request.intent).slice(0, 60)}`)
+      reason = 'unknown-intent'
+      detail = `unrecognized secret request intent: ${String(request.intent).slice(0, 60)}`
     }
   } catch (err) {
-    error = String(err?.message ?? err).slice(0, 300)
+    reason = 'exception'
+    detail = String(err?.message ?? err).slice(0, 300)
   }
 
   await storageHost.set(SECRET_RESULT_KEY, {
-    id: request.id, at: new Date().toISOString(), ok, error
+    id: request.id, at: new Date().toISOString(), ok, reason, detail
   }).catch((err) => orca.log(`secret result publish failed: ${err.message}`))
 
   await publishSecretStatus(orca, storageHost, secretsHost)
@@ -469,7 +521,7 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
   } else if (request.intent === 'uninstall') {
     result = await uninstallClaudeIntegration(orca)
   } else {
-    result = { ok: false, reason: 'intento-desconocido', detail: `Intento desconocido: ${String(request.intent).slice(0, 60)}` }
+    result = { ok: false, reason: 'unknown-intent', detail: `unrecognized claude integration request intent: ${String(request.intent).slice(0, 60)}` }
   }
 
   await storageHost.set(CLAUDE_INTEGRATION_RESULT_KEY, {
@@ -509,7 +561,7 @@ async function attendLocaleRequest (orca, storageHost) {
 
   const locale = request.locale === 'en' ? 'en' : request.locale === 'es' ? 'es' : null
   const result = locale === null
-    ? { ok: false, reason: 'locale-invalida', detail: `locale no reconocida: ${String(request.locale).slice(0, 20)}` }
+    ? { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${String(request.locale).slice(0, 20)}` }
     : await saveLocale(orca, locale)
 
   await storageHost.set(LOCALE_RESULT_KEY, {
@@ -526,7 +578,7 @@ async function attendLocaleRequest (orca, storageHost) {
 // ---------------------------------------------------------------------------
 
 function boardEntryKey (entry) {
-  return `${entry.worktreeId ?? '(sin-worktree)'}::${entry.paneKey}`
+  return `${entry.worktreeId ?? '(no-worktree)'}::${entry.paneKey}`
 }
 
 // `orca worktree list --json` resolves a worktreeId to its project and
@@ -559,7 +611,7 @@ async function resolveWorktreeProjects (orca) {
       }
     }
   } catch (error) {
-    orca.log(`orca worktree list --json falló: ${String(error?.message ?? error).slice(0, 160)}`)
+    orca.log(`orca worktree list --json failed: ${String(error?.message ?? error).slice(0, 160)}`)
   }
   worktreeListCache = map
   worktreeListCacheAt = now
@@ -622,7 +674,7 @@ async function cmdDecide (orca, storageHost, secretsHost, args) {
     ? args.actions.filter((a) => typeof a === 'string' && a.trim().length > 0)
     : []
   if (actions.length === 0) {
-    throw new Error('advisor.decide requiere { actions: string[] } con al menos una accion no vacia.')
+    throw new Error('advisor.decide requires { actions: string[] } with at least one non-empty action.')
   }
 
   const apiKey = await resolveApiKey(secretsHost)
@@ -706,27 +758,27 @@ async function pingJev (apiKey) {
 
 /** Checks the key past "is one configured": whether Jev actually accepts it
  *  right now, distinguishing a dead key (401/403) from no network at all --
- *  a key that "está configurada" and a key that works are different facts,
+ *  a key that "is configured" and a key that works are different facts,
  *  and only one of them is what "advisor.doctor" is for. */
 async function checkApiKey (secretsHost) {
   const apiKey = await resolveApiKey(secretsHost)
   if (apiKey === null) {
-    return { id: 'api-key', ok: false, detail: 'Sin clave: no hay TYPESAFE_API_KEY en secrets, entorno ni archivo de respaldo.' }
+    return { id: 'api-key', ok: false, detail: 'No key: TYPESAFE_API_KEY is not set in secrets, the environment, or the fallback file.' }
   }
   try {
     await pingJev(apiKey)
-    return { id: 'api-key', ok: true, detail: 'Clave valida: Jev respondio.' }
+    return { id: 'api-key', ok: true, detail: 'Key valid: Jev responded.' }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
-      return { id: 'api-key', ok: false, detail: `Clave rechazada (${error.status}).` }
+      return { id: 'api-key', ok: false, detail: `Key rejected (${error.status}).` }
     }
     if (error instanceof JevTimeoutError) {
-      return { id: 'api-key', ok: false, detail: 'Sin red: Jev no respondio dentro del presupuesto.' }
+      return { id: 'api-key', ok: false, detail: "No network: Jev didn't respond within the budget." }
     }
     if (error instanceof JevRequestError) {
-      return { id: 'api-key', ok: false, detail: `Jev respondio con un error${error.status !== null ? ` (${error.status})` : ''}: ${String(error.message).slice(0, 160)}` }
+      return { id: 'api-key', ok: false, detail: `Jev responded with an error${error.status !== null ? ` (${error.status})` : ''}: ${String(error.message).slice(0, 160)}` }
     }
-    return { id: 'api-key', ok: false, detail: `Sin red: ${String(error?.message ?? error).slice(0, 160)}` }
+    return { id: 'api-key', ok: false, detail: `No network: ${String(error?.message ?? error).slice(0, 160)}` }
   }
 }
 
@@ -740,31 +792,31 @@ async function checkSecretMirror (secretsHost) {
   const secretValue = await secretsHost.get(SECRET_KEY_NAME)
   const mirror = await readSecretMirror()
   if (!mirror.ok) {
-    return { id: 'secret-mirror', ok: false, detail: `No se pudo leer el archivo espejo: ${String(mirror.detail ?? mirror.reason ?? 'sin detalle').slice(0, 160)}` }
+    return { id: 'secret-mirror', ok: false, detail: `Could not read the mirror file: ${String(mirror.detail ?? mirror.reason ?? 'no detail').slice(0, 160)}` }
   }
   const mirrored = typeof mirror.value === 'string' ? mirror.value : null
   if (secretValue === null && mirrored === null) {
-    return { id: 'secret-mirror', ok: true, detail: 'Sin clave configurada y sin archivo espejo: consistente.' }
+    return { id: 'secret-mirror', ok: true, detail: 'No key configured and no mirror file: consistent.' }
   }
   if (secretValue !== null && mirrored === secretValue) {
-    return { id: 'secret-mirror', ok: true, detail: 'El archivo espejo coincide con secrets.' }
+    return { id: 'secret-mirror', ok: true, detail: 'The mirror file matches secrets.' }
   }
-  return { id: 'secret-mirror', ok: false, detail: 'El archivo espejo no coincide con secrets (desincronizado) -- vuelve a guardar la clave desde el panel.' }
+  return { id: 'secret-mirror', ok: false, detail: 'The mirror file does not match secrets (out of sync) -- save the key again from the panel.' }
 }
 
 /** Whether the Claude Code side (hook, env var, mod link) is actually in place right now. */
 async function checkClaudeIntegration () {
   const status = await claudeIntegrationStatus()
   if (!status.ok) {
-    return { id: 'claude-integration', ok: false, detail: `No se pudo leer el estado: ${String(status.detail ?? status.reason ?? 'sin detalle').slice(0, 160)}` }
+    return { id: 'claude-integration', ok: false, detail: `Could not read the status: ${String(status.detail ?? status.reason ?? 'no detail').slice(0, 160)}` }
   }
   const parts = []
-  if (!status.hook.installed) parts.push('falta el hook de PreToolUse')
-  else if (!status.hook.pathMatches) parts.push('el hook apunta a otra ruta de gate-bash.ts')
-  if (!status.env.installed) parts.push(`falta ${status.env.name}=1`)
-  if (!status.modLink.installed) parts.push('el mod de skills no está enlazado')
-  if (parts.length === 0) return { id: 'claude-integration', ok: true, detail: 'Hook, variable de entorno y mod de skills instalados.' }
-  return { id: 'claude-integration', ok: false, detail: `Sin instalar del todo: ${parts.join('; ')}.` }
+  if (!status.hook.installed) parts.push('missing the PreToolUse hook')
+  else if (!status.hook.pathMatches) parts.push('the hook points at a different gate-bash.ts path')
+  if (!status.env.installed) parts.push(`missing ${status.env.name}=1`)
+  if (!status.modLink.installed) parts.push('the skills mod is not linked')
+  if (parts.length === 0) return { id: 'claude-integration', ok: true, detail: 'Hook, environment variable and skills mod all installed.' }
+  return { id: 'claude-integration', ok: false, detail: `Not fully installed: ${parts.join('; ')}.` }
 }
 
 /** advisor.doctor -- checks the key against a real Jev call, CLI reachability, catalog validity, the secret mirror, and the Claude Code integration. */
@@ -776,7 +828,7 @@ async function cmdDoctor (orca, storageHost, secretsHost) {
   checks.push(await checkClaudeIntegration())
 
   let cliOk = false
-  let cliDetail = 'No se pudo verificar (falta la capacidad process:spawn o el binario no responde).'
+  let cliDetail = 'Could not verify (missing the process:spawn capability, or the binary does not respond).'
   try {
     const { execFile } = await import('node:child_process')
     const { promisify } = await import('node:util')
@@ -786,17 +838,17 @@ async function cmdDoctor (orca, storageHost, secretsHost) {
     // this code only runs inside the plugin worker, which Orca itself forked.
     await execFileAsync('orca', ['status', '--json'], { timeout: 5000 })
     cliOk = true
-    cliDetail = 'orca CLI responde (status ok).'
+    cliDetail = 'orca CLI responds (status ok).'
   } catch (error) {
-    cliDetail = `orca CLI no respondio: ${String(error?.message ?? error).slice(0, 160)}`
+    cliDetail = `orca CLI did not respond: ${String(error?.message ?? error).slice(0, 160)}`
   }
   checks.push({ id: 'orca-cli', ok: cliOk, detail: cliDetail })
 
   try {
     const catalog = await getCatalog(storageHost)
-    checks.push({ id: 'catalog', ok: true, detail: `Catalogo valido con ${catalog.destinations.length} destino(s).` })
+    checks.push({ id: 'catalog', ok: true, detail: `Valid catalog with ${catalog.destinations.length} destination(s).` })
   } catch (error) {
-    checks.push({ id: 'catalog', ok: false, detail: `Catalogo invalido: ${error?.message ?? error}` })
+    checks.push({ id: 'catalog', ok: false, detail: `Invalid catalog: ${error?.message ?? error}` })
   }
 
   const allOk = checks.every((c) => c.ok)
