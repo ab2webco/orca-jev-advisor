@@ -14,11 +14,17 @@
       config.html through the same `localeStatus`/`localeRequest` keys.
 
       Numbers on this panel are never invented: every one comes from
-      counting entries in the two JSONL logs main.mjs's
-      read-measurements.mjs aggregates (adapters/claude/gate-bash.ts's and
-      adapters/claude/mod-skills'). Nothing here estimates a saved dollar,
-      a saved token, or how long a deliberation would have taken -- none
-      of that is measured anywhere in this plugin.
+      counting entries in the JSONL logs main.mjs's read-measurements.mjs
+      aggregates (adapters/claude/gate-bash.ts's, adapters/claude/mod-skills'
+      and adapters/claude/gate-outcome.ts's). Nothing here estimates a saved
+      dollar, a saved token, or how long a deliberation would have taken --
+      none of that is measured anywhere in this plugin.
+
+      The approvals section is the same rule applied to a suggested number:
+      src/core/approval_record.ts's ceilingEvidence() returns null, not a
+      guess, whenever approvals and rejections overlap or one side has no
+      evidence yet -- and this panel renders that null as an honest sentence
+      explaining why, never as a blank dash.
     -->
     <style>
       /* El host inyecta una lista corta de tokens en el <style> del shell
@@ -152,6 +158,13 @@
       </div>
 
       <div class="divider" style="margin-top:14px; padding-top:10px;">
+        <h2 data-i18n="approvals.heading"></h2>
+        <div id="approvals-empty" class="empty-line" style="display:none"></div>
+        <div id="approvals-grid" class="stat-grid"></div>
+        <div id="approvals-ceiling" style="margin-top:8px"></div>
+      </div>
+
+      <div class="divider" style="margin-top:14px; padding-top:10px;">
         <h2 data-i18n="stats.byProjectHeading"></h2>
         <div id="stats-by-project"></div>
       </div>
@@ -215,6 +228,19 @@
           'gate.tableAllowed': 'permitidas',
           'gate.tableAsked': 'con pregunta',
           'gate.tableBlocked': 'bloqueadas',
+          'approvals.heading': 'Lo que la persona respondió',
+          'approvals.empty': 'El gate todavía no ha detenido ningún comando. Esta sección se llena la próxima vez que se pregunte y la persona responda.',
+          'approvals.asked': 'Preguntas hechas',
+          'approvals.approved': 'Aprobadas',
+          'approvals.rejected': 'Rechazadas',
+          'approvals.unresolved': 'Sin responder',
+          'approvals.highestApproved': 'Más alto aprobado',
+          'approvals.lowestRejected': 'Más bajo rechazado',
+          'approvals.band': 'Banda entre ambos',
+          'approvals.suggestedCeiling': 'Techo sugerido',
+          'approvals.evidenceCount': 'Basado en {{approved}} aprobación(es) y {{rejected}} rechazo(s) con puntaje.',
+          'approvals.noSuggestionInsufficient': 'Todavía no hay evidencia suficiente para sugerir un techo: hacen falta aprobaciones y rechazos con puntaje de ambos lados ({{approved}} aprobación(es), {{rejected}} rechazo(s) hasta ahora).',
+          'approvals.noSuggestionOverlap': 'Las aprobaciones y los rechazos se superponen -- lo más alto aprobado ({{highest}}) es mayor o igual que lo más bajo rechazado ({{lowest}}), con {{approved}} aprobación(es) y {{rejected}} rechazo(s) -- así que ningún techo único los separa todavía.',
           'live.heading': 'Estados en vivo',
           'live.loading': 'Cargando…',
           'live.empty': 'Sin datos todavía. El tablero se llena a medida que llegan eventos.',
@@ -260,6 +286,19 @@
           'gate.tableAllowed': 'allowed',
           'gate.tableAsked': 'asked',
           'gate.tableBlocked': 'blocked',
+          'approvals.heading': 'What the person answered',
+          'approvals.empty': 'The gate has not stopped any command yet. This section fills in the next time it asks and the person answers.',
+          'approvals.asked': 'Questions asked',
+          'approvals.approved': 'Approved',
+          'approvals.rejected': 'Rejected',
+          'approvals.unresolved': 'Unanswered',
+          'approvals.highestApproved': 'Highest approved',
+          'approvals.lowestRejected': 'Lowest rejected',
+          'approvals.band': 'Band between them',
+          'approvals.suggestedCeiling': 'Suggested ceiling',
+          'approvals.evidenceCount': 'Based on {{approved}} approval(s) and {{rejected}} rejection(s) with a score.',
+          'approvals.noSuggestionInsufficient': 'Not enough evidence yet to suggest a ceiling: scored approvals and rejections are needed on both sides ({{approved}} approval(s), {{rejected}} rejection(s) so far).',
+          'approvals.noSuggestionOverlap': 'Approvals and rejections overlap -- the highest approved ({{highest}}) is at or above the lowest rejected ({{lowest}}), with {{approved}} approval(s) and {{rejected}} rejection(s) -- so no single ceiling separates them yet.',
           'live.heading': 'Live status',
           'live.loading': 'Loading…',
           'live.empty': 'No data yet. The board fills in as events arrive.',
@@ -420,6 +459,9 @@
         var gateSourceGridEl = el('gate-source-grid')
         var gateLatencyEl = el('gate-latency-line')
         var gateByFamilyEl = el('gate-by-family')
+        var approvalsEmptyEl = el('approvals-empty')
+        var approvalsGridEl = el('approvals-grid')
+        var approvalsCeilingEl = el('approvals-ceiling')
 
         if (!summary || !summary.ok) {
           gridEl.innerHTML = ''
@@ -431,6 +473,10 @@
           gateSourceGridEl.innerHTML = ''
           gateLatencyEl.textContent = ''
           gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
+          approvalsEmptyEl.style.display = ''
+          approvalsEmptyEl.textContent = t('approvals.empty')
+          approvalsGridEl.innerHTML = ''
+          approvalsCeilingEl.innerHTML = ''
           byProjectEl.innerHTML = '<p class="empty-line">' + esc(t('stats.byProjectEmpty')) + '</p>'
           recentEl.innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
           return
@@ -438,6 +484,7 @@
 
         var gate = summary.gate || {}
         var mod = summary.modSkills || {}
+        var approvals = summary.approvals || {}
 
         // ---- resumen de skills (lo unico que queda en el grid de arriba) ----
         if (!((mod.totalDecisions || 0) > 0)) {
@@ -495,6 +542,47 @@
               return '<tr><td>' + esc(f.commandFamily) + '</td><td>' + esc(f.total) + '</td><td>' + esc(v.allow || 0) + '</td><td>' + esc(v.ask || 0) + '</td><td>' + esc(v.deny || 0) + '</td></tr>'
             }).join('')
             gateByFamilyEl.innerHTML = '<table><thead><tr><th>' + esc(t('gate.tableFamily')) + '</th><th>' + esc(t('gate.tableTotal')) + '</th><th>' + esc(t('gate.tableAllowed')) + '</th><th>' + esc(t('gate.tableAsked')) + '</th><th>' + esc(t('gate.tableBlocked')) + '</th></tr></thead><tbody>' + familyRows + '</tbody></table>'
+          }
+        }
+
+        // ---- lo que respondio la persona cuando el gate la detuvo, y lo que
+        // esa respuesta dice sobre el techo -- ceilingEvidence() (approval_
+        // record.ts) nunca inventa un numero: si aprobaciones y rechazos se
+        // superponen, o falta evidencia de un lado, suggestedCeiling es null
+        // y esta seccion explica por que en vez de mostrar un guion. -------
+        var approvalsHaveData = (approvals.asked || 0) > 0
+        if (!approvalsHaveData) {
+          approvalsEmptyEl.style.display = ''
+          approvalsEmptyEl.textContent = t('approvals.empty')
+          approvalsGridEl.innerHTML = ''
+          approvalsCeilingEl.innerHTML = ''
+        } else {
+          approvalsEmptyEl.style.display = 'none'
+          approvalsGridEl.innerHTML = [
+            statTile(approvals.asked || 0, t('approvals.asked')),
+            statTile(approvals.approved || 0, t('approvals.approved')),
+            statTile(approvals.rejected || 0, t('approvals.rejected')),
+            statTile(approvals.unresolved || 0, t('approvals.unresolved'))
+          ].join('')
+
+          var ceiling = approvals.ceiling || { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 }
+          if (ceiling.suggestedCeiling != null) {
+            approvalsCeilingEl.innerHTML = '<div class="stat-grid">' + [
+              statTile(ceiling.highestApproved, t('approvals.highestApproved')),
+              statTile(ceiling.lowestRejected, t('approvals.lowestRejected')),
+              statTile(ceiling.band, t('approvals.band')),
+              statTile(ceiling.suggestedCeiling, t('approvals.suggestedCeiling'))
+            ].join('') + '</div><p class="empty-line" style="margin-top:8px">' +
+              esc(t('approvals.evidenceCount', { approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0) })) + '</p>'
+          } else if ((ceiling.approvedCount || 0) === 0 || (ceiling.rejectedCount || 0) === 0) {
+            approvalsCeilingEl.innerHTML = '<p class="empty-line">' + esc(t('approvals.noSuggestionInsufficient', {
+              approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+            })) + '</p>'
+          } else {
+            approvalsCeilingEl.innerHTML = '<p class="empty-line">' + esc(t('approvals.noSuggestionOverlap', {
+              highest: String(ceiling.highestApproved), lowest: String(ceiling.lowestRejected),
+              approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+            })) + '</p>'
           }
         }
 

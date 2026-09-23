@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * read-measurements.mjs — sidecar that reads and aggregates the two
- * append-only JSONL logs neither of which the plugin worker can reach
- * directly (both live under ~/.cache/orca-supervisor/, outside the
+ * read-measurements.mjs — sidecar that reads and aggregates the three
+ * append-only JSONL logs none of which the plugin worker can reach
+ * directly (all live under ~/.cache/orca-supervisor/, outside the
  * worker's own permission sandbox -- same reason every other cross-
  * boundary read in this plugin goes through a clean child):
  *
@@ -10,6 +10,9 @@
  *                                 (src/core/gate_measurement.ts)
  *   mod-skills-measurements.jsonl adapters/claude/mod-skills
  *                                 (src/core/skill_measurement.ts)
+ *   gate-approvals.jsonl          adapters/claude/gate-bash.ts (pending half)
+ *                                 adapters/claude/gate-outcome.ts (outcome half)
+ *                                 (src/core/approval_record.ts)
  *
  * Aggregation happens here, not in the worker or the panel: these files
  * can grow over a week of real use, and shipping every raw line across
@@ -33,10 +36,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
+import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const MOD_SKILLS_LOG_PATH = join(CACHE_DIR, 'mod-skills-measurements.jsonl')
+const APPROVALS_LOG_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 
 function isRecord (value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -213,11 +218,98 @@ async function aggregateModSkills () {
   }
 }
 
+/**
+ * Guards a raw parsed JSONL row into a PendingApprovalRecord (see
+ * src/core/approval_record.ts), for the same reason toGateDecisionRecord()
+ * does: a hand-edited or half-written line on disk is `unknown` regardless
+ * of what gate-bash.ts's own writer promises. A row missing or mistyping a
+ * required field is dropped (counted as corrupt) rather than fed to the
+ * join with a guessed default.
+ */
+function toPendingApprovalRecord (row) {
+  if (
+    typeof row.toolUseId !== 'string' ||
+    typeof row.at !== 'string' ||
+    (row.project !== null && typeof row.project !== 'string') ||
+    (row.destinationId !== null && typeof row.destinationId !== 'string') ||
+    typeof row.commandFamily !== 'string' ||
+    (row.shape !== null && typeof row.shape !== 'string') ||
+    (row.reversible !== null && typeof row.reversible !== 'number') ||
+    (row.external !== null && typeof row.external !== 'number') ||
+    (row.consequence !== null && typeof row.consequence !== 'number') ||
+    typeof row.ceiling !== 'number'
+  ) {
+    return null
+  }
+  return {
+    type: 'gate-pending',
+    toolUseId: row.toolUseId,
+    at: row.at,
+    project: row.project,
+    destinationId: row.destinationId,
+    commandFamily: row.commandFamily,
+    shape: row.shape,
+    reversible: row.reversible,
+    external: row.external,
+    consequence: row.consequence,
+    ceiling: row.ceiling,
+  }
+}
+
+/** Same guard as {@link toPendingApprovalRecord}, for the outcome half gate-outcome.ts appends to the same file. */
+function toApprovalOutcomeRecord (row) {
+  if (
+    typeof row.toolUseId !== 'string' ||
+    typeof row.at !== 'string' ||
+    (row.outcome !== 'approved' && row.outcome !== 'rejected')
+  ) {
+    return null
+  }
+  return { type: 'gate-outcome', toolUseId: row.toolUseId, at: row.at, outcome: row.outcome }
+}
+
+/**
+ * Joins the pending and outcome halves that live in the same file
+ * (gate-bash.ts and gate-outcome.ts both append to gate-approvals.jsonl)
+ * with the pure fold in src/core/approval_record.ts, then asks that same
+ * module what the labelled decisions say the ceiling should be. Nothing
+ * here invents a threshold: ceilingEvidence() itself returns null rather
+ * than a number whenever approvals and rejections overlap or one side has
+ * no evidence yet, and this function passes that null straight through.
+ */
+async function aggregateApprovals () {
+  const { rows, corrupt } = await readJsonl(APPROVALS_LOG_PATH)
+  const pending = []
+  const outcomes = []
+  let malformed = 0
+  for (const row of rows) {
+    if (row.type === 'gate-pending') {
+      const record = toPendingApprovalRecord(row)
+      if (record === null) malformed += 1
+      else pending.push(record)
+    } else if (row.type === 'gate-outcome') {
+      const record = toApprovalOutcomeRecord(row)
+      if (record === null) malformed += 1
+      else outcomes.push(record)
+    }
+  }
+
+  const summary = summarizeApprovals(pending, outcomes)
+  return {
+    asked: summary.asked,
+    approved: summary.approved,
+    rejected: summary.rejected,
+    unresolved: summary.unresolved,
+    corruptLines: corrupt + malformed,
+    ceiling: ceilingEvidence(summary.labelled),
+  }
+}
+
 async function main () {
   let result
   try {
-    const [gate, modSkills] = await Promise.all([aggregateGate(), aggregateModSkills()])
-    result = { ok: true, gate, modSkills }
+    const [gate, modSkills, approvals] = await Promise.all([aggregateGate(), aggregateModSkills(), aggregateApprovals()])
+    result = { ok: true, gate, modSkills, approvals }
   } catch (error) {
     result = { ok: false, reason: 'excepcion', detail: String(error?.message ?? error).slice(0, 300) }
   }
