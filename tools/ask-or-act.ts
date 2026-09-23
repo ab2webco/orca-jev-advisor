@@ -7,12 +7,12 @@
  * do not deserve the same confirmation. Each action is judged on its own.
  *
  * Usage, from any project:
- *   node ~/Projects/orca-supervisor/tools/ask-or-act.ts "accion 1" "accion 2" ...
- *   printf '%s\n' "accion 1" "accion 2" | node ~/Projects/orca-supervisor/tools/ask-or-act.ts
- *   node ~/Projects/orca-supervisor/tools/ask-or-act.ts --json "accion"    # machine-readable
+ *   node ~/Projects/orca-supervisor/tools/ask-or-act.ts "action 1" "action 2" ...
+ *   printf '%s\n' "action 1" "action 2" | node ~/Projects/orca-supervisor/tools/ask-or-act.ts
+ *   node ~/Projects/orca-supervisor/tools/ask-or-act.ts --json "action"    # machine-readable
  *
  * Optional context, so the judgment knows where it is:
- *   ASK_OR_ACT_CONTEXT="repo privado, sin usuarios en produccion" node ... "accion"
+ *   ASK_OR_ACT_CONTEXT="private repo, no users in production" node ... "action"
  *
  * Requires TYPESAFE_API_KEY in the environment, or a line
  * `TYPESAFE_API_KEY=...` in ~/.config/orca-supervisor/env.
@@ -32,6 +32,10 @@
 import { callJev, getNoulAnswer, getScoreAnswer } from '../src/core/jev.ts'
 import type { NoulQuestion, Question, ScoreQuestion } from '../src/core/jev.ts'
 import { resolveApiKey } from '../src/core/secrets.ts'
+import { translateReason } from '../src/core/i18n.ts'
+import type { LocalizedReason } from '../src/core/i18n.ts'
+import { DESTINATION_CATALOG } from '../src/core/i18n_destination.ts'
+import type { DestinationKey } from '../src/core/i18n_destination.ts'
 
 type Verdict = 'actua' | 'confirma' | 'pregunta'
 
@@ -41,7 +45,8 @@ type Judgment = {
   readonly reversible: number
   readonly externallyVisible: number
   readonly consequence: number
-  readonly reasons: readonly string[]
+  /** Catalog keys, not text -- see LocalizedReason in src/core/i18n.ts. Resolved to English at print time below (renderReasons). */
+  readonly reasons: readonly LocalizedReason<DestinationKey>[]
 }
 
 // Three atomic questions. Deliberately not one compound "is it safe to act":
@@ -92,10 +97,10 @@ const EXTERNAL_GATE = 0.35
 const CONSEQUENCE_CEILING = 1.5
 
 function judge(action: string, reversible: number, externallyVisible: number, consequence: number): Judgment {
-  const reasons: string[] = []
-  if (reversible < REVERSIBLE_GATE) reasons.push(`revertirla no es trivial (${reversible.toFixed(2)})`)
-  if (externallyVisible >= EXTERNAL_GATE) reasons.push(`se nota fuera del equipo (${externallyVisible.toFixed(2)})`)
-  if (consequence > CONSEQUENCE_CEILING) reasons.push(`si sale mal duele (${consequence.toFixed(2)})`)
+  const reasons: LocalizedReason<DestinationKey>[] = []
+  if (reversible < REVERSIBLE_GATE) reasons.push({ key: 'risk.hardToUndo' })
+  if (externallyVisible >= EXTERNAL_GATE) reasons.push({ key: 'risk.noticedOutsideTeam' })
+  if (consequence > CONSEQUENCE_CEILING) reasons.push({ key: 'risk.hurtsIfWrong' })
 
   let verdict: Verdict = 'actua'
   if (reasons.length === 1) verdict = 'confirma'
@@ -111,7 +116,7 @@ async function evaluate(apiKey: string, action: string, context: string): Promis
   const external = getNoulAnswer(response.answers, 'externa')
   const consequence = getScoreAnswer(response.answers, 'consecuencia')
   if (reversible === null || external === null || consequence === null) {
-    throw new Error(`Jev no devolvió respuestas completas para la accion "${action}"`)
+    throw new Error(`Jev didn't return complete answers for action "${action}"`)
   }
   return judge(action, reversible.noul, external.noul, consequence.score)
 }
@@ -131,7 +136,11 @@ function pad(value: string, width: number): string {
   return value.length >= width ? value.slice(0, width - 1) + '…' : value + ' '.repeat(width - value.length)
 }
 
-const MARK: Record<Verdict, string> = { actua: '✓ ACTUA   ', confirma: '· CONFIRMA', pregunta: '! PREGUNTA' }
+const MARK: Record<Verdict, string> = { actua: '✓ ACT     ', confirma: '· CONFIRM ', pregunta: '! ASK     ' }
+
+function renderReasons(reasons: readonly LocalizedReason<DestinationKey>[]): string {
+  return reasons.map((reason) => translateReason(DESTINATION_CATALOG, 'en', reason)).join(' · ')
+}
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
@@ -139,18 +148,18 @@ async function main(): Promise<void> {
   const actions = [...argv.filter((a) => a !== '--json'), ...(await readStdin())]
 
   if (actions.length === 0) {
-    console.error('Uso: node ask-or-act.ts "accion 1" "accion 2" ...   (o una accion por linea por stdin)')
+    console.error('Usage: node ask-or-act.ts "action 1" "action 2" ...   (or one action per line via stdin)')
     process.exitCode = 1
     return
   }
 
   const apiKey = await resolveApiKey()
   if (apiKey === null) {
-    console.error('No hay TYPESAFE_API_KEY en el entorno ni en ~/.config/orca-supervisor/env')
+    console.error('No TYPESAFE_API_KEY in the environment or in ~/.config/orca-supervisor/env')
     process.exitCode = 1
     return
   }
-  const context = process.env['ASK_OR_ACT_CONTEXT'] ?? 'Proyecto de software en desarrollo activo.'
+  const context = process.env['ASK_OR_ACT_CONTEXT'] ?? 'Software project in active development.'
   const judgments = await Promise.all(actions.map((action) => evaluate(apiKey, action, context)))
 
   if (asJson) {
@@ -158,16 +167,16 @@ async function main(): Promise<void> {
     return
   }
 
-  console.log(`Contexto: ${context}\n`)
+  console.log(`Context: ${context}\n`)
   for (const j of judgments) {
     console.log(`${MARK[j.verdict]}  ${pad(j.action, 62)} rev ${j.reversible.toFixed(2)}  ext ${j.externallyVisible.toFixed(2)}  cons ${j.consequence.toFixed(2)}`)
-    if (j.reasons.length > 0) console.log(`             ${j.reasons.join(' · ')}`)
+    if (j.reasons.length > 0) console.log(`             ${renderReasons(j.reasons)}`)
   }
 
   const act = judgments.filter((j) => j.verdict === 'actua')
   const ask = judgments.filter((j) => j.verdict !== 'actua')
-  console.log(`\n${act.length} de ${judgments.length} se pueden hacer sin preguntar.`)
-  if (ask.length > 0) console.log(`Pregunta solo por: ${ask.map((j) => j.action).join(' | ')}`)
+  console.log(`\n${act.length} of ${judgments.length} can be done without asking.`)
+  if (ask.length > 0) console.log(`Asking only about: ${ask.map((j) => j.action).join(' | ')}`)
 }
 
 await main()
