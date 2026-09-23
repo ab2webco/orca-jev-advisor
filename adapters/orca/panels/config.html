@@ -168,6 +168,10 @@
         overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
               font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
+      /* Same token .said.bad already uses for a failed save -- an unset
+         policy kind is the same class of "needs your attention", not a new
+         color of its own. */
+      .hint.warn { color: var(--destructive, var(--fb-destructive)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
     </style>
   </head>
@@ -185,10 +189,14 @@
       <section id="secret-section">
         <h2 data-i18n="secret.heading"></h2>
         <div class="sub" id="secret-status" style="padding:0 0 6px"></div>
-        <label for="api-key" data-i18n="secret.label"></label>
-        <input id="api-key" type="password" autocomplete="off" data-i18n-placeholder="secret.placeholder" />
+        <div id="secret-input-group">
+          <label for="api-key" data-i18n="secret.label"></label>
+          <input id="api-key" type="password" autocomplete="off" data-i18n-placeholder="secret.placeholder" />
+        </div>
         <div class="actions">
           <button id="save-key" class="primary" type="button" data-i18n="secret.save"></button>
+          <button id="replace-key" type="button" data-i18n="secret.replace"></button>
+          <button id="cancel-key" class="link" type="button" data-i18n="secret.cancel"></button>
           <button id="clear-key" class="link" type="button" data-i18n="secret.clear"></button>
           <span class="said" id="key-said"></span>
         </div>
@@ -265,6 +273,8 @@
           'secret.label': 'Nueva clave (se guarda cifrada; nunca se vuelve a mostrar completa)',
           'secret.placeholder': 'api...',
           'secret.save': 'Guardar clave',
+          'secret.replace': 'Reemplazar clave',
+          'secret.cancel': 'Cancelar',
           'secret.clear': 'Eliminar clave guardada',
           'secret.saving': 'Guardando…',
           'secret.saved': 'Clave guardada.',
@@ -273,7 +283,7 @@
           'secret.configured': 'Clave configurada (termina en …{{tail}}).',
           'secret.notConfigured': 'Sin clave configurada.',
           'integration.heading': 'Integración con Claude Code',
-          'integration.hint': 'Este plugin escribe cuatro cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, y un enlace al mod de skills. Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
+          'integration.hint': 'Este plugin escribe seis cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, un enlace al mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), y un espejo de las políticas del equipo en JSON legible (no es secreto). Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
           'integration.checking': 'Comprobando…',
           'integration.statusUnavailable': 'No se pudo leer el estado.',
           'integration.hookInstalled': 'Hook de Bash: puesto, en {{path}}',
@@ -323,6 +333,16 @@
           'policies.fieldIdPlaceholder': 'id-corto',
           'policies.fieldRule': 'rule',
           'policies.fieldRulePlaceholder': 'La regla en una frase',
+          'policies.fieldKind': 'Qué hace esta regla',
+          'policies.kindPermits': 'Se hace sin preguntar',
+          'policies.kindRequiresHuman': 'Lo decide una persona',
+          'policies.kindProhibits': 'No se hace nunca',
+          'policies.kindUnset': '— Elegir —',
+          'policies.kindNeedsReview': 'Falta elegir qué hace esta política. Mientras tanto, esta fila se ignora al decidir y no se pierde.',
+          'policies.fieldDestinations': 'Destinos (opcional)',
+          'policies.fieldDestinationsPlaceholder': 'id-destino-1, id-destino-2',
+          'policies.fieldDestinationsHint': 'Vacío = aplica a todos los destinos (comportamiento actual). Ids separados por comas para limitar esta política a destinos específicos.',
+          'policies.unknownDestination': 'Estos ids no existen en el catálogo actual: {{ids}}',
           'policies.remove': 'Quitar',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
@@ -347,6 +367,8 @@
           'secret.label': 'New key (saved encrypted; never shown in full again)',
           'secret.placeholder': 'api...',
           'secret.save': 'Save key',
+          'secret.replace': 'Replace key',
+          'secret.cancel': 'Cancel',
           'secret.clear': 'Remove saved key',
           'secret.saving': 'Saving…',
           'secret.saved': 'Key saved.',
@@ -355,7 +377,7 @@
           'secret.configured': 'Key configured (ends in …{{tail}}).',
           'secret.notConfigured': 'No key configured.',
           'integration.heading': 'Claude Code integration',
-          'integration.hint': "This plugin writes four things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, and a link to the skills mod. None of this happens without showing it here, and \"Revert everything\" puts it all back.",
+          'integration.hint': "This plugin writes six things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a link to the skills mod, a human-readable JSON mirror of the destination catalog (not secret), and a human-readable JSON mirror of the team policies (not secret). None of this happens without showing it here, and \"Revert everything\" puts it all back.",
           'integration.checking': 'Checking…',
           'integration.statusUnavailable': 'Could not read the status.',
           'integration.hookInstalled': 'Bash hook: installed, at {{path}}',
@@ -405,6 +427,16 @@
           'policies.fieldIdPlaceholder': 'short-id',
           'policies.fieldRule': 'rule',
           'policies.fieldRulePlaceholder': 'The rule, in one sentence',
+          'policies.fieldKind': 'What this rule does',
+          'policies.kindPermits': 'Done without asking',
+          'policies.kindRequiresHuman': 'A person decides',
+          'policies.kindProhibits': 'Never done',
+          'policies.kindUnset': '— Choose —',
+          'policies.kindNeedsReview': 'This policy still needs what it does chosen. Until then this row is ignored when deciding, and not lost.',
+          'policies.fieldDestinations': 'Destinations (optional)',
+          'policies.fieldDestinationsPlaceholder': 'destination-id-1, destination-id-2',
+          'policies.fieldDestinationsHint': "Empty = applies to all destinations (today's behavior). Comma-separated ids to limit this policy to specific destinations.",
+          'policies.unknownDestination': "These ids don't exist in the current catalog: {{ids}}",
           'policies.remove': 'Remove',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
@@ -631,6 +663,11 @@
       var LOCALE_RESULT_KEY = 'localeResult'
       var LOCALE_STATUS_KEY = 'localeStatus'
 
+      // Fire-and-forget nudge telling main.mjs's poll loop to re-mirror the
+      // catalog/policies JSON files gate-bash.ts reads directly -- see
+      // CATALOG_POLICY_MIRROR_REQUEST_KEY there. Nothing here waits for it.
+      var CATALOG_POLICY_MIRROR_REQUEST_KEY = 'catalog-policy-mirror-request'
+
       function waitForLocaleResult (requestId, deadline) {
         return read(LOCALE_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
@@ -834,18 +871,59 @@
         return { destinations: rows.filter(function (r) { return r.id.length > 0 }) }
       }
 
+      // Read fresh off the catalog editor's own in-memory rows (never
+      // re-fetched from storage) so a policy's destination-id warning always
+      // compares against what is actually loaded right now, including
+      // catalog edits the user hasn't saved yet.
+      function currentCatalogDestinationIds () {
+        var ids = []
+        catalogListEl.querySelectorAll('.entry').forEach(function (entryEl) {
+          if (typeof entryEl._read !== 'function') return
+          var id = entryEl._read().id
+          if (id) ids.push(id)
+        })
+        return ids
+      }
+
       // ---------- politicas -----------------------------------------------
 
       var policiesListEl = el('policies-list')
 
+      // Same three values as decisions.ts' PolicyKind (src/core/decisions.ts)
+      // and store.ts' POLICY_KINDS -- kept as a plain list here because this
+      // panel is untyped JS with no import of that union, same reason
+      // DESTINATION_KINDS above duplicates CatalogDestination's kind values.
+      // '' is NOT a PolicyKind: it is this panel's own sentinel for "nobody
+      // has chosen one yet", used only for a row that arrived from storage
+      // with no kind (or an invalid one) and never written back as a real
+      // stored value on its own -- see the entry._read comment below.
+      var POLICY_KIND_OPTIONS = [
+        { value: '', labelKey: 'policies.kindUnset' },
+        { value: 'permits', labelKey: 'policies.kindPermits' },
+        { value: 'requires_human', labelKey: 'policies.kindRequiresHuman' },
+        { value: 'prohibits', labelKey: 'policies.kindProhibits' }
+      ]
+
+      function policyKindLabel (value) {
+        var match = POLICY_KIND_OPTIONS.filter(function (o) { return o.value === value })[0]
+        return match ? t(match.labelKey) : t('policies.kindUnset')
+      }
+
       function addPolicyRow (row) {
-        row = row || { id: '', rule: '' }
+        row = row || { id: '', rule: '', kind: '' }
         var idField = fieldInput(t('policies.fieldId'), row.id, t('policies.fieldIdPlaceholder'))
         var ruleField = fieldInput(t('policies.fieldRule'), row.rule, t('policies.fieldRulePlaceholder'))
         var entry = makeCollapsible(
           !row.id,
           function () { return idField.input.value.trim() },
-          function () { return ruleField.input.value.trim() }
+          function () {
+            var base = policyKindLabel(kindSelect.value) + ' · ' + ruleField.input.value.trim()
+            var destinations = parseDestinations()
+            // Visible without expanding the row: a scoped policy reads
+            // differently from a global one at a glance, which matters once
+            // there are 20 of them.
+            return destinations.length > 0 ? base + ' → ' + destinations.join(', ') : base
+          }
         )
         idField.input.addEventListener('input', function () { entry._sync() })
         ruleField.input.addEventListener('input', function () { entry._sync() })
@@ -853,6 +931,73 @@
         rowEl.appendChild(idField.wrap)
         rowEl.appendChild(ruleField.wrap)
         entry.appendChild(rowEl)
+
+        var kindWrap = elMake('div')
+        var kindLabel = elMake('label')
+        kindLabel.textContent = t('policies.fieldKind')
+        var kindSelect = elMake('select')
+        // A row loaded from storage without a valid kind (written before
+        // `kind` existed, or with a typo'd value) never gets guessed into one
+        // of the three real options -- it lands on the '' sentinel instead,
+        // and stays there, visibly, until a human picks one.
+        var storedKind = POLICY_KIND_OPTIONS.some(function (o) { return o.value === row.kind && o.value !== '' }) ? row.kind : ''
+        POLICY_KIND_OPTIONS.forEach(function (option) {
+          var opt = elMake('option')
+          opt.value = option.value
+          opt.textContent = t(option.labelKey)
+          if (option.value === storedKind) opt.selected = true
+          kindSelect.appendChild(opt)
+        })
+        kindWrap.appendChild(kindLabel)
+        kindWrap.appendChild(kindSelect)
+        entry.appendChild(kindWrap)
+
+        var needsReviewHint = elMake('p', 'hint warn')
+        needsReviewHint.textContent = t('policies.kindNeedsReview')
+        entry.appendChild(needsReviewHint)
+
+        function syncKindWarning () {
+          needsReviewHint.style.display = kindSelect.value === '' ? '' : 'none'
+        }
+        syncKindWarning()
+        kindSelect.addEventListener('change', function () { syncKindWarning(); entry._sync() })
+
+        // Scope: empty (the default) means this policy applies globally,
+        // exactly like every row already saved today. A comma-separated list
+        // of destination ids narrows it -- coordinated with store.ts's
+        // `PolicyRow.destinations?: readonly string[]`.
+        var destinationsField = fieldInput(
+          t('policies.fieldDestinations'), (row.destinations || []).join(', '), t('policies.fieldDestinationsPlaceholder'))
+        entry.appendChild(destinationsField.wrap)
+
+        var destinationsHint = elMake('p', 'hint')
+        destinationsHint.textContent = t('policies.fieldDestinationsHint')
+        entry.appendChild(destinationsHint)
+
+        var destinationsWarning = elMake('p', 'hint warn')
+        entry.appendChild(destinationsWarning)
+
+        function parseDestinations () {
+          return destinationsField.input.value.split(',')
+            .map(function (s) { return s.trim() })
+            .filter(function (s) { return s.length > 0 })
+        }
+
+        // Compared against the catalog editor's own in-memory rows, never
+        // re-fetched. Purely informational -- a typo'd or removed
+        // destination id is shown, never blocked and never thrown on.
+        function syncDestinationsWarning () {
+          var known = currentCatalogDestinationIds()
+          var unknown = parseDestinations().filter(function (id) { return known.indexOf(id) === -1 })
+          if (unknown.length > 0) {
+            destinationsWarning.textContent = t('policies.unknownDestination', { ids: unknown.join(', ') })
+            destinationsWarning.style.display = ''
+          } else {
+            destinationsWarning.style.display = 'none'
+          }
+        }
+        syncDestinationsWarning()
+        destinationsField.input.addEventListener('input', function () { syncDestinationsWarning(); entry._sync() })
 
         entry._sync()
 
@@ -865,7 +1010,22 @@
         entry.appendChild(actions)
 
         entry._read = function () {
-          return { id: idField.input.value.trim(), rule: ruleField.input.value.trim() }
+          // kindSelect.value is '' when still unset: written back as
+          // `undefined` (dropped from the saved object, same as
+          // terminalTitleMatch above) rather than as an empty string or a
+          // guessed real kind, so store.ts's isPolicyRow still sees it as
+          // "no valid kind" next time and keeps excluding it from judgment
+          // -- without this panel ever deleting the row itself.
+          var destinations = parseDestinations()
+          return {
+            id: idField.input.value.trim(),
+            rule: ruleField.input.value.trim(),
+            kind: kindSelect.value || undefined,
+            // Same "empty means unset" convention as kind/terminalTitleMatch:
+            // an empty scope is dropped rather than written as `[]`, so a
+            // policy with no destinations still reads as "applies globally".
+            destinations: destinations.length > 0 ? destinations : undefined
+          }
         }
 
         policiesListEl.appendChild(entry)
@@ -914,18 +1074,57 @@
       var keySaidEl = el('key-said')
       var lastSecretStatus = null
 
+      // Three UI states over this one section, all driven from here so
+      // there is exactly one place that decides what is visible:
+      //  - 'empty'     no key configured yet -- label+input+Save, no Remove.
+      //  - 'idle'      a key exists -- only the status line, Replace and Remove.
+      //  - 'replacing' user asked to replace -- label+input+Save reappear
+      //                (auto-focused) plus Cancel, alongside Remove.
+      // 'replacing' is UI-only: it never touches the stored key, and Cancel
+      // just falls back to 'idle' with no host call.
+      var secretUiMode = 'empty'
+
+      function applySecretUiMode () {
+        var showInput = secretUiMode !== 'idle'
+        el('secret-input-group').style.display = showInput ? '' : 'none'
+        el('save-key').style.display = showInput ? '' : 'none'
+        el('replace-key').style.display = secretUiMode === 'idle' ? '' : 'none'
+        el('cancel-key').style.display = secretUiMode === 'replacing' ? '' : 'none'
+        el('clear-key').style.display = secretUiMode === 'empty' ? 'none' : ''
+        if (secretUiMode === 'replacing') el('api-key').focus()
+      }
+
       // The panel never reads the key back: it only paints what the worker
       // published in SECRET_STATUS_KEY (isConfigured/endsWith), never the
       // full value.
       function renderSecretStatus (status) {
         lastSecretStatus = status
-        if (status === null) { secretStatusEl.textContent = t('secret.checking'); return }
+        if (status === null) {
+          secretStatusEl.textContent = t('secret.checking')
+          secretUiMode = 'empty'
+          applySecretUiMode()
+          return
+        }
         if (status && status.configured) {
           secretStatusEl.textContent = t('secret.configured', { tail: status.endsWith || '????' })
+          secretUiMode = secretUiMode === 'replacing' ? 'replacing' : 'idle'
         } else {
           secretStatusEl.textContent = t('secret.notConfigured')
+          secretUiMode = 'empty'
         }
+        applySecretUiMode()
       }
+
+      el('replace-key').addEventListener('click', function () {
+        secretUiMode = 'replacing'
+        applySecretUiMode()
+      })
+
+      el('cancel-key').addEventListener('click', function () {
+        el('api-key').value = ''
+        secretUiMode = 'idle'
+        applySecretUiMode()
+      })
 
       function loadSecretStatus () {
         return read(SECRET_STATUS_KEY, false).then(renderSecretStatus)
@@ -944,6 +1143,7 @@
         sendSecretRequest('save', value).then(function () {
           input.value = ''
           said(keySaidEl, t('secret.saved'))
+          secretUiMode = 'idle'
           return loadSecretStatus()
         }).catch(function (error) {
           said(keySaidEl, String(error && error.message || error), true)
@@ -1053,6 +1253,7 @@
         ]).then(function (results) {
           var failed = results.find(function (r) { return !r || !r.ok })
           if (failed) throw new Error(failed.error || t('common.hostRejectedWrite'))
+          writeBackground(CATALOG_POLICY_MIRROR_REQUEST_KEY, new Date().toISOString())
           currentConfig = config
           said(saveSaidEl, t('save.saved'))
         }).catch(function (error) {

@@ -6,7 +6,15 @@ import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isArrayOf, isNumber, isRecord, isString } from "../guards.ts";
-import { DELICATENESS_LEVELS } from "../jev.ts";
+/**
+ * How many levels a destination's `maxAutoDelicateness` can range over.
+ *
+ * It used to live in the prototype CLI's own `jev.ts`, which has been
+ * deleted along with the rest of that dead layer. Kept here, next to the
+ * only field that validates against it, rather than reaching across the
+ * tree for a single number.
+ */
+const DELICATENESS_LEVELS = 5;
 
 export type DestinationKind = "service" | "client-site" | "project" | "support";
 
@@ -27,10 +35,21 @@ export interface AutonomyConfig {
   // the model is fully certain the encargo is trivial, which practically
   // never happens for a client site.
   maxAutoDelicateness: number;
+  // Optional per-destination override for the command gate's consequence
+  // ceiling (src/core/decisions.ts's GATE_CONSEQUENCE_CEILING). Absent
+  // means "use the global consequenceCeiling" -- same shape and meaning as
+  // the store.ts runtime copy of this type; kept in sync deliberately.
+  consequenceCeiling?: number;
 }
 
 function isAutonomyConfig(value: unknown): value is AutonomyConfig {
-  return isRecord(value) && isNumber(value.actThreshold) && isNumber(value.confirmThreshold) && isNumber(value.maxAutoDelicateness);
+  if (!isRecord(value) || !isNumber(value.actThreshold) || !isNumber(value.confirmThreshold) || !isNumber(value.maxAutoDelicateness)) {
+    return false;
+  }
+  if ("consequenceCeiling" in value && value.consequenceCeiling !== undefined && !isNumber(value.consequenceCeiling)) {
+    return false;
+  }
+  return true;
 }
 
 export interface Destination {
@@ -64,7 +83,7 @@ function isCatalogShape(value: unknown): value is Catalog {
  * Business rules beyond the raw shape: thresholds must live in (0, 1],
  * acting always requires at least as much confidence as merely confirming,
  * and maxAutoDelicateness must be a whole, zero-based level index within
- * the delicateness scale (see jev.ts's DELICATENESS_LEVELS -- the two must
+ * the delicateness scale (see DELICATENESS_LEVELS above -- the two must
  * never drift).
  */
 function validateAutonomyRules(catalog: Catalog): string[] {

@@ -23,6 +23,14 @@
  * itself (question shapes, retry/backoff, latency budget, response
  * guards) and the key resolution come from src/core, shared with the Orca
  * plugin adapter -- see adapters/orca/.
+ *
+ * Tier 1a used to be a list of whole-string regexes: `/^\s*git\s+status\b/`
+ * tested against the entire command. That worked for a simple command but
+ * silently waved through a compound one that merely STARTED with a safe
+ * verb (`git status && rm -rf /` matched the `git status` regex and never
+ * reached tier 1b or Jev). `isObviouslySafeCommand` (src/core, pure and
+ * unit-tested) fixes this by splitting on `&&`/`||`/`;`/`|` first and
+ * requiring every resulting segment to be independently safe.
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -38,6 +46,7 @@ import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
 import type { GateKey } from '../../src/core/i18n_gate.ts'
 import { buildGateDecisionRecord, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
+import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
@@ -81,18 +90,6 @@ const LOCALE = resolveLocale()
 const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, LOCALE, key, params)
 
 type Decision = 'allow' | 'deny' | 'ask'
-
-/** Tier 1a: runs without consulting anyone. Reading, inspecting, testing. */
-const OBVIOUSLY_SAFE: readonly RegExp[] = [
-  /^\s*(ls|pwd|cat|head|tail|wc|which|echo|date|whoami|env)\b/,
-  /^\s*git\s+(status|diff|log|show|remote|rev-parse|blame)\b/,
-  // `git branch` only in its read-only forms: -d, -D, -m and -M delete or rename.
-  /^\s*git\s+branch(\s+(-a|-r|-v|-vv|--all|--list|--show-current))*\s*$/,
-  /^\s*git\s+stash\s+list\b/,
-  /^\s*(npm|pnpm|yarn|bun)\s+(test|run test|run lint|run typecheck|run build)\b/,
-  /^\s*(jq|rg|grep|find|sed -n|awk)\b/,
-  /^\s*gh\s+(pr|issue|run|repo)\s+(list|view|status|checks)\b/,
-]
 
 /** Tier 1b: never runs without explicit human intervention. `why` is a catalog key, resolved at emit time in the panel's chosen language. */
 const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey }[] = [
@@ -269,7 +266,12 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
   }
 }
 
-/** What makes a feature branch different from a client's main. */
+/**
+ * What makes a feature branch different from a client's main. This string
+ * is sent to Jev as model input (see askJev/buildActionGateState below) and
+ * is also folded into the cache key, so it stays in English like every
+ * other prompt this project sends the model.
+ */
 function repoContext(cwd: string): string {
   const run = (args: string[]): string => {
     try {
@@ -282,10 +284,10 @@ function repoContext(cwd: string): string {
   const remote = run(['remote', 'get-url', 'origin']).replace(/^.*[:/]/, '').replace(/\.git$/, '')
   const dirty = run(['status', '--porcelain']).length > 0
   const parts = [
-    remote.length > 0 ? `repositorio ${remote}` : 'sin remoto',
-    branch.length > 0 ? `rama ${branch}` : 'rama desconocida',
-    branch === 'main' || branch === 'master' ? 'es la rama principal compartida' : 'es una rama de trabajo',
-    dirty ? 'con cambios sin confirmar' : 'limpio',
+    remote.length > 0 ? `repository ${remote}` : 'no remote',
+    branch.length > 0 ? `branch ${branch}` : 'unknown branch',
+    branch === 'main' || branch === 'master' ? 'this is the shared main branch' : 'this is a working branch',
+    dirty ? 'with uncommitted changes' : 'clean',
   ]
   return parts.join(', ')
 }
@@ -317,9 +319,7 @@ async function main(): Promise<void> {
   if (input === null) passThrough()
   const { command, cwd } = input as HookInput
 
-  for (const safe of OBVIOUSLY_SAFE) {
-    if (safe.test(command)) passThrough()
-  }
+  if (isObviouslySafeCommand(command)) passThrough()
   for (const { pattern, why } of NEVER_SILENTLY) {
     if (pattern.test(command)) {
       appendGateRecord(cwd, command, 'local-rule', 'ask', null)

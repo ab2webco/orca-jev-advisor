@@ -67,7 +67,7 @@ export function commandFamily(command: string): string {
 }
 
 /** Splits on the shell operators that chain commands, so each part can be classified on its own. */
-function splitSegments(command: string): string[] {
+export function splitSegments(command: string): string[] {
   return command
     .split(/\|\||&&|[;|]/)
     .map((part) => stripAssignments(part.trim()))
@@ -82,7 +82,7 @@ function splitSegments(command: string): string[] {
  * stripping punctuation, wrote `TOKENghp_...` into the log -- the literal
  * secret, in the one file this module promises never to put one in.
  */
-function stripAssignments(segment: string): string {
+export function stripAssignments(segment: string): string {
   return segment.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/, "");
 }
 
