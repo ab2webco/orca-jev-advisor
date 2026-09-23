@@ -397,7 +397,8 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       ...buildActionGateQuestions(),
       ...(filteredPolicies.length > 0 ? buildPolicyQuestions(filteredPolicies) : {}),
     }
-    const response = await callJev(apiKey, buildActionGateState(command, context), questions, { budgetMs: BUDGET_MS })
+    const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
+    const response = await callJev(apiKey, buildActionGateState(command, context, destination), questions, { budgetMs: BUDGET_MS })
     const gate = decideGateAction({
       action: command,
       policies: filteredPolicies,
