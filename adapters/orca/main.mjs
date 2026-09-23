@@ -719,9 +719,9 @@ async function cmdDecide (orca, storageHost, secretsHost, args) {
     })
   )
 
-  const act = decisions.filter((d) => d.outcome === 'actua').length
-  const blocked = decisions.filter((d) => d.outcome === 'no_hagas').length
-  const ask = decisions.filter((d) => d.outcome === 'pregunta').length
+  const act = decisions.filter((d) => d.outcome === 'act').length
+  const blocked = decisions.filter((d) => d.outcome === 'do_not').length
+  const ask = decisions.filter((d) => d.outcome === 'ask').length
   const decideLocale = await resolveWorkerLocale()
   await orca.host.call('notifications.show', {
     title: translate(ADVISOR_CATALOG, decideLocale, 'title'),

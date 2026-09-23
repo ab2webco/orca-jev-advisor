@@ -58,11 +58,11 @@ function describeNearestLevel(score: number, legend: Record<string, string>): st
 
 /**
  * What a policy DOES, not how strongly an action matches it:
- *   - "permite": the rule blesses this class of action ("se hace sin preguntar").
- *   - "pregunta": the rule requires a human to decide ("lo confirma una persona").
- *   - "prohibe": the rule forbids this class of action outright ("no se hace nunca").
+ *   - "permits": the rule blesses this class of action ("se hace sin preguntar").
+ *   - "requires_human": the rule requires a human to decide ("lo confirma una persona").
+ *   - "prohibits": the rule forbids this class of action outright ("no se hace nunca").
  */
-export type PolicyKind = "permite" | "pregunta" | "prohibe";
+export type PolicyKind = "permits" | "requires_human" | "prohibits";
 
 export interface Policy {
   readonly id: string;
@@ -70,8 +70,8 @@ export interface Policy {
   readonly kind: PolicyKind;
 }
 
-export type DestinationOutcome = "actua" | "no_hagas" | "pregunta";
-export type DestinationSource = "politica" | "riesgo";
+export type DestinationOutcome = "act" | "do_not" | "ask";
+export type DestinationSource = "policy" | "risk";
 
 export interface DestinationDecision {
   readonly action: string;
@@ -90,14 +90,14 @@ export interface DestinationDecision {
   readonly isPolicyGap: boolean;
 }
 
-const NO_POLICY = "sin_politica";
+const NO_POLICY = "no_policy";
 const COVERAGE_GATE = 0.7;
 // A single, kind-neutral match threshold: "is this action the kind of thing
 // this rule describes", answered on the same 0..1 noul scale as every other
 // high-confidence gate in this file (COVERAGE_GATE, REVERSIBLE_GATE). Picked
 // deliberately, not measured: acting on a match is one-sided in both
-// directions here (a false "yes" against a `permite` rule skips the human
-// entirely, and a false "yes" against a `prohibe` rule blocks something that
+// directions here (a false "yes" against a `permits` rule skips the human
+// entirely, and a false "yes" against a `prohibits` rule blocks something that
 // should have fallen through to risk judgment), so the bar for treating a
 // match as real stays at the same 0.7 this file already uses whenever a
 // "yes" answer skips a human. Anything below it is "no match" -- there is no
@@ -117,7 +117,7 @@ export function buildPolicyQuestions(policies: readonly Policy[]): Record<string
   return {
     cobertura: {
       type: "choice",
-      instructions: "Cual de las politicas del equipo habla directamente de una accion como esta. Responde sin_politica si ninguna la cubre.",
+      instructions: "Cual de las politicas del equipo habla directamente de una accion como esta. Responde no_policy si ninguna la cubre.",
       criteria,
     },
     es_del_tipo: {
@@ -186,8 +186,8 @@ export function buildDestinationState(action: string, context: string, policies:
  * the action (or coverage confidence is too low, or the covering policy's
  * `kind` did not match), so the caller can fetch the risk-stage answers and
  * call interpretDestinationRisk instead. That fallback is the norm, not an
- * edge case: only a `prohibe` match blocks and only a `permite` match
- * green-lights; a `pregunta` match still resolves here (it does not need
+ * edge case: only a `prohibits` match blocks and only a `permits` match
+ * green-lights; a `requires_human` match still resolves here (it does not need
  * risk judgment), and any non-match of any kind falls through.
  */
 export function interpretDestinationPolicy(action: string, policies: readonly Policy[], answers: Record<string, Answer>): DestinationDecision | null {
@@ -201,12 +201,12 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
   if (policy === undefined) return null;
 
   switch (policy.kind) {
-    case "permite":
-      return { action, outcome: "actua", source: "politica", policyId: coverage.choice, rationale: [{ key: "policy.allowed", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
-    case "pregunta":
-      return { action, outcome: "pregunta", source: "politica", policyId: coverage.choice, rationale: [{ key: "policy.needsHuman", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
-    case "prohibe":
-      return { action, outcome: "no_hagas", source: "politica", policyId: coverage.choice, rationale: [{ key: "policy.forbidden", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
+    case "permits":
+      return { action, outcome: "act", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.allowed", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
+    case "requires_human":
+      return { action, outcome: "ask", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.needsHuman", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
+    case "prohibits":
+      return { action, outcome: "do_not", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.forbidden", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
     default: {
       const exhaustive: never = policy.kind;
       return exhaustive;
@@ -223,8 +223,8 @@ export function interpretDestinationRisk(action: string, answers: Record<string,
   if (reversible === null || external === null || consequence === null) {
     return {
       action,
-      outcome: "pregunta",
-      source: "riesgo",
+      outcome: "ask",
+      source: "risk",
       policyId: null,
       rationale: [{ key: "risk.incompleteAnswers" }],
       isPolicyGap: true,
@@ -243,11 +243,11 @@ export function interpretDestinationRisk(action: string, answers: Record<string,
   if (external.noul >= EXTERNAL_GATE) reasons.push({ key: "risk.noticedOutsideTeam" });
   if (consequence.score > CONSEQUENCE_CEILING) reasons.push({ key: "risk.hurtsIfWrong" });
 
-  const outcome: DestinationOutcome = reasons.length === 0 ? "actua" : "pregunta";
+  const outcome: DestinationOutcome = reasons.length === 0 ? "act" : "ask";
   return {
     action,
     outcome,
-    source: "riesgo",
+    source: "risk",
     policyId: null,
     rationale: reasons.length === 0 ? [{ key: "risk.clear" }] : [{ key: "risk.noPolicyCoverage" }, ...reasons],
     isPolicyGap: true,

@@ -27,7 +27,7 @@ export interface DecisionLogEntry {
   readonly judged: string;
   /** The raw Jev answers behind the verdict -- kept for calibration, not just the final label. */
   readonly rawAnswers: Record<string, Answer>;
-  /** The final verdict as a short label (e.g. 'actua', 'allow', 'avanzado'). */
+  /** The final verdict as a short label (e.g. 'act', 'allow', 'avanzado'). */
   readonly verdict: string;
   readonly overriddenAt: string | null;
   readonly overriddenBy: string | null;
