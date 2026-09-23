@@ -73,17 +73,17 @@ function validateAutonomyRules(catalog: Catalog): string[] {
   for (const destination of catalog.destinations) {
     const { actThreshold, confirmThreshold, maxAutoDelicateness } = destination.autonomy;
     if (!(actThreshold > 0 && actThreshold <= 1)) {
-      errors.push(`Destino '${destination.id}': actThreshold debe estar en (0, 1], recibido ${actThreshold}`);
+      errors.push(`Destination '${destination.id}': actThreshold must be in (0, 1], got ${actThreshold}`);
     }
     if (!(confirmThreshold > 0 && confirmThreshold <= 1)) {
-      errors.push(`Destino '${destination.id}': confirmThreshold debe estar en (0, 1], recibido ${confirmThreshold}`);
+      errors.push(`Destination '${destination.id}': confirmThreshold must be in (0, 1], got ${confirmThreshold}`);
     }
     if (actThreshold < confirmThreshold) {
-      errors.push(`Destino '${destination.id}': actThreshold (${actThreshold}) debe ser >= confirmThreshold (${confirmThreshold})`);
+      errors.push(`Destination '${destination.id}': actThreshold (${actThreshold}) must be >= confirmThreshold (${confirmThreshold})`);
     }
     if (!Number.isInteger(maxAutoDelicateness) || maxAutoDelicateness < 0 || maxAutoDelicateness > maxLevelIndex) {
       errors.push(
-        `Destino '${destination.id}': maxAutoDelicateness debe ser un entero entre 0 y ${maxLevelIndex}, recibido ${maxAutoDelicateness}`,
+        `Destination '${destination.id}': maxAutoDelicateness must be an integer between 0 and ${maxLevelIndex}, got ${maxAutoDelicateness}`,
       );
     }
   }
@@ -104,7 +104,7 @@ export async function loadCatalog(catalogPath?: string): Promise<Catalog> {
     raw = await readFile(path, "utf8");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`No se pudo leer el catálogo en ${path}: ${message}`);
+    throw new Error(`Couldn't read the catalog at ${path}: ${message}`);
   }
 
   let parsed: unknown;
@@ -112,24 +112,24 @@ export async function loadCatalog(catalogPath?: string): Promise<Catalog> {
     parsed = JSON.parse(raw);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`El catálogo en ${path} no es JSON válido: ${message}`);
+    throw new Error(`The catalog at ${path} isn't valid JSON: ${message}`);
   }
 
   if (!isCatalogShape(parsed)) {
     throw new Error(
-      `El catálogo en ${path} no tiene la forma esperada {destinations: [{id, label, kind, worktreePath, autonomy: {actThreshold, confirmThreshold, maxAutoDelicateness}, ...}]}`,
+      `The catalog at ${path} doesn't have the expected shape {destinations: [{id, label, kind, worktreePath, autonomy: {actThreshold, confirmThreshold, maxAutoDelicateness}, ...}]}`,
     );
   }
 
   const ruleErrors = validateAutonomyRules(parsed);
   if (ruleErrors.length > 0) {
-    throw new Error(`El catálogo en ${path} tiene valores de autonomía inválidos:\n- ${ruleErrors.join("\n- ")}`);
+    throw new Error(`The catalog at ${path} has invalid autonomy values:\n- ${ruleErrors.join("\n- ")}`);
   }
 
   const ids = parsed.destinations.map((d) => d.id);
   const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
   if (duplicateIds.length > 0) {
-    throw new Error(`El catálogo en ${path} tiene ids de destino duplicados: ${duplicateIds.join(", ")}`);
+    throw new Error(`The catalog at ${path} has duplicate destination ids: ${duplicateIds.join(", ")}`);
   }
 
   return parsed;

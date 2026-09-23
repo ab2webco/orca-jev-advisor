@@ -246,30 +246,30 @@ export interface SkillDecision {
  * not had its false-positive check.
  */
 export function decideSkill(wide: WideResult | null, fit: FitResult | null, fitAttempted: boolean, fitsThreshold: number = DEFAULT_FITS_THRESHOLD): SkillDecision {
-  if (wide === null) return { name: null, reason: "jev no respondió la etapa 1" };
+  if (wide === null) return { name: null, reason: "jev didn't answer stage 1" };
   if (!wide.needsSkill) {
-    return { name: null, reason: `no hace falta skill (compuerta ${wide.gate === null ? "sin respuesta" : wide.gate.toFixed(2)})` };
+    return { name: null, reason: `no skill needed (gate ${wide.gate === null ? "no answer" : wide.gate.toFixed(2)})` };
   }
-  if (wide.ranked.length === 0) return { name: null, reason: "la etapa 1 no rankeó ninguna skill" };
+  if (wide.ranked.length === 0) return { name: null, reason: "stage 1 ranked no skill" };
 
-  if (fitAttempted && fit === null) return { name: null, reason: "la etapa 2 no respondió" };
+  if (fitAttempted && fit === null) return { name: null, reason: "stage 2 didn't answer" };
   if (fit === null) {
     // Stage 2 was never attempted at all: the top of the ranking is the
     // whole answer stage 1 alone can give.
     const top = wide.ranked[0] as { name: string; probability: number };
-    return { name: top.name, reason: `tope del ranking (${top.probability.toFixed(2)}), sin etapa 2` };
+    return { name: top.name, reason: `top of ranking (${top.probability.toFixed(2)}), no stage 2` };
   }
 
   const fitValues = Object.values(fit.fits);
   const best = fitValues.length > 0 ? Math.max(...fitValues) : null;
   if (best !== null && best < fitsThreshold) {
-    return { name: null, reason: `nada encaja, mejor fits ${best.toFixed(2)} < ${fitsThreshold}` };
+    return { name: null, reason: `nothing fits, best fits ${best.toFixed(2)} < ${fitsThreshold}` };
   }
-  if (fit.winner === null) return { name: null, reason: "la etapa 2 no eligió ninguna" };
+  if (fit.winner === null) return { name: null, reason: "stage 2 chose none" };
 
   const fitOfWinner = fit.fits[fit.winner];
   return {
     name: fit.winner,
-    reason: `etapa 2${fitOfWinner === undefined ? "" : `, fits ${fitOfWinner.toFixed(2)}`}`,
+    reason: `stage 2${fitOfWinner === undefined ? "" : `, fits ${fitOfWinner.toFixed(2)}`}`,
   };
 }
