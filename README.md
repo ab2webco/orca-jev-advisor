@@ -124,8 +124,85 @@ Two honest limits:
 
 ## Not ready yet
 
-- Verified on macOS. Windows and Linux are implemented and **not tested**.
 - Active skill/tool advice is off by default, for the reason above.
+
+## Platform support
+
+**Verified on macOS.** Windows and Linux are implemented, and every
+platform-sensitive module now takes its target platform and environment as
+plain arguments (rather than reading `process.platform`/`process.env`
+itself), which makes it possible to drive `win32` and `linux` behavior from
+this macOS machine and check the arithmetic without the real OS. That is
+what the phrase "proven by simulation" below means: it is evidence about
+this code's own path/permission logic, not a report that Claude Code, Orca,
+or a real filesystem behaves identically on those platforms. Nobody has run
+this plugin on Windows or Linux.
+
+**Proven by simulation** (unit-tested with `win32`/`linux` inputs, including
+a Windows home directory containing a space and both states of
+`XDG_CONFIG_HOME`/`XDG_CACHE_HOME`):
+
+- Where this plugin's own config/cache files resolve to: `~/.config` /
+  `~/.cache` on macOS; the same, but honoring `XDG_CONFIG_HOME` /
+  `XDG_CACHE_HOME` when set, on Linux; `%APPDATA%` / `%LOCALAPPDATA%` on
+  Windows (`src/core/paths.ts`). Linux ignoring those two variables was a
+  real gap this audit closed — Orca's own code honors them, and a
+  developer's Orca and this plugin now agree on where things live.
+- Where Orca's own per-account `userData` (and therefore Claude Code's
+  per-account config root) resolves to on each platform
+  (`src/core/orca_accounts.ts`) — this module already handled the same XDG
+  case correctly before this audit; it now also has a test suite.
+- The command gate's cache-key logic (`src/core/command_shape.ts`)
+  correctly recognizes a Windows absolute path (`C:\...`, `C:/...`, or a
+  `\\server\share` UNC path) as absolute, instead of silently resolving it
+  *relative to the current directory* — which is what it did before this
+  audit, and which could misclassify a target genuinely outside the working
+  tree as inside it, letting a dangerous out-of-tree command reuse a safe
+  in-tree verdict. This was a real, fixed bug, not a hypothetical.
+- Destination matching (`src/core/destination_match.ts`) and worktree
+  catalog derivation (`src/core/worktree_catalog.ts`) both already handled
+  `\` separators, including a Windows path with a space in it.
+- `write-secret-mirror.mjs`'s `chmod 600` on the API key mirror: it already
+  told the truth about Windows before this audit (best-effort, never
+  claims the mode holds, and `statMirror()`'s disclosure names the platform
+  so the config panel does not imply a POSIX guarantee NTFS cannot give).
+
+**Proven by inspection, not simulation** (reasoned from documented Node.js
+behavior, not exercised by a test): sidecar processes are spawned via
+`execFile` with an argument array and no shell, so a Windows path
+containing a space in `--allow-fs-read=...`/`--allow-fs-write=...` is
+passed as one argument, not split by a naive string join; `fs.rename` is
+atomic-with-overwrite on both Windows and POSIX in the Node version this
+project requires. The Windows-only `SYSTEM` prefix list added during this
+audit only covers the `C:` drive (`C:\Windows`, `C:\Program Files`,
+`C:\ProgramData`) — a target on another drive letter is not specially
+recognized and simply falls through to the ordinary in-tree/out-of-tree
+check, same as before this list existed.
+
+**Unverifiable without the real machine**, and expected to need attention
+if something breaks:
+
+- Directory symlink creation for the mod-skills integration
+  (`install-claude-integration.mjs`). Windows commonly refuses a directory
+  symlink without Developer Mode or an elevated process; the installer
+  already catches that failure and reports it per-target instead of
+  crashing (`modLinkWarning`), but nobody has watched it actually refuse or
+  succeed on a real Windows box.
+- Whether Claude Code itself resolves `%APPDATA%`/`%USERPROFILE%` and
+  spawns the gate hook (`node <path>`) the way its own settings.json schema
+  documents on Windows, and whether Orca launches the plugin worker and its
+  sidecars there with the environment shape this code assumes (`APPDATA`,
+  `LOCALAPPDATA`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `PATH`).
+- Case-sensitivity at the very last step of the command gate's in-tree
+  check on Windows: `cwd` and the matched destination's root are compared
+  byte-for-byte, which is correct on case-sensitive POSIX filesystems; NTFS
+  is case-preserving but case-insensitive, and this project has no evidence
+  either way about whether the strings it compares ever differ only in
+  case in practice.
+
+If you run this on Windows or Linux and something in this list turns out
+wrong, that is exactly the gap this section warned about — please report
+it rather than assuming the simulation covered it.
 
 ## For contributors
 

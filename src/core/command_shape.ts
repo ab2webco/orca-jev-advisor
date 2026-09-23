@@ -39,6 +39,25 @@ const LITERAL = "<arg>";
 const SYSTEM_PREFIXES = ["/etc", "/usr", "/bin", "/sbin", "/var", "/opt", "/System", "/Library", "/boot", "/dev", "/proc"];
 
 /**
+ * The Windows equivalents, compared case-insensitively (NTFS is
+ * case-preserving but not case-sensitive, unlike the POSIX prefixes above).
+ * This is a best-effort heuristic like SYSTEM_PREFIXES itself, not
+ * exhaustive: it only covers the `C:` drive, which is where a normal
+ * Windows install and its Program Files live -- a target on another drive
+ * letter (`D:\Windows`, a portable install) is not recognized as SYSTEM by
+ * this list and instead falls through to the ordinary in-tree/out-of-tree
+ * check, same as it did before this list existed.
+ */
+const WINDOWS_SYSTEM_PREFIXES = ["c:/windows", "c:/program files", "c:/program files (x86)", "c:/programdata"];
+
+/** A Windows absolute path: a drive letter followed by `:` and a separator (`C:\` or `C:/`), or a UNC path (`\\server\share`). */
+const WINDOWS_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
+
+function isWindowsAbsolutePath(token: string): boolean {
+  return WINDOWS_ABSOLUTE_PATH.test(token) || token.startsWith("\\\\");
+}
+
+/**
  * Shell constructs whose meaning cannot be known without running them.
  *
  * A command substitution can expand to anything, so two commands that look
@@ -67,7 +86,20 @@ function isInside(candidate: string, root: string): boolean {
 }
 
 function looksLikePath(token: string): boolean {
-  return token.startsWith("/") || token.startsWith("./") || token.startsWith("../") || token.startsWith("~") || token.includes("/");
+  // `token.includes("\\")` (a bare backslash-separated Windows path or a
+  // UNC share) was missing until this fix: without it, an absolute Windows
+  // path passed to a SUBCOMMAND_PROGRAMS entry (e.g. `git add C:\Users\dev\
+  // project\src\file.ts`) was not recognized as a path and was instead
+  // treated as a second verb -- see the `MAX_VERBS` loop below -- kept
+  // LITERAL in the shape instead of classified in-tree/out-of-tree.
+  return (
+    token.startsWith("/") ||
+    token.startsWith("./") ||
+    token.startsWith("../") ||
+    token.startsWith("~") ||
+    token.includes("/") ||
+    token.includes("\\")
+  );
 }
 
 /**
@@ -99,13 +131,25 @@ function classifyArgument(token: string, cwd: string, home: string, treeRoot: st
 
   const normalizedCwd = normalizeSeparators(cwd);
   const normalizedHome = normalizeSeparators(home);
+  // A Windows absolute path (`C:\...`, `C:/...`, or a `\\server\share` UNC
+  // path) used to fall through to the `resolveAgainst(normalizedCwd, ...)`
+  // branch below, because it does not start with `/`. resolveAgainst just
+  // APPENDS the token's segments onto cwd's -- it never recognizes "this is
+  // already absolute" -- so `C:\Users\dev\other-project\file` from cwd
+  // `C:\Users\dev\project` produced the nonsense path
+  // `C:/Users/dev/project/C:/Users/dev/other-project/file`, which starts
+  // with the tree root and was therefore misclassified IN_TREE. That is not
+  // a cosmetic bug: it lets a command targeting something genuinely outside
+  // the working tree borrow a cached verdict that was only ever measured
+  // for something inside it.
   const expanded = token.startsWith("~")
     ? resolveAgainst(normalizedHome, token.slice(1))
-    : token.startsWith("/")
+    : token.startsWith("/") || isWindowsAbsolutePath(token)
       ? normalizeSeparators(token)
       : resolveAgainst(normalizedCwd, token);
 
   if (SYSTEM_PREFIXES.some((p) => isInside(expanded, p))) return SYSTEM;
+  if (WINDOWS_SYSTEM_PREFIXES.some((p) => isInside(expanded.toLowerCase(), p))) return SYSTEM;
   // Measured against the working tree's ROOT, not the current directory: from
   // `app/packages/web`, `../sibling` is still inside the project being worked
   // on, and calling it "outside" would refuse to reuse an answer that applies.

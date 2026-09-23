@@ -107,3 +107,71 @@ test("the same command in a different working directory is judged apart", () => 
   const deeper = shape("rm -rf ../sibling", { cwd: "/Users/dev/Projects/app/packages/web", treeRoot: "/Users/dev/Projects/app" });
   assert.notEqual(here, deeper, "../sibling leaves the project from one of these and stays inside from the other");
 });
+
+// ---------------------------------------------------------------------------
+// Windows -- simulated by driving this module with win32-shaped strings.
+// This is evidence about the code's own path arithmetic, not about a real
+// Windows machine: it proves the shape logic treats a drive-letter path as
+// absolute and stays inside/outside the tree correctly, not that Claude
+// Code's own hook plumbing behaves identically on Windows.
+// ---------------------------------------------------------------------------
+
+const WIN_CTX: ShapeContext = {
+  cwd: "C:\\Users\\Ana Gómez\\Projects\\app",
+  home: "C:\\Users\\Ana Gómez",
+  destinationId: "app",
+  repoContext: "repository app, branch feature/x, this is a working branch, clean",
+};
+
+const winShape = (command: string, over: Partial<ShapeContext> = {}): string | null =>
+  commandShape(command, { ...WIN_CTX, ...over });
+
+test("a Windows absolute path outside the tree is recognised as outside it (regression: it used to be misclassified IN_TREE)", () => {
+  // Before the fix, classifyArgument only recognized `/`-prefixed strings as
+  // absolute; a backslash drive-letter path fell through to
+  // resolveAgainst(cwd, token), which APPENDS instead of replacing, so the
+  // result still started with the tree root and was misclassified IN_TREE --
+  // letting a target genuinely outside the tree borrow an in-tree verdict.
+  // Quoted, like a real shell command must, since these paths contain a
+  // space -- the tokenizer's quote handling is exercised here too.
+  const inTree = winShape('rm -rf "C:\\Users\\Ana Gómez\\Projects\\app\\dist"');
+  const outOfTree = winShape('rm -rf "C:\\Users\\Ana Gómez\\Projects\\other-project\\dist"');
+  assert.notEqual(inTree, outOfTree);
+});
+
+test("a Windows absolute path inside the tree shares an entry with a relative one naming the same file", () => {
+  assert.equal(winShape('rm -rf "C:\\Users\\Ana Gómez\\Projects\\app\\dist"'), winShape("rm -rf dist"));
+});
+
+test("a Windows path argument after a subcommand verb is classified, not kept as a second verb", () => {
+  // Before the fix, looksLikePath did not recognize a backslash path, so
+  // `git add <windows path>` treated the path itself as a second verb (see
+  // MAX_VERBS) and kept it LITERAL in the shape -- defeating cache reuse and
+  // putting the literal path (which can carry a person's name) in the key.
+  const a = winShape('git add "C:\\Users\\Ana Gómez\\Projects\\app\\src\\one.ts"');
+  const b = winShape('git add "C:\\Users\\Ana Gómez\\Projects\\app\\src\\two.ts"');
+  assert.equal(a, b);
+  assert.ok(a !== null && !a.includes("Ana G"), "a literal Windows path leaked into the cache key");
+});
+
+test("a Windows system directory is its own class, matching the POSIX SYSTEM behavior", () => {
+  const system = winShape("rm -rf C:\\Windows\\System32", { cwd: "C:\\Users\\Ana Gómez\\Projects\\app" });
+  const inTree = winShape("rm -rf dist");
+  assert.notEqual(system, inTree);
+  // Case-insensitive, matching NTFS itself.
+  const upperCase = winShape("rm -rf C:\\WINDOWS\\System32");
+  assert.equal(system, upperCase);
+});
+
+test("a UNC path is recognised as absolute and out of the tree", () => {
+  const unc = winShape("rm -rf \\\\fileserver\\share\\data");
+  const inTree = winShape("rm -rf dist");
+  assert.notEqual(unc, inTree);
+});
+
+test("a Windows home-relative path resolves the same way as its POSIX equivalent", () => {
+  assert.equal(
+    winShape("rm -rf ~\\Documents\\contracts"),
+    winShape("rm -rf ../other-project", { cwd: "C:\\Users\\Ana Gómez\\Projects\\app" }),
+  );
+});
