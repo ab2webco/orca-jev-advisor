@@ -246,7 +246,8 @@
           'live.empty': 'Sin datos todavía. El tablero se llena a medida que llegan eventos.',
           'live.unknownWorktree': '(worktree desconocido)',
           'live.agentsCount': '{{n}} agente(s)',
-          'live.updating': 'Actualizando…'
+          'live.updating': 'Actualizando…',
+          'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
           'board.refresh': 'Reload the board',
@@ -304,7 +305,8 @@
           'live.empty': 'No data yet. The board fills in as events arrive.',
           'live.unknownWorktree': '(unknown worktree)',
           'live.agentsCount': '{{n}} agent(s)',
-          'live.updating': 'Updating…'
+          'live.updating': 'Updating…',
+          'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
       }
       /**
@@ -678,7 +680,9 @@
           renderStats(results[1])
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
-          noteEl.textContent = String(error && error.message || error)
+          // Same rule as config.html: a raw fault message is written for
+          // whoever is debugging, not for whoever installed this.
+          noteEl.textContent = t('error.unexpected')
         })
       }
 
