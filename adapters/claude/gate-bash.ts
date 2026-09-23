@@ -15,7 +15,11 @@
  *
  * ALWAYS fails open: any error, timeout or missing key ends in a clean exit
  * with no verdict, and the permission follows its normal course. A gate that
- * breaks work when the network drops is worse than no gate at all.
+ * breaks work when the network drops is worse than no gate at all. That same
+ * fail-open contract now also covers the optional catalog/policies mirror
+ * (see readCatalogMirror/readPoliciesMirror below): a missing, unreadable or
+ * malformed mirror degrades to the pre-existing global-thresholds behavior,
+ * never a crash and never an extra prompt.
  *
  * This is the Claude Code adapter: the three-tier design and the local
  * pattern lists below are this file's own (measured, and correct -- do not
@@ -31,22 +35,37 @@
  * reached tier 1b or Jev). `isObviouslySafeCommand` (src/core, pure and
  * unit-tested) fixes this by splitting on `&&`/`||`/`;`/`|` first and
  * requiring every resulting segment to be independently safe.
+ *
+ * Tier 2's single Jev call now also carries the destination-scoped policy
+ * questions when the cwd matches a catalog destination with policies that
+ * apply to it (see askJev below): one combined question set, one callJev
+ * call, exactly as before -- decideGateAction (src/core/decisions.ts) is
+ * what composes "does a policy already resolve this" with the existing
+ * consequence-ceiling risk rule, substituting a per-destination ceiling
+ * override when the matched destination's catalog entry carries one.
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { buildActionGateQuestions, buildActionGateState, decideAction } from '../../src/core/decisions.ts'
+import { buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import type { GateActionReason, Policy } from '../../src/core/decisions.ts'
+import { commandShape } from '../../src/core/command_shape.ts'
+import { matchDestination } from '../../src/core/destination_match.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
-import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
+import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
 import type { Locale } from '../../src/core/i18n.ts'
 import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
 import type { GateKey } from '../../src/core/i18n_gate.ts'
+import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
+import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
+import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
+import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
@@ -62,6 +81,13 @@ const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
+// Written by adapters/orca/write-secret-mirror.mjs, refreshed on plugin
+// activation and on every config-panel save -- this hook has no channel
+// into Orca's own `storage`, so this file mirror is its only way to see
+// the catalog/policies at all. See src/core/gate_catalog_mirror.ts for
+// the validation that stands between this file and the gate's decision.
+const CATALOG_MIRROR_PATH = join(CONFIG_DIR, 'catalog.json')
+const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 const BUDGET_MS = 1800
 
 /** Since the hook started, so it can say how long deciding cost. */
@@ -88,6 +114,19 @@ function resolveLocale(): Locale {
 
 const LOCALE = resolveLocale()
 const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, LOCALE, key, params)
+
+/** True when `key` belongs to DESTINATION_CATALOG (a policy citation) rather than this file's own GATE_CATALOG (a risk reason) -- GateKey and DestinationKey are disjoint string unions by construction, so membership alone is enough to route it. */
+function isDestinationReasonKey(key: string): key is DestinationKey {
+  return Object.prototype.hasOwnProperty.call(DESTINATION_CATALOG.en, key)
+}
+
+/** Resolves a decideGateAction reason through whichever catalog its key actually belongs to. */
+function resolveGateActionReason(reason: GateActionReason): string {
+  if (isDestinationReasonKey(reason.key)) {
+    return translateReason(DESTINATION_CATALOG, LOCALE, { key: reason.key, params: reason.params })
+  }
+  return translateReason(GATE_CATALOG, LOCALE, { key: reason.key as GateKey, params: reason.params })
+}
 
 type Decision = 'allow' | 'deny' | 'ask'
 
@@ -175,8 +214,22 @@ function passThroughWithNotice(message: string): void {
 
 type CacheEntry = { readonly decision: Decision; readonly reason: string; readonly at: number }
 
-function cacheKey(command: string, context: string): string {
-  return createHash('sha256').update(`${context}\u0000${command}`).digest('hex').slice(0, 24)
+/**
+ * The cache key for a command, or null when it must not be cached.
+ *
+ * It used to hash the literal command text, which over 702 real decisions
+ * hit 3.1% of the time: commands almost never repeat verbatim. The key is
+ * now the command's SHAPE (see src/core/command_shape.ts), which collapses
+ * `node --test a.test.ts` and `node --test b.test.ts` into one entry while
+ * keeping `rm -rf dist` apart from `rm -rf ../other-project` -- measured at
+ * 1.37 and 2.13, so merging those two would be a hole, not a cache.
+ *
+ * Null means "ask every time": a command whose meaning cannot be known
+ * without running it never borrows another command's answer.
+ */
+function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null): string | null {
+  const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
+  return shape === null ? null : createHash('sha256').update(shape).digest('hex').slice(0, 24)
 }
 
 function readCache(): Record<string, CacheEntry> {
@@ -219,6 +272,29 @@ function writeAuthWarned(warned: boolean): void {
   } catch {
     // A mark that can't be written is never a reason to block anything;
     // worst case, the notice repeats next time.
+  }
+}
+
+/**
+ * Best-effort, fail-open reads of the optional catalog/policies mirror --
+ * same discipline as readCache/resolveLocale above: a missing file, an
+ * unreadable one, or one that fails src/core/gate_catalog_mirror.ts's shape
+ * validation is never a throw, it is simply "no catalog" / "no policies",
+ * and the gate keeps working exactly as it did before this feature existed.
+ */
+function readCatalogMirror(): { readonly destinations: readonly MirroredDestination[] } | null {
+  try {
+    return parseMirroredCatalog(JSON.parse(readFileSync(CATALOG_MIRROR_PATH, 'utf8')))
+  } catch {
+    return null
+  }
+}
+
+function readPoliciesMirror(): readonly Policy[] {
+  try {
+    return parseMirroredPolicies(JSON.parse(readFileSync(POLICIES_MIRROR_PATH, 'utf8'))) ?? []
+  } catch {
+    return []
   }
 }
 
@@ -297,15 +373,40 @@ type JevOutcome =
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
 
-/** Calls Jev (src/core) and translates the three-axis verdict into the hook's decision. Never throws. */
-async function askJev(apiKey: string, command: string, context: string): Promise<JevOutcome> {
+/**
+ * Calls Jev (src/core) and translates the verdict into the hook's decision.
+ * Never throws.
+ *
+ * Also resolves the cwd against the (optional) catalog mirror, filters the
+ * (optional) policies mirror down to whatever applies at the matched
+ * destination, and -- when at least one policy applies -- folds the two
+ * extra policy-stage questions into the SAME callJev call the gate already
+ * makes (no second network round trip). decideGateAction then composes
+ * "does a policy already resolve this" with the existing consequence-
+ * ceiling risk rule, substituting the matched destination's own ceiling
+ * override when its catalog entry carries one.
+ */
+async function askJev(apiKey: string, command: string, context: string, cwd: string): Promise<JevOutcome> {
   try {
-    const response = await callJev(apiKey, buildActionGateState(command, context), buildActionGateQuestions(), { budgetMs: BUDGET_MS })
-    const gate = decideAction(response.answers)
-    if (gate.verdict === 'allow') {
-      return { kind: 'verdict', decision: 'allow', reason: t('reason.allowClear') }
+    const catalog = readCatalogMirror()
+    const policies = readPoliciesMirror()
+    const matched: MirroredDestination | null = catalog !== null ? matchDestination(cwd, catalog.destinations) : null
+    const filteredPolicies = filterPoliciesForDestination(policies, matched?.id ?? null)
+
+    const questions = {
+      ...buildActionGateQuestions(),
+      ...(filteredPolicies.length > 0 ? buildPolicyQuestions(filteredPolicies) : {}),
     }
-    return { kind: 'verdict', decision: 'ask', reason: gate.reasons.map((r) => t(r.key, r.params)).join(' · ') }
+    const response = await callJev(apiKey, buildActionGateState(command, context), questions, { budgetMs: BUDGET_MS })
+    const gate = decideGateAction({
+      action: command,
+      policies: filteredPolicies,
+      answers: response.answers,
+      consequenceCeiling: matched?.autonomy?.consequenceCeiling,
+      noDestinationMatched: matched === null,
+    })
+    const reason = gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
+    return { kind: 'verdict', decision: gate.verdict, reason }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
       return { kind: 'auth-rejected', status: error.status }
@@ -332,9 +433,14 @@ async function main(): Promise<void> {
   if (apiKey === null) passThrough()
 
   const context = repoContext(cwd)
-  const key = cacheKey(command, context)
-  const cache = readCache()
-  const hit = cache[key]
+  // The destination is resolved here as well as inside askJev: it is part of
+  // the cache key, because two repositories with different thresholds must
+  // never share a verdict. Both reads hit the same small mirror file.
+  const cachedCatalog = readCatalogMirror()
+  const cachedMatch = cachedCatalog !== null ? matchDestination(cwd, cachedCatalog.destinations) : null
+  const key = cacheKey(command, context, cwd, cachedMatch?.id ?? null, cachedMatch?.worktreePath ?? null)
+  const cache = key === null ? {} : readCache()
+  const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
     appendGateRecord(cwd, command, 'cache', hit.decision, null)
     emit(hit.decision, t('cached', { reason: hit.reason }))
@@ -342,7 +448,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, context)
+  const outcome = await askJev(apiKey as string, command, context, cwd)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') passThrough()
@@ -361,8 +467,10 @@ async function main(): Promise<void> {
   if (readAuthWarned()) writeAuthWarned(false)
 
   const resolved = outcome as { kind: 'verdict'; decision: Decision; reason: string }
-  cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
-  writeCache(cache)
+  if (key !== null) {
+    cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
+    writeCache(cache)
+  }
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs)
   emit(resolved.decision, resolved.reason)
 }
