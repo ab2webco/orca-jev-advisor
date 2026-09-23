@@ -5,7 +5,7 @@
  * The problem and the two-stage shape are TypeSafe's own skill-suggestion
  * cookbook, already built once as `jev-skill-suggestion`. This is a
  * second, narrower implementation for exactly one reason (see the feature
- * document, odd/tasks/mod-skills.md, "Por qué uno nuestro"): it can weigh
+ * document, odd/tasks/mod-skills.md, "Why our own, not a third party's"): it can weigh
  * in the Orca worktree, project and branch a session is running in, which
  * a third-party mod has no way to see. Everything else -- the Jev client,
  * the question shapes, the guards -- comes from src/core, shared with the

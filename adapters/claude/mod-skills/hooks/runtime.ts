@@ -124,7 +124,7 @@ export function makeProcessRun($: EngineInterface): ProcessRun {
     const result = await Promise.race([
       $.process.run(argv),
       $.clock.sleep(ORCA_PROCESS_BUDGET_MS).then((): never => {
-        throw new Error(`${argv[0]} no respondió dentro de ${ORCA_PROCESS_BUDGET_MS}ms`)
+        throw new Error(`${argv[0]} didn't respond within ${ORCA_PROCESS_BUDGET_MS}ms`)
       }),
     ])
     return { exitCode: result.exitCode, stdout: result.stdout }
