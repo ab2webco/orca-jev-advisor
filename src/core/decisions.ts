@@ -196,6 +196,28 @@ export function buildDestinationState(action: string, context: string, policies:
  * green-lights; a `requires_human` match still resolves here (it does not need
  * risk judgment), and any non-match of any kind falls through.
  */
+/**
+ * Maps the pre-rename Spanish kinds onto the current ones.
+ *
+ * The rename to English changed the code and the shipped seed but not the
+ * data already stored in existing installs, so a policy saved before it
+ * carried `permite`/`prohibe`/`pregunta` and stopped matching anything --
+ * silently, because the policy stage simply found no applicable rule. Read
+ * migration is the honest fix: it costs one lookup and it means nobody has
+ * to retype twenty rules.
+ */
+const LEGACY_POLICY_KINDS: Readonly<Record<string, PolicyKind>> = {
+  permite: "permits",
+  pregunta: "requires_human",
+  prohibe: "prohibits",
+};
+
+export function migratePolicyKind(value: unknown): PolicyKind | null {
+  if (typeof value !== "string") return null;
+  if (value === "permits" || value === "requires_human" || value === "prohibits") return value;
+  return LEGACY_POLICY_KINDS[value] ?? null;
+}
+
 export function interpretDestinationPolicy(action: string, policies: readonly Policy[], answers: Record<string, Answer>): DestinationDecision | null {
   const coverage = getChoiceAnswer(answers, "coverage");
   const match = getNoulAnswer(answers, "same_kind");
@@ -206,7 +228,10 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
   const policy = policies.find((p) => p.id === coverage.choice);
   if (policy === undefined) return null;
 
-  switch (policy.kind) {
+  const kind = migratePolicyKind(policy.kind);
+  if (kind === null) return null;
+
+  switch (kind) {
     case "permits":
       return { action, outcome: "act", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.allowed", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
     case "requires_human":
@@ -214,8 +239,13 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
     case "prohibits":
       return { action, outcome: "do_not", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.forbidden", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
     default: {
-      const exhaustive: never = policy.kind;
-      return exhaustive;
+      // Fails safe, and deliberately not `return exhaustive`. That returned
+      // the VALUE -- a string where the caller expects a decision object --
+      // so a policy carrying an unrecognised kind produced an object with
+      // undefined fields instead of "no policy applies", and the whole
+      // policy stage silently did nothing. An unknown kind is a data problem
+      // and must degrade to judging risk, which is the safe path.
+      return null;
     }
   }
 }
@@ -440,9 +470,18 @@ export function decideAction(answers: Record<string, Answer>, options?: DecideAc
   // just no longer decide.
   const ask = consequence.score > consequenceCeiling;
 
+  // Reasons explain a STOP. On a pass they are noise that reads as a warning:
+  // `docker rm my-container` was allowed while announcing "there's no
+  // automatic way to undo it", which sounds like a refusal and is not one.
+  // And when it does stop, the axis that actually decided leads, so the first
+  // thing read is the reason it happened rather than a supporting detail.
+  const decisive = reasons.filter((r) => r.key === "reason.breaksSomethingImportant" || r.key === "reason.needsCleanupAfter");
+  const supporting = reasons.filter((r) => !decisive.includes(r));
+  const explained = ask ? [...decisive, ...supporting] : [];
+
   return {
     verdict: ask ? "ask" : "allow",
-    reasons,
+    reasons: explained,
     reversible: reversible.noul,
     external: external.noul,
     consequence: consequence.score,
@@ -494,9 +533,24 @@ export interface DecideGateActionInput {
 export function decideGateAction(input: DecideGateActionInput): GateActionResult {
   if (input.policies.length > 0) {
     const policyDecision = interpretDestinationPolicy(input.action, input.policies, input.answers);
-    if (policyDecision !== null) {
-      const verdict: GateVerdict = policyDecision.outcome === "act" ? "allow" : "ask";
-      return { verdict, reasons: policyDecision.rationale };
+    // A policy may only make this gate MORE careful, never more permissive.
+    //
+    // Measured over a labelled corpus against the live API, the `same_kind`
+    // question does not separate a policy that genuinely covers a command
+    // from one that merely sounds close: genuine matches scored 0.69-0.75 and
+    // spurious ones 0.64-0.72, a band of -0.03. With that overlap no
+    // threshold can make "this rule permits it" safe -- `rm -rf dist` was
+    // waved through by a policy about reading code and running tests, at a
+    // coverage confidence of 1.00.
+    //
+    // A wrong stop costs a prompt. A wrong pass is how something
+    // irreversible happens. So `prohibits` and `requires_human` are honoured,
+    // because they only ever add caution, and `permits` falls through to the
+    // risk rule instead of short-circuiting it. Nothing is lost in practice:
+    // the commands a policy would permit are cheap ones the risk rule already
+    // allows on its own.
+    if (policyDecision !== null && policyDecision.outcome !== "act") {
+      return { verdict: "ask", reasons: policyDecision.rationale };
     }
   }
 

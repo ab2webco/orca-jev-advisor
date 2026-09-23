@@ -14,6 +14,7 @@
 // `host.storage`) and from a CLI/test harness with a fake in-memory host.
 
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
+import { migratePolicyKind } from "./decisions.ts";
 import type { PolicyKind } from "./decisions.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
@@ -141,7 +142,10 @@ export interface PolicyRow {
 const POLICY_KINDS: readonly PolicyKind[] = ["permits", "requires_human", "prohibits"];
 
 function isPolicyKind(value: unknown): value is PolicyKind {
-  return isString(value) && (POLICY_KINDS as readonly string[]).includes(value);
+  // Accepts the pre-rename Spanish spellings too: a row saved before the
+  // rename is valid data that simply needs mapping, not a row to discard.
+  // Dropping it silently emptied the policy stage on existing installs.
+  return migratePolicyKind(value) !== null;
 }
 
 function isPolicyRow(value: unknown): value is PolicyRow {
