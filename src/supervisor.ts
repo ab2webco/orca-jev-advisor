@@ -17,12 +17,12 @@ import type { Projection } from "./projection.ts";
 function printUsage(): void {
   console.log(
     [
-      "Uso:",
+      "Usage:",
       '  node src/supervisor.ts "<encargo>" [--execute]',
       "  node src/supervisor.ts --self-check",
       "",
-      "  --execute     Ejecuta la acción decidida en vez de solo simularla (por defecto: simulacro).",
-      "  --self-check  Solo lee el estado en vivo de Orca y muestra la proyección; no llama a Jev ni actúa.",
+      "  --execute     Executes the decided action instead of only simulating it (default: dry run).",
+      "  --self-check  Only reads Orca's live state and shows the projection; it does not call Jev or act.",
     ].join("\n"),
   );
 }
@@ -39,11 +39,11 @@ interface ProjectionColumn {
 
 const PROJECTION_COLUMNS: ProjectionColumn[] = [
   { header: "ID", width: 24, get: (r) => r.id },
-  { header: "Destino", width: 30, get: (r) => r.label },
-  { header: "Tipo", width: 12, get: (r) => r.kind },
-  { header: "Handle", width: 22, get: (r) => r.handle ?? "(sin terminal)" },
-  { header: "Estado agente", width: 14, get: (r) => r.agentState ?? "(sin agente)" },
-  { header: "Min. inactivo", width: 14, get: (r) => (r.minutesSinceLastOutput === null ? "-" : String(r.minutesSinceLastOutput)) },
+  { header: "Destination", width: 30, get: (r) => r.label },
+  { header: "Type", width: 12, get: (r) => r.kind },
+  { header: "Handle", width: 22, get: (r) => r.handle ?? "(no terminal)" },
+  { header: "Agent state", width: 14, get: (r) => r.agentState ?? "(no agent)" },
+  { header: "Min. idle", width: 14, get: (r) => (r.minutesSinceLastOutput === null ? "-" : String(r.minutesSinceLastOutput)) },
 ];
 
 function printProjectionTable(projection: Projection): void {
@@ -72,7 +72,7 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (!arg.startsWith("--") && encargo === null) {
       encargo = arg;
     } else {
-      throw new Error(`Argumento no reconocido: ${arg}`);
+      throw new Error(`Unrecognized argument: ${arg}`);
     }
   }
   return { encargo, execute, selfCheck };
@@ -85,19 +85,19 @@ async function loadLiveProjection(): Promise<{ catalog: Catalog; projection: Pro
 }
 
 async function runSelfCheck(): Promise<void> {
-  console.log("=== Supervisor Orca: auto-verificación (solo lectura) ===\n");
+  console.log("=== Orca Supervisor: self-check (read-only) ===\n");
   const { projection } = await loadLiveProjection();
   printProjectionTable(projection);
-  console.log("\nNo se llamó a Jev ni se envió nada a ninguna terminal.");
+  console.log("\nJev was not called and nothing was sent to any terminal.");
 }
 
 async function runEncargo(encargo: string, execute: boolean): Promise<void> {
-  console.log("=== Supervisor Orca ===");
+  console.log("=== Orca Supervisor ===");
   console.log(`Encargo: "${encargo}"`);
-  console.log(`Modo: ${execute ? "EJECUCIÓN REAL" : "SIMULACRO (no se ejecutará ninguna acción)"}\n`);
+  console.log(`Mode: ${execute ? "REAL EXECUTION" : "DRY RUN (no action will be executed)"}\n`);
 
   const { catalog, projection } = await loadLiveProjection();
-  console.log("--- Lo que se ve en vivo ---");
+  console.log("--- What is seen live ---");
   printProjectionTable(projection);
 
   const request = buildJevRequest(encargo, projection);
@@ -106,49 +106,49 @@ async function runEncargo(encargo: string, execute: boolean): Promise<void> {
 
   console.log("\n--- Jev ---");
   if (jevResult.kind === "dry") {
-    console.log("No hay TYPESAFE_API_KEY configurada (ni env var ni ~/.config/orca-supervisor/env): no se llamó a la red.");
-    console.log("Esto es exactamente lo que se habría enviado:\n");
+    console.log("No TYPESAFE_API_KEY is configured (neither an env var nor ~/.config/orca-supervisor/env): the network was not called.");
+    console.log("This is exactly what would have been sent:\n");
     console.log(JSON.stringify(jevResult.request, null, 2));
-    console.log("\n--- Decisión ---");
-    console.log("No se puede decidir sin respuesta de Jev. Configure TYPESAFE_API_KEY para completar el flujo.");
+    console.log("\n--- Decision ---");
+    console.log("Cannot decide without a response from Jev. Set TYPESAFE_API_KEY to complete the flow.");
     return;
   }
 
-  console.log(`Modelo: ${jevResult.response.model}`);
-  console.log(`Tokens usados: entrada=${jevResult.response.usage.input_tokens}, salida=${jevResult.response.usage.output_tokens}`);
-  console.log("Respuestas:");
+  console.log(`Model: ${jevResult.response.model}`);
+  console.log(`Tokens used: input=${jevResult.response.usage.input_tokens}, output=${jevResult.response.usage.output_tokens}`);
+  console.log("Answers:");
   for (const [questionId, answer] of Object.entries(jevResult.response.answers)) {
     console.log(`  ${questionId}: ${JSON.stringify(answer)}`);
   }
 
   const decision = decide(encargo, jevResult.response, catalog, projection);
 
-  console.log("\n--- Decisión ---");
-  console.log(`Acción: ${decision.action}`);
-  console.log(`Destino: ${decision.destinationId ?? "(ninguno)"}`);
-  console.log(`Handle: ${decision.handle ?? "(ninguno)"}`);
-  console.log(`Ambigüedad (unambiguousDestination, noul): ${decision.ambiguityNoul === null ? "(sin dato)" : decision.ambiguityNoul.toFixed(2)}`);
-  console.log(`Delicadeza (score): ${decision.delicatenessScore === null ? "(sin dato)" : decision.delicatenessScore.toFixed(2)}`);
-  console.log(`Razón: ${decision.reason}`);
+  console.log("\n--- Decision ---");
+  console.log(`Action: ${decision.action}`);
+  console.log(`Destination: ${decision.destinationId ?? "(none)"}`);
+  console.log(`Handle: ${decision.handle ?? "(none)"}`);
+  console.log(`Ambiguity (unambiguousDestination, noul): ${decision.ambiguityNoul === null ? "(no data)" : decision.ambiguityNoul.toFixed(2)}`);
+  console.log(`Delicateness (score): ${decision.delicatenessScore === null ? "(no data)" : decision.delicatenessScore.toFixed(2)}`);
+  console.log(`Reason: ${decision.reason}`);
 
-  console.log("\n--- Resultado ---");
+  console.log("\n--- Result ---");
   if (decision.action !== "act" || decision.handle === null || decision.instruction === null) {
-    console.log("No se envía nada a ninguna terminal (la decisión no fue 'act', o falta destino/instrucción).");
+    console.log("Nothing is sent to any terminal (the decision was not 'act', or a destination/instruction is missing).");
     return;
   }
 
   const result = await performAction({ handle: decision.handle, instruction: decision.instruction }, execute);
   if (!result.executed) {
-    console.log("Simulacro: esto es lo que se ejecutaría (no se ejecutó nada):");
+    console.log("Dry run: this is what would be executed (nothing was executed):");
     for (const command of result.commands) {
       console.log(`  ${command}`);
     }
   } else {
-    console.log(`Espera 'composer-ready': satisfecha=${result.composerWait.satisfied}`);
+    console.log(`Wait 'composer-ready': satisfied=${result.composerWait.satisfied}`);
     if (result.writableWaitFallback !== null) {
-      console.log(`Espera de respaldo 'writable': satisfecha=${result.writableWaitFallback.satisfied}`);
+      console.log(`Fallback wait 'writable': satisfied=${result.writableWaitFallback.satisfied}`);
     }
-    console.log(`Envío: aceptado=${result.send.accepted}, bytes=${result.send.bytesWritten}`);
+    console.log(`Send: accepted=${result.send.accepted}, bytes=${result.send.bytesWritten}`);
   }
 }
 

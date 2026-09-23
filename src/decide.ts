@@ -65,7 +65,7 @@ function findProjectionEntry(projection: Projection, id: string): DestinationPro
 // indexed level sits closest to it for a human-readable reason string.
 function describeDelicateness(score: number, legend: Record<string, string>): string {
   const entries = Object.entries(legend);
-  if (entries.length === 0) return `puntaje ${score.toFixed(2)} (sin leyenda)`;
+  if (entries.length === 0) return `score ${score.toFixed(2)} (no legend)`;
   let closest = entries[0];
   let closestDistance = Math.abs(Number(closest[0]) - score);
   for (const entry of entries) {
@@ -105,7 +105,7 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   const ambiguityAnswer = asNoul(response.answers[QUESTION_ID.unambiguousDestination]);
 
   if (destinationAnswer === null || delicatenessAnswer === null || ambiguityAnswer === null) {
-    return incomplete("Jev no devolvió respuestas completas para 'destination', 'delicateness' o 'unambiguousDestination'.");
+    return incomplete("Jev did not return complete answers for 'destination', 'delicateness' or 'unambiguousDestination'.");
   }
 
   const destinationId = destinationAnswer.choice;
@@ -113,7 +113,7 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   const projectionEntry = findProjectionEntry(projection, destinationId);
 
   if (destination === null || projectionEntry === null) {
-    return incomplete(`Jev no identificó un destino conocido del catálogo (respuesta: '${destinationId}').`);
+    return incomplete(`Jev did not identify a known destination from the catalog (answer: '${destinationId}').`);
   }
 
   // targetAgent may point at a different destination than `destination`
@@ -130,9 +130,9 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   const { actThreshold, confirmThreshold, maxAutoDelicateness } = destination.autonomy;
 
   const reasonParts = [
-    `Destino: ${destination.label} (${destination.id}).`,
-    `Claridad del encargo (unambiguousDestination): ${ambiguityNoul.toFixed(2)} (umbral confirmar ${confirmThreshold}, actuar ${actThreshold}).`,
-    `Delicadeza: ${delicatenessScore.toFixed(2)} - ${describeDelicateness(delicatenessScore, delicatenessAnswer.legend)} (máximo nivel permitido para actuar solo: ${maxAutoDelicateness}).`,
+    `Destination: ${destination.label} (${destination.id}).`,
+    `Encargo clarity (unambiguousDestination): ${ambiguityNoul.toFixed(2)} (confirm threshold ${confirmThreshold}, act threshold ${actThreshold}).`,
+    `Delicateness: ${delicatenessScore.toFixed(2)} - ${describeDelicateness(delicatenessScore, delicatenessAnswer.legend)} (max level allowed to act alone: ${maxAutoDelicateness}).`,
   ];
 
   const makeDecision = (action: Action, reason: string, includeInstruction: boolean): Decision => ({
@@ -155,8 +155,8 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   if (!handleOk) {
     blockingReasons.push(
       agentEntry.handle === null
-        ? "Eje bloqueante: handle. No hay una terminal en vivo resuelta para este destino."
-        : `Eje bloqueante: handle. El agente/terminal no está en condición de recibir una instrucción ahora (estado: '${agentEntry.agentState ?? "desconocido"}', conectado: ${agentEntry.connected ?? false}).`,
+        ? "Blocking axis: handle. There is no resolved live terminal for this destination."
+        : `Blocking axis: handle. The agent/terminal is not in a condition to receive an instruction right now (state: '${agentEntry.agentState ?? "unknown"}', connected: ${agentEntry.connected ?? false}).`,
     );
   }
 
@@ -164,7 +164,7 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   const delicatenessOk = delicatenessScore <= maxAutoDelicateness;
   if (!delicatenessOk) {
     blockingReasons.push(
-      `Eje bloqueante: delicadeza. ${delicatenessScore.toFixed(2)} supera el máximo de ${maxAutoDelicateness} permitido para actuar sin humano en este destino.`,
+      `Blocking axis: delicateness. ${delicatenessScore.toFixed(2)} exceeds the maximum of ${maxAutoDelicateness} allowed to act without a human on this destination.`,
     );
   }
 
@@ -172,7 +172,7 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   const clearEnoughToConfirm = ambiguityNoul >= confirmThreshold;
   if (!clearEnoughToConfirm) {
     blockingReasons.push(
-      `Eje bloqueante: ambigüedad. ${ambiguityNoul.toFixed(2)} está por debajo del umbral de confirmación (${confirmThreshold}).`,
+      `Blocking axis: ambiguity. ${ambiguityNoul.toFixed(2)} is below the confirmation threshold (${confirmThreshold}).`,
     );
   }
 
@@ -185,10 +185,10 @@ export function decide(encargo: string, response: JevResponse, catalog: Catalog,
   if (ambiguityNoul < actThreshold) {
     return makeDecision(
       "confirm",
-      `En banda de confirmación: claridad ${ambiguityNoul.toFixed(2)} está entre confirmar (${confirmThreshold}) y actuar (${actThreshold}); delicadeza y handle ya están dentro de lo permitido.`,
+      `In confirmation band: clarity ${ambiguityNoul.toFixed(2)} is between confirm (${confirmThreshold}) and act (${actThreshold}); delicateness and handle are already within what is allowed.`,
       true,
     );
   }
 
-  return makeDecision("act", "Los tres ejes (handle, delicadeza, ambigüedad) permiten actuar sin humano.", true);
+  return makeDecision("act", "All three axes (handle, delicateness, ambiguity) allow acting without a human.", true);
 }

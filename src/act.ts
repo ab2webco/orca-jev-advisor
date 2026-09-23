@@ -31,7 +31,7 @@ function describePlannedCommands(plan: ActionPlan, waitTimeoutMs: number): strin
   const quotedText = JSON.stringify(plan.instruction);
   return [
     `orca terminal wait --terminal ${plan.handle} --for composer-ready --timeout-ms ${waitTimeoutMs} --json`,
-    `(si 'composer-ready' no se cumple a tiempo) orca terminal wait --terminal ${plan.handle} --for writable --timeout-ms ${waitTimeoutMs} --json`,
+    `(if 'composer-ready' is not met in time) orca terminal wait --terminal ${plan.handle} --for writable --timeout-ms ${waitTimeoutMs} --json`,
     `orca terminal send --terminal ${plan.handle} --text ${quotedText} --enter --json`,
   ];
 }
