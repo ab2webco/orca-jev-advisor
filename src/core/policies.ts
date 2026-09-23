@@ -8,11 +8,18 @@
 // share one implementation instead of three.
 
 import { readFile } from "node:fs/promises";
-import type { Policy } from "./decisions.ts";
+import type { Policy, PolicyKind } from "./decisions.ts";
 import { isRecord, isString } from "../guards.ts";
 
 /** Reserved: never usable as a real policy id, since Jev's coverage question uses it to mean "none of these apply". */
 export const NO_POLICY_ID = "sin_politica";
+
+/** The only valid values for a policy row's `kind` -- see PolicyKind in decisions.ts. */
+const POLICY_KINDS: readonly PolicyKind[] = ["permite", "pregunta", "prohibe"];
+
+function isPolicyKind(value: unknown): value is PolicyKind {
+  return isString(value) && (POLICY_KINDS as readonly string[]).includes(value);
+}
 
 function isPolicyRow(value: unknown, index: number): Policy {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule)) {
@@ -21,7 +28,15 @@ function isPolicyRow(value: unknown, index: number): Policy {
   if (value.id === NO_POLICY_ID) {
     throw new Error(`'${NO_POLICY_ID}' es un id reservado y no puede usarse como id de politica`);
   }
-  return { id: value.id, rule: value.rule };
+  // No silent fallback here, on purpose: a policy with no `kind` (or a
+  // typo'd one) used to mean every low-confidence match against it was
+  // treated as a violation, regardless of what the rule actually said. A
+  // missing/invalid `kind` is a misconfiguration the operator needs to see
+  // and fix, exactly like a missing `id` or `rule`.
+  if (!isPolicyKind(value.kind)) {
+    throw new Error(`La politica en la posicion ${index} ('${value.id}') necesita 'kind' igual a uno de: ${POLICY_KINDS.join(", ")}`);
+  }
+  return { id: value.id, rule: value.rule, kind: value.kind };
 }
 
 /**
