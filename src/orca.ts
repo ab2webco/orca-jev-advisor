@@ -63,7 +63,7 @@ export async function runOrca(args: string[], execTimeoutMs = 60_000): Promise<u
     stdout = execResult.stdout;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${commandLabel} falló al ejecutarse: ${message}`);
+    throw new Error(`${commandLabel} failed to execute: ${message}`);
   }
 
   let parsed: unknown;
@@ -71,17 +71,17 @@ export async function runOrca(args: string[], execTimeoutMs = 60_000): Promise<u
     parsed = JSON.parse(stdout);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${commandLabel} no devolvió JSON válido: ${message}`);
+    throw new Error(`${commandLabel} did not return valid JSON: ${message}`);
   }
 
   if (!isOrcaEnvelope(parsed)) {
-    throw new Error(`${commandLabel} devolvió una respuesta con forma inesperada (se esperaba {id, ok, result|error})`);
+    throw new Error(`${commandLabel} returned a response with an unexpected shape (expected {id, ok, result|error})`);
   }
 
   if (!parsed.ok) {
-    const code = parsed.error.code !== undefined ? parsed.error.code : "desconocido";
-    const message = parsed.error.message !== undefined ? parsed.error.message : "sin mensaje";
-    throw new Error(`${commandLabel} respondió con error [${code}]: ${message}`);
+    const code = parsed.error.code !== undefined ? parsed.error.code : "unknown";
+    const message = parsed.error.message !== undefined ? parsed.error.message : "no message";
+    throw new Error(`${commandLabel} responded with error [${code}]: ${message}`);
   }
 
   return parsed.result;
@@ -154,7 +154,7 @@ function isWorktreePsResult(value: unknown): value is WorktreePsResult {
 export async function worktreePs(): Promise<WorktreePsResult> {
   const result = await runOrca(["worktree", "ps"]);
   if (!isWorktreePsResult(result)) {
-    throw new Error("orca worktree ps --json: el campo 'result' no tiene la forma esperada {worktrees: [...]}");
+    throw new Error("orca worktree ps --json: the 'result' field does not have the expected shape {worktrees: [...]}");
   }
   return result;
 }
@@ -203,7 +203,7 @@ function isTerminalListResult(value: unknown): value is TerminalListResult {
 export async function terminalList(): Promise<TerminalListResult> {
   const result = await runOrca(["terminal", "list"]);
   if (!isTerminalListResult(result)) {
-    throw new Error("orca terminal list --json: el campo 'result' no tiene la forma esperada {terminals: [...]}");
+    throw new Error("orca terminal list --json: the 'result' field does not have the expected shape {terminals: [...]}");
   }
   return result;
 }
@@ -251,7 +251,7 @@ export async function terminalWait(handle: string, condition: WaitCondition, tim
     timeoutMs + 10_000,
   );
   if (!isTerminalWaitResult(result)) {
-    throw new Error("orca terminal wait --json: el campo 'result' no tiene la forma esperada {wait: {...}}");
+    throw new Error("orca terminal wait --json: the 'result' field does not have the expected shape {wait: {...}}");
   }
   return result;
 }
@@ -282,7 +282,7 @@ function isTerminalSendResult(value: unknown): value is TerminalSendResult {
 export async function terminalSend(handle: string, text: string): Promise<TerminalSendResult> {
   const result = await runOrca(["terminal", "send", "--terminal", handle, "--text", text, "--enter"]);
   if (!isTerminalSendResult(result)) {
-    throw new Error("orca terminal send --json: el campo 'result' no tiene la forma esperada {send: {...}}");
+    throw new Error("orca terminal send --json: the 'result' field does not have the expected shape {send: {...}}");
   }
   return result;
 }
@@ -314,7 +314,7 @@ function isTerminalReadResult(value: unknown): value is TerminalReadResult {
 export async function terminalRead(handle: string, limit: number): Promise<TerminalReadResult> {
   const result = await runOrca(["terminal", "read", "--terminal", handle, "--limit", String(limit)]);
   if (!isTerminalReadResult(result)) {
-    throw new Error("orca terminal read --json: el campo 'result' no tiene la forma esperada {terminal: {...}}");
+    throw new Error("orca terminal read --json: the 'result' field does not have the expected shape {terminal: {...}}");
   }
   return result;
 }
