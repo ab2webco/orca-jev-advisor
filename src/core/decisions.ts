@@ -351,7 +351,30 @@ export interface GateDecision {
 
 const GATE_REVERSIBLE_GATE = 0.7;
 const GATE_EXTERNAL_GATE = 0.5;
-const GATE_CONSEQUENCE_CEILING = 1.5;
+/**
+ * Measured across BOTH populations the gate actually sees, not one.
+ *
+ * It sat at 1.5, the midpoint of a band measured over single commands
+ * (`rm -rf node_modules`, `gh pr merge ...`), where harmless topped out at
+ * 1.05 and dangerous started at 1.94. Real traffic is not shaped like that:
+ * an agent writes compound scripts, and those score higher as a class
+ * without being more dangerous. A routine `python3 <<heredoc` that edits a
+ * file, runs the tests and commits scored **1.51** -- one hundredth over the
+ * line -- and `grep -rl old src | xargs sed -i` scored 1.62. Both are
+ * everyday work, and both were stopping.
+ *
+ * Measured over both populations together, harmless tops out at 1.62 and
+ * dangerous starts at 1.94. This is the midpoint of that narrower band, and
+ * it stops every dangerous case in both corpora while stopping none of the
+ * harmless ones.
+ *
+ * The band is 0.32 wide where the single-command one was 0.86, so this is a
+ * tighter fit than it looks and worth re-measuring whenever the prompts
+ * change. What does not depend on it at all: the local rules, which catch a
+ * force push, a recursive delete from / or $HOME, a dropped table and
+ * `curl | bash` with no network and no threshold.
+ */
+const GATE_CONSEQUENCE_CEILING = 1.78;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
