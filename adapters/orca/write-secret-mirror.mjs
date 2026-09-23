@@ -50,9 +50,9 @@ import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
-// platform; resolveConfigDir only decides the `.config` vs `%APPDATA%`
+// platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
 // convention on top of it (see src/core/paths.ts).
-const CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA })
+const CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
 const MIRROR_PATH = join(CONFIG_DIR, 'env')
 const ENV_VAR_NAME = 'TYPESAFE_API_KEY'
 // The config panel's message-language choice, mirrored the same way as the

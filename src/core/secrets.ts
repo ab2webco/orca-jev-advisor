@@ -26,9 +26,17 @@ import { normalizePlatform, resolveConfigDir } from "./paths.ts";
 
 const ENV_VAR_NAME = "TYPESAFE_API_KEY";
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
-// platform; resolveConfigDir only decides the `.config` vs `%APPDATA%`
+// platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
 // convention on top of it.
-const FALLBACK_PATH = join(resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA }), "env");
+const FALLBACK_PATH = join(
+  resolveConfigDir(normalizePlatform(process.platform), {
+    home: homedir(),
+    appDataDir: process.env.APPDATA,
+    localAppDataDir: process.env.LOCALAPPDATA,
+    xdgConfigHome: process.env.XDG_CONFIG_HOME,
+  }),
+  "env",
+);
 
 /** The key name this plugin uses inside Orca's `secrets` store. */
 export const SECRET_KEY_NAME = "typesafeApiKey";

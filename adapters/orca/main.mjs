@@ -66,7 +66,13 @@ import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUse
 // privilege: each sidecar gets exactly the directories its own docstring
 // says it touches, on purpose, rather than by accident of inheritance.
 const PLATFORM = normalizePlatform(process.platform)
-const HOME_PATHS = { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA }
+const HOME_PATHS = {
+  home: homedir(),
+  appDataDir: process.env.APPDATA,
+  localAppDataDir: process.env.LOCALAPPDATA,
+  xdgConfigHome: process.env.XDG_CONFIG_HOME,
+  xdgCacheHome: process.env.XDG_CACHE_HOME,
+}
 const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
 const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 // Claude Code's own config roots the install sidecar writes into -- see
