@@ -200,7 +200,7 @@ test("decideAction: still callable with a single argument, using the global ceil
 });
 
 test("decideAction: an explicit per-destination ceiling overrides the global one, in both directions", () => {
-  const midRisk = riskAnswers(0.9, 0.1, 1.6); // above the global 1.5 ceiling
+  const midRisk = riskAnswers(0.9, 0.1, 1.9); // above the global 1.78 ceiling
   assert.equal(decideAction(midRisk).verdict, "ask");
   assert.equal(decideAction(midRisk, { consequenceCeiling: 2.0 }).verdict, "allow");
 
@@ -260,7 +260,7 @@ test("decideGateAction: a requires_human policy match also produces ask", () => 
 test("decideGateAction: no policy match falls through to the consequence-ceiling rule, using the per-destination ceiling when provided and the global one when not", () => {
   const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
   // Match is below MATCH_GATE, so interpretDestinationPolicy returns null and this falls through.
-  const noMatch = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.2 }, { reversible: 0.9, external: 0.1, consequence: 1.6 });
+  const noMatch = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.2 }, { reversible: 0.9, external: 0.1, consequence: 1.9 });
 
   const withGlobalCeiling = decideGateAction({ action: ACTION, policies: [permits], answers: noMatch });
   assert.equal(withGlobalCeiling.verdict, "ask");
