@@ -30,7 +30,7 @@ adapters/claude/ # the Claude Code side: the PreToolUse gate, later the prompt h
 `src/core/` never does extra I/O: each module receives what it needs as a
 parameter (the API key, the `storage` host, the `secrets` host) instead
 of reading the environment or disk on its own. That's what lets the
-same code serve both a one-shot CLI (`tools/*.ts`) and a plugin
+same code serve both the Claude Code gate and an Orca plugin
 worker that can die and restart at any time
 (`adapters/orca/main.mjs`).
 
@@ -171,7 +171,7 @@ environment variable next, the development file last.
 - `src/core/decisions.ts` — the three decision families, each a pure
   function over already-obtained responses: `decideDestination`
   (policy first, risk after — the original `decide()` from
-  `tools/decide.ts`), `decideAction` (the three axes of the command
+  the destination decision), `decideAction` (the command gate's axes
   gate, the same one used by `adapters/claude/gate-bash.ts`), and
   `scoreComplexity` (a `score` question that maps a task to a
   capability level).
@@ -189,8 +189,7 @@ environment variable next, the development file last.
   here from `src/catalog.ts`; still used by `supervisor.ts`'s routing
   engine).
 - `src/core/policies.ts` — loads and validates a policies file
-  (`{id, rule}[]`), shared by `tools/decide.ts` and
-  `tools/policy-gate.ts` instead of each one loading its own.
+  (`{id, rule}[]`), loaded once and shared by every consumer.
 
 ### The routing engine (`node src/supervisor.ts`)
 
@@ -223,22 +222,21 @@ pass beyond moving `catalog.ts` and `apiKey.ts` (see below):
   `src/core/secrets.ts`, which does exactly the same thing for this use
   case plus the `secrets` precedence when running inside the plugin.)
 
-### The CLI entry points (`tools/*.ts`)
+### There are no CLI entry points
 
-- `tools/decide.ts` and `tools/policy-gate.ts` — both import the
-  questions and the policy stage interpretation
-  (`buildPolicyQuestions` / `interpretDestinationPolicy`) from
-  `src/core/decisions.ts`, and `loadPolicies` from
-  `src/core/policies.ts`. Before, each one loaded an almost identical
-  copy of the same logic.
-- `tools/ask-or-act.ts` — shares the infrastructure (`callJev`,
-  `resolveApiKey`) with the rest of the project, but keeps its own
-  question wording and its own three-level thresholds
-  (`actua`/`confirma`/`pregunta`): its wording isn't identical to
-  `src/core/decisions.ts`'s risk stage (it was calibrated separately
-  against the real API), so unifying it would have changed an
-  already-measured behavior without re-measuring it. The decision is
-  documented here instead of forcing reuse.
+There used to be three (`tools/ask-or-act.ts`, `tools/policy-gate.ts`,
+`tools/decide.ts`), written before the plugin existed so the decisions
+could be exercised against the real API from a terminal. They are gone.
+
+Nothing in the product ever called them, and they had started to drift:
+`ask-or-act.ts` still carried its own copy of a three-axis risk rule that
+measurement later showed to be wrong — it would have shipped advice the
+gate itself no longer follows. Three ways to make the same judgement means
+three things to keep in step, and they did not stay in step.
+
+What they did is now reached through the plugin: the `advisor.decide`
+command judges one or more described actions, and the Bash gate judges
+commands automatically without anyone typing anything.
 
 ### `adapters/claude/` — the Claude Code gate
 
