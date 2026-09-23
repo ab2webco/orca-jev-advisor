@@ -1,164 +1,175 @@
-# orca-jev-advisor (plugin de Orca)
+# orca-jev-advisor (Orca plugin)
 
-El adaptador de Orca del proyecto `orca-supervisor`: el contenedor de una
-capa de decisión respaldada por Jev (TypeSafe) que corre *dentro* de Orca,
-como plugin, en vez de como CLI aparte. Ve solo su propio worktree para
-acciones directas (`terminal.sendText`, `workspace.readContext`), pero
-mantiene un tablero cruzado entre worktrees a través de `storage` y el
-único evento global que existe (`agent.status.changed`).
+The `orca-supervisor` project's Orca adapter: the container for a
+Jev-backed (TypeSafe) decision layer that runs *inside* Orca,
+as a plugin, instead of as a separate CLI. It only sees its own
+worktree for direct actions (`terminal.sendText`, `workspace.readContext`),
+but maintains a cross-worktree board through `storage` and the
+only global event that exists (`agent.status.changed`).
 
-No duplica lógica: toda la decisión (Jev, los tres veredictos, el
-almacenamiento tipado, el log) vive en `../../src/core/` y es la misma que
-usan los CLIs de `tools/` y el hook de Claude Code en `adapters/claude/`.
-Este directorio es solo la superficie de Orca: el manifest, el worker, y
-los dos paneles.
+It doesn't duplicate logic: all the decision-making (Jev, the three
+verdicts, the typed storage, the log) lives in `../../src/core/` and is
+the same one used by the `tools/` CLIs and the Claude Code hook in
+`adapters/claude/`. This directory is just Orca's surface: the manifest,
+the worker, and the two panels.
 
-## Qué hay aquí
+## What's here
 
 ```
-orca-plugin.json           manifest: paneles, comandos, eventos, capabilities
+orca-plugin.json           manifest: panels, commands, events, capabilities
 main.mjs                    worker: activate(host) -> { commands, teardown }
-write-secret-mirror.mjs      sidecar: escribe/lee el espejo de la clave (ver abajo)
-panels/board.html            panel de navegación: tabla del tablero en vivo
-panels/config.html           panel de settings: clave, catálogo, políticas, umbrales
-icons/advisor.svg            ícono usado por ambos paneles
+write-secret-mirror.mjs      sidecar: writes/reads the key mirror (see below)
+panels/board.html            navigation panel: live board table
+panels/config.html           settings panel: key, catalog, policies, thresholds
+icons/advisor.svg            icon used by both panels
 ```
 
-## Los tres comandos
+## The three commands
 
-- **`advisor.decide`** — recibe `{ actions: string[] }`, corre
-  `decideDestination` (política primero, riesgo después, igual que
-  `tools/decide.ts`) sobre cada una, registra cada veredicto en el log
-  (`src/core/log.ts`), y muestra una notificación con el resumen. Devuelve
-  el arreglo de decisiones.
-- **`advisor.board`** — devuelve el contenido actual de `storage`'s
-  `board`: la tabla `{worktreeId, paneKey, state, receivedAt, updatedAt}`
-  que `main.mjs` mantiene actualizada al escuchar `agent.status.changed`.
-- **`advisor.doctor`** — revisa cuatro cosas y devuelve `{ok, checks[]}`:
-  - `api-key`: no solo que haya una clave resuelta (`secrets` o el
-    fallback de entorno/archivo) -- le hace una llamada real y mínima a
-    Jev y reporta lo que de verdad pasó: clave válida (Jev respondió),
-    clave rechazada (401/403), sin red (timeout o error de conexión), o
-    sin clave. Una clave muerta sale en rojo aquí, no en verde.
-  - `secret-mirror`: si el archivo espejo (ver la sección siguiente)
-    coincide con lo que hay en `secrets` ahora mismo.
-  - `orca-cli`: el binario `orca` responde a `status --json` (capacidad
-    `process:spawn` -- nunca se manda nada a una terminal real).
-  - `catalog`: el catálogo guardado en `storage` tiene una forma válida.
+- **`advisor.decide`** — receives `{ actions: string[] }`, runs
+  `decideDestination` (policy first, risk after, same as
+  `tools/decide.ts`) on each one, logs each verdict in the log
+  (`src/core/log.ts`), and shows a notification with the summary.
+  Returns the array of decisions.
+- **`advisor.board`** — returns the current contents of `storage`'s
+  `board`: the `{worktreeId, paneKey, state, receivedAt, updatedAt}`
+  table that `main.mjs` keeps updated by listening to
+  `agent.status.changed`.
+- **`advisor.doctor`** — checks four things and returns
+  `{ok, checks[]}`:
+  - `api-key`: not just that there's a resolved key (`secrets` or the
+    environment/file fallback) -- it makes a real, minimal call to
+    Jev and reports what actually happened: valid key (Jev responded),
+    rejected key (401/403), no network (timeout or connection error),
+    or no key. A dead key shows up red here, not green.
+  - `secret-mirror`: whether the mirror file (see the next
+    section) matches what's currently in `secrets`.
+  - `orca-cli`: whether the `orca` binary responds to `status --json`
+    (`process:spawn` capability -- nothing is ever sent to a real
+    terminal).
+  - `catalog`: whether the catalog stored in `storage` has a valid
+    shape.
 
-## El espejo de la clave (`~/.config/orca-supervisor/env`)
+## The key mirror (`~/.config/orca-supervisor/env`)
 
-El panel de configuración guarda la clave de TypeSafe en `secrets`
-(cifrado por Orca con `safeStorage` de Electron), pero los CLIs de
-`tools/` y `adapters/claude/gate-bash.ts` corren como Node suelto, fuera
-de Electron, y no pueden leer `secrets` -- es una frontera real, no un
-descuido. Por eso, cada vez que la clave cambia en `secrets` (guardado o
-borrado desde el panel) y también al activarse el worker, `main.mjs`
-espeja su valor a `~/.config/orca-supervisor/env` (`TYPESAFE_API_KEY=...`,
-el mismo fallback que ya documenta `src/core/secrets.ts`), con permisos
-**`0600`** y escritura atómica (archivo temporal + `rename`). Al borrar la
-clave, el espejo se borra también (o se le quita solo esa línea, si el
-archivo tenía otro contenido).
+The settings panel stores the TypeSafe key in `secrets`
+(encrypted by Orca with Electron's `safeStorage`), but the `tools/`
+CLIs and `adapters/claude/gate-bash.ts` run as plain Node, outside
+of Electron, and can't read `secrets` -- it's a real boundary, not an
+oversight. That's why, every time the key changes in `secrets` (saved
+or deleted from the panel) and also when the worker activates,
+`main.mjs` mirrors its value to `~/.config/orca-supervisor/env`
+(`TYPESAFE_API_KEY=...`, the same fallback already documented by
+`src/core/secrets.ts`), with **`0600`** permissions and an atomic
+write (temp file + `rename`). When the key is deleted, the mirror is
+deleted too (or just that line is removed from it, if the file had
+other content).
 
-El worker no puede escribir ese archivo él mismo: su sandbox de permisos
-solo le deja leer su propia raíz de plugin (medido, no supuesto -- escribir
-ahí lanzaba en vez de resolver). La escritura corre en cambio en
-`write-secret-mirror.mjs`, un proceso hijo limpio (`mandoSinValla`, el
-mismo patrón `/usr/bin/env -u NODE_OPTIONS` que ya usa
-`orca-wa-inbox/main.mjs` para esta misma clase de problema). La clave
-cruza a ese hijo únicamente por **stdin**, nunca por argv (visible en
-cualquier `ps`) ni por ningún `orca.log`.
+The worker can't write that file itself: its permission sandbox
+only lets it read its own plugin root (measured, not assumed --
+writing there threw instead of resolving). The write instead runs in
+`write-secret-mirror.mjs`, a clean child process (`mandoSinValla`, the
+same `/usr/bin/env -u NODE_OPTIONS` pattern already used by
+`orca-wa-inbox/main.mjs` for this same class of problem). The key
+crosses to that child only via **stdin**, never via argv (visible in
+any `ps`) nor in any `orca.log`.
 
-Esto significa que, a partir de esta versión, el panel es el único lugar
-donde el usuario escribe la clave -- pero el archivo sigue existiendo en
-disco, en texto plano, con los permisos de un archivo que solo el dueño
-puede leer. Quien prefiera no tener ese espejo en disco debe saberlo antes
-de guardar la clave desde el panel.
+This means that, as of this version, the panel is the only place
+where the user writes the key -- but the file still exists on
+disk, in plain text, with the permissions of a file only its owner
+can read. Anyone who'd rather not have that mirror on disk should
+know this before saving the key from the panel.
 
-## Cómo se llena el tablero entre worktrees
+## How the board gets filled across worktrees
 
-`terminal.sendText` y `workspace.readContext` están **limitados al
-worktree activo del plugin** -- eso está verificado, no es una suposición.
-`agent.status.changed`, en cambio, es el único evento global: trae
-`worktreeId` en su payload sin importar en qué worktree corre la instancia
-del worker que lo recibe. Como `storage` no aparece en la lista de
-capacidades limitadas al worktree activo, este plugin la trata como el
-canal compartido: cada instancia que recibe el evento escribe la misma
-clave `board`, así que cualquier worktree que abra el panel ve el estado
-de todos. Cruzar hacia *acción* en otro worktree (no solo lectura) seguiría
-necesitando `process:spawn` para invocar `orca terminal send` desde afuera
--- eso es justo lo que este skeleton NO hace todavía (ver más abajo).
+`terminal.sendText` and `workspace.readContext` are **limited to
+the plugin's active worktree** -- that's verified, not an assumption.
+`agent.status.changed`, on the other hand, is the only global event: it
+carries `worktreeId` in its payload regardless of which worktree the
+worker instance that receives it is running in. Since `storage` doesn't
+appear on the list of capabilities limited to the active worktree, this
+plugin treats it as the shared channel: every instance that receives
+the event writes the same `board` key, so any worktree that opens the
+panel sees the state of all of them. Crossing into *action* on another
+worktree (not just reading) would still need `process:spawn` to invoke
+`orca terminal send` from outside -- that's exactly what this skeleton
+does NOT do yet (see below).
 
-## Qué está armado
+## What's built
 
-- El cliente de Jev, las tres familias de decisión, el store tipado, el
-  log, y la resolución de la clave -- todo en `../../src/core/`, con
-  guards explícitos y sin ningún `any`.
-- El manifest declara paneles, comandos, eventos y capabilities, y cada
-  ruta que declara (`main`, cada `panel.entry`, cada `icon`) existe en
-  disco -- verificado con un script que lee el JSON y comprueba cada ruta.
-- `main.mjs` se suscribe a los tres eventos, mantiene el tablero
-  actualizado, expone los tres comandos, y su `teardown` cancela las tres
-  suscripciones -- no queda nada corriendo después de que Orca mate al
+- The Jev client, the three decision families, the typed store, the
+  log, and key resolution -- all in `../../src/core/`, with
+  explicit guards and no `any` anywhere.
+- The manifest declares panels, commands, events, and capabilities,
+  and every path it declares (`main`, each `panel.entry`, each `icon`)
+  exists on disk -- verified with a script that reads the JSON and
+  checks each path.
+- `main.mjs` subscribes to the three events, keeps the board
+  updated, exposes the three commands, and its `teardown` cancels the
+  three subscriptions -- nothing is left running after Orca kills the
   worker.
-- Los dos paneles son HTML+CSS+JS planos, sin build, sin request externo,
-  legibles a ancho angosto (probado visualmente contra 320px de ancho de
-  contenido, el caso más apretado de un panel lateral).
+- The two panels are plain HTML+CSS+JS, no build, no external
+  request, readable at narrow width (visually tested against 320px of
+  content width, the tightest case for a side panel).
 
-## Qué NO está armado (y por qué)
+## What's NOT built (and why)
 
-- **El bridge panel ↔ worker es una propuesta documentada, no un contrato
-  confirmado.** Los dos archivos HTML asumen un protocolo por
-  `postMessage` (`advisor:ready`, `advisor:requestBoard`,
+- **The panel ↔ worker bridge is a documented proposal, not a
+  confirmed contract.** The two HTML files assume a `postMessage`
+  protocol (`advisor:ready`, `advisor:requestBoard`,
   `advisor:board`, `advisor:requestConfig`, `advisor:config`,
   `advisor:saveSecret`, `advisor:clearSecret`, `advisor:saveConfig`,
-  `advisor:saveResult`) porque el panel corre en un iframe sandboxeado de
-  origen opaco y ese es el único canal posible. No se tuvo acceso al
-  runtime real que instancia un panel de Orca para confirmar los nombres
-  exactos de esos mensajes -- ajústalos aquí y en `main.mjs` en cuanto se
-  confirmen. Hoy `main.mjs` no tiene el lado que escucha esos mensajes:
-  solo expone los tres comandos del manifest.
-- **El contrato de activación (`activate(host) -> {commands, teardown}`)
-  es una suposición razonada, documentada en el encabezado de `main.mjs`**,
-  no algo verificado contra el runtime de Orca. Los 13 métodos del host
+  `advisor:saveResult`) because the panel runs in a sandboxed iframe
+  with an opaque origin and that's the only channel possible. There
+  was no access to the real runtime that instantiates an Orca panel to
+  confirm the exact names of those messages -- adjust them here and in
+  `main.mjs` as soon as they're confirmed. Today `main.mjs` doesn't
+  have the side that listens for those messages: it only exposes the
+  three manifest commands.
+- **The activation contract (`activate(host) -> {commands, teardown}`)
+  is a reasoned assumption, documented in `main.mjs`'s header**,
+  not something verified against Orca's runtime. The 13 host methods
   (`workspace.readContext`, `terminal.sendText`, `notifications.show`,
-  `storage.*`, `secrets.*`, `settings.*`, `events.subscribe`) sí están
-  verificados; cómo Orca invoca `activate` y despacha un comando invocado
-  hacia el mapa `commands` no lo está.
-- **Sin automations.** El manifest deja `contributes.automations: []` con
-  una nota (`_automationsNote`) explicando que, cuando se diseñe una (por
-  ejemplo, una revisión periódica del log o del tablero), va ahí.
-- **Ninguna acción cruza worktrees todavía.** `advisor.decide` juzga
-  acciones; no las ejecuta en ningún worktree. Ejecutar en un worktree
-  ajeno requeriría spawnear `orca terminal send` vía `process:spawn`
-  -- la capability está declarada porque se anticipa, pero no se usa en
-  ningún lado de este skeleton (y esta tarea pidió explícitamente no
-  ejecutar `orca terminal send` / `terminal create`).
-- **Nada de esto está instalado ni cargado en una configuración real de
-  Orca.** Ni `~/.claude/settings.json` ni la configuración de Orca fueron
-  tocados.
+  `storage.*`, `secrets.*`, `settings.*`, `events.subscribe`) are
+  verified; how Orca invokes `activate` and dispatches an invoked
+  command to the `commands` map is not.
+- **No automations.** The manifest leaves `contributes.automations: []`
+  with a note (`_automationsNote`) explaining that, when one is
+  designed (for example, a periodic review of the log or the board),
+  it goes there.
+- **No action crosses worktrees yet.** `advisor.decide` judges
+  actions; it doesn't execute them on any worktree. Executing on
+  another worktree would require spawning `orca terminal send` via
+  `process:spawn` -- the capability is declared because it's
+  anticipated, but it isn't used anywhere in this skeleton (and this
+  task explicitly asked not to execute `orca terminal send` /
+  `terminal create`).
+- **None of this is installed or loaded in a real Orca
+  configuration.** Neither `~/.claude/settings.json` nor Orca's
+  configuration were touched.
 
-## Cómo cargarlo como plugin de desarrollo
+## How to load it as a development plugin
 
-Esto no se ejecutó como parte de esta tarea (instalar el plugin estaba
-fuera de alcance); son los pasos tal como los documenta el manifest de
-referencia (`orca-wa-inbox`) para un plugin cargado desde disco:
+This wasn't run as part of this task (installing the plugin was
+out of scope); these are the steps as documented by the reference
+manifest (`orca-wa-inbox`) for a plugin loaded from disk:
 
-1. Abre la configuración de plugins de Orca y agrega esta carpeta
-   (`adapters/orca/`) como una ruta de plugin de desarrollo
-   (`devPluginPaths` en la configuración de Orca, según el patrón visto en
-   otros plugins).
-2. Orca debería leer `orca-plugin.json`, validar que `main.mjs` existe, y
-   ofrecer el plugin en la lista de plugins instalados/en desarrollo.
-3. Configura la clave de TypeSafe desde el panel de configuración
-   (`Jev Advisor` bajo settings) -- eso la guarda vía `secrets`, no en
-   disco.
-4. Invoca `advisor.doctor` primero para confirmar que la clave, el CLI de
-   `orca`, y el catálogo están en orden antes de usar `advisor.decide`.
+1. Open Orca's plugin settings and add this folder
+   (`adapters/orca/`) as a development plugin path
+   (`devPluginPaths` in Orca's configuration, following the pattern
+   seen in other plugins).
+2. Orca should read `orca-plugin.json`, validate that `main.mjs`
+   exists, and offer the plugin in the list of installed/in-development
+   plugins.
+3. Configure the TypeSafe key from the settings panel
+   (`Jev Advisor` under settings) -- that stores it via `secrets`, not
+   on disk.
+4. Invoke `advisor.doctor` first to confirm that the key, the `orca`
+   CLI, and the catalog are in order before using `advisor.decide`.
 
-## Node y dependencias
+## Node and dependencies
 
-Node ≥24, `"type": "module"`, cero dependencias, sin paso de build.
-`main.mjs` importa `.ts` directamente desde `../../src/core/` gracias al
-"type stripping" nativo de Node -- el mismo mecanismo que ya usan
-`tools/*.ts` y `adapters/claude/gate-bash.ts`.
+Node ≥24, `"type": "module"`, zero dependencies, no build step.
+`main.mjs` imports `.ts` files directly from `../../src/core/` thanks
+to Node's native "type stripping" -- the same mechanism already used
+by `tools/*.ts` and `adapters/claude/gate-bash.ts`.
