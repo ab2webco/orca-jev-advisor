@@ -656,6 +656,11 @@
         var age = nowMs - at
         return age >= 0 && age <= staleAfterMs
       }
+      // Mirrors buildSecretTombstone in worker-status.mjs -- see that
+      // file's module comment.
+      function buildSecretTombstone (id, atIso) {
+        return { id: id, at: atIso, tombstone: true }
+      }
 
       function signalPanelOpen () {
         writeBackground(PANEL_SEEN_KEY, { at: new Date().toISOString() })
@@ -671,6 +676,15 @@
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForSecretResult(requestId, deadline) })
         })
+      }
+
+      function tombstoneSecretRequest (requestId) {
+        // Best-effort: this panel cannot delete a key (see the module note
+        // in <head>), so it redacts its own pending request in place rather
+        // than let a plaintext key linger in storage.json once it stops
+        // waiting for it. Never fired for the heartbeat guard's own early
+        // exit below, since nothing was written in that case.
+        return writeBackground(SECRET_REQUEST_KEY, buildSecretTombstone(requestId, new Date().toISOString()))
       }
 
       function sendSecretRequest (intent, value) {
@@ -691,6 +705,13 @@
           return write(SECRET_REQUEST_KEY, request).then(function (r) {
             if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
             return waitForSecretResult(requestId, Date.now() + 20000)
+          }).catch(function (err) {
+            // Every exit from here on down (a rejected write, an ok:false
+            // result, or the timeout inside waitForSecretResult) means the
+            // request may still be sitting in storage un-attended -- redact
+            // it before this error propagates, not only on a timeout.
+            return tombstoneSecretRequest(requestId).catch(function () { /* best-effort */ })
+              .then(function () { throw err })
           })
         })
       }
