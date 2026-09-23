@@ -12,10 +12,10 @@ import type { Policy, PolicyKind } from "./decisions.ts";
 import { isRecord, isString } from "../guards.ts";
 
 /** Reserved: never usable as a real policy id, since Jev's coverage question uses it to mean "none of these apply". */
-export const NO_POLICY_ID = "sin_politica";
+export const NO_POLICY_ID = "no_policy";
 
 /** The only valid values for a policy row's `kind` -- see PolicyKind in decisions.ts. */
-const POLICY_KINDS: readonly PolicyKind[] = ["permite", "pregunta", "prohibe"];
+const POLICY_KINDS: readonly PolicyKind[] = ["permits", "requires_human", "prohibits"];
 
 function isPolicyKind(value: unknown): value is PolicyKind {
   return isString(value) && (POLICY_KINDS as readonly string[]).includes(value);

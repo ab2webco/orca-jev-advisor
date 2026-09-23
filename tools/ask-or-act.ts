@@ -19,8 +19,8 @@
  *
  * Node 24 runs this file directly (native type stripping). No build, no deps.
  *
- * This tool's question wording and three-tier thresholds (actua/confirma/
- * pregunta) were calibrated independently of tools/decide.ts's risk stage
+ * This tool's question wording and three-tier thresholds (act/confirm/
+ * ask) were calibrated independently of tools/decide.ts's risk stage
  * and read slightly differently on purpose -- they are NOT byte-identical
  * to src/core/decisions.ts's buildDestinationRiskQuestions, so they are
  * kept local rather than silently swapped for the shared ones (that would
@@ -37,7 +37,7 @@ import type { LocalizedReason } from '../src/core/i18n.ts'
 import { DESTINATION_CATALOG } from '../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../src/core/i18n_destination.ts'
 
-type Verdict = 'actua' | 'confirma' | 'pregunta'
+type Verdict = 'act' | 'confirm' | 'ask'
 
 type Judgment = {
   readonly action: string
@@ -90,7 +90,7 @@ const QUESTIONS: Record<string, Question> = {
 /**
  * Thresholds. These are a starting point, not a truth: calibrate them by
  * running in dry mode against your own decisions for a week before trusting
- * the `actua` verdict.
+ * the `act` verdict.
  */
 const REVERSIBLE_GATE = 0.7
 const EXTERNAL_GATE = 0.35
@@ -102,10 +102,10 @@ function judge(action: string, reversible: number, externallyVisible: number, co
   if (externallyVisible >= EXTERNAL_GATE) reasons.push({ key: 'risk.noticedOutsideTeam' })
   if (consequence > CONSEQUENCE_CEILING) reasons.push({ key: 'risk.hurtsIfWrong' })
 
-  let verdict: Verdict = 'actua'
-  if (reasons.length === 1) verdict = 'confirma'
-  if (reasons.length >= 2) verdict = 'pregunta'
-  if (consequence > 2.5) verdict = 'pregunta'
+  let verdict: Verdict = 'act'
+  if (reasons.length === 1) verdict = 'confirm'
+  if (reasons.length >= 2) verdict = 'ask'
+  if (consequence > 2.5) verdict = 'ask'
 
   return { action, verdict, reversible, externallyVisible, consequence, reasons }
 }
@@ -136,7 +136,7 @@ function pad(value: string, width: number): string {
   return value.length >= width ? value.slice(0, width - 1) + '…' : value + ' '.repeat(width - value.length)
 }
 
-const MARK: Record<Verdict, string> = { actua: '✓ ACT     ', confirma: '· CONFIRM ', pregunta: '! ASK     ' }
+const MARK: Record<Verdict, string> = { act: '✓ ACT     ', confirm: '· CONFIRM ', ask: '! ASK     ' }
 
 function renderReasons(reasons: readonly LocalizedReason<DestinationKey>[]): string {
   return reasons.map((reason) => translateReason(DESTINATION_CATALOG, 'en', reason)).join(' · ')
@@ -173,8 +173,8 @@ async function main(): Promise<void> {
     if (j.reasons.length > 0) console.log(`             ${renderReasons(j.reasons)}`)
   }
 
-  const act = judgments.filter((j) => j.verdict === 'actua')
-  const ask = judgments.filter((j) => j.verdict !== 'actua')
+  const act = judgments.filter((j) => j.verdict === 'act')
+  const ask = judgments.filter((j) => j.verdict !== 'act')
   console.log(`\n${act.length} of ${judgments.length} can be done without asking.`)
   if (ask.length > 0) console.log(`Asking only about: ${ask.map((j) => j.action).join(' | ')}`)
 }

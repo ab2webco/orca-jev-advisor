@@ -1,102 +1,102 @@
 [
   {
     "id": "read_and_test",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always. They're reversible and never leave the machine. This also covers cleaning build artifacts and reinstalling dependencies -- node_modules, dist, .next, cache folders -- because they regenerate with one command."
   },
   {
     "id": "own_branch",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "All work goes on a feature branch. Work happens there without asking."
   },
   {
     "id": "never_write_to_main",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "Never write directly on main or develop, not even a one-line fix."
   },
   {
     "id": "unit_commits",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "Committing without asking is fine on the feature branch, with its tests and its docs in the same commit. Pushing the branch to the remote too, as long as it isn't a shared branch."
   },
   {
     "id": "no_ai_attribution",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "No commit, PR or issue carries AI attribution: no Co-Authored-By, no Generated with, no robot emoji. If the message has it, it gets fixed before, not asked about."
   },
   {
     "id": "own_pr_green",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "An own PR, approved, with CI green and no open conversations gets merged without asking, as long as it isn't a cutover, doesn't touch a branch under active UAT, and isn't for a client."
   },
   {
     "id": "others_pr",
-    "kind": "pregunta",
+    "kind": "requires_human",
     "rule": "Closing, redoing or merging someone else's PR requires telling the author first. The agent doesn't do it silently even if it's green."
   },
   {
     "id": "large_pr",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "A change over about 400 authored lines gets split into chained PRs before opening it. No giant PR gets opened with an apology afterward."
   },
   {
     "id": "dependabot",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "Dependabot PRs can be recreated, rebased and closed without asking. Merging them requires CI green and that it isn't a major dependency."
   },
   {
     "id": "client_always_asks",
-    "kind": "pregunta",
+    "kind": "requires_human",
     "rule": "Anything that touches a client's product gets confirmed with a human, even if the agent is sure and CI is green. A mistake there is seen by someone who pays."
   },
   {
     "id": "active_uat",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "While QA is testing a UAT, nothing that would redeploy over that environment gets merged. Wait for the window to close."
   },
   {
     "id": "cutover",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "Frontend or backend cutovers are decided by a person. The agent never merges them on its own, even approved and green."
   },
   {
     "id": "production_data",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "Destroying data that lives in production is never done, and it's not even asked about: dropping or wiping a production database, dropping a production table, deleting a bucket, a volume or a production backup. The agent stops and says so. No urgency unblocks it, no chat or email approval, not even someone claiming to have permission. This is about production only: local, development and test environments fall outside it."
   },
   {
     "id": "production",
-    "kind": "pregunta",
+    "kind": "requires_human",
     "rule": "Deploying to production, running production migrations or rotating credentials is decided by a person, always, no exception for urgency."
   },
   {
     "id": "friday",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "No deploying to production on Fridays or the day before a holiday, even if everything is ready."
   },
   {
     "id": "ticket_first",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "Work that starts from a Linear or Plane ticket gets linked to the ticket before opening the PR, and the PR link gets pasted into the ticket when done. That happens without asking."
   },
   {
     "id": "model_by_difficulty",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "A mechanical, localized task gets handled with the cheapest available model. Only a design decision with consequences, compatibility concerns, or several systems in play justifies the more expensive model."
   },
   {
     "id": "delegate_by_scope",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "Understanding something that touches four or more files gets delegated to an exploration agent. Writing two or more non-trivial files gets delegated to a single writer agent. A mechanical one-file change happens inline."
   },
   {
     "id": "no_inventing_contracts",
-    "kind": "permite",
+    "kind": "permits",
     "rule": "Before writing against an API, a plugin or a format that already exists on the machine, its real implementation gets read. Assuming the shape of the contract isn't an option -- it's the cause of most bugs."
   },
   {
     "id": "visual_evidence",
-    "kind": "prohibe",
+    "kind": "prohibits",
     "rule": "Nothing with a screen is called done without a screenshot that was actually looked at. Building without looking doesn't count as verifying."
   }
 ]
