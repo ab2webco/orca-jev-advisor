@@ -14,6 +14,8 @@
 // `host.storage`) and from a CLI/test harness with a fake in-memory host.
 
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
+import { migratePolicyKind } from "./decisions.ts";
+import type { PolicyKind } from "./decisions.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
 export interface StorageHost {
@@ -58,10 +60,27 @@ export interface AutonomyConfig {
   readonly actThreshold: number;
   readonly confirmThreshold: number;
   readonly maxAutoDelicateness: number;
+  /**
+   * Per-destination override for decisions.ts's GATE_CONSEQUENCE_CEILING.
+   * Optional -- absent means "use the global consequenceCeiling" (see
+   * PluginConfig.thresholds.consequenceCeiling below). This is the only
+   * field compatible with decideAction's `consequence.score` axis (a
+   * continuous value with the same ~1.5 ceiling shape); the other
+   * AutonomyConfig fields (actThreshold, confirmThreshold,
+   * maxAutoDelicateness) belong to decideDestination's unrelated
+   * delicateness-level family and are never a substitute for this.
+   */
+  readonly consequenceCeiling?: number;
 }
 
 function isAutonomyConfig(value: unknown): value is AutonomyConfig {
-  return isRecord(value) && isNumber(value.actThreshold) && isNumber(value.confirmThreshold) && isNumber(value.maxAutoDelicateness);
+  if (!isRecord(value) || !isNumber(value.actThreshold) || !isNumber(value.confirmThreshold) || !isNumber(value.maxAutoDelicateness)) {
+    return false;
+  }
+  if ("consequenceCeiling" in value && value.consequenceCeiling !== undefined && !isNumber(value.consequenceCeiling)) {
+    return false;
+  }
+  return true;
 }
 
 export interface CatalogDestination {
@@ -102,23 +121,70 @@ export async function setCatalog(host: StorageHost, data: CatalogData): Promise<
 // policies: the team's standing decisions, consumed by decideDestination.
 // ---------------------------------------------------------------------------
 
+// `kind` is the SAME PolicyKind union decisions.ts exports (imported above),
+// never a parallel string union -- see interpretDestinationPolicy in
+// decisions.ts, which switches on it exhaustively and would fail to compile
+// if this file's `kind` could ever hold a value decisions.ts doesn't know.
 export interface PolicyRow {
   readonly id: string;
   readonly rule: string;
+  readonly kind: PolicyKind;
+  /**
+   * Optional per-destination scope. Absent or empty means "global": today's
+   * behavior for all existing seeded rows, unchanged. See
+   * filterPoliciesForDestination in decisions.ts for how this is
+   * interpreted -- this module only validates the raw shape.
+   */
+  readonly destinations?: readonly string[];
+}
+
+/** The runtime list of PolicyKind's members, same technique policies.ts already uses for its own isPolicyKind. */
+const POLICY_KINDS: readonly PolicyKind[] = ["permits", "requires_human", "prohibits"];
+
+function isPolicyKind(value: unknown): value is PolicyKind {
+  // Accepts the pre-rename Spanish spellings too: a row saved before the
+  // rename is valid data that simply needs mapping, not a row to discard.
+  // Dropping it silently emptied the policy stage on existing installs.
+  return migratePolicyKind(value) !== null;
 }
 
 function isPolicyRow(value: unknown): value is PolicyRow {
-  return isRecord(value) && isString(value.id) && isString(value.rule);
-}
-
-function isPoliciesData(value: unknown): value is PolicyRow[] {
-  return isArrayOf(value, isPolicyRow);
+  if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false;
+  if ("destinations" in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false;
+  return true;
 }
 
 const DEFAULT_POLICIES: readonly PolicyRow[] = [];
 
+/**
+ * Reads the stored policies, keeping only the rows that are fully valid.
+ *
+ * Deliberately NOT `readKey(host, STORAGE_KEY.policies, isPoliciesData, ...)`
+ * -- isPoliciesData (via isArrayOf's `.every`) is all-or-nothing: if even one
+ * stored row lacked `kind` (every row did, before `kind` existed) or had an
+ * invalid one, the WHOLE array would fail the guard and this would silently
+ * fall back to the empty DEFAULT_POLICIES, disabling every policy the user
+ * had ever written with no error and no trace.
+ *
+ * Instead this filters row by row. A row missing `kind` (or holding an
+ * invalid one) is excluded from what the Jev judgment stage sees -- it is
+ * never guessed into permits/requires_human/prohibits, so it behaves exactly
+ * like "no policy covers this action" and falls through to the risk-based
+ * fallback, which is the safe default either way. It is NOT deleted: this
+ * function only decides what the WORKER judges with. The raw stored array is
+ * untouched, and the config panel reads storage directly (not through this
+ * function), so an incomplete row keeps showing up there, with its id and
+ * rule intact, until a human picks its kind and saves again.
+ */
 export async function getPolicies(host: StorageHost): Promise<readonly PolicyRow[]> {
-  return readKey(host, STORAGE_KEY.policies, isPoliciesData, [...DEFAULT_POLICIES]);
+  let raw: unknown;
+  try {
+    raw = await host.get(STORAGE_KEY.policies);
+  } catch {
+    return [...DEFAULT_POLICIES];
+  }
+  if (raw === undefined || raw === null || !Array.isArray(raw)) return [...DEFAULT_POLICIES];
+  return raw.filter(isPolicyRow);
 }
 
 export async function setPolicies(host: StorageHost, policies: readonly PolicyRow[]): Promise<void> {

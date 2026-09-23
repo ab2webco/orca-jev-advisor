@@ -220,7 +220,7 @@ const DEFAULT_BUDGET_MS = 4_000;
 
 export class JevTimeoutError extends Error {
   constructor(budgetMs: number) {
-    super(`Jev no respondió dentro del presupuesto de ${budgetMs}ms`);
+    super(`Jev didn't respond within the ${budgetMs}ms budget`);
     this.name = "JevTimeoutError";
   }
 }
@@ -277,8 +277,8 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
   const budgetMs = options.budgetMs ?? DEFAULT_BUDGET_MS;
   const doFetch = options.fetchImpl ?? defaultFetch();
   const doSleep = options.sleepImpl ?? defaultSleep();
-  if (!doFetch) throw new JevRequestError("callJev: no hay una implementación de fetch disponible (ni inyectada ni global)", null);
-  if (!doSleep) throw new JevRequestError("callJev: no hay temporizadores disponibles (ni inyectados ni globales)", null);
+  if (!doFetch) throw new JevRequestError("callJev: no fetch implementation available (neither injected nor global)", null);
+  if (!doSleep) throw new JevRequestError("callJev: no timers available (neither injected nor global)", null);
 
   const request: JevRequest = { state, model: "jev-latest", questions };
 
@@ -310,7 +310,7 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
     } catch (error) {
       if (timedOut || error instanceof JevTimeoutError) throw new JevTimeoutError(budgetMs);
       if (error instanceof Error && error.name === "AbortError") throw new JevTimeoutError(budgetMs);
-      throw new JevRequestError(`No se pudo contactar a Jev: ${error instanceof Error ? error.message : String(error)}`, null);
+      throw new JevRequestError(`Couldn't reach Jev: ${error instanceof Error ? error.message : String(error)}`, null);
     }
 
     if (response.ok) {
@@ -319,16 +319,16 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
       try {
         parsed = JSON.parse(bodyText);
       } catch {
-        throw new JevRequestError("Jev respondió 200 pero el cuerpo no es JSON válido", response.status);
+        throw new JevRequestError("Jev responded 200 but the body isn't valid JSON", response.status);
       }
       if (!isJevResponse(parsed)) {
-        throw new JevRequestError("Jev respondió 200 pero el cuerpo no tiene la forma esperada {model, answers, usage}", response.status);
+        throw new JevRequestError("Jev responded 200 but the body doesn't have the expected shape {model, answers, usage}", response.status);
       }
       return parsed;
     }
 
     const bodyText = await response.text().catch(() => "");
-    lastError = new JevRequestError(`Jev respondió ${response.status}: ${bodyText || `HTTP ${response.status}`}`, response.status);
+    lastError = new JevRequestError(`Jev responded ${response.status}: ${bodyText || `HTTP ${response.status}`}`, response.status);
 
     if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_RETRIES) {
       throw lastError;
@@ -336,5 +336,5 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
     await doSleep(500 * 2 ** attempt);
   }
 
-  throw lastError ?? new JevRequestError("Jev: fallo desconocido tras reintentos", null);
+  throw lastError ?? new JevRequestError("Jev: unknown failure after retries", null);
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -65,7 +65,7 @@
         border-bottom: 1px solid var(--border, var(--fb-border));
       }
       header .meta { margin-left: auto; }
-      header button, .lang-switch button {
+      header button {
         font: inherit; font-size: 13px; line-height: 1; padding: 3px 8px; cursor: pointer;
         border: 1px solid var(--border, var(--fb-border));
         border-radius: var(--radius-md);
@@ -73,17 +73,15 @@
         color: var(--muted-foreground, var(--fb-muted-foreground));
         transition: background-color 90ms ease, color 90ms ease;
       }
-      header button:hover, .lang-switch button:hover { background: var(--accent, var(--fb-accent));
+      header button:hover { background: var(--accent, var(--fb-accent));
                             color: var(--accent-foreground, var(--fb-accent-foreground)); }
-      header button:active, .lang-switch button:active { transform: translateY(1px); }
-      header button:focus-visible, .lang-switch button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      header button:active { transform: translateY(1px); }
+      header button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
       header button[disabled] { opacity: 0.5; cursor: default; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
       .meta { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .nota { margin: 0 0 8px; padding: 0 12px; }
       .nota:empty { display: none; }
-      .lang-switch { display: flex; gap: 4px; }
-      .lang-switch button[aria-pressed="true"] { background: var(--primary, var(--fb-primary)); color: var(--primary-foreground, var(--fb-primary-foreground)); border-color: transparent; }
 
       section { padding: 10px 12px; }
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
@@ -95,6 +93,10 @@
       .stat .label { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); margin-top: 2px; }
       .empty-line { color: var(--muted-foreground, var(--fb-muted-foreground)); font-size: 12px; }
       table { width: 100%; border-collapse: collapse; font-size: 12px; }
+      /* At 320px the five-column family table is 386px wide. Let the table
+         scroll inside its own box instead of pushing the whole page sideways. */
+      #gate-by-family { overflow-x: auto; }
+      #gate-by-family table { min-width: 340px; }
       th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border, var(--fb-border)); }
       th { color: var(--muted-foreground, var(--fb-muted-foreground)); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
       tr:last-child td { border-bottom: 0; }
@@ -126,10 +128,6 @@
   <body>
     <header>
       <h1>Advisor</h1>
-      <div class="lang-switch" id="lang-switch" role="group" aria-label="idioma / language">
-        <button type="button" id="lang-es" aria-pressed="true">ES</button>
-        <button type="button" id="lang-en" aria-pressed="false">EN</button>
-      </div>
       <span class="meta" id="status"></span>
       <button id="refresh" data-i18n-title="board.refresh" data-i18n-aria="board.refresh">&#8635;</button>
     </header>
@@ -270,7 +268,20 @@
           'live.updating': 'Updating…'
         }
       }
-      var currentLocale = 'es'
+      /**
+       * The language Orca is running in.
+       *
+       * Orca substitutes the resolved UI locale into the panel shell's
+       * `<html lang>`, so the plugin no longer has to ask a question the
+       * user already answered in Orca's own settings. Anything this plugin
+       * has no catalog for falls back to English.
+       */
+      function localeFromOrca () {
+        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      var currentLocale = localeFromOrca()
       function t (key, params) {
         var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
         if (!params) return template
@@ -282,10 +293,6 @@
         document.querySelectorAll('[data-i18n]').forEach(function (node) { node.textContent = t(node.getAttribute('data-i18n')) })
         document.querySelectorAll('[data-i18n-title]').forEach(function (node) { node.title = t(node.getAttribute('data-i18n-title')) })
         document.querySelectorAll('[data-i18n-aria]').forEach(function (node) { node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria'))) })
-      }
-      function setLangButtons (locale) {
-        el('lang-es').setAttribute('aria-pressed', String(locale === 'es'))
-        el('lang-en').setAttribute('aria-pressed', String(locale === 'en'))
       }
 
       // ---------- puente real con el host --------------------------------
@@ -378,24 +385,10 @@
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
-      function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
 
-      // ---------- idioma (comparte localeStatus/localeRequest con config.html) ----
-      function sendLocaleRequest (locale) {
-        var requestId = 'locale-' + Date.now() + '-' + Math.random().toString(36).slice(2)
-        return write('localeRequest', { id: requestId, at: new Date().toISOString(), locale: locale })
-      }
-      function applyLocale (locale) {
-        currentLocale = (locale === 'en') ? 'en' : 'es'
-        document.documentElement.lang = currentLocale
-        setLangButtons(currentLocale)
-        applyStaticI18n()
-        renderStats(lastStats)
-        render(lastBoard)
-      }
-      el('lang-es').addEventListener('click', function () { if (currentLocale !== 'es') { applyLocale('es'); sendLocaleRequest('es').catch(function () {}) } })
-      el('lang-en').addEventListener('click', function () { if (currentLocale !== 'en') { applyLocale('en'); sendLocaleRequest('en').catch(function () {}) } })
-
+      // This panel only reads. The locale mirror for the gate and the skills
+      // mod is written by config.html alone; both panels doing it would race
+      // for no gain, so there is no storage.set helper here.
       // ---------- render: stats ---------------------------------------------
       function esc (text) {
         return String(text == null ? '' : text)
@@ -408,6 +401,13 @@
         return '<div class="stat"><div class="n">' + esc(n) + '</div><div class="label">' + esc(label) + '</div></div>'
       }
 
+      /** null/undefined-safe project label -- a record whose project could
+       *  not be resolved (gate-bash.ts's own projectName() returning null)
+       *  is still shown, honestly, never silently dropped. */
+      function projectLabel (project) {
+        return (project === null || project === undefined || project === '') ? t('stats.unknownProject') : String(project)
+      }
+
       var lastStats = null
       function renderStats (summary) {
         lastStats = summary
@@ -415,11 +415,22 @@
         var emptyEl = el('stats-empty')
         var byProjectEl = el('stats-by-project')
         var recentEl = el('stats-recent')
+        var gateEmptyEl = el('gate-empty')
+        var gateVerdictGridEl = el('gate-verdict-grid')
+        var gateSourceGridEl = el('gate-source-grid')
+        var gateLatencyEl = el('gate-latency-line')
+        var gateByFamilyEl = el('gate-by-family')
 
         if (!summary || !summary.ok) {
           gridEl.innerHTML = ''
           emptyEl.style.display = ''
           emptyEl.textContent = t('stats.noData')
+          gateEmptyEl.style.display = ''
+          gateEmptyEl.textContent = t('gate.empty')
+          gateVerdictGridEl.innerHTML = ''
+          gateSourceGridEl.innerHTML = ''
+          gateLatencyEl.textContent = ''
+          gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
           byProjectEl.innerHTML = '<p class="empty-line">' + esc(t('stats.byProjectEmpty')) + '</p>'
           recentEl.innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
           return
@@ -427,20 +438,15 @@
 
         var gate = summary.gate || {}
         var mod = summary.modSkills || {}
-        var hasAnyData = (gate.totalDecisions || 0) > 0 || (mod.totalDecisions || 0) > 0
 
-        if (!hasAnyData) {
+        // ---- resumen de skills (lo unico que queda en el grid de arriba) ----
+        if (!((mod.totalDecisions || 0) > 0)) {
           gridEl.innerHTML = ''
           emptyEl.style.display = ''
-          emptyEl.textContent = t('stats.noData')
+          emptyEl.textContent = t('stats.skillsEmpty')
         } else {
           emptyEl.style.display = 'none'
-          var blocked = (gate.byVerdict ? (gate.byVerdict.ask + gate.byVerdict.deny) : 0)
           var tiles = []
-          tiles.push(statTile(gate.totalDecisions || 0, t('stats.gateDecisions')))
-          tiles.push(statTile(blocked, t('stats.gateBlocked')))
-          tiles.push(statTile(gate.cacheHitRate == null ? t('stats.na') : pct(gate.cacheHitRate) + '%', t('stats.gateCacheRate')))
-          tiles.push(statTile(gate.jevLatencyMeanMs == null ? t('stats.na') : Math.round(gate.jevLatencyMeanMs) + 'ms', t('stats.gateLatency')))
           tiles.push(statTile(mod.suggestedCount || 0, t('stats.skillSuggestions')))
           tiles.push(statTile(mod.matchRate == null ? t('stats.na') : pct(mod.matchRate) + '%', t('stats.skillMatchRate')))
           if (mod.listingCharsTotal != null) {
@@ -449,10 +455,53 @@
           gridEl.innerHTML = tiles.join('')
         }
 
+        // ---- lo que hizo el gate de Jev: honesto, nunca "0 guardado" cuando
+        // en realidad es "todavia no corrio" ------------------------------
+        var gateHasData = (gate.totalDecisions || 0) > 0
+        if (!gateHasData) {
+          gateEmptyEl.style.display = ''
+          gateEmptyEl.textContent = t('gate.empty')
+          gateVerdictGridEl.innerHTML = ''
+          gateSourceGridEl.innerHTML = ''
+          gateLatencyEl.textContent = ''
+          gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
+        } else {
+          gateEmptyEl.style.display = 'none'
+          var verdict = gate.byVerdict || { allow: 0, ask: 0, deny: 0 }
+          gateVerdictGridEl.innerHTML = [
+            statTile(verdict.allow || 0, t('gate.verdict.allow')),
+            statTile(verdict.ask || 0, t('gate.verdict.ask')),
+            statTile(verdict.deny || 0, t('gate.verdict.deny'))
+          ].join('')
+
+          var source = gate.bySource || { 'local-rule': 0, cache: 0, jev: 0 }
+          gateSourceGridEl.innerHTML = [
+            statTile(source['local-rule'] || 0, t('gate.source.localRule')),
+            statTile(source.cache || 0, t('gate.source.cache')),
+            statTile(source.jev || 0, t('gate.source.jev'))
+          ].join('')
+
+          var latency = gate.jevLatency || { sampleCount: 0, medianMs: null, maxMs: null }
+          gateLatencyEl.textContent = latency.sampleCount > 0
+            ? t('gate.latency', { median: String(Math.round(latency.medianMs)), max: String(Math.round(latency.maxMs)), n: String(latency.sampleCount) })
+            : t('gate.latency.none')
+
+          var families = gate.byCommandFamily || []
+          if (families.length === 0) {
+            gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
+          } else {
+            var familyRows = families.map(function (f) {
+              var v = f.byVerdict || { allow: 0, ask: 0, deny: 0 }
+              return '<tr><td>' + esc(f.commandFamily) + '</td><td>' + esc(f.total) + '</td><td>' + esc(v.allow || 0) + '</td><td>' + esc(v.ask || 0) + '</td><td>' + esc(v.deny || 0) + '</td></tr>'
+            }).join('')
+            gateByFamilyEl.innerHTML = '<table><thead><tr><th>' + esc(t('gate.tableFamily')) + '</th><th>' + esc(t('gate.tableTotal')) + '</th><th>' + esc(t('gate.tableAllowed')) + '</th><th>' + esc(t('gate.tableAsked')) + '</th><th>' + esc(t('gate.tableBlocked')) + '</th></tr></thead><tbody>' + familyRows + '</tbody></table>'
+          }
+        }
+
         // Por proyecto: combina gate y skills en una tabla simple.
         var projects = {}
-        ;(gate.byProject || []).forEach(function (p) { projects[p.key] = projects[p.key] || {}; projects[p.key].gate = p.count })
-        ;(mod.byProject || []).forEach(function (p) { projects[p.key] = projects[p.key] || {}; projects[p.key].skills = p.count })
+        ;(gate.byProject || []).forEach(function (p) { var k = projectLabel(p.project); projects[k] = projects[k] || {}; projects[k].gate = p.total })
+        ;(mod.byProject || []).forEach(function (p) { var k = projectLabel(p.key); projects[k] = projects[k] || {}; projects[k].skills = p.count })
         var projectKeys = Object.keys(projects).sort(function (a, b) {
           var ta = (projects[a].gate || 0) + (projects[a].skills || 0)
           var tb = (projects[b].gate || 0) + (projects[b].skills || 0)
@@ -476,7 +525,7 @@
           recentEl.innerHTML = recent.map(function (r) {
             var latency = r.latencyMs != null ? ' · ' + r.latencyMs + 'ms' : ''
             return '<div class="item" style="padding:6px 0"><div class="line1">' +
-              '<span class="worktree">' + esc(r.project || t('live.unknownWorktree')) + '</span>' +
+              '<span class="worktree">' + esc(projectLabel(r.project)) + '</span>' +
               '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
               '<span class="tag">' + esc(sourceLabel[r.source] || esc(r.source)) + latency + '</span>' +
               '<span class="' + tagClass(r.verdict === 'deny' ? 'blocked' : (r.verdict === 'ask' ? 'working' : 'done')) + '">' + esc(r.verdict || '') + '</span>' +
@@ -568,11 +617,8 @@
         })
       })
 
-      read('localeStatus', true).then(function (localeStatus) {
-        var locale = (localeStatus && localeStatus.value) || 'es'
-        currentLocale = (locale === 'en') ? 'en' : 'es'
-        document.documentElement.lang = currentLocale
-        setLangButtons(currentLocale)
+      // Orca's language decides; see the note in config.html.
+      Promise.resolve().then(function () {
         applyStaticI18n()
         return reload(true)
       }).then(startPolling)

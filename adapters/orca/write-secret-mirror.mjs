@@ -18,7 +18,7 @@
  * works the same way on Windows, unlike the wrapper this project used
  * before), where the sandbox does not apply.
  *
- * Usage: node write-secret-mirror.mjs <save|clear|read>
+ * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save>
  *   save   reads the new key from stdin (never argv, never logged), and
  *          atomically (temp file + rename) writes or replaces its
  *          TYPESAFE_API_KEY= line in the mirror file, mode 0600. Other
@@ -27,14 +27,21 @@
  *          if nothing else is left in it.
  *   read   reports the mirror's current TYPESAFE_API_KEY value (or null),
  *          for main.mjs's doctor check that it still matches `secrets`.
+ *   catalog-save   reads the destination catalog as JSON from stdin and
+ *          atomically writes it, pretty-printed, to catalog.json in the
+ *          config dir. Not secret (the config panel already shows it in
+ *          the clear), so it gets ordinary file permissions -- no forced
+ *          0600 -- for adapters/claude/gate-bash.ts to read directly.
+ *   policies-save  same as catalog-save, but for the team policies array,
+ *          written to policies.json.
  *
  * Always prints exactly one JSON line to stdout and nothing else -- no
  * console.error, no stray output that would corrupt the parent's parse.
- * `save` and `clear` answer `{ok:true}` or `{ok:false, reason, detail}`;
- * `read` answers `{ok:true, value}` or the same failure shape. The key
- * itself is never written to stderr, to a log, or to any field but
- * `value` on `read` -- and that leaves this process only over the pipe
- * its own parent already owns.
+ * `save`, `clear`, `catalog-save` and `policies-save` answer `{ok:true}`
+ * or `{ok:false, reason, detail}`; `read` answers `{ok:true, value}` or
+ * the same failure shape. The key itself is never written to stderr, to
+ * a log, or to any field but `value` on `read` -- and that leaves this
+ * process only over the pipe its own parent already owns.
  */
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
@@ -43,9 +50,9 @@ import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
-// platform; resolveConfigDir only decides the `.config` vs `%APPDATA%`
+// platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
 // convention on top of it (see src/core/paths.ts).
-const CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA })
+const CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
 const MIRROR_PATH = join(CONFIG_DIR, 'env')
 const ENV_VAR_NAME = 'TYPESAFE_API_KEY'
 // The config panel's message-language choice, mirrored the same way as the
@@ -54,6 +61,13 @@ const ENV_VAR_NAME = 'TYPESAFE_API_KEY'
 // by adapters/claude/gate-bash.ts and adapters/claude/mod-skills, which
 // have no channel into Orca's own `storage` (see src/core/i18n.ts).
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
+// Destination catalog and team policies -- mirrored the same way as the
+// key and the locale, but neither is sensitive: the config panel already
+// shows both in the clear, so they get the platform's ordinary file
+// permissions (see writeAtomic's `mode` parameter) instead of 0600.
+// adapters/claude/gate-bash.ts reads these two files directly.
+const CATALOG_PATH = join(CONFIG_DIR, 'catalog.json')
+const POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
 
 async function readStdin () {
   const chunks = []
@@ -94,24 +108,37 @@ async function readExisting () {
   }
 }
 
-async function writeAtomic (content, path = MIRROR_PATH) {
+/**
+ * Atomic temp-file-plus-rename write, shared by every mirror file this
+ * script owns. `mode` defaults to 0600 so the key and locale mirrors are
+ * byte-for-byte unchanged from before this function took a third
+ * parameter. Passing `null` opts a caller out of the forced mode entirely
+ * -- no explicit `mode` on `writeFile`, no follow-up `chmod` -- so the
+ * file lands with whatever ordinary permissions the platform default
+ * (`fs.writeFile`'s own default, minus umask on POSIX) gives it. Used by
+ * catalog-save/policies-save, since neither file is secret.
+ */
+async function writeAtomic (content, path = MIRROR_PATH, mode = 0o600) {
   await mkdir(dirname(path), { recursive: true })
   const tempPath = `${path}.${randomUUID()}.tmp`
-  await writeFile(tempPath, content, { encoding: 'utf8', mode: 0o600 })
-  try {
-    // POSIX mode bits; Windows has no such permission model (it approximates
-    // via the read-only attribute instead) -- attempted, never fatal if it
-    // cannot apply. statMirror() below reports whatever `fs.stat` actually
-    // measures afterward, on every platform, rather than assuming 0600 held.
-    await chmod(tempPath, 0o600)
-  } catch {
-    // Best-effort; the write itself already succeeded.
+  const hasMode = typeof mode === 'number'
+  await writeFile(tempPath, content, hasMode ? { encoding: 'utf8', mode } : { encoding: 'utf8' })
+  if (hasMode) {
+    try {
+      // POSIX mode bits; Windows has no such permission model (it approximates
+      // via the read-only attribute instead) -- attempted, never fatal if it
+      // cannot apply. statMirror() below reports whatever `fs.stat` actually
+      // measures afterward, on every platform, rather than assuming the mode held.
+      await chmod(tempPath, mode)
+    } catch {
+      // Best-effort; the write itself already succeeded.
+    }
   }
   await rename(tempPath, path)
 }
 
 async function save (key) {
-  if (key.length === 0) return { ok: false, reason: 'clave-vacia', detail: 'stdin no traía una clave.' }
+  if (key.length === 0) return { ok: false, reason: 'empty-key', detail: 'stdin carried no key.' }
 
   const existing = await readExisting()
   const lines = existing !== null ? existing.split('\n') : []
@@ -167,7 +194,7 @@ async function statMirror () {
 
 async function localeSave (value) {
   const locale = String(value ?? '').trim()
-  if (locale !== 'es' && locale !== 'en') return { ok: false, reason: 'locale-invalida', detail: `locale no reconocida: ${locale.slice(0, 20)}` }
+  if (locale !== 'es' && locale !== 'en') return { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${locale.slice(0, 20)}` }
   await writeAtomic(`${locale}\n`, LOCALE_PATH)
   return { ok: true }
 }
@@ -180,6 +207,33 @@ async function localeRead () {
     if (error?.code === 'ENOENT') return { ok: true, value: null }
     throw error
   }
+}
+
+/** Parses the JSON payload piped over stdin, or reports why it couldn't. */
+function parseJsonPayload (raw) {
+  try {
+    return { ok: true, value: JSON.parse(raw) }
+  } catch (error) {
+    return { ok: false, reason: 'invalid-json', detail: String(error?.message ?? error).slice(0, 200) }
+  }
+}
+
+/** Writes the destination catalog JSON, pretty-printed (this mirrors a
+ *  promise made to the user that the file is inspectable, not opaque),
+ *  with the platform's ordinary permissions -- not secret, so no forced mode. */
+async function catalogSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  if (!parsed.ok) return parsed
+  await writeAtomic(`${JSON.stringify(parsed.value, null, 2)}\n`, CATALOG_PATH, null)
+  return { ok: true }
+}
+
+/** Same as catalogSave, for the team policies array. */
+async function policiesSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  if (!parsed.ok) return parsed
+  await writeAtomic(`${JSON.stringify(parsed.value, null, 2)}\n`, POLICIES_PATH, null)
+  return { ok: true }
 }
 
 async function main () {
@@ -198,11 +252,15 @@ async function main () {
       result = await read()
     } else if (mode === 'stat') {
       result = await statMirror()
+    } else if (mode === 'catalog-save') {
+      result = await catalogSave((await readStdin()).trim())
+    } else if (mode === 'policies-save') {
+      result = await policiesSave((await readStdin()).trim())
     } else {
-      result = { ok: false, reason: 'modo-desconocido', detail: `modo no reconocido: ${String(mode).slice(0, 60)}` }
+      result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
     }
   } catch (error) {
-    result = { ok: false, reason: 'excepcion', detail: String(error?.message ?? error).slice(0, 300) }
+    result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
   process.stdout.write(JSON.stringify(result))
 }

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,26 +17,24 @@
 
       Every user-facing string in this file comes from CATALOG (es/en)
       below, looked up by key -- never typed inline at the point it is
-      shown. This is NOT Orca's own `contributes.languagePacks`: that
-      mechanism replaces Orca's whole UI language and a plugin can only
-      offer it as a value of Orca's OWN `uiLanguage` setting (verified in
-      orca-oss: I18nProvider.tsx resolves a plugin's pack only when
-      `uiLanguage === pack.id`); nothing tells a plugin what language Orca
-      is already in (`settings.get` is this plugin's own config, not the
-      app's, and the panel shell injects no locale token). So this plugin
-      carries its own small, explicit choice instead -- the two buttons
-      next to the title -- kept in its own storage and mirrored to
-      ~/.config/orca-supervisor/locale for gate-bash.ts and mod-skills,
-      which run outside Orca and read it directly (see src/core/i18n.ts).
+      shown. The language is Orca's: the panel shell substitutes the
+      resolved UI locale into `<html lang>`, so this panel reads
+      `document.documentElement.lang` and no longer asks a question the
+      user already answered in Orca's settings. This is NOT Orca's own
+      `contributes.languagePacks`, which replaces Orca's whole UI language
+      and a plugin can only offer as a value of Orca's own `uiLanguage`.
+      The resolved locale is still mirrored to the plugin's config
+      directory for gate-bash.ts and mod-skills, which run outside Orca and
+      cannot read this document (see src/core/i18n.ts).
     -->
 
     <style>
-      /* El host inyecta una lista corta de tokens en el <style> del shell
+      /* The host injects a short list of tokens into the shell's <style>
          (PANEL_DESIGN_TOKEN_ALLOWLIST, orca-oss src/shared/plugins/plugin-panel-shell.ts)
-         y pone light/dark en <html>. Nada mas llega aca. Los respaldos son los
-         valores reales de main.css, no un gris inventado, para que el panel se
-         lea bien aunque el host no inyecte nada (host viejo, o el arnes de
-         pruebas). */
+         and sets light/dark on <html>. Nothing else reaches here. The
+         fallbacks are main.css's real values, not a made-up grey, so the
+         panel still reads well even when the host injects nothing (an old
+         host, or the test harness). */
       :root {
         color-scheme: light dark;
         --radius-md: calc(var(--radius, 0.625rem) * 0.8);
@@ -73,15 +71,12 @@
       .wrap { max-width: 760px; }
       .titlebar { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 12px 0; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-      .lang-switch { display: flex; gap: 4px; }
-      .lang-switch button { padding: 3px 8px; font-size: 11px; font-weight: 500; }
-      .lang-switch button[aria-pressed="true"] { background: var(--primary, var(--fb-primary)); color: var(--primary-foreground, var(--fb-primary-foreground)); border-color: transparent; }
       .sub:first-child { margin-top: 0; }
       .sub { color: var(--muted-foreground, var(--fb-muted-foreground));
              margin: 0; padding: 2px 12px 12px; font-size: 12px; }
-      /* Los paneles propios de Orca no usan tarjetas por seccion: son planos, a
-         sangre, separados por un filete de --border y una etiqueta chica en
-         mayusculas, igual que activity.html y wa-inbox/config.html. */
+      /* Orca's own panels don't use per-section cards: they're flat, full
+         bleed, separated by a thin --border rule and a small uppercase
+         label, same as activity.html and wa-inbox/config.html. */
       section { padding: 12px; margin: 0; border-top: 1px solid var(--border, var(--fb-border)); }
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
            color: var(--muted-foreground, var(--fb-muted-foreground));
@@ -120,8 +115,9 @@
       button.primary:hover { background: var(--primary, var(--fb-primary));
                              color: var(--primary-foreground, var(--fb-primary-foreground));
                              filter: brightness(1.12); }
-      /* Subrayado siempre, no solo en hover: en tema claro --destructive es muy
-         cercano al texto pleno, y sin subrayar "Quitar" no se lee como accionable. */
+      /* Always underlined, not only on hover: in light theme --destructive is
+         very close to plain text, and without an underline "Remove" doesn't
+         read as actionable. */
       button.link { border: 0; background: none; padding: 0; margin-left: 10px;
                     color: var(--destructive, var(--fb-destructive)); font-size: 11px; font-weight: 400;
                     text-decoration: underline; text-underline-offset: 2px; }
@@ -132,8 +128,9 @@
       .row.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
       @media (max-width: 560px) { .row, .row.two, .row.four { grid-template-columns: 1fr; } }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-      /* La allowlist no trae color de exito, y no se inventa uno: el peso y el
-         texto pleno cargan la confirmacion. El fallo si tiene token, --destructive. */
+      /* The allowlist carries no success color, and none is invented here:
+         weight and plain text carry the confirmation. Failure does get a
+         token, --destructive. */
       .said { font-size: 12px; font-weight: 500; color: var(--foreground, var(--fb-foreground)); }
       .said.bad { font-weight: 400; color: var(--destructive, var(--fb-destructive)); }
       .entry {
@@ -142,8 +139,34 @@
       }
       .entry:first-child { margin-top: 0; }
       .entry-actions { display: flex; justify-content: flex-end; }
+      /* Twenty destinations and twenty policies rendered as open forms push
+         this document past 15000px, and Orca clamps a panel's reported height
+         to 8000 -- past that the document scrolls inside a settings pane that
+         already scrolls, which is two scrollbars. Collapsed, each row costs a
+         line until someone opens it. */
+      details.entry > summary {
+        cursor: pointer; list-style: none; display: flex; gap: 8px;
+        align-items: baseline; padding: 7px 2px; font-size: 12px;
+      }
+      details.entry > summary::-webkit-details-marker { display: none; }
+      details.entry > summary::before {
+        content: '\25B8'; font-size: 9px; opacity: 0.5; transition: transform 0.12s;
+      }
+      details.entry[open] > summary::before { transform: rotate(90deg); }
+      details.entry > summary:hover { color: var(--foreground, var(--fb-foreground)); }
+      .entry-name { font-weight: 600; flex: 0 0 auto; }
+      #claude-integration-status li { overflow-wrap: anywhere; }
+      .entry-meta { color: var(--muted-foreground, var(--fb-muted-foreground));
+        /* min-width:0 is what lets a flex child shrink below its content and
+           actually ellipsize; without it the summary widens the document. */
+        min-width: 0; flex: 1 1 auto;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
               font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
+      /* Same token .said.bad already uses for a failed save -- an unset
+         policy kind is the same class of "needs your attention", not a new
+         color of its own. */
+      .hint.warn { color: var(--destructive, var(--fb-destructive)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
     </style>
   </head>
@@ -151,20 +174,20 @@
     <div class="wrap">
       <div class="titlebar">
         <h1>Jev Advisor</h1>
-        <div class="lang-switch" id="lang-switch" role="group" aria-label="idioma / language">
-          <button type="button" id="lang-es" aria-pressed="true">ES</button>
-          <button type="button" id="lang-en" aria-pressed="false">EN</button>
-        </div>
       </div>
       <p class="sub" data-i18n="app.subtitle"></p>
 
       <section id="secret-section">
         <h2 data-i18n="secret.heading"></h2>
         <div class="sub" id="secret-status" style="padding:0 0 6px"></div>
-        <label for="api-key" data-i18n="secret.label"></label>
-        <input id="api-key" type="password" autocomplete="off" data-i18n-placeholder="secret.placeholder" />
+        <div id="secret-input-group">
+          <label for="api-key" data-i18n="secret.label"></label>
+          <input id="api-key" type="password" autocomplete="off" data-i18n-placeholder="secret.placeholder" />
+        </div>
         <div class="actions">
           <button id="save-key" class="primary" type="button" data-i18n="secret.save"></button>
+          <button id="replace-key" type="button" data-i18n="secret.replace"></button>
+          <button id="cancel-key" class="link" type="button" data-i18n="secret.cancel"></button>
           <button id="clear-key" class="link" type="button" data-i18n="secret.clear"></button>
           <span class="said" id="key-said"></span>
         </div>
@@ -205,7 +228,12 @@
         <h2 data-i18n="catalog.heading"></h2>
         <p class="hint" data-i18n="catalog.hint"></p>
         <div id="catalog-list"></div>
-        <div class="actions"><button id="add-catalog-row" type="button" data-i18n="catalog.add"></button></div>
+        <div class="actions">
+          <button id="add-catalog-row" type="button" data-i18n="catalog.add"></button>
+          <button id="refresh-catalog" type="button" data-i18n="catalog.refresh"></button>
+          <span class="said" id="catalog-refresh-said"></span>
+        </div>
+        <p class="hint" data-i18n="catalog.refreshHint"></p>
       </section>
 
       <section id="policies-section">
@@ -228,12 +256,11 @@
 
       var el = function (id) { return document.getElementById(id) }
 
-      // ---------- catalogo de idioma (es/en) --------------------------------
-      // Cada clave que este panel muestra vive aca, en los dos idiomas. Nada
-      // de texto de cara al usuario se escribe suelto en el resto del
-      // archivo -- todo pasa por t(clave, parametros). Ver el comentario
-      // grande en <head> sobre por que esto no es contributes.languagePacks
-      // de Orca.
+      // ---------- language catalog (es/en) -----------------------------------
+      // Every key this panel shows lives here, in both languages. No
+      // user-facing text is ever written loose anywhere else in this file --
+      // everything goes through t(key, params). See the big comment in
+      // <head> for why this isn't Orca's own contributes.languagePacks.
       var CATALOG = {
         es: {
           'app.subtitle': 'Configuración del plugin. Todo se guarda a través del host de Orca — nada de esto llama a una URL externa desde este panel.',
@@ -242,6 +269,8 @@
           'secret.label': 'Nueva clave (se guarda cifrada; nunca se vuelve a mostrar completa)',
           'secret.placeholder': 'api...',
           'secret.save': 'Guardar clave',
+          'secret.replace': 'Reemplazar clave',
+          'secret.cancel': 'Cancelar',
           'secret.clear': 'Eliminar clave guardada',
           'secret.saving': 'Guardando…',
           'secret.saved': 'Clave guardada.',
@@ -250,7 +279,7 @@
           'secret.configured': 'Clave configurada (termina en …{{tail}}).',
           'secret.notConfigured': 'Sin clave configurada.',
           'integration.heading': 'Integración con Claude Code',
-          'integration.hint': 'Este plugin escribe cuatro cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, y un enlace al mod de skills. Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
+          'integration.hint': 'Este plugin escribe seis cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, un enlace al mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), y un espejo de las políticas del equipo en JSON legible (no es secreto). Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
           'integration.checking': 'Comprobando…',
           'integration.statusUnavailable': 'No se pudo leer el estado.',
           'integration.hookInstalled': 'Hook de Bash: puesto, en {{path}}',
@@ -263,6 +292,12 @@
           'integration.mirrorMissing': 'Archivo de la clave: no existe todavía ({{path}}).',
           'integration.mirrorUnknown': 'Archivo de la clave: no se pudo comprobar.',
           'integration.modLinked': 'Mod de skills: enlazado en {{path}}',
+          'entry.untitled': '(sin nombre)',
+          'integration.hookCount': 'Hook de Bash: puesto en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
+          'integration.hookPanesCovered': 'Paneles de Orca: los {{panes}} cubiertos.',
+          'integration.hookPanesMissing': 'Paneles de Orca: NO cubiertos. El hook no corre dentro de Orca.',
+          'integration.hookPanesNone': 'Paneles de Orca: no se encontró ninguna cuenta ({{reason}}).',
+          'integration.modLinkedCount': 'Mod de skills: enlazado en {{installed}} de {{total}} sitios.',
           'integration.modNotLinked': 'Mod de skills: no enlazado.',
           'integration.setup': 'Configurar',
           'integration.revert': 'Revertir todo',
@@ -276,6 +311,11 @@
           'thresholds.logMaxEntries': 'Tamaño máximo del log',
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
+          'catalog.refresh': 'Actualizar desde Orca',
+          'catalog.refreshHint': 'Agrega los worktrees nuevos que Orca ya conoce, sin tocar los destinos que ya editaste.',
+          'catalog.refreshing': 'Actualizando…',
+          'catalog.refreshDone': 'Se agregaron {{count}} destino(s) nuevo(s).',
+          'catalog.refreshNone': 'No había destinos nuevos.',
           'catalog.add': '+ Agregar destino',
           'catalog.fieldId': 'id',
           'catalog.fieldIdPlaceholder': 'id-corto',
@@ -294,6 +334,16 @@
           'policies.fieldIdPlaceholder': 'id-corto',
           'policies.fieldRule': 'rule',
           'policies.fieldRulePlaceholder': 'La regla en una frase',
+          'policies.fieldKind': 'Qué hace esta regla',
+          'policies.kindPermits': 'Se hace sin preguntar',
+          'policies.kindRequiresHuman': 'Lo decide una persona',
+          'policies.kindProhibits': 'No se hace nunca',
+          'policies.kindUnset': '— Elegir —',
+          'policies.kindNeedsReview': 'Falta elegir qué hace esta política. Mientras tanto, esta fila se ignora al decidir y no se pierde.',
+          'policies.fieldDestinations': 'Destinos (opcional)',
+          'policies.fieldDestinationsPlaceholder': 'id-destino-1, id-destino-2',
+          'policies.fieldDestinationsHint': 'Vacío = aplica a todos los destinos (comportamiento actual). Ids separados por comas para limitar esta política a destinos específicos.',
+          'policies.unknownDestination': 'Estos ids no existen en el catálogo actual: {{ids}}',
           'policies.remove': 'Quitar',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
@@ -301,7 +351,15 @@
           'common.timeout': 'Tiempo de espera agotado.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
           'common.couldNotSend': 'No se pudo enviar el pedido.',
-          'common.hostRejectedWrite': 'El host rechazó la escritura.'
+          'common.hostRejectedWrite': 'El host rechazó la escritura.',
+          'error.emptyKey': 'La clave no puede estar vacía.',
+          'error.unknownIntent': 'Pedido no reconocido.',
+          'error.invalidLocale': 'Idioma no reconocido.',
+          'error.unknownMode': 'Modo no reconocido.',
+          'error.noJson': 'El proceso auxiliar no devolvió una respuesta válida.',
+          'error.launchFailed': 'No se pudo iniciar el proceso auxiliar.',
+          'error.exception': 'Ocurrió un error inesperado.',
+          'error.missingPluginRoot': 'Falta la ruta del plugin.'
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
@@ -310,6 +368,8 @@
           'secret.label': 'New key (saved encrypted; never shown in full again)',
           'secret.placeholder': 'api...',
           'secret.save': 'Save key',
+          'secret.replace': 'Replace key',
+          'secret.cancel': 'Cancel',
           'secret.clear': 'Remove saved key',
           'secret.saving': 'Saving…',
           'secret.saved': 'Key saved.',
@@ -318,7 +378,7 @@
           'secret.configured': 'Key configured (ends in …{{tail}}).',
           'secret.notConfigured': 'No key configured.',
           'integration.heading': 'Claude Code integration',
-          'integration.hint': "This plugin writes four things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, and a link to the skills mod. None of this happens without showing it here, and \"Revert everything\" puts it all back.",
+          'integration.hint': "This plugin writes six things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a link to the skills mod, a human-readable JSON mirror of the destination catalog (not secret), and a human-readable JSON mirror of the team policies (not secret). None of this happens without showing it here, and \"Revert everything\" puts it all back.",
           'integration.checking': 'Checking…',
           'integration.statusUnavailable': 'Could not read the status.',
           'integration.hookInstalled': 'Bash hook: installed, at {{path}}',
@@ -331,6 +391,12 @@
           'integration.mirrorMissing': "Key file: doesn't exist yet ({{path}}).",
           'integration.mirrorUnknown': 'Key file: could not check.',
           'integration.modLinked': 'Skills mod: linked at {{path}}',
+          'entry.untitled': '(unnamed)',
+          'integration.hookCount': 'Bash hook: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
+          'integration.hookPanesCovered': 'Orca panes: all {{panes}} covered.',
+          'integration.hookPanesMissing': 'Orca panes: NOT covered. The hook does not run inside Orca.',
+          'integration.hookPanesNone': 'Orca panes: no account found ({{reason}}).',
+          'integration.modLinkedCount': 'Skills mod: linked in {{installed}} of {{total}} places.',
           'integration.modNotLinked': 'Skills mod: not linked.',
           'integration.setup': 'Set up',
           'integration.revert': 'Revert everything',
@@ -344,6 +410,11 @@
           'thresholds.logMaxEntries': 'Maximum log size',
           'catalog.heading': 'Destination catalog',
           'catalog.hint': 'One destination per worktree this plugin may judge or route.',
+          'catalog.refresh': 'Refresh from Orca',
+          'catalog.refreshHint': 'Adds newly-seen worktrees without touching the destinations you already edited.',
+          'catalog.refreshing': 'Refreshing…',
+          'catalog.refreshDone': '{{count}} new destination(s) added.',
+          'catalog.refreshNone': 'No new destinations.',
           'catalog.add': '+ Add destination',
           'catalog.fieldId': 'id',
           'catalog.fieldIdPlaceholder': 'short-id',
@@ -362,6 +433,16 @@
           'policies.fieldIdPlaceholder': 'short-id',
           'policies.fieldRule': 'rule',
           'policies.fieldRulePlaceholder': 'The rule, in one sentence',
+          'policies.fieldKind': 'What this rule does',
+          'policies.kindPermits': 'Done without asking',
+          'policies.kindRequiresHuman': 'A person decides',
+          'policies.kindProhibits': 'Never done',
+          'policies.kindUnset': '— Choose —',
+          'policies.kindNeedsReview': 'This policy still needs what it does chosen. Until then this row is ignored when deciding, and not lost.',
+          'policies.fieldDestinations': 'Destinations (optional)',
+          'policies.fieldDestinationsPlaceholder': 'destination-id-1, destination-id-2',
+          'policies.fieldDestinationsHint': "Empty = applies to all destinations (today's behavior). Comma-separated ids to limit this policy to specific destinations.",
+          'policies.unknownDestination': "These ids don't exist in the current catalog: {{ids}}",
           'policies.remove': 'Remove',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
@@ -369,11 +450,53 @@
           'common.timeout': 'Timed out.',
           'common.hostRejectedRequest': 'The host rejected the request.',
           'common.couldNotSend': 'Could not send the request.',
-          'common.hostRejectedWrite': 'The host rejected the write.'
+          'common.hostRejectedWrite': 'The host rejected the write.',
+          'error.emptyKey': "The key can't be empty.",
+          'error.unknownIntent': 'Unrecognized request.',
+          'error.invalidLocale': 'Unrecognized language.',
+          'error.unknownMode': 'Unrecognized mode.',
+          'error.noJson': "The helper process didn't return a valid response.",
+          'error.launchFailed': 'Could not start the helper process.',
+          'error.exception': 'An unexpected error occurred.',
+          'error.missingPluginRoot': 'The plugin path is missing.'
         }
       }
 
-      var currentLocale = 'es'
+      // Maps a producer's stable `reason` code (write-secret-mirror.mjs,
+      // install-claude-integration.mjs, main.mjs's own request handlers --
+      // never already-localized prose, see those files' own notes) to this
+      // panel's own catalog key. An unrecognized or missing code falls back
+      // to the generic 'common.hostRejectedRequest' rather than ever
+      // surfacing the producer's raw (English, diagnostic-only) `detail`.
+      var ERROR_REASON_KEYS = {
+        'empty-key': 'error.emptyKey',
+        'unknown-intent': 'error.unknownIntent',
+        'invalid-locale': 'error.invalidLocale',
+        'unknown-mode': 'error.unknownMode',
+        'no-json': 'error.noJson',
+        'launch-failed': 'error.launchFailed',
+        exception: 'error.exception',
+        'missing-plugin-root': 'error.missingPluginRoot'
+      }
+      function errorMessageFor (result) {
+        var key = result && typeof result.reason === 'string' ? ERROR_REASON_KEYS[result.reason] : undefined
+        return t(key || 'common.hostRejectedRequest')
+      }
+
+      /**
+       * The language Orca is running in.
+       *
+       * Orca substitutes the resolved UI locale into the panel shell's
+       * `<html lang>`, so the plugin no longer has to ask a question the
+       * user already answered in Orca's own settings. Anything this plugin
+       * has no catalog for falls back to English.
+       */
+      function localeFromOrca () {
+        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      var currentLocale = localeFromOrca()
       function t (key, params) {
         var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
         if (!params) return template
@@ -382,20 +505,20 @@
         })
       }
 
-      // ---------- puente real con el host --------------------------------
-      // Mismo protocolo que panels/board.html y wa-inbox/config.html: el
-      // iframe es sandboxed con origen opaco, asi que el unico canal es
-      // postMessage con el frame padre (orca-oss
-      // src/shared/plugins/plugin-panel-bridge.ts). '*' es el unico
-      // targetOrigin usable; el host valida la ventana que lo manda.
+      // ---------- real bridge to the host -------------------------------
+      // Same protocol as panels/board.html and wa-inbox/config.html: the
+      // iframe is sandboxed with an opaque origin, so the only channel is
+      // postMessage with the parent frame (orca-oss
+      // src/shared/plugins/plugin-panel-bridge.ts). '*' is the only usable
+      // targetOrigin; the host validates which window sends it.
       //
-      // Toda escritura de este panel nace de un clic -- guardar la clave,
-      // guardar la configuracion -- asi que viaja por el carril de usuario:
-      // cupo reservado, prioridad sobre cualquier lectura de fondo y
-      // reintento con backoff si el host la rechaza por `rate_limited`
-      // (PANEL_MESSAGE_RATE_LIMIT). Simplificado del mecanismo de cola de
-      // wa-inbox/config.html a lo que este panel necesita: unas pocas
-      // lecturas al abrir y unas pocas escrituras por clic, nunca sondeo.
+      // Every write this panel makes is born from a click -- saving the key,
+      // saving the configuration -- so it travels the user lane: a reserved
+      // quota, priority over any background read, and a backoff retry if the
+      // host rejects it with `rate_limited` (PANEL_MESSAGE_RATE_LIMIT).
+      // Simplified from wa-inbox/config.html's own queue mechanism down to
+      // what this panel needs: a few reads on open and a few writes per
+      // click, never polling.
       var seq = 0
       var pending = {}
       var CUPO = { max: 30, ventanaMs: 10000, reserva: 4 }
@@ -466,25 +589,26 @@
         resolve(d)
       })
 
-      // storage.get devuelve { value: <dato> } y el bridge lo envuelve otra vez.
+      // storage.get returns { value: <data> } and the bridge wraps it again.
       function stored (result) {
         if (!result || !result.ok || !result.value) return null
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
       function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
-      // Escritura de fondo (no la pidio un clic): sondeo y latido usan esta,
-      // nunca la de usuario, para no gastar el cupo reservado a un clic real.
+      // Background write (not requested by a click): polling and the
+      // heartbeat use this one, never the user lane, so a real click's
+      // reserved quota is never spent by them.
       function writeBackground (key, value) { return call('storage.set', { key: key, value: value }, false) }
 
-      // ---------- clave secreta: pedido/resultado ---------------------------
-      // Un panel sandboxed no puede llamar `secrets.get`/`secrets.set`/
+      // ---------- secret key: request/result ---------------------------------
+      // A sandboxed panel cannot call `secrets.get`/`secrets.set`/
       // `secrets.delete` (isPluginPanelAction, orca-oss plugin-host-api.ts):
-      // solo `notifications.show`, `storage.get` y `storage.set`. Este panel
-      // deja un pedido en storage y `main.mjs` lo atiende con un temporizador,
-      // igual que SIDECAR_REQUEST_KEY/SIDECAR_RESULT_KEY en orca-wa-inbox. La
-      // clave nunca se relee: solo se muestra el estado enmascarado que el
-      // worker publica en SECRET_STATUS_KEY.
+      // only `notifications.show`, `storage.get` and `storage.set`. This
+      // panel leaves a request in storage and `main.mjs` attends it on a
+      // timer, same as SIDECAR_REQUEST_KEY/SIDECAR_RESULT_KEY in
+      // orca-wa-inbox. The key is never read back: only the masked status
+      // the worker publishes in SECRET_STATUS_KEY is shown.
       var SECRET_REQUEST_KEY = 'secretRequest'
       var SECRET_RESULT_KEY = 'secretResult'
       var SECRET_STATUS_KEY = 'secretStatus'
@@ -498,7 +622,7 @@
         return read(SECRET_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(result.error || t('common.hostRejectedRequest'))
+            throw new Error(errorMessageFor(result))
           }
           if (Date.now() >= deadline) throw new Error(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
@@ -510,7 +634,7 @@
         var requestId = 'secret-' + Date.now() + '-' + Math.random().toString(36).slice(2)
         var request = { id: requestId, at: new Date().toISOString(), intent: intent }
         if (value !== undefined) request.value = value
-        // Empuja al worker a su sondeo rapido antes de esperar el resultado.
+        // Nudges the worker into its fast poll before waiting for the result.
         signalPanelOpen()
         return write(SECRET_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
@@ -518,11 +642,11 @@
         })
       }
 
-      // ---------- integracion con Claude Code: pedido/resultado -------------
-      // Mismo patron que la clave secreta arriba: un panel sandboxed no puede
-      // instalar/revertir directamente (eso corre en el worker, a traves de
-      // install-claude-integration.mjs), asi que deja un pedido en storage y
-      // main.mjs lo atiende en el mismo sondeo que ya usa para la clave.
+      // ---------- Claude Code integration: request/result -------------------
+      // Same pattern as the secret above: a sandboxed panel cannot
+      // install/revert directly (that runs in the worker, through
+      // install-claude-integration.mjs), so it leaves a request in storage
+      // and main.mjs attends it in the same poll it already uses for the key.
       var CLAUDE_INTEGRATION_REQUEST_KEY = 'claudeIntegrationRequest'
       var CLAUDE_INTEGRATION_RESULT_KEY = 'claudeIntegrationResult'
       var CLAUDE_INTEGRATION_STATUS_KEY = 'claudeIntegrationStatus'
@@ -531,7 +655,7 @@
         return read(CLAUDE_INTEGRATION_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(result.detail || result.reason || t('common.hostRejectedRequest'))
+            throw new Error(errorMessageFor(result))
           }
           if (Date.now() >= deadline) throw new Error(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
@@ -549,20 +673,25 @@
         })
       }
 
-      // ---------- idioma: pedido/resultado/estado ---------------------------
-      // Mismo patron otra vez: este panel no puede escribir el archivo espejo
-      // del idioma el mismo (permission sandbox del worker), asi que pide y
-      // main.mjs lo atiende. LOCALE_STATUS_KEY es lo que este panel lee al
-      // abrir para saber en que idioma pintar.
+      // ---------- language: request/result/status -----------------------------
+      // Same pattern again: this panel cannot write the language's mirror
+      // file itself (the worker's permission sandbox), so it requests and
+      // main.mjs attends it. LOCALE_STATUS_KEY is what this panel reads on
+      // open to know which language to paint.
       var LOCALE_REQUEST_KEY = 'localeRequest'
       var LOCALE_RESULT_KEY = 'localeResult'
       var LOCALE_STATUS_KEY = 'localeStatus'
+
+      // Fire-and-forget nudge telling main.mjs's poll loop to re-mirror the
+      // catalog/policies JSON files gate-bash.ts reads directly -- see
+      // CATALOG_POLICY_MIRROR_REQUEST_KEY there. Nothing here waits for it.
+      var CATALOG_POLICY_MIRROR_REQUEST_KEY = 'catalog-policy-mirror-request'
 
       function waitForLocaleResult (requestId, deadline) {
         return read(LOCALE_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(result.detail || result.reason || t('common.hostRejectedRequest'))
+            throw new Error(errorMessageFor(result))
           }
           if (Date.now() >= deadline) throw new Error(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
@@ -580,7 +709,38 @@
         })
       }
 
-      // ---------- aplicar el catalogo al DOM ---------------------------------
+      // ---------- catalog refresh: request/result -----------------------------
+      // Same request/result pattern as the secret/Claude-integration/locale
+      // channels above: this panel cannot call orca.commands.register'd
+      // 'advisor.refreshCatalog' directly (the sandboxed bridge only allows
+      // notifications.show/storage.get/storage.set), so it leaves a request
+      // and main.mjs's poll loop attends it.
+      var CATALOG_REFRESH_REQUEST_KEY = 'catalogRefreshRequest'
+      var CATALOG_REFRESH_RESULT_KEY = 'catalogRefreshResult'
+
+      function waitForCatalogRefreshResult (requestId, deadline) {
+        return read(CATALOG_REFRESH_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw new Error(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForCatalogRefreshResult(requestId, deadline) })
+        })
+      }
+
+      function sendCatalogRefreshRequest () {
+        var requestId = 'catalog-refresh-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString() }
+        signalPanelOpen()
+        return write(CATALOG_REFRESH_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          return waitForCatalogRefreshResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
         document.querySelectorAll('[data-i18n]').forEach(function (node) {
@@ -592,40 +752,17 @@
         el('integration-hint').innerHTML = t('integration.hint')
       }
 
-      function setLangButtons (locale) {
-        el('lang-es').setAttribute('aria-pressed', String(locale === 'es'))
-        el('lang-en').setAttribute('aria-pressed', String(locale === 'en'))
-      }
 
-      // Al cambiar de idioma, las filas dinamicas (catalogo/politicas) ya
-      // tienen sus etiquetas fijadas al crearse: se leen sus valores, se
-      // reconstruyen con las etiquetas del idioma nuevo, y el resto del
-      // panel se repinta por catalogo.
-      function applyLocale (locale) {
-        currentLocale = (locale === 'en') ? 'en' : 'es'
-        document.documentElement.lang = currentLocale
-        setLangButtons(currentLocale)
-        var savedCatalog = readCatalog()
-        var savedPolicies = readPolicies()
-        applyStaticI18n()
-        renderSecretStatus(lastSecretStatus)
-        renderClaudeIntegrationStatus(lastClaudeIntegrationStatus)
-        catalogListEl.innerHTML = ''
-        savedCatalog.destinations.forEach(addCatalogRow)
-        policiesListEl.innerHTML = ''
-        savedPolicies.forEach(addPolicyRow)
-      }
+      // There is no applyLocale here any more. It existed to repaint the panel
+      // when the in-panel language switch was used, and the switch is gone:
+      // the language comes from Orca, which remounts the whole panel when it
+      // changes, so nothing needs to repaint in place.
 
-      el('lang-es').addEventListener('click', function () {
-        if (currentLocale === 'es') return
-        applyLocale('es')
-        sendLocaleRequest('es').catch(function () { /* la vista ya cambio; un fallo de red no la revierte */ })
-      })
-      el('lang-en').addEventListener('click', function () {
-        if (currentLocale === 'en') return
-        applyLocale('en')
-        sendLocaleRequest('en').catch(function () { /* idem */ })
-      })
+      // The gate and the skills mod run OUTSIDE Orca and cannot read the
+      // panel's `<html lang>`, so the locale Orca reports is mirrored out to
+      // them. Best effort: a failed mirror leaves those two on their previous
+      // language, which is a cosmetic difference, never a blocked command.
+      sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
 
       // ---------- catalogo ----------------------------------------------
       var DESTINATION_KINDS = ['service', 'client-site', 'project', 'support']
@@ -651,16 +788,43 @@
 
       var catalogListEl = el('catalog-list')
 
+      /** Wraps one editable row in a disclosure whose summary stays in step
+       *  with the id field, so a collapsed list still says what is in it. */
+      function makeCollapsible (isNew, nameOf, metaOf) {
+        var entry = elMake('details', 'entry')
+        var summary = elMake('summary')
+        var name = elMake('span', 'entry-name')
+        var meta = elMake('span', 'entry-meta')
+        summary.appendChild(name)
+        summary.appendChild(meta)
+        entry.appendChild(summary)
+        entry.open = isNew
+        entry._sync = function () {
+          name.textContent = nameOf() || t('entry.untitled')
+          meta.textContent = metaOf()
+        }
+        // Deliberately NOT called here: the closures above read fields the
+        // caller declares after this point, so at construction they are still
+        // hoisted-undefined. Each builder calls _sync() once it is complete.
+        return entry
+      }
+
       function addCatalogRow (row) {
         row = row || {
           id: '', label: '', kind: 'project', worktreePath: '', terminalTitleMatch: '',
           autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 }
         }
-        var entry = elMake('div', 'entry')
-
-        var row1 = elMake('div', 'row two')
         var idField = fieldInput(t('catalog.fieldId'), row.id, t('catalog.fieldIdPlaceholder'))
         var labelField = fieldInput(t('catalog.fieldLabel'), row.label, t('catalog.fieldLabelPlaceholder'))
+        var entry = makeCollapsible(
+          !row.id,
+          function () { return idField.input.value.trim() },
+          function () { return kindSelect.value + ' \u00b7 ' + (labelField.input.value.trim() || row.worktreePath) }
+        )
+        idField.input.addEventListener('input', function () { entry._sync() })
+        labelField.input.addEventListener('input', function () { entry._sync() })
+
+        var row1 = elMake('div', 'row two')
         row1.appendChild(idField.wrap)
         row1.appendChild(labelField.wrap)
         entry.appendChild(row1)
@@ -677,6 +841,7 @@
           if (k === row.kind) opt.selected = true
           kindSelect.appendChild(opt)
         })
+        kindSelect.addEventListener('change', function () { entry._sync() })
         kindWrap.appendChild(kindLabel)
         kindWrap.appendChild(kindSelect)
         var pathField = fieldInput(t('catalog.fieldPath'), row.worktreePath, t('catalog.fieldPathPlaceholder'))
@@ -694,6 +859,8 @@
         row3.appendChild(confirmField.wrap)
         row3.appendChild(delicatenessField.wrap)
         entry.appendChild(row3)
+
+        entry._sync()
 
         var actions = elMake('div', 'entry-actions')
         var removeBtn = elMake('button', 'link')
@@ -723,6 +890,22 @@
 
       el('add-catalog-row').addEventListener('click', function () { addCatalogRow() })
 
+      var catalogRefreshSaidEl = el('catalog-refresh-said')
+      el('refresh-catalog').addEventListener('click', function () {
+        said(catalogRefreshSaidEl, t('catalog.refreshing'))
+        sendCatalogRefreshRequest().then(function (result) {
+          var added = (result && typeof result.added === 'number') ? result.added : 0
+          said(catalogRefreshSaidEl, added > 0 ? t('catalog.refreshDone', { count: String(added) }) : t('catalog.refreshNone'))
+          return read('catalog', false)
+        }).then(function (catalog) {
+          if (!catalog) return
+          catalogListEl.innerHTML = ''
+          ;(catalog.destinations || []).forEach(addCatalogRow)
+        }).catch(function (error) {
+          said(catalogRefreshSaidEl, String(error && error.message || error), true)
+        })
+      })
+
       function readCatalog () {
         var rows = []
         catalogListEl.querySelectorAll('.entry').forEach(function (entryEl) {
@@ -731,19 +914,135 @@
         return { destinations: rows.filter(function (r) { return r.id.length > 0 }) }
       }
 
+      // Read fresh off the catalog editor's own in-memory rows (never
+      // re-fetched from storage) so a policy's destination-id warning always
+      // compares against what is actually loaded right now, including
+      // catalog edits the user hasn't saved yet.
+      function currentCatalogDestinationIds () {
+        var ids = []
+        catalogListEl.querySelectorAll('.entry').forEach(function (entryEl) {
+          if (typeof entryEl._read !== 'function') return
+          var id = entryEl._read().id
+          if (id) ids.push(id)
+        })
+        return ids
+      }
+
       // ---------- politicas -----------------------------------------------
 
       var policiesListEl = el('policies-list')
 
+      // Same three values as decisions.ts' PolicyKind (src/core/decisions.ts)
+      // and store.ts' POLICY_KINDS -- kept as a plain list here because this
+      // panel is untyped JS with no import of that union, same reason
+      // DESTINATION_KINDS above duplicates CatalogDestination's kind values.
+      // '' is NOT a PolicyKind: it is this panel's own sentinel for "nobody
+      // has chosen one yet", used only for a row that arrived from storage
+      // with no kind (or an invalid one) and never written back as a real
+      // stored value on its own -- see the entry._read comment below.
+      var POLICY_KIND_OPTIONS = [
+        { value: '', labelKey: 'policies.kindUnset' },
+        { value: 'permits', labelKey: 'policies.kindPermits' },
+        { value: 'requires_human', labelKey: 'policies.kindRequiresHuman' },
+        { value: 'prohibits', labelKey: 'policies.kindProhibits' }
+      ]
+
+      function policyKindLabel (value) {
+        var match = POLICY_KIND_OPTIONS.filter(function (o) { return o.value === value })[0]
+        return match ? t(match.labelKey) : t('policies.kindUnset')
+      }
+
       function addPolicyRow (row) {
-        row = row || { id: '', rule: '' }
-        var entry = elMake('div', 'entry')
-        var rowEl = elMake('div', 'row two')
+        row = row || { id: '', rule: '', kind: '' }
         var idField = fieldInput(t('policies.fieldId'), row.id, t('policies.fieldIdPlaceholder'))
         var ruleField = fieldInput(t('policies.fieldRule'), row.rule, t('policies.fieldRulePlaceholder'))
+        var entry = makeCollapsible(
+          !row.id,
+          function () { return idField.input.value.trim() },
+          function () {
+            var base = policyKindLabel(kindSelect.value) + ' · ' + ruleField.input.value.trim()
+            var destinations = parseDestinations()
+            // Visible without expanding the row: a scoped policy reads
+            // differently from a global one at a glance, which matters once
+            // there are 20 of them.
+            return destinations.length > 0 ? base + ' → ' + destinations.join(', ') : base
+          }
+        )
+        idField.input.addEventListener('input', function () { entry._sync() })
+        ruleField.input.addEventListener('input', function () { entry._sync() })
+        var rowEl = elMake('div', 'row two')
         rowEl.appendChild(idField.wrap)
         rowEl.appendChild(ruleField.wrap)
         entry.appendChild(rowEl)
+
+        var kindWrap = elMake('div')
+        var kindLabel = elMake('label')
+        kindLabel.textContent = t('policies.fieldKind')
+        var kindSelect = elMake('select')
+        // A row loaded from storage without a valid kind (written before
+        // `kind` existed, or with a typo'd value) never gets guessed into one
+        // of the three real options -- it lands on the '' sentinel instead,
+        // and stays there, visibly, until a human picks one.
+        var storedKind = POLICY_KIND_OPTIONS.some(function (o) { return o.value === row.kind && o.value !== '' }) ? row.kind : ''
+        POLICY_KIND_OPTIONS.forEach(function (option) {
+          var opt = elMake('option')
+          opt.value = option.value
+          opt.textContent = t(option.labelKey)
+          if (option.value === storedKind) opt.selected = true
+          kindSelect.appendChild(opt)
+        })
+        kindWrap.appendChild(kindLabel)
+        kindWrap.appendChild(kindSelect)
+        entry.appendChild(kindWrap)
+
+        var needsReviewHint = elMake('p', 'hint warn')
+        needsReviewHint.textContent = t('policies.kindNeedsReview')
+        entry.appendChild(needsReviewHint)
+
+        function syncKindWarning () {
+          needsReviewHint.style.display = kindSelect.value === '' ? '' : 'none'
+        }
+        syncKindWarning()
+        kindSelect.addEventListener('change', function () { syncKindWarning(); entry._sync() })
+
+        // Scope: empty (the default) means this policy applies globally,
+        // exactly like every row already saved today. A comma-separated list
+        // of destination ids narrows it -- coordinated with store.ts's
+        // `PolicyRow.destinations?: readonly string[]`.
+        var destinationsField = fieldInput(
+          t('policies.fieldDestinations'), (row.destinations || []).join(', '), t('policies.fieldDestinationsPlaceholder'))
+        entry.appendChild(destinationsField.wrap)
+
+        var destinationsHint = elMake('p', 'hint')
+        destinationsHint.textContent = t('policies.fieldDestinationsHint')
+        entry.appendChild(destinationsHint)
+
+        var destinationsWarning = elMake('p', 'hint warn')
+        entry.appendChild(destinationsWarning)
+
+        function parseDestinations () {
+          return destinationsField.input.value.split(',')
+            .map(function (s) { return s.trim() })
+            .filter(function (s) { return s.length > 0 })
+        }
+
+        // Compared against the catalog editor's own in-memory rows, never
+        // re-fetched. Purely informational -- a typo'd or removed
+        // destination id is shown, never blocked and never thrown on.
+        function syncDestinationsWarning () {
+          var known = currentCatalogDestinationIds()
+          var unknown = parseDestinations().filter(function (id) { return known.indexOf(id) === -1 })
+          if (unknown.length > 0) {
+            destinationsWarning.textContent = t('policies.unknownDestination', { ids: unknown.join(', ') })
+            destinationsWarning.style.display = ''
+          } else {
+            destinationsWarning.style.display = 'none'
+          }
+        }
+        syncDestinationsWarning()
+        destinationsField.input.addEventListener('input', function () { syncDestinationsWarning(); entry._sync() })
+
+        entry._sync()
 
         var actions = elMake('div', 'entry-actions')
         var removeBtn = elMake('button', 'link')
@@ -754,7 +1053,22 @@
         entry.appendChild(actions)
 
         entry._read = function () {
-          return { id: idField.input.value.trim(), rule: ruleField.input.value.trim() }
+          // kindSelect.value is '' when still unset: written back as
+          // `undefined` (dropped from the saved object, same as
+          // terminalTitleMatch above) rather than as an empty string or a
+          // guessed real kind, so store.ts's isPolicyRow still sees it as
+          // "no valid kind" next time and keeps excluding it from judgment
+          // -- without this panel ever deleting the row itself.
+          var destinations = parseDestinations()
+          return {
+            id: idField.input.value.trim(),
+            rule: ruleField.input.value.trim(),
+            kind: kindSelect.value || undefined,
+            // Same "empty means unset" convention as kind/terminalTitleMatch:
+            // an empty scope is dropped rather than written as `[]`, so a
+            // policy with no destinations still reads as "applies globally".
+            destinations: destinations.length > 0 ? destinations : undefined
+          }
         }
 
         policiesListEl.appendChild(entry)
@@ -803,17 +1117,57 @@
       var keySaidEl = el('key-said')
       var lastSecretStatus = null
 
-      // El panel nunca relee la clave: solo pinta lo que el worker publico en
-      // SECRET_STATUS_KEY (isConfigured/endsWith), nunca el valor completo.
+      // Three UI states over this one section, all driven from here so
+      // there is exactly one place that decides what is visible:
+      //  - 'empty'     no key configured yet -- label+input+Save, no Remove.
+      //  - 'idle'      a key exists -- only the status line, Replace and Remove.
+      //  - 'replacing' user asked to replace -- label+input+Save reappear
+      //                (auto-focused) plus Cancel, alongside Remove.
+      // 'replacing' is UI-only: it never touches the stored key, and Cancel
+      // just falls back to 'idle' with no host call.
+      var secretUiMode = 'empty'
+
+      function applySecretUiMode () {
+        var showInput = secretUiMode !== 'idle'
+        el('secret-input-group').style.display = showInput ? '' : 'none'
+        el('save-key').style.display = showInput ? '' : 'none'
+        el('replace-key').style.display = secretUiMode === 'idle' ? '' : 'none'
+        el('cancel-key').style.display = secretUiMode === 'replacing' ? '' : 'none'
+        el('clear-key').style.display = secretUiMode === 'empty' ? 'none' : ''
+        if (secretUiMode === 'replacing') el('api-key').focus()
+      }
+
+      // The panel never reads the key back: it only paints what the worker
+      // published in SECRET_STATUS_KEY (isConfigured/endsWith), never the
+      // full value.
       function renderSecretStatus (status) {
         lastSecretStatus = status
-        if (status === null) { secretStatusEl.textContent = t('secret.checking'); return }
+        if (status === null) {
+          secretStatusEl.textContent = t('secret.checking')
+          secretUiMode = 'empty'
+          applySecretUiMode()
+          return
+        }
         if (status && status.configured) {
           secretStatusEl.textContent = t('secret.configured', { tail: status.endsWith || '????' })
+          secretUiMode = secretUiMode === 'replacing' ? 'replacing' : 'idle'
         } else {
           secretStatusEl.textContent = t('secret.notConfigured')
+          secretUiMode = 'empty'
         }
+        applySecretUiMode()
       }
+
+      el('replace-key').addEventListener('click', function () {
+        secretUiMode = 'replacing'
+        applySecretUiMode()
+      })
+
+      el('cancel-key').addEventListener('click', function () {
+        el('api-key').value = ''
+        secretUiMode = 'idle'
+        applySecretUiMode()
+      })
 
       function loadSecretStatus () {
         return read(SECRET_STATUS_KEY, false).then(renderSecretStatus)
@@ -832,6 +1186,7 @@
         sendSecretRequest('save', value).then(function () {
           input.value = ''
           said(keySaidEl, t('secret.saved'))
+          secretUiMode = 'idle'
           return loadSecretStatus()
         }).catch(function (error) {
           said(keySaidEl, String(error && error.message || error), true)
@@ -848,7 +1203,7 @@
         })
       })
 
-      // ---------- integracion con Claude Code -------------------------------
+      // ---------- Claude Code integration ------------------------------------
 
       var claudeIntegrationStatusEl = el('claude-integration-status')
       var claudeIntegrationSaidEl = el('claude-integration-said')
@@ -860,9 +1215,9 @@
         return item
       }
 
-      // Pinta exactamente lo que el worker publico en CLAUDE_INTEGRATION_STATUS_KEY
-      // -- nunca la clave, y nunca mas detalle del que el panel necesita para
-      // que el usuario sepa que hay puesto y donde.
+      // Paints exactly what the worker published in
+      // CLAUDE_INTEGRATION_STATUS_KEY -- never the key, and never more detail
+      // than the panel needs for the user to know what's set up and where.
       function renderClaudeIntegrationStatus (status) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
@@ -872,9 +1227,18 @@
           return
         }
         var hookLine = status.hook && status.hook.installed
-          ? (status.hook.pathMatches ? t('integration.hookInstalled', { path: status.hook.path }) : t('integration.hookWrongPath'))
+          ? t('integration.hookCount', { installed: String(status.hook.installedCount), total: String(status.hook.totalCount) })
           : t('integration.hookNotInstalled')
         claudeIntegrationStatusEl.appendChild(li(hookLine))
+
+        // Orca's own panes are the ones that matter most for a plugin shipped
+        // for Orca, and they read a different settings.json than ~/.claude --
+        // so they get their own line rather than hiding inside a total.
+        var panes = status.hook && status.hook.orcaPaneCount
+        var paneLine = !panes
+          ? t('integration.hookPanesNone', { reason: (status.orcaUserData && status.orcaUserData.reason) || '-' })
+          : (status.hook.orcaPanesCovered ? t('integration.hookPanesCovered', { panes: String(panes) }) : t('integration.hookPanesMissing'))
+        claudeIntegrationStatusEl.appendChild(li(paneLine))
 
         var envLine = status.env && status.env.installed
           ? t('integration.envInstalled', { name: status.env.name })
@@ -888,7 +1252,7 @@
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
         var modLine = status.modLink && status.modLink.installed
-          ? t('integration.modLinked', { path: status.modLink.path })
+          ? t('integration.modLinkedCount', { installed: String(status.hook.totalCount), total: String(status.hook.totalCount) })
           : t('integration.modNotLinked')
         claudeIntegrationStatusEl.appendChild(li(modLine))
       }
@@ -932,6 +1296,7 @@
         ]).then(function (results) {
           var failed = results.find(function (r) { return !r || !r.ok })
           if (failed) throw new Error(failed.error || t('common.hostRejectedWrite'))
+          writeBackground(CATALOG_POLICY_MIRROR_REQUEST_KEY, new Date().toISOString())
           currentConfig = config
           said(saveSaidEl, t('save.saved'))
         }).catch(function (error) {
@@ -941,11 +1306,11 @@
 
       function load () {
         fillThresholds({})
-        return read(LOCALE_STATUS_KEY, false).then(function (localeStatus) {
-          var locale = (localeStatus && localeStatus.value) || 'es'
-          currentLocale = (locale === 'en') ? 'en' : 'es'
-          document.documentElement.lang = currentLocale
-          setLangButtons(currentLocale)
+        // Orca's own language decides, not a preference stored here: the
+        // developer already chose it once, in Orca's settings. What is stored
+        // exists only to reach the gate and the skills mod, which run outside
+        // Orca and cannot see this document.
+        return Promise.resolve().then(function () {
           applyStaticI18n()
           renderSecretStatus(null)
           renderClaudeIntegrationStatus(null)
@@ -968,8 +1333,8 @@
         })
       }
 
-      // Latido: mientras el panel este visible, avisa que sigue abierto para
-      // que el worker sondee su pedido cada ~1s en lugar de cada ~15s.
+      // Heartbeat: while the panel is visible, it signals that it's still
+      // open so the worker polls its request every ~1s instead of every ~15s.
       var heartbeatTimer = null
       function startHeartbeat () {
         if (heartbeatTimer) return

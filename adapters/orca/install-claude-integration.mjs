@@ -38,11 +38,20 @@
  * orca-jev-mod-skills, and our own bookkeeping under
  * ~/.config/orca-supervisor/.
  */
-import { lstat, mkdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
+import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
+import {
+  ORCA_USER_DATA_ENV,
+  accountConfigTarget,
+  claudeAccountsDir,
+  homeConfigTarget,
+  resolveOrcaUserDataDir,
+  settingsPathFor,
+  skillsDirFor
+} from '../../src/core/orca_accounts.ts'
 
 // `~/.claude/...` is Claude Code's own convention, not ours to redefine --
 // it stays home-relative on every platform (Claude Code's own docs give no
@@ -51,11 +60,65 @@ import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 // (STATE_DIR) follows the `.config`/`%APPDATA%` convention this project
 // does control -- see src/core/paths.ts.
 const HOME = homedir()
-const SETTINGS_PATH = join(HOME, '.claude', 'settings.json')
-const MOD_LINK_PATH = join(HOME, '.claude', 'skills', 'orca-jev-mod-skills')
-const STATE_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA })
+const PLATFORM = normalizePlatform(process.platform)
+// Writes go to the first candidate; reads try each in turn. On Linux, once
+// XDG_CONFIG_HOME is honoured, an existing install's state and backup sit in
+// ~/.config/orca-supervisor -- and losing sight of them would mean uninstall
+// could no longer restore what install captured, which is the one file that
+// cannot be reconstructed later.
+const STATE_DIRS = resolveConfigDirCandidates(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
+const STATE_DIR = STATE_DIRS[0]
 const STATE_PATH = join(STATE_DIR, 'claude-settings-install-state.json')
-const BACKUP_PATH = join(STATE_DIR, 'claude-settings-backup.json')
+
+// ---------------------------------------------------------------------------
+// Install targets.
+//
+// `~/.claude` alone is NOT enough, and getting this wrong was invisible:
+// Orca launches every agent pane with CLAUDE_CONFIG_DIR pointing at
+// <userData>/claude-accounts/<uuid>/auth, so a hook written to the home
+// settings.json never runs in the panes -- the one place a plugin built
+// FOR Orca most needs it. See src/core/orca_accounts.ts.
+//
+// Discovery is by directory listing, never a hardcoded account id, and the
+// userData root comes from Orca's own ORCA_USER_DATA_PATH so that a machine
+// running both a release and a development Orca gets the one that is
+// actually hosting this plugin.
+// ---------------------------------------------------------------------------
+
+async function discoverTargets () {
+  const targets = [homeConfigTarget(PLATFORM, HOME)]
+  const userData = resolveOrcaUserDataDir(PLATFORM, {
+    home: HOME,
+    appDataDir: process.env.APPDATA,
+    xdgConfigHome: process.env.XDG_CONFIG_HOME,
+    orcaUserDataPath: process.env[ORCA_USER_DATA_ENV]
+  })
+  const accountsDir = claudeAccountsDir(PLATFORM, userData.path)
+  let entries = []
+  try {
+    entries = await readdir(accountsDir, { withFileTypes: true })
+  } catch (error) {
+    // No Orca accounts reachable from here (not installed, a different
+    // userData, or the installer run from a plain terminal). The home
+    // target still installs; the caller reports the gap rather than
+    // pretending the panes are covered.
+    return { targets, userData, accountsDir, accountsFound: false, reason: String(error?.code ?? error) }
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    targets.push(accountConfigTarget(PLATFORM, accountsDir, entry.name))
+  }
+  return { targets, userData, accountsDir, accountsFound: true, reason: null }
+}
+
+/** State and backup files are per target, so one account's original shape is never mistaken for another's. */
+function stateKey (target) {
+  return target.id.replace(/[^a-zA-Z0-9_.-]/g, '_')
+}
+
+function backupPathFor (target) {
+  return join(STATE_DIR, `claude-settings-backup.${stateKey(target)}.json`)
+}
 
 const ENV_VAR_NAME = 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'
 const ENV_VAR_VALUE = '1'
@@ -117,9 +180,9 @@ function resolveNodeCommand () {
 // Atomic, backed-up settings.json read/write
 // ---------------------------------------------------------------------------
 
-async function readSettings () {
+async function readSettings (settingsPath) {
   try {
-    const raw = await readFile(SETTINGS_PATH, 'utf8')
+    const raw = await readFile(settingsPath, 'utf8')
     const parsed = JSON.parse(raw)
     return isRecord(parsed) ? parsed : {}
   } catch (error) {
@@ -135,29 +198,29 @@ async function readSettings () {
  *  write on purpose" verification (a real SIGKILL sent to this process
  *  between the temp write and the rename); it is never set in normal
  *  operation, so it is a no-op there. */
-async function writeSettingsAtomic (settings) {
-  await mkdir(dirname(SETTINGS_PATH), { recursive: true })
-  const tempPath = `${SETTINGS_PATH}.${randomUUID()}.tmp`
+async function writeSettingsAtomic (settingsPath, settings) {
+  await mkdir(dirname(settingsPath), { recursive: true })
+  const tempPath = `${settingsPath}.${randomUUID()}.tmp`
   await writeFile(tempPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
   const testDelay = Number(process.env.ORCA_TEST_DELAY_BEFORE_RENAME_MS ?? '0')
   if (testDelay > 0) await new Promise((resolve) => setTimeout(resolve, testDelay))
-  await rename(tempPath, SETTINGS_PATH)
+  await rename(tempPath, settingsPath)
 }
 
 /** Backs up the pre-modification settings.json exactly once: a run that
  *  finds a backup already there leaves it alone, so a later, already-
  *  modified state is never mistaken for the original. */
-async function backupSettingsOnce (currentRawText) {
+async function backupSettingsOnce (backupPath, currentRawText) {
   await mkdir(STATE_DIR, { recursive: true })
   try {
-    await readFile(BACKUP_PATH, 'utf8')
+    await readFile(backupPath, 'utf8')
     return // already backed up once; never overwrite the original capture
   } catch (error) {
     if (error?.code !== 'ENOENT') throw error
   }
-  const tempPath = `${BACKUP_PATH}.${randomUUID()}.tmp`
+  const tempPath = `${backupPath}.${randomUUID()}.tmp`
   await writeFile(tempPath, currentRawText, 'utf8')
-  await rename(tempPath, BACKUP_PATH)
+  await rename(tempPath, backupPath)
 }
 
 // ---------------------------------------------------------------------------
@@ -168,12 +231,15 @@ async function backupSettingsOnce (currentRawText) {
 // ---------------------------------------------------------------------------
 
 async function readInstallState () {
-  try {
-    const parsed = JSON.parse(await readFile(STATE_PATH, 'utf8'))
-    return isRecord(parsed) ? parsed : null
-  } catch {
-    return null
+  for (const dir of STATE_DIRS) {
+    try {
+      const parsed = JSON.parse(await readFile(join(dir, 'claude-settings-install-state.json'), 'utf8'))
+      if (isRecord(parsed)) return parsed
+    } catch {
+      continue
+    }
   }
+  return null
 }
 
 async function writeInstallState (state) {
@@ -278,46 +344,46 @@ function uninstallEnvVar (settings, state) {
 // mod-skills symlink
 // ---------------------------------------------------------------------------
 
-async function currentModLinkTarget () {
+async function currentModLinkTarget (modLinkPath) {
   try {
-    const stat = await lstat(MOD_LINK_PATH)
+    const stat = await lstat(modLinkPath)
     if (!stat.isSymbolicLink()) return { exists: true, isSymlink: false, target: null }
-    return { exists: true, isSymlink: true, target: await readlink(MOD_LINK_PATH) }
+    return { exists: true, isSymlink: true, target: await readlink(modLinkPath) }
   } catch (error) {
     if (error?.code === 'ENOENT') return { exists: false, isSymlink: false, target: null }
     throw error
   }
 }
 
-async function installModLink (pluginRoot) {
+async function installModLink (pluginRoot, modLinkPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  const current = await currentModLinkTarget()
+  const current = await currentModLinkTarget(modLinkPath)
   if (current.isSymlink && current.target === source) return { changed: false }
   if (current.exists) {
     // Ours by convention (the distinctive name), but not pointing where we
     // expect (a stale link from a moved plugin root, or a leftover
     // non-symlink): replace it rather than leaving two conflicting copies.
-    await rm(MOD_LINK_PATH, { recursive: true, force: true })
+    await rm(modLinkPath, { recursive: true, force: true })
   }
-  await mkdir(dirname(MOD_LINK_PATH), { recursive: true })
+  await mkdir(dirname(modLinkPath), { recursive: true })
   try {
-    await symlink(source, MOD_LINK_PATH, 'dir')
+    await symlink(source, modLinkPath, 'dir')
   } catch (error) {
     return { changed: false, error: `could not symlink the mod (${String(error?.message ?? error)}); Windows or a restricted filesystem may not allow it here` }
   }
   return { changed: true }
 }
 
-async function uninstallModLink (pluginRoot) {
+async function uninstallModLink (pluginRoot, modLinkPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  const current = await currentModLinkTarget()
+  const current = await currentModLinkTarget(modLinkPath)
   if (!current.exists) return { changed: false }
   if (!current.isSymlink || current.target !== source) {
     // Not ours (or not pointing at this plugin root): leave it alone rather
     // than guessing whose it is.
     return { changed: false, skipped: true }
   }
-  await unlink(MOD_LINK_PATH)
+  await unlink(modLinkPath)
   return { changed: true }
 }
 
@@ -325,87 +391,189 @@ async function uninstallModLink (pluginRoot) {
 // Modes
 // ---------------------------------------------------------------------------
 
+/** Per-target bookkeeping. v1 stored one flat record for ~/.claude alone;
+ *  it is migrated under the `home` key so an existing install keeps the
+ *  "what did this look like before we touched it" facts it captured, which
+ *  are only knowable once and cannot be recomputed. */
+function targetStates (state) {
+  if (isRecord(state.targets)) return state.targets
+  const legacy = { ...state }
+  delete legacy.installedAt
+  return Object.keys(legacy).length > 0 ? { home: legacy } : {}
+}
+
+function modLinkPathFor (target) {
+  return join(skillsDirFor(PLATFORM, target), 'orca-jev-mod-skills')
+}
+
 async function install (pluginRoot) {
   const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
-  const rawBefore = await readFile(SETTINGS_PATH, 'utf8').catch((error) => {
-    if (error?.code === 'ENOENT') return '{}\n'
-    throw error
-  })
-  await backupSettingsOnce(rawBefore)
+  const discovery = await discoverTargets()
+  const stored = (await readInstallState()) ?? {}
+  const states = targetStates(stored)
 
-  const settings = await readSettings()
-  const state = (await readInstallState()) ?? {}
+  const perTarget = []
+  let nodeVerified = true
+  for (const target of discovery.targets) {
+    const settingsPath = settingsPathFor(PLATFORM, target)
+    const state = isRecord(states[target.id]) ? states[target.id] : {}
+    try {
+      const rawBefore = await readFile(settingsPath, 'utf8').catch((error) => {
+        if (error?.code === 'ENOENT') return '{}\n'
+        throw error
+      })
+      await backupSettingsOnce(backupPathFor(target), rawBefore)
 
-  const hook = installHookEntry(settings, gatePath, state)
-  const envChanged = installEnvVar(settings, state)
-  await writeSettingsAtomic(settings)
-  await writeInstallState({ ...state, installedAt: state.installedAt ?? new Date().toISOString() })
+      const settings = await readSettings(settingsPath)
+      const hook = installHookEntry(settings, gatePath, state)
+      const envChanged = installEnvVar(settings, state)
+      await writeSettingsAtomic(settingsPath, settings)
+      states[target.id] = state
+      if (!hook.nodeVerified) nodeVerified = false
 
-  const modResult = await installModLink(pluginRoot)
+      const modResult = await installModLink(pluginRoot, modLinkPathFor(target))
+      perTarget.push({
+        id: target.id,
+        label: target.label,
+        orcaManaged: target.orcaManaged,
+        ok: true,
+        changes: { hook: hook.changed, env: envChanged, modLink: modResult.changed },
+        modLinkWarning: modResult.error ?? null
+      })
+    } catch (error) {
+      // One unwritable target (a permission problem, a settings.json
+      // someone is editing) must not abandon the others half-installed.
+      perTarget.push({ id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: false, detail: String(error?.message ?? error).slice(0, 300) })
+    }
+  }
+  await writeInstallState({ version: 2, targets: states, installedAt: stored.installedAt ?? new Date().toISOString() })
 
+  const failed = perTarget.filter((t) => !t.ok)
+  const orcaTargets = perTarget.filter((t) => t.orcaManaged && t.ok).length
   return {
-    ok: true,
-    changes: { hook: hook.changed, env: envChanged, modLink: modResult.changed },
-    modLinkWarning: modResult.error ?? null,
-    // false only when the running interpreter is Electron-as-node and the
-    // hook had to fall back to a bare "node" on PATH -- see
-    // resolveNodeCommand. Surfaced so the doctor/panel can say so instead
-    // of silently hoping PATH resolves it.
-    nodeCommandVerified: hook.nodeVerified,
+    ok: failed.length < perTarget.length,
+    targets: perTarget,
+    orcaAccountsInstalled: orcaTargets,
+    // Where the Orca accounts were looked for, and whether Orca itself said
+    // so -- `convention` means we guessed a standard install path, which is
+    // right on a normal machine but cannot tell two Orca installs apart.
+    orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
+    changes: {
+      hook: perTarget.some((t) => t.ok && t.changes.hook),
+      env: perTarget.some((t) => t.ok && t.changes.env),
+      modLink: perTarget.some((t) => t.ok && t.changes.modLink)
+    },
+    modLinkWarning: perTarget.find((t) => t.ok && t.modLinkWarning)?.modLinkWarning ?? null,
+    failures: failed,
+    nodeCommandVerified: nodeVerified
   }
 }
 
 async function uninstall (pluginRoot) {
-  const settings = await readSettings()
-  // Missing state (e.g. deleted by hand) fails toward NOT deleting a
-  // container that might be the user's own: every "existed before" flag
-  // defaults to true, so an absent record only ever under-cleans, never
-  // removes something it cannot prove it created.
-  const state = (await readInstallState()) ?? {
-    hadEnvVarBefore: false,
-    priorEnvValue: null,
-    envObjectExistedBefore: true,
-    hooksObjectExistedBefore: true,
-    preToolUseArrayExistedBefore: true,
-    bashGroupExistedBefore: true,
+  const discovery = await discoverTargets()
+  const stored = (await readInstallState()) ?? {}
+  const states = targetStates(stored)
+  // A target we no longer discover (an account Orca removed) is still
+  // cleaned if we have a record of installing into it: uninstall must not
+  // leave our hook behind just because discovery moved on.
+  const byId = new Map(discovery.targets.map((t) => [t.id, t]))
+  for (const id of Object.keys(states)) {
+    if (byId.has(id)) continue
+    if (id === 'home') byId.set(id, homeConfigTarget(PLATFORM, HOME))
+    else if (id.startsWith('account:')) byId.set(id, accountConfigTarget(PLATFORM, discovery.accountsDir, id.slice('account:'.length)))
   }
 
-  const hookChanged = uninstallHookEntry(settings, state)
-  const envChanged = uninstallEnvVar(settings, state)
-  await writeSettingsAtomic(settings)
-
-  const modResult = await uninstallModLink(pluginRoot)
-
+  const perTarget = []
+  for (const target of byId.values()) {
+    const settingsPath = settingsPathFor(PLATFORM, target)
+    // Missing state fails toward NOT deleting a container that might be the
+    // user's own: every "existed before" flag defaults to true, so an absent
+    // record only ever under-cleans.
+    const state = isRecord(states[target.id]) ? states[target.id] : {
+      hadEnvVarBefore: false, priorEnvValue: null, envObjectExistedBefore: true,
+      hooksObjectExistedBefore: true, preToolUseArrayExistedBefore: true, bashGroupExistedBefore: true
+    }
+    try {
+      const settings = await readSettings(settingsPath)
+      const hookChanged = uninstallHookEntry(settings, state)
+      const envChanged = uninstallEnvVar(settings, state)
+      await writeSettingsAtomic(settingsPath, settings)
+      const modResult = await uninstallModLink(pluginRoot, modLinkPathFor(target))
+      await rm(backupPathFor(target), { force: true })
+      perTarget.push({
+        id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: true,
+        changes: { hook: hookChanged, env: envChanged, modLink: modResult.changed },
+        modLinkWarning: modResult.skipped ? 'mod-skills link did not point at this plugin; left untouched' : null
+      })
+    } catch (error) {
+      perTarget.push({ id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: false, detail: String(error?.message ?? error).slice(0, 300) })
+    }
+  }
   await rm(STATE_PATH, { force: true })
-  await rm(BACKUP_PATH, { force: true })
 
   return {
-    ok: true,
-    changes: { hook: hookChanged, env: envChanged, modLink: modResult.changed },
-    modLinkWarning: modResult.skipped ? 'mod-skills link did not point at this plugin; left untouched' : null,
+    ok: perTarget.some((t) => t.ok),
+    targets: perTarget,
+    changes: {
+      hook: perTarget.some((t) => t.ok && t.changes.hook),
+      env: perTarget.some((t) => t.ok && t.changes.env),
+      modLink: perTarget.some((t) => t.ok && t.changes.modLink)
+    },
+    modLinkWarning: perTarget.find((t) => t.ok && t.modLinkWarning)?.modLinkWarning ?? null,
+    failures: perTarget.filter((t) => !t.ok)
   }
 }
 
 async function status (pluginRoot) {
-  const settings = await readSettings()
   const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
-  const group = isRecord(settings.hooks) && Array.isArray(settings.hooks.PreToolUse)
-    ? settings.hooks.PreToolUse.find((g) => isRecord(g) && g.matcher === 'Bash')
-    : undefined
-  const ownHook = group && Array.isArray(group.hooks) ? group.hooks.find((h) => isRecord(h) && h.statusMessage === HOOK_STATUS_MESSAGE) : undefined
-  const hookInstalled = ownHook !== undefined
-  const hookPathMatches = hookInstalled && Array.isArray(ownHook.args) && ownHook.args.includes(gatePath)
-  const envInstalled = isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE
-  const modLink = await currentModLinkTarget()
-  const modInstalled = modLink.isSymlink && modLink.target === join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  const discovery = await discoverTargets()
 
+  const perTarget = []
+  for (const target of discovery.targets) {
+    const settingsPath = settingsPathFor(PLATFORM, target)
+    let settings = {}
+    let readError = null
+    try {
+      settings = await readSettings(settingsPath)
+    } catch (error) {
+      readError = String(error?.message ?? error).slice(0, 200)
+    }
+    const group = isRecord(settings.hooks) && Array.isArray(settings.hooks.PreToolUse)
+      ? settings.hooks.PreToolUse.find((g) => isRecord(g) && g.matcher === 'Bash')
+      : undefined
+    const ownHook = group && Array.isArray(group.hooks) ? group.hooks.find((h) => isRecord(h) && h.statusMessage === HOOK_STATUS_MESSAGE) : undefined
+    const modLink = await currentModLinkTarget(modLinkPathFor(target)).catch(() => ({ isSymlink: false, target: null }))
+    perTarget.push({
+      id: target.id,
+      label: target.label,
+      orcaManaged: target.orcaManaged,
+      settingsPath,
+      readError,
+      hook: { installed: ownHook !== undefined, pathMatches: ownHook !== undefined && Array.isArray(ownHook.args) && ownHook.args.includes(gatePath) },
+      env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
+      modLink: { installed: modLink.isSymlink && modLink.target === modSource }
+    })
+  }
+
+  const orcaTargets = perTarget.filter((t) => t.orcaManaged)
   return {
     ok: true,
-    hook: { installed: hookInstalled, pathMatches: hookPathMatches, path: SETTINGS_PATH },
-    env: { installed: envInstalled, name: ENV_VAR_NAME },
-    modLink: { installed: modInstalled, path: MOD_LINK_PATH },
-    backupPath: BACKUP_PATH,
-    statePath: STATE_PATH,
+    targets: perTarget,
+    // The headline figures the panel shows: "installed" must mean every
+    // place Claude Code actually reads, and the Orca panes are the ones
+    // that matter most for a plugin shipped for Orca.
+    hook: {
+      installed: perTarget.every((t) => t.hook.installed),
+      installedCount: perTarget.filter((t) => t.hook.installed).length,
+      totalCount: perTarget.length,
+      orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.hook.installed),
+      orcaPaneCount: orcaTargets.length
+    },
+    env: { installed: perTarget.every((t) => t.env.installed), name: ENV_VAR_NAME },
+    modLink: { installed: perTarget.every((t) => t.modLink.installed) },
+    orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
+    statePath: STATE_PATH
   }
 }
 

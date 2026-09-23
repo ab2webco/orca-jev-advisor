@@ -2,11 +2,16 @@
 // client sites, projects, support inboxes) this supervisor is allowed to
 // route encargos to, along with each destination's autonomy thresholds.
 
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isArrayOf, isNumber, isRecord, isString } from "../guards.ts";
-import { DELICATENESS_LEVELS } from "../jev.ts";
+/**
+ * How many levels a destination's `maxAutoDelicateness` can range over.
+ *
+ * It used to live in the prototype CLI's own `jev.ts`, which has been
+ * deleted along with the rest of that dead layer. Kept here, next to the
+ * only field that validates against it, rather than reaching across the
+ * tree for a single number.
+ */
+const DELICATENESS_LEVELS = 5;
 
 export type DestinationKind = "service" | "client-site" | "project" | "support";
 
@@ -27,10 +32,21 @@ export interface AutonomyConfig {
   // the model is fully certain the encargo is trivial, which practically
   // never happens for a client site.
   maxAutoDelicateness: number;
+  // Optional per-destination override for the command gate's consequence
+  // ceiling (src/core/decisions.ts's GATE_CONSEQUENCE_CEILING). Absent
+  // means "use the global consequenceCeiling" -- same shape and meaning as
+  // the store.ts runtime copy of this type; kept in sync deliberately.
+  consequenceCeiling?: number;
 }
 
 function isAutonomyConfig(value: unknown): value is AutonomyConfig {
-  return isRecord(value) && isNumber(value.actThreshold) && isNumber(value.confirmThreshold) && isNumber(value.maxAutoDelicateness);
+  if (!isRecord(value) || !isNumber(value.actThreshold) || !isNumber(value.confirmThreshold) || !isNumber(value.maxAutoDelicateness)) {
+    return false;
+  }
+  if ("consequenceCeiling" in value && value.consequenceCeiling !== undefined && !isNumber(value.consequenceCeiling)) {
+    return false;
+  }
+  return true;
 }
 
 export interface Destination {
@@ -64,7 +80,7 @@ function isCatalogShape(value: unknown): value is Catalog {
  * Business rules beyond the raw shape: thresholds must live in (0, 1],
  * acting always requires at least as much confidence as merely confirming,
  * and maxAutoDelicateness must be a whole, zero-based level index within
- * the delicateness scale (see jev.ts's DELICATENESS_LEVELS -- the two must
+ * the delicateness scale (see DELICATENESS_LEVELS above -- the two must
  * never drift).
  */
 function validateAutonomyRules(catalog: Catalog): string[] {
@@ -73,64 +89,19 @@ function validateAutonomyRules(catalog: Catalog): string[] {
   for (const destination of catalog.destinations) {
     const { actThreshold, confirmThreshold, maxAutoDelicateness } = destination.autonomy;
     if (!(actThreshold > 0 && actThreshold <= 1)) {
-      errors.push(`Destino '${destination.id}': actThreshold debe estar en (0, 1], recibido ${actThreshold}`);
+      errors.push(`Destination '${destination.id}': actThreshold must be in (0, 1], got ${actThreshold}`);
     }
     if (!(confirmThreshold > 0 && confirmThreshold <= 1)) {
-      errors.push(`Destino '${destination.id}': confirmThreshold debe estar en (0, 1], recibido ${confirmThreshold}`);
+      errors.push(`Destination '${destination.id}': confirmThreshold must be in (0, 1], got ${confirmThreshold}`);
     }
     if (actThreshold < confirmThreshold) {
-      errors.push(`Destino '${destination.id}': actThreshold (${actThreshold}) debe ser >= confirmThreshold (${confirmThreshold})`);
+      errors.push(`Destination '${destination.id}': actThreshold (${actThreshold}) must be >= confirmThreshold (${confirmThreshold})`);
     }
     if (!Number.isInteger(maxAutoDelicateness) || maxAutoDelicateness < 0 || maxAutoDelicateness > maxLevelIndex) {
       errors.push(
-        `Destino '${destination.id}': maxAutoDelicateness debe ser un entero entre 0 y ${maxLevelIndex}, recibido ${maxAutoDelicateness}`,
+        `Destination '${destination.id}': maxAutoDelicateness must be an integer between 0 and ${maxLevelIndex}, got ${maxAutoDelicateness}`,
       );
     }
   }
   return errors;
-}
-
-/**
- * Loads and validates catalog.json. Defaults to the file next to this
- * module's project root; accepts an explicit path for tests or alternate
- * deployments.
- */
-export async function loadCatalog(catalogPath?: string): Promise<Catalog> {
-  const defaultPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "catalog.json");
-  const path = catalogPath ?? defaultPath;
-
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`No se pudo leer el catálogo en ${path}: ${message}`);
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`El catálogo en ${path} no es JSON válido: ${message}`);
-  }
-
-  if (!isCatalogShape(parsed)) {
-    throw new Error(
-      `El catálogo en ${path} no tiene la forma esperada {destinations: [{id, label, kind, worktreePath, autonomy: {actThreshold, confirmThreshold, maxAutoDelicateness}, ...}]}`,
-    );
-  }
-
-  const ruleErrors = validateAutonomyRules(parsed);
-  if (ruleErrors.length > 0) {
-    throw new Error(`El catálogo en ${path} tiene valores de autonomía inválidos:\n- ${ruleErrors.join("\n- ")}`);
-  }
-
-  const ids = parsed.destinations.map((d) => d.id);
-  const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
-  if (duplicateIds.length > 0) {
-    throw new Error(`El catálogo en ${path} tiene ids de destino duplicados: ${duplicateIds.join(", ")}`);
-  }
-
-  return parsed;
 }

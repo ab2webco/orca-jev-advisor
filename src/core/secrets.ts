@@ -22,13 +22,27 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { normalizePlatform, resolveConfigDir } from "./paths.ts";
+import { normalizePlatform, resolveConfigDirCandidates } from "./paths.ts";
 
 const ENV_VAR_NAME = "TYPESAFE_API_KEY";
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
-// platform; resolveConfigDir only decides the `.config` vs `%APPDATA%`
+// platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
 // convention on top of it.
-const FALLBACK_PATH = join(resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA }), "env");
+/**
+ * Every place the key file may live, best first.
+ *
+ * More than one only on Linux, and only once `XDG_CONFIG_HOME` is set:
+ * honouring that variable moved where this plugin writes, and anyone already
+ * set up had their key in `~/.config/orca-supervisor/env`. Reading both means
+ * that key keeps working instead of the gate behaving as though none was ever
+ * entered -- a failure that would have looked like the plugin doing nothing.
+ */
+const FALLBACK_PATHS = resolveConfigDirCandidates(normalizePlatform(process.platform), {
+  home: homedir(),
+  appDataDir: process.env.APPDATA,
+  localAppDataDir: process.env.LOCALAPPDATA,
+  xdgConfigHome: process.env.XDG_CONFIG_HOME,
+}).map((dir) => join(dir, "env"));
 
 /** The key name this plugin uses inside Orca's `secrets` store. */
 export const SECRET_KEY_NAME = "typesafeApiKey";
@@ -63,13 +77,19 @@ function parseEnvFile(content: string): string | null {
 }
 
 async function fromFallbackFile(): Promise<string | null> {
-  let fileContent: string;
-  try {
-    fileContent = await readFile(FALLBACK_PATH, "utf8");
-  } catch {
-    return null;
+  // First candidate that both exists and holds a key wins. A file that is
+  // there but empty does not shadow a legacy one that still has the key.
+  for (const path of FALLBACK_PATHS) {
+    let fileContent: string;
+    try {
+      fileContent = await readFile(path, "utf8");
+    } catch {
+      continue;
+    }
+    const value = parseEnvFile(fileContent);
+    if (value !== null) return value;
   }
-  return parseEnvFile(fileContent);
+  return null;
 }
 
 /**

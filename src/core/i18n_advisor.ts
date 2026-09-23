@@ -13,7 +13,17 @@ export type AdvisorKey =
   | "notify.decide.body"
   | "notify.doctor.ok"
   | "notify.doctor.problem"
-  | "error.noApiKey";
+  | "error.noApiKey"
+  // adapters/orca/install-claude-integration.mjs's own failure paths (the
+  // `reason`/`detail` shape it returns on save/clear key, install/revert
+  // Claude integration). That script emits the `reason` code below; this
+  // panel maps `reason` -> key and resolves the rest (params) from the
+  // response's own fields instead of trusting its raw `detail` prose.
+  | "install.missingPluginRoot"
+  | "install.unknownMode"
+  | "install.exception"
+  | "install.symlinkFailed"
+  | "install.symlinkNotOurs";
 
 export const ADVISOR_CATALOG: Catalog<AdvisorKey> = {
   es: {
@@ -24,6 +34,11 @@ export const ADVISOR_CATALOG: Catalog<AdvisorKey> = {
     "notify.doctor.ok": "Todo en orden.",
     "notify.doctor.problem": "Hay problemas de configuración -- revisa el panel.",
     "error.noApiKey": "No hay TYPESAFE_API_KEY configurada en el almacén de secrets del plugin.",
+    "install.missingPluginRoot": "Falta pluginRoot: uso esperado install-claude-integration.mjs <install|uninstall|status> <pluginRoot>.",
+    "install.unknownMode": "Modo no reconocido: {{mode}}.",
+    "install.exception": "Fallo inesperado: {{message}}",
+    "install.symlinkFailed": "No se pudo enlazar el mod ({{message}}); Windows o un sistema de archivos restringido podria no permitirlo aqui.",
+    "install.symlinkNotOurs": "El enlace de mod-skills no apuntaba a este plugin; se dejo sin tocar.",
   },
   en: {
     title: "Jev Advisor",
@@ -33,5 +48,10 @@ export const ADVISOR_CATALOG: Catalog<AdvisorKey> = {
     "notify.doctor.ok": "Everything checks out.",
     "notify.doctor.problem": "There are configuration problems -- check the panel.",
     "error.noApiKey": "No TYPESAFE_API_KEY is configured in the plugin's secrets store.",
+    "install.missingPluginRoot": "Missing pluginRoot: usage is install-claude-integration.mjs <install|uninstall|status> <pluginRoot>.",
+    "install.unknownMode": "Unrecognized mode: {{mode}}.",
+    "install.exception": "Unexpected failure: {{message}}",
+    "install.symlinkFailed": "Couldn't symlink the mod ({{message}}); Windows or a restricted filesystem may not allow it here.",
+    "install.symlinkNotOurs": "The mod-skills link didn't point at this plugin; left untouched.",
   },
 };
