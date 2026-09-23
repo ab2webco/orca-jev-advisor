@@ -6,6 +6,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
 import {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
@@ -13,7 +14,9 @@ import {
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
+  publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   WORKER_HEARTBEAT_KEY
@@ -75,6 +78,22 @@ test('attendSecretRequest: a tombstoned request is never attended, even though i
   assert.equal(await secretsHost.get('TYPESAFE_API_KEY'), null)
   // The tombstone itself is left in place -- already redacted, harmless.
   assert.equal((await storageHost.get('secretRequest')).tombstone, true)
+})
+
+// ---------------------------------------------------------------------------
+// T7 -- the panel's Thresholds section must never guess a number that
+// disagrees with the real gate constant. publishGateDefaults is the only
+// route decisions.ts's GATE_CONSEQUENCE_CEILING can reach a sandboxed panel
+// (which cannot import from src/core) -- this test fails if main.mjs ever
+// goes back to a hardcoded literal instead of importing the real constant.
+// ---------------------------------------------------------------------------
+
+test('publishGateDefaults mirrors the real GATE_CONSEQUENCE_CEILING, not a hardcoded literal', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  await publishGateDefaults(orca, storageHost)
+  const published = await storageHost.get(GATE_DEFAULTS_KEY)
+  assert.equal(published.consequenceCeiling, GATE_CONSEQUENCE_CEILING)
 })
 
 // ---------------------------------------------------------------------------

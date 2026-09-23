@@ -42,6 +42,7 @@ import {
   buildDestinationState,
   buildPolicyQuestions,
   decideDestination,
+  GATE_CONSEQUENCE_CEILING,
   interpretDestinationPolicy
 } from '../../src/core/decisions.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
@@ -473,6 +474,31 @@ const WORKER_HEARTBEAT_STALE_MS = 40 * 1000
 async function publishWorkerHeartbeat (orca, storageHost) {
   await storageHost.set(WORKER_HEARTBEAT_KEY, { at: new Date().toISOString() })
     .catch((error) => orca.log(`worker heartbeat publish failed: ${error.message}`))
+}
+
+// ---------------------------------------------------------------------------
+// Gate defaults mirror -- the config panel's Thresholds section used to
+// fall back to a hardcoded 1.5 for consequenceCeiling, a stale copy of a
+// value decisions.ts has since re-measured to 1.78 (GATE_CONSEQUENCE_CEILING
+// there). A panel is a sandboxed HTML document and cannot import from
+// src/core (see odd/tasks/panel-worker-wakeup.md, T7); this worker is the
+// only thing that can, so it mirrors the constants it is actually exported
+// into storage once at activation, the same one-shot pattern as
+// publishLocaleStatus. These are static, compiled-in numbers: republishing
+// on every poll tick would be pointless, since they cannot change without a
+// new build of this plugin.
+//
+// GATE_REVERSIBLE_GATE and GATE_EXTERNAL_GATE (decisions.ts's other two gate
+// constants) are NOT exported there, so they cannot be mirrored the same way
+// without editing src/core -- out of scope here; see that task doc's report
+// for the audit of which panel fallbacks currently agree with them anyway.
+// ---------------------------------------------------------------------------
+
+const GATE_DEFAULTS_KEY = 'gateDefaults'
+
+async function publishGateDefaults (orca, storageHost) {
+  await storageHost.set(GATE_DEFAULTS_KEY, { consequenceCeiling: GATE_CONSEQUENCE_CEILING, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`gate defaults publish failed: ${error.message}`))
 }
 
 // ---------------------------------------------------------------------------
@@ -1171,6 +1197,7 @@ export default function activate (orca) {
   publishLocaleStatus(orca, storageHost)
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
   publishWorkerHeartbeat(orca, storageHost)
+  publishGateDefaults(orca, storageHost)
   runSecretPoll()
 
   // Measurements refresh on its own light cadence -- these two JSONL files
@@ -1219,7 +1246,9 @@ export {
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
+  publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   WORKER_HEARTBEAT_KEY,

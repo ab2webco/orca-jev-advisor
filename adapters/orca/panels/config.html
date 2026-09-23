@@ -1163,14 +1163,30 @@
 
       // ---------- umbrales --------------------------------------------------
 
-      function fillThresholds (config) {
+      // Mirrors main.mjs's GATE_DEFAULTS_KEY (see that file's own module
+      // note on why this exists: consequenceCeiling had no honest literal
+      // fallback a panel could hardcode).
+      var GATE_DEFAULTS_KEY = 'gateDefaults'
+
+      function fillThresholds (config, gateDefaults) {
         config = config || {}
         var thresholds = config.thresholds || {}
         el('actThreshold').value = thresholds.actThreshold != null ? thresholds.actThreshold : 0.9
         el('confirmThreshold').value = thresholds.confirmThreshold != null ? thresholds.confirmThreshold : 0.6
         el('reversibleGate').value = thresholds.reversibleGate != null ? thresholds.reversibleGate : 0.7
         el('externalGate').value = thresholds.externalGate != null ? thresholds.externalGate : 0.35
-        el('consequenceCeiling').value = thresholds.consequenceCeiling != null ? thresholds.consequenceCeiling : 1.5
+        // consequenceCeiling has no honest literal fallback here: 1.5 was a
+        // stale copy of a value src/core/decisions.ts has since re-measured
+        // to 1.78 (GATE_CONSEQUENCE_CEILING), and a panel cannot import from
+        // src/core. The real number comes from the worker's GATE_DEFAULTS_KEY
+        // mirror (see T7 in odd/tasks/panel-worker-wakeup.md); until that has
+        // ever been published, this stays honestly blank rather than show a
+        // guessed number, and "Save configuration" refuses to persist a
+        // blank ceiling (see that button's click handler).
+        var gateConsequenceCeiling = gateDefaults && typeof gateDefaults.consequenceCeiling === 'number' ? gateDefaults.consequenceCeiling : null
+        el('consequenceCeiling').value = thresholds.consequenceCeiling != null
+          ? thresholds.consequenceCeiling
+          : (gateConsequenceCeiling != null ? gateConsequenceCeiling : '')
         el('logMaxEntries').value = config.logMaxEntries != null ? config.logMaxEntries : 500
       }
 
@@ -1393,6 +1409,15 @@
       var currentConfig = null
 
       el('save-all').addEventListener('click', function () {
+        // Number('') is 0, not NaN. If this field is still blank -- the
+        // worker's GATE_DEFAULTS_KEY mirror has never been published and
+        // nothing was saved before -- saving must never turn "we don't know
+        // the real ceiling yet" into a silently-persisted 0 (see T7 in
+        // odd/tasks/panel-worker-wakeup.md).
+        if (el('consequenceCeiling').value === '') {
+          said(saveSaidEl, t('common.workerSilent'), true)
+          return
+        }
         said(saveSaidEl, t('save.saving'))
         var config = readConfig(currentConfig)
         Promise.all([
@@ -1424,12 +1449,13 @@
             read('config', false),
             read('catalog', false),
             read('policies', false),
+            read(GATE_DEFAULTS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus()
           ])
         }).then(function (results) {
           currentConfig = results[0]
-          fillThresholds(currentConfig)
+          fillThresholds(currentConfig, results[3])
           catalogListEl.innerHTML = ''
           ;((results[1] && results[1].destinations) || []).forEach(addCatalogRow)
           policiesListEl.innerHTML = ''
