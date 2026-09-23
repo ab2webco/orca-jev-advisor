@@ -70,10 +70,16 @@ import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
 // resolveCacheDir/resolveConfigDir only decide the `.cache`/`.config` vs
-// `%LOCALAPPDATA%`/`%APPDATA%` convention on top of it -- see
+// `%LOCALAPPDATA%`/`%APPDATA%` vs XDG convention on top of it -- see
 // src/core/paths.ts.
 const PLATFORM = normalizePlatform(process.platform)
-const HOME_PATHS = { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA }
+const HOME_PATHS = {
+  home: homedir(),
+  appDataDir: process.env.APPDATA,
+  localAppDataDir: process.env.LOCALAPPDATA,
+  xdgConfigHome: process.env.XDG_CONFIG_HOME,
+  xdgCacheHome: process.env.XDG_CACHE_HOME,
+}
 const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
 const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 

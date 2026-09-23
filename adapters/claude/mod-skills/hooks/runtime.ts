@@ -20,8 +20,14 @@ import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
 // adapters do. `HOME` does not exist on Windows (`USERPROFILE` does); a
 // forward slash works as a path separator on Windows too, so no
 // platform-specific join is needed for the plain string concatenation
-// below -- only the `.config`/`.cache` vs `%APPDATA%`/`%LOCALAPPDATA%`
+// below -- only the `.config`/`.cache` vs `%APPDATA%`/`%LOCALAPPDATA%`/XDG
 // directory convention actually differs.
+//
+// `computeHomePaths` is the pure half (env in, paths out, no `$`), kept
+// separate from `resolveHomePaths` so it is unit-testable the same way
+// src/core/paths.ts is -- see ../runtime.test.ts, which drives it with
+// win32 and linux (XDG_* both set and unset) shapes directly, something
+// impossible while every branch here read `$.env.get(...)` itself.
 // ---------------------------------------------------------------------------
 
 interface ModHomePaths {
@@ -30,25 +36,54 @@ interface ModHomePaths {
   readonly cacheDir: string;
 }
 
-async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null> {
-  const homeEnv = await $.env.get('HOME')
-  const userProfile = await $.env.get('USERPROFILE')
-  const home = homeEnv && homeEnv.length > 0 ? homeEnv : userProfile && userProfile.length > 0 ? userProfile : null
+export interface ModPathEnv {
+  readonly home?: string;
+  readonly userProfile?: string;
+  readonly appData?: string;
+  readonly localAppData?: string;
+  /**
+   * `$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME`, when set. This environment has
+   * no direct platform noun (see the `isWindows` heuristic below), so
+   * unlike src/core/paths.ts -- which honors these only on `linux`, never
+   * `darwin` -- this honors them on every non-Windows environment reaching
+   * this branch. The alternative was silently ignoring them everywhere
+   * this sandbox runs, which is the exact Linux gap this project is
+   * closing; a macOS developer who has not set XDG_CONFIG_HOME (the common
+   * case) sees no change at all.
+   */
+  readonly xdgConfigHome?: string;
+  readonly xdgCacheHome?: string;
+}
+
+export function computeHomePaths(env: ModPathEnv): ModHomePaths | null {
+  const home = env.home && env.home.length > 0 ? env.home : env.userProfile && env.userProfile.length > 0 ? env.userProfile : null
   if (!home) return null
 
-  const appData = await $.env.get('APPDATA')
-  const localAppData = await $.env.get('LOCALAPPDATA')
   // `%APPDATA%` is a Windows-only convention; its presence (or HOME's
   // absence with USERPROFILE set) is the signal, since this environment
   // exposes no direct platform noun.
-  const isWindows = (appData !== undefined && appData.length > 0) || (!(homeEnv && homeEnv.length > 0) && userProfile !== undefined && userProfile.length > 0)
+  const isWindows = (env.appData !== undefined && env.appData.length > 0) || (!(env.home && env.home.length > 0) && env.userProfile !== undefined && env.userProfile.length > 0)
 
   if (isWindows) {
-    const configBase = appData && appData.length > 0 ? appData : `${home}/AppData/Roaming`
-    const cacheBase = localAppData && localAppData.length > 0 ? localAppData : `${home}/AppData/Local`
+    const configBase = env.appData && env.appData.length > 0 ? env.appData : `${home}/AppData/Roaming`
+    const cacheBase = env.localAppData && env.localAppData.length > 0 ? env.localAppData : `${home}/AppData/Local`
     return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor/Cache` }
   }
-  return { home, configDir: `${home}/.config/orca-supervisor`, cacheDir: `${home}/.cache/orca-supervisor` }
+  const configBase = env.xdgConfigHome && env.xdgConfigHome.length > 0 ? env.xdgConfigHome : `${home}/.config`
+  const cacheBase = env.xdgCacheHome && env.xdgCacheHome.length > 0 ? env.xdgCacheHome : `${home}/.cache`
+  return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor` }
+}
+
+async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null> {
+  const [home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome] = await Promise.all([
+    $.env.get('HOME'),
+    $.env.get('USERPROFILE'),
+    $.env.get('APPDATA'),
+    $.env.get('LOCALAPPDATA'),
+    $.env.get('XDG_CONFIG_HOME'),
+    $.env.get('XDG_CACHE_HOME'),
+  ])
+  return computeHomePaths({ home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome })
 }
 
 /** The home directory alone, for building a `~/.claude/...` path -- Claude Code's own convention, unrelated to this plugin's `.config`/`.cache` choice. */

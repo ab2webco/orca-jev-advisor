@@ -61,7 +61,7 @@ import {
 // does control -- see src/core/paths.ts.
 const HOME = homedir()
 const PLATFORM = normalizePlatform(process.platform)
-const STATE_DIR = resolveConfigDir(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA })
+const STATE_DIR = resolveConfigDir(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
 const STATE_PATH = join(STATE_DIR, 'claude-settings-install-state.json')
 
 // ---------------------------------------------------------------------------

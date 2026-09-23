@@ -67,6 +67,14 @@ test("normalizes Windows-style backslash separators before matching", () => {
   assert.equal(result, oss);
 });
 
+test("matches a Windows drive-letter path whose home directory contains a space", () => {
+  const app = destination("app", "C:\\Users\\Ana Gómez\\Projects\\app");
+  const nested = matchDestination("C:\\Users\\Ana Gómez\\Projects\\app\\src\\core", [app]);
+  assert.equal(nested, app);
+  const sibling = matchDestination("C:\\Users\\Ana Gómez\\Projects\\app-385", [app]);
+  assert.equal(sibling, null);
+});
+
 test("tolerates a trailing slash on the destination's worktreePath", () => {
   const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss/");
   const result = matchDestination("/Users/dev/Projects/orca-oss/src", [oss]);
