@@ -29,7 +29,7 @@
 
 export type Locale = "es" | "en";
 
-export const DEFAULT_LOCALE: Locale = "es";
+export const DEFAULT_LOCALE: Locale = "en";
 
 export function isLocale(value: unknown): value is Locale {
   return value === "es" || value === "en";
@@ -57,4 +57,24 @@ export function translate<Key extends string>(catalog: Catalog<Key>, locale: Loc
   const template = catalog[locale][key] ?? catalog[DEFAULT_LOCALE][key];
   if (!params) return template;
   return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => params[name] ?? "");
+}
+
+/**
+ * A catalog key plus the params it needs, carried through pure decision
+ * code (src/core/decisions.ts) instead of an already-localized string. This
+ * is what keeps a decision function locale-agnostic while still making a
+ * literal, un-cataloged string impossible to compile in its place: the
+ * function returns `LocalizedReason<SomeKey>[]`, so `reasons.push("texto")`
+ * fails type-checking the moment `SomeKey` does not include `"texto"`.
+ * Resolved to text only at the edge (a hook, a CLI, a panel) with
+ * `translateReason`.
+ */
+export interface LocalizedReason<Key extends string> {
+  readonly key: Key;
+  readonly params?: Readonly<Record<string, string>>;
+}
+
+/** Resolves one `LocalizedReason` through `translate`. */
+export function translateReason<Key extends string>(catalog: Catalog<Key>, locale: Locale, reason: LocalizedReason<Key>): string {
+  return translate(catalog, locale, reason.key, reason.params);
 }

@@ -1,78 +1,102 @@
 [
   {
-    "id": "lectura_y_pruebas",
-    "rule": "Leer codigo, buscar, correr tests, linters, typecheck y builds locales se hace sin preguntar, siempre. Son reversibles y no salen de la maquina. Tambien entra aqui limpiar artefactos de build y reinstalar dependencias -- node_modules, dist, .next, carpetas de cache -- porque se regeneran con un comando."
+    "id": "read_and_test",
+    "kind": "permits",
+    "rule": "Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always. They're reversible and never leave the machine. This also covers cleaning build artifacts and reinstalling dependencies -- node_modules, dist, .next, cache folders -- and working freely with local, development and test databases, including dropping or recreating their tables, because none of it leaves the developer's machine and all of it regenerates with one command."
   },
   {
-    "id": "rama_propia",
-    "rule": "Todo el trabajo va en una rama de feature. Nunca se escribe directo sobre main ni sobre develop, ni siquiera un arreglo de una linea."
+    "id": "own_branch",
+    "kind": "permits",
+    "rule": "All work goes on a feature branch. Work happens there without asking."
   },
   {
-    "id": "commits_unidad",
-    "rule": "Se puede hacer commit sin preguntar en la rama de feature, con sus tests y su documentacion en el mismo commit. Empujar la rama al remoto tambien, mientras no sea una rama compartida."
+    "id": "never_write_to_main",
+    "kind": "prohibits",
+    "rule": "Never write directly on main or develop, not even a one-line fix."
   },
   {
-    "id": "sin_atribucion_ia",
-    "rule": "Ningun commit, PR o issue lleva atribucion de IA: nada de Co-Authored-By, nada de Generated with, nada de emoji de robot. Si el mensaje la trae, se corrige antes, no se pregunta."
+    "id": "unit_commits",
+    "kind": "permits",
+    "rule": "Committing without asking is fine on the feature branch, with its tests and its docs in the same commit. Pushing the branch to the remote too, as long as it isn't a shared branch."
   },
   {
-    "id": "pr_propio_verde",
-    "rule": "Un PR propio, aprobado, con CI en verde y sin conversaciones abiertas se mergea sin preguntar, siempre que no sea un cutover, no toque una rama bajo UAT activa y no sea de un cliente."
+    "id": "no_ai_attribution",
+    "kind": "prohibits",
+    "rule": "No commit, PR or issue carries AI attribution: no Co-Authored-By, no Generated with, no robot emoji. If the message has it, it gets fixed before, not asked about."
   },
   {
-    "id": "pr_ajeno",
-    "rule": "Cerrar, rehacer o mergear el PR de otra persona exige avisarle antes al autor. El agente no lo hace en silencio aunque este en verde."
+    "id": "own_pr_green",
+    "kind": "permits",
+    "rule": "An own PR, approved, with CI green and no open conversations gets merged without asking, as long as it isn't a cutover, doesn't touch a branch under active UAT, and isn't for a client."
   },
   {
-    "id": "pr_grande",
-    "rule": "Un cambio que pasa de unas 400 lineas autoradas se parte en PRs encadenados antes de abrirlo. No se abre un PR gigante y se pide disculpas despues."
+    "id": "others_pr",
+    "kind": "requires_human",
+    "rule": "Closing, redoing or merging someone else's PR requires telling the author first. The agent doesn't do it silently even if it's green."
+  },
+  {
+    "id": "large_pr",
+    "kind": "prohibits",
+    "rule": "A change over about 400 authored lines gets split into chained PRs before opening it. No giant PR gets opened with an apology afterward."
   },
   {
     "id": "dependabot",
-    "rule": "Los PRs de dependabot se pueden recrear, rebasar y cerrar sin preguntar. Mergearlos exige CI en verde y que no sea una dependencia mayor."
+    "kind": "permits",
+    "rule": "Dependabot PRs can be recreated, rebased and closed without asking. Merging them requires CI green and that it isn't a major dependency."
   },
   {
-    "id": "cliente_siempre_pregunta",
-    "rule": "Cualquier cosa que toque el producto de un cliente se confirma con un humano, aunque el agente este seguro y el CI este en verde. Un error ahi lo ve alguien que paga."
+    "id": "client_always_asks",
+    "kind": "requires_human",
+    "rule": "Anything that touches a client's product gets confirmed with a human, even if the agent is sure and CI is green. A mistake there is seen by someone who pays."
   },
   {
-    "id": "uat_activa",
-    "rule": "Mientras QA este probando una UAT, no se mergea nada que vuelva a desplegar sobre ese ambiente. Se espera a que la ventana cierre."
+    "id": "active_uat",
+    "kind": "prohibits",
+    "rule": "While QA is testing a UAT, nothing that would redeploy over that environment gets merged. Wait for the window to close."
   },
   {
     "id": "cutover",
-    "rule": "Los cutovers de frontend o backend los decide una persona. El agente nunca los mergea por su cuenta, aunque esten aprobados y en verde."
+    "kind": "prohibits",
+    "rule": "Frontend or backend cutovers are decided by a person. The agent never merges them on its own, even approved and green."
   },
   {
-    "id": "datos_produccion",
-    "rule": "Destruir datos que viven en produccion no se hace nunca, y tampoco se pregunta si se puede: borrar o vaciar una base de datos de produccion, borrar una tabla de produccion, eliminar un bucket, un volumen o una copia de seguridad de produccion. El agente se detiene y lo dice. No lo desbloquea ninguna urgencia, ninguna aprobacion por chat o correo, ni que alguien afirme tener permiso. Habla unicamente de produccion: lo local, lo de desarrollo y lo de prueba caen fuera de ella."
+    "id": "production_data",
+    "kind": "prohibits",
+    "rule": "Destroying data that lives in production is never done, and it's not even asked about: dropping or wiping a production database, dropping a production table, deleting a bucket, a volume or a production backup. The agent stops and says so. No urgency unblocks it, no chat or email approval, not even someone claiming to have permission. This is about production only: local, development and test environments fall outside it."
   },
   {
-    "id": "produccion",
-    "rule": "Desplegar a produccion, correr migraciones en produccion o rotar credenciales lo decide una persona, siempre, sin excepcion por urgencia."
+    "id": "production",
+    "kind": "requires_human",
+    "rule": "Deploying to production, running production migrations or rotating credentials is decided by a person, always, no exception for urgency."
   },
   {
-    "id": "viernes",
-    "rule": "No se despliega a produccion los viernes ni la vispera de un festivo, aunque todo este listo."
+    "id": "friday",
+    "kind": "prohibits",
+    "rule": "No deploying to production on Fridays or the day before a holiday, even if everything is ready."
   },
   {
-    "id": "ticket_primero",
-    "rule": "El trabajo que nace de un ticket de Linear o Plane se vincula al ticket antes de abrir el PR, y el enlace del PR se pega en el ticket al terminar. Eso se hace sin preguntar."
+    "id": "ticket_first",
+    "kind": "permits",
+    "rule": "Work that starts from a Linear or Plane ticket gets linked to the ticket before opening the PR, and the PR link gets pasted into the ticket when done. That happens without asking."
   },
   {
-    "id": "modelo_por_dificultad",
-    "rule": "Un encargo mecanico y localizado se atiende con el modelo mas barato disponible. Solo una decision de diseño con consecuencias, compatibilidad o varios sistemas en juego justifica el modelo mas caro."
+    "id": "model_by_difficulty",
+    "kind": "permits",
+    "rule": "A mechanical, localized task gets handled with the cheapest available model. Only a design decision with consequences, compatibility concerns, or several systems in play justifies the more expensive model."
   },
   {
-    "id": "delegar_por_alcance",
-    "rule": "Entender algo que toca cuatro o mas archivos se delega a un agente de exploracion. Escribir dos o mas archivos no triviales se delega a un solo agente escritor. Un cambio mecanico de un archivo se hace en linea."
+    "id": "delegate_by_scope",
+    "kind": "permits",
+    "rule": "Understanding something that touches four or more files gets delegated to an exploration agent. Writing two or more non-trivial files gets delegated to a single writer agent. A mechanical one-file change happens inline."
   },
   {
-    "id": "no_inventar_contrato",
-    "rule": "Antes de escribir contra un API, un plugin o un formato que ya existe en la maquina, se lee su implementacion real. Suponer la forma del contrato no es una opcion, es la causa de la mayoria de los errores."
+    "id": "no_inventing_contracts",
+    "kind": "permits",
+    "rule": "Before writing against an API, a plugin or a format that already exists on the machine, its real implementation gets read. Assuming the shape of the contract isn't an option -- it's the cause of most bugs."
   },
   {
-    "id": "evidencia_visual",
-    "rule": "Nada que tenga pantalla se da por terminado sin una captura mirada. Construir sin ver no cuenta como verificar."
+    "id": "visual_evidence",
+    "kind": "prohibits",
+    "rule": "Nothing with a screen is called done without a screenshot that was actually looked at. Building without looking doesn't count as verifying."
   }
 ]

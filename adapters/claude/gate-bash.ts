@@ -1,21 +1,25 @@
 /**
- * gate-bash — PreToolUse hook. Decide si un comando se ejecuta, se pregunta
- * o se bloquea, sin que el agente tenga que acordarse de nada.
+ * gate-bash — PreToolUse hook. Decides whether a command runs, gets asked
+ * about, or gets blocked, without the agent having to remember any of it.
  *
- * El problema de meter un modelo en el camino de cada comando es el costo y la
- * latencia. Por eso hay tres niveles, y solo el tercero llama a Jev:
+ * The problem with putting a model in the path of every command is cost and
+ * latency. That's why there are three tiers, and only the third one calls Jev:
  *
- *   0. El filtro `if` de settings.json. El hook ni siquiera se lanza para
- *      comandos que no calzan con los patrones de interes. Esto lo hace Claude
- *      Code antes de gastar un proceso.
- *   1. Listas locales, en microsegundos. Lo inofensivo pasa; lo catastrofico
- *      se bloquea. Sin red, sin costo.
- *   2. Solo lo que queda en el medio va a Jev, y el resultado se cachea por
- *      comando y repositorio, asi que la segunda vez tampoco cuesta.
+ *   0. settings.json's `if` filter. The hook doesn't even launch for
+ *      commands that don't match the patterns of interest. Claude Code does
+ *      this before spending a process.
+ *   1. Local lists, in microseconds. Harmless passes through; catastrophic
+ *      gets blocked. No network, no cost.
+ *   2. Only what's left in the middle goes to Jev, and the result is cached
+ *      per command and repository, so the second time doesn't cost either.
  *
- * Falla abierto SIEMPRE: cualquier error, timeout o falta de llave termina en
- * salida limpia sin veredicto, y el permiso sigue su curso normal. Un gate que
- * rompe el trabajo cuando se cae la red es peor que no tener gate.
+ * ALWAYS fails open: any error, timeout or missing key ends in a clean exit
+ * with no verdict, and the permission follows its normal course. A gate that
+ * breaks work when the network drops is worse than no gate at all. That same
+ * fail-open contract now also covers the optional catalog/policies mirror
+ * (see readCatalogMirror/readPoliciesMirror below): a missing, unreadable or
+ * malformed mirror degrades to the pre-existing global-thresholds behavior,
+ * never a crash and never an extra prompt.
  *
  * This is the Claude Code adapter: the three-tier design and the local
  * pattern lists below are this file's own (measured, and correct -- do not
@@ -23,29 +27,59 @@
  * itself (question shapes, retry/backoff, latency budget, response
  * guards) and the key resolution come from src/core, shared with the Orca
  * plugin adapter -- see adapters/orca/.
+ *
+ * Tier 1a used to be a list of whole-string regexes: `/^\s*git\s+status\b/`
+ * tested against the entire command. That worked for a simple command but
+ * silently waved through a compound one that merely STARTED with a safe
+ * verb (`git status && rm -rf /` matched the `git status` regex and never
+ * reached tier 1b or Jev). `isObviouslySafeCommand` (src/core, pure and
+ * unit-tested) fixes this by splitting on `&&`/`||`/`;`/`|` first and
+ * requiring every resulting segment to be independently safe.
+ *
+ * Tier 2's single Jev call now also carries the destination-scoped policy
+ * questions when the cwd matches a catalog destination with policies that
+ * apply to it (see askJev below): one combined question set, one callJev
+ * call, exactly as before -- decideGateAction (src/core/decisions.ts) is
+ * what composes "does a policy already resolve this" with the existing
+ * consequence-ceiling risk rule, substituting a per-destination ceiling
+ * override when the matched destination's catalog entry carries one.
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { buildActionGateQuestions, buildActionGateState, decideAction } from '../../src/core/decisions.ts'
+import { buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import type { GateActionReason, Policy } from '../../src/core/decisions.ts'
+import { commandShape } from '../../src/core/command_shape.ts'
+import { matchDestination } from '../../src/core/destination_match.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
-import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
+import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
 import type { Locale } from '../../src/core/i18n.ts'
 import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
 import type { GateKey } from '../../src/core/i18n_gate.ts'
+import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
+import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
+import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
+import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
+import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
 // resolveCacheDir/resolveConfigDir only decide the `.cache`/`.config` vs
-// `%LOCALAPPDATA%`/`%APPDATA%` convention on top of it -- see
+// `%LOCALAPPDATA%`/`%APPDATA%` vs XDG convention on top of it -- see
 // src/core/paths.ts.
 const PLATFORM = normalizePlatform(process.platform)
-const HOME_PATHS = { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA }
+const HOME_PATHS = {
+  home: homedir(),
+  appDataDir: process.env.APPDATA,
+  localAppDataDir: process.env.LOCALAPPDATA,
+  xdgConfigHome: process.env.XDG_CONFIG_HOME,
+  xdgCacheHome: process.env.XDG_CACHE_HOME,
+}
 const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
 const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 
@@ -53,9 +87,16 @@ const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
+// Written by adapters/orca/write-secret-mirror.mjs, refreshed on plugin
+// activation and on every config-panel save -- this hook has no channel
+// into Orca's own `storage`, so this file mirror is its only way to see
+// the catalog/policies at all. See src/core/gate_catalog_mirror.ts for
+// the validation that stands between this file and the gate's decision.
+const CATALOG_MIRROR_PATH = join(CONFIG_DIR, 'catalog.json')
+const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 const BUDGET_MS = 1800
 
-/** Desde que arranca el hook, para poder decir cuanto costo decidir. */
+/** Since the hook started, so it can say how long deciding cost. */
 const STARTED_AT = Date.now()
 
 /**
@@ -80,21 +121,22 @@ function resolveLocale(): Locale {
 const LOCALE = resolveLocale()
 const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, LOCALE, key, params)
 
+/** True when `key` belongs to DESTINATION_CATALOG (a policy citation) rather than this file's own GATE_CATALOG (a risk reason) -- GateKey and DestinationKey are disjoint string unions by construction, so membership alone is enough to route it. */
+function isDestinationReasonKey(key: string): key is DestinationKey {
+  return Object.prototype.hasOwnProperty.call(DESTINATION_CATALOG.en, key)
+}
+
+/** Resolves a decideGateAction reason through whichever catalog its key actually belongs to. */
+function resolveGateActionReason(reason: GateActionReason): string {
+  if (isDestinationReasonKey(reason.key)) {
+    return translateReason(DESTINATION_CATALOG, LOCALE, { key: reason.key, params: reason.params })
+  }
+  return translateReason(GATE_CATALOG, LOCALE, { key: reason.key as GateKey, params: reason.params })
+}
+
 type Decision = 'allow' | 'deny' | 'ask'
 
-/** Nivel 1a: se ejecuta sin consultar a nadie. Lectura, inspeccion, pruebas. */
-const OBVIOUSLY_SAFE: readonly RegExp[] = [
-  /^\s*(ls|pwd|cat|head|tail|wc|which|echo|date|whoami|env)\b/,
-  /^\s*git\s+(status|diff|log|show|remote|rev-parse|blame)\b/,
-  // `git branch` solo en sus formas de lectura: -d, -D, -m y -M borran o renombran.
-  /^\s*git\s+branch(\s+(-a|-r|-v|-vv|--all|--list|--show-current))*\s*$/,
-  /^\s*git\s+stash\s+list\b/,
-  /^\s*(npm|pnpm|yarn|bun)\s+(test|run test|run lint|run typecheck|run build)\b/,
-  /^\s*(jq|rg|grep|find|sed -n|awk)\b/,
-  /^\s*gh\s+(pr|issue|run|repo)\s+(list|view|status|checks)\b/,
-]
-
-/** Nivel 1b: no se ejecuta nunca sin intervencion humana explicita. `why` is a catalog key, resolved at emit time in the panel's chosen language. */
+/** Tier 1b: never runs without explicit human intervention. `why` is a catalog key, resolved at emit time in the panel's chosen language. */
 const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey }[] = [
   { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush' },
   { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected' },
@@ -132,10 +174,10 @@ function readHookInput(): HookInput | null {
 }
 
 /**
- * `permissionDecisionReason` solo se ve cuando el veredicto frena algo. Un
- * permiso silencioso deja a Jev invisible: nadie puede saber si opino, si
- * acerto, ni con que numeros -- y lo que no se ve no se puede calibrar. Por eso
- * cada consulta al modelo deja ademas una linea para el usuario.
+ * `permissionDecisionReason` is only seen when the verdict stops something. A
+ * silent permission leaves Jev invisible: nobody can tell whether it weighed
+ * in, whether it got it right, or with what numbers -- and what can't be seen
+ * can't be calibrated. That's why every model call also leaves a line for the user.
  */
 function emit(decision: Decision, reason: string, visible = true): void {
   const payload: Record<string, unknown> = {
@@ -145,8 +187,8 @@ function emit(decision: Decision, reason: string, visible = true): void {
       permissionDecisionReason: reason,
     },
   }
-  // Solo se anuncia cuando cambia el curso de las cosas. Un 'permite' por
-  // comando es ruido que entierra al unico aviso que importaba.
+  // Only announced when it changes the course of things. An 'allow' per
+  // command is noise that buries the one notice that mattered.
   if (visible && decision !== 'allow') {
     const verb = t(decision === 'deny' ? 'verb.blocks' : 'verb.asks')
     payload['systemMessage'] = t('statusLine', { verb, reason, ms: String(Date.now() - STARTED_AT) })
@@ -154,18 +196,18 @@ function emit(decision: Decision, reason: string, visible = true): void {
   process.stdout.write(JSON.stringify(payload))
 }
 
-/** Sin veredicto: el permiso sigue su curso normal. Es la salida por defecto. */
+/** No verdict: the permission follows its normal course. This is the default exit. */
 function passThrough(): void {
   process.exit(0)
 }
 
 /**
- * Sin veredicto, pero con un aviso: el permiso sigue su curso (fallar
- * abierto sigue siendo correcto), pero el usuario se entera de que Jev no
- * pudo opinar -- fallar abierto en silencio es peor que fallar abierto con
- * una linea. Usado solo para el rechazo de autenticacion (401/403), y solo
- * una vez por marca (ver readAuthWarned/writeAuthWarned): cada comando
- * repitiendo el mismo aviso seria tan ruidoso como no avisar nunca.
+ * No verdict, but with a notice: the permission follows its course (failing
+ * open is still correct), but the user learns that Jev couldn't weigh in --
+ * failing open in silence is worse than failing open with one line. Used
+ * only for the authentication rejection (401/403), and only once per mark
+ * (see readAuthWarned/writeAuthWarned): every command repeating the same
+ * notice would be as noisy as never warning at all.
  */
 function passThroughWithNotice(message: string): void {
   const payload = {
@@ -178,8 +220,22 @@ function passThroughWithNotice(message: string): void {
 
 type CacheEntry = { readonly decision: Decision; readonly reason: string; readonly at: number }
 
-function cacheKey(command: string, context: string): string {
-  return createHash('sha256').update(`${context}\u0000${command}`).digest('hex').slice(0, 24)
+/**
+ * The cache key for a command, or null when it must not be cached.
+ *
+ * It used to hash the literal command text, which over 702 real decisions
+ * hit 3.1% of the time: commands almost never repeat verbatim. The key is
+ * now the command's SHAPE (see src/core/command_shape.ts), which collapses
+ * `node --test a.test.ts` and `node --test b.test.ts` into one entry while
+ * keeping `rm -rf dist` apart from `rm -rf ../other-project` -- measured at
+ * 1.37 and 2.13, so merging those two would be a hole, not a cache.
+ *
+ * Null means "ask every time": a command whose meaning cannot be known
+ * without running it never borrows another command's answer.
+ */
+function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null): string | null {
+  const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
+  return shape === null ? null : createHash('sha256').update(shape).digest('hex').slice(0, 24)
 }
 
 function readCache(): Record<string, CacheEntry> {
@@ -196,15 +252,15 @@ function writeCache(cache: Record<string, CacheEntry>): void {
     mkdirSync(dirname(CACHE_PATH), { recursive: true })
     writeFileSync(CACHE_PATH, JSON.stringify(cache), 'utf8')
   } catch {
-    // Un cache que no se puede escribir no es motivo para bloquear nada.
+    // A cache that can't be written is never a reason to block anything.
   }
 }
 
 /**
- * Si el ultimo rechazo de autenticacion ya se avisó -- persistido junto al
- * cache porque este proceso no vive entre comandos (Claude Code lanza el
- * hook una vez por comando): sin esta marca en disco, "una vez" seria en
- * realidad "en cada comando".
+ * Whether the last authentication rejection was already warned about --
+ * persisted alongside the cache because this process doesn't live between
+ * commands (Claude Code spawns the hook once per command): without this
+ * mark on disk, "once" would actually mean "on every command".
  */
 function readAuthWarned(): boolean {
   try {
@@ -220,8 +276,31 @@ function writeAuthWarned(warned: boolean): void {
     mkdirSync(dirname(AUTH_WARNED_PATH), { recursive: true })
     writeFileSync(AUTH_WARNED_PATH, JSON.stringify({ warned, at: Date.now() }), 'utf8')
   } catch {
-    // Una marca que no se puede escribir no es motivo para bloquear nada;
-    // en el peor caso el aviso se repite la proxima vez.
+    // A mark that can't be written is never a reason to block anything;
+    // worst case, the notice repeats next time.
+  }
+}
+
+/**
+ * Best-effort, fail-open reads of the optional catalog/policies mirror --
+ * same discipline as readCache/resolveLocale above: a missing file, an
+ * unreadable one, or one that fails src/core/gate_catalog_mirror.ts's shape
+ * validation is never a throw, it is simply "no catalog" / "no policies",
+ * and the gate keeps working exactly as it did before this feature existed.
+ */
+function readCatalogMirror(): { readonly destinations: readonly MirroredDestination[] } | null {
+  try {
+    return parseMirroredCatalog(JSON.parse(readFileSync(CATALOG_MIRROR_PATH, 'utf8')))
+  } catch {
+    return null
+  }
+}
+
+function readPoliciesMirror(): readonly Policy[] {
+  try {
+    return parseMirroredPolicies(JSON.parse(readFileSync(POLICIES_MIRROR_PATH, 'utf8'))) ?? []
+  } catch {
+    return []
   }
 }
 
@@ -269,7 +348,12 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
   }
 }
 
-/** Lo que hace distinta a una rama de feature de la main de un cliente. */
+/**
+ * What makes a feature branch different from a client's main. This string
+ * is sent to Jev as model input (see askJev/buildActionGateState below) and
+ * is also folded into the cache key, so it stays in English like every
+ * other prompt this project sends the model.
+ */
 function repoContext(cwd: string): string {
   const run = (args: string[]): string => {
     try {
@@ -282,10 +366,10 @@ function repoContext(cwd: string): string {
   const remote = run(['remote', 'get-url', 'origin']).replace(/^.*[:/]/, '').replace(/\.git$/, '')
   const dirty = run(['status', '--porcelain']).length > 0
   const parts = [
-    remote.length > 0 ? `repositorio ${remote}` : 'sin remoto',
-    branch.length > 0 ? `rama ${branch}` : 'rama desconocida',
-    branch === 'main' || branch === 'master' ? 'es la rama principal compartida' : 'es una rama de trabajo',
-    dirty ? 'con cambios sin confirmar' : 'limpio',
+    remote.length > 0 ? `repository ${remote}` : 'no remote',
+    branch.length > 0 ? `branch ${branch}` : 'unknown branch',
+    branch === 'main' || branch === 'master' ? 'this is the shared main branch' : 'this is a working branch',
+    dirty ? 'with uncommitted changes' : 'clean',
   ]
   return parts.join(', ')
 }
@@ -295,15 +379,41 @@ type JevOutcome =
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
 
-/** Llama a Jev (src/core) y traduce el veredicto de tres ejes a la decision del hook. Nunca lanza. */
-async function askJev(apiKey: string, command: string, context: string): Promise<JevOutcome> {
+/**
+ * Calls Jev (src/core) and translates the verdict into the hook's decision.
+ * Never throws.
+ *
+ * Also resolves the cwd against the (optional) catalog mirror, filters the
+ * (optional) policies mirror down to whatever applies at the matched
+ * destination, and -- when at least one policy applies -- folds the two
+ * extra policy-stage questions into the SAME callJev call the gate already
+ * makes (no second network round trip). decideGateAction then composes
+ * "does a policy already resolve this" with the existing consequence-
+ * ceiling risk rule, substituting the matched destination's own ceiling
+ * override when its catalog entry carries one.
+ */
+async function askJev(apiKey: string, command: string, context: string, cwd: string): Promise<JevOutcome> {
   try {
-    const response = await callJev(apiKey, buildActionGateState(command, context), buildActionGateQuestions(), { budgetMs: BUDGET_MS })
-    const gate = decideAction(response.answers)
-    if (gate.verdict === 'allow') {
-      return { kind: 'verdict', decision: 'allow', reason: 'reversible, local and cheap' }
+    const catalog = readCatalogMirror()
+    const policies = readPoliciesMirror()
+    const matched: MirroredDestination | null = catalog !== null ? matchDestination(cwd, catalog.destinations) : null
+    const filteredPolicies = filterPoliciesForDestination(policies, matched?.id ?? null)
+
+    const questions = {
+      ...buildActionGateQuestions(),
+      ...(filteredPolicies.length > 0 ? buildPolicyQuestions(filteredPolicies) : {}),
     }
-    return { kind: 'verdict', decision: 'ask', reason: gate.reasons.join(' · ') }
+    const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
+    const response = await callJev(apiKey, buildActionGateState(command, context, destination), questions, { budgetMs: BUDGET_MS })
+    const gate = decideGateAction({
+      action: command,
+      policies: filteredPolicies,
+      answers: response.answers,
+      consequenceCeiling: matched?.autonomy?.consequenceCeiling,
+      noDestinationMatched: matched === null,
+    })
+    const reason = gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
+    return { kind: 'verdict', decision: gate.verdict, reason }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
       return { kind: 'auth-rejected', status: error.status }
@@ -317,9 +427,7 @@ async function main(): Promise<void> {
   if (input === null) passThrough()
   const { command, cwd } = input as HookInput
 
-  for (const safe of OBVIOUSLY_SAFE) {
-    if (safe.test(command)) passThrough()
-  }
+  if (isObviouslySafeCommand(command)) passThrough()
   for (const { pattern, why } of NEVER_SILENTLY) {
     if (pattern.test(command)) {
       appendGateRecord(cwd, command, 'local-rule', 'ask', null)
@@ -332,9 +440,14 @@ async function main(): Promise<void> {
   if (apiKey === null) passThrough()
 
   const context = repoContext(cwd)
-  const key = cacheKey(command, context)
-  const cache = readCache()
-  const hit = cache[key]
+  // The destination is resolved here as well as inside askJev: it is part of
+  // the cache key, because two repositories with different thresholds must
+  // never share a verdict. Both reads hit the same small mirror file.
+  const cachedCatalog = readCatalogMirror()
+  const cachedMatch = cachedCatalog !== null ? matchDestination(cwd, cachedCatalog.destinations) : null
+  const key = cacheKey(command, context, cwd, cachedMatch?.id ?? null, cachedMatch?.worktreePath ?? null)
+  const cache = key === null ? {} : readCache()
+  const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
     appendGateRecord(cwd, command, 'cache', hit.decision, null)
     emit(hit.decision, t('cached', { reason: hit.reason }))
@@ -342,7 +455,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, context)
+  const outcome = await askJev(apiKey as string, command, context, cwd)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') passThrough()
@@ -355,14 +468,16 @@ async function main(): Promise<void> {
     passThrough()
   }
 
-  // Llegar aca es una respuesta valida: si el ultimo aviso de rechazo
-  // seguia en pie, la llave ya funciona de nuevo, y el proximo rechazo
-  // merece avisarse otra vez.
+  // Getting here is a valid response: if the last rejection notice was
+  // still standing, the key works again now, and the next rejection
+  // deserves a fresh warning.
   if (readAuthWarned()) writeAuthWarned(false)
 
   const resolved = outcome as { kind: 'verdict'; decision: Decision; reason: string }
-  cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
-  writeCache(cache)
+  if (key !== null) {
+    cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
+    writeCache(cache)
+  }
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs)
   emit(resolved.decision, resolved.reason)
 }

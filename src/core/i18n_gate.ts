@@ -18,7 +18,15 @@ export type GateKey =
   | "cached"
   | "statusLine"
   | "authRejected"
-  | "notice";
+  | "notice"
+  | "reason.allowClear"
+  | "reason.incompleteAnswers"
+  | "reason.cannotUndoAndLeavesMachine"
+  | "reason.cannotUndo"
+  | "reason.someoneElseWillNotice"
+  | "reason.breaksSomethingImportant"
+  | "reason.needsCleanupAfter"
+  | "reason.noDestinationMatched";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -37,6 +45,14 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
     notice: "jev · {{message}}",
+    "reason.allowClear": "reversible, local y barato",
+    "reason.incompleteAnswers": "Jev no devolvió respuestas completas para 'reversible', 'externa' o 'consecuencia'.",
+    "reason.cannotUndoAndLeavesMachine": "no se puede deshacer y el efecto sale de tu maquina",
+    "reason.cannotUndo": "no hay forma automatica de deshacerlo",
+    "reason.someoneElseWillNotice": "el efecto lo va a notar alguien mas",
+    "reason.breaksSomethingImportant": "si esta mal, rompe algo que le importa a alguien",
+    "reason.needsCleanupAfter": "si esta mal, hay que limpiar despues",
+    "reason.noDestinationMatched": "no se pudo relacionar el directorio actual con ningun destino del catalogo -- se usaron los umbrales globales por defecto",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -54,5 +70,13 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "not judging: the key was rejected ({{status}})",
     notice: "jev · {{message}}",
+    "reason.allowClear": "reversible, local and cheap",
+    "reason.incompleteAnswers": "Jev didn't return complete answers for 'reversible', 'external' or 'consequence'.",
+    "reason.cannotUndoAndLeavesMachine": "it can't be undone and the effect leaves your machine",
+    "reason.cannotUndo": "there's no automatic way to undo it",
+    "reason.someoneElseWillNotice": "someone else is going to notice the effect",
+    "reason.breaksSomethingImportant": "if it's wrong, it breaks something that matters to someone",
+    "reason.needsCleanupAfter": "if it's wrong, there's cleanup to do afterward",
+    "reason.noDestinationMatched": "couldn't match the current directory to any catalog destination -- fell back to the default global thresholds",
   },
 };

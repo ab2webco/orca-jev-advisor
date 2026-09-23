@@ -11,6 +11,7 @@ import { DEFAULT_LOCALE, parseLocaleFile } from '../../../../src/core/i18n.ts'
 import type { Locale } from '../../../../src/core/i18n.ts'
 import type { ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory.ts'
+import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
 
 // ---------------------------------------------------------------------------
 // Home/config/cache directories, without node:os or node:path -- neither
@@ -19,8 +20,14 @@ import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory
 // adapters do. `HOME` does not exist on Windows (`USERPROFILE` does); a
 // forward slash works as a path separator on Windows too, so no
 // platform-specific join is needed for the plain string concatenation
-// below -- only the `.config`/`.cache` vs `%APPDATA%`/`%LOCALAPPDATA%`
+// below -- only the `.config`/`.cache` vs `%APPDATA%`/`%LOCALAPPDATA%`/XDG
 // directory convention actually differs.
+//
+// `computeHomePaths` is the pure half (env in, paths out, no `$`), kept
+// separate from `resolveHomePaths` so it is unit-testable the same way
+// src/core/paths.ts is -- see ../runtime.test.ts, which drives it with
+// win32 and linux (XDG_* both set and unset) shapes directly, something
+// impossible while every branch here read `$.env.get(...)` itself.
 // ---------------------------------------------------------------------------
 
 interface ModHomePaths {
@@ -29,25 +36,66 @@ interface ModHomePaths {
   readonly cacheDir: string;
 }
 
-async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null> {
-  const homeEnv = await $.env.get('HOME')
-  const userProfile = await $.env.get('USERPROFILE')
-  const home = homeEnv && homeEnv.length > 0 ? homeEnv : userProfile && userProfile.length > 0 ? userProfile : null
+export interface ModPathEnv {
+  readonly home?: string;
+  readonly userProfile?: string;
+  readonly appData?: string;
+  readonly localAppData?: string;
+  /**
+   * `$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME`, when set. This environment has
+   * no direct platform noun (see the `isWindows` heuristic below), so
+   * unlike src/core/paths.ts -- which honors these only on `linux`, never
+   * `darwin` -- this honors them on every non-Windows environment reaching
+   * this branch. The alternative was silently ignoring them everywhere
+   * this sandbox runs, which is the exact Linux gap this project is
+   * closing; a macOS developer who has not set XDG_CONFIG_HOME (the common
+   * case) sees no change at all.
+   */
+  readonly xdgConfigHome?: string;
+  readonly xdgCacheHome?: string;
+}
+
+export function computeHomePaths(env: ModPathEnv): ModHomePaths | null {
+  const home = env.home && env.home.length > 0 ? env.home : env.userProfile && env.userProfile.length > 0 ? env.userProfile : null
   if (!home) return null
 
-  const appData = await $.env.get('APPDATA')
-  const localAppData = await $.env.get('LOCALAPPDATA')
   // `%APPDATA%` is a Windows-only convention; its presence (or HOME's
   // absence with USERPROFILE set) is the signal, since this environment
   // exposes no direct platform noun.
-  const isWindows = (appData !== undefined && appData.length > 0) || (!(homeEnv && homeEnv.length > 0) && userProfile !== undefined && userProfile.length > 0)
+  const isWindows = (env.appData !== undefined && env.appData.length > 0) || (!(env.home && env.home.length > 0) && env.userProfile !== undefined && env.userProfile.length > 0)
 
   if (isWindows) {
-    const configBase = appData && appData.length > 0 ? appData : `${home}/AppData/Roaming`
-    const cacheBase = localAppData && localAppData.length > 0 ? localAppData : `${home}/AppData/Local`
+    const configBase = env.appData && env.appData.length > 0 ? env.appData : `${home}/AppData/Roaming`
+    const cacheBase = env.localAppData && env.localAppData.length > 0 ? env.localAppData : `${home}/AppData/Local`
     return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor/Cache` }
   }
-  return { home, configDir: `${home}/.config/orca-supervisor`, cacheDir: `${home}/.cache/orca-supervisor` }
+  // XDG on Linux only, matching src/core/paths.ts. The two must agree or the
+  // gate and this mod look for the API key in different places and one of
+  // them silently finds nothing -- which is exactly what happened on a macOS
+  // machine with XDG_CONFIG_HOME set, because this function honoured it and
+  // paths.ts deliberately does not.
+  //
+  // This sandbox exposes no platform noun, so the home directory's own shape
+  // is the signal: macOS puts users under /Users, Linux under /home. It is a
+  // convention rather than a guarantee, and it errs toward macOS -- an
+  // unrecognised layout ignores XDG, which is the behaviour that matches
+  // paths.ts everywhere except Linux.
+  const isLinux = home.startsWith('/home/') || home === '/root'
+  const configBase = isLinux && env.xdgConfigHome && env.xdgConfigHome.length > 0 ? env.xdgConfigHome : `${home}/.config`
+  const cacheBase = isLinux && env.xdgCacheHome && env.xdgCacheHome.length > 0 ? env.xdgCacheHome : `${home}/.cache`
+  return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor` }
+}
+
+async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null> {
+  const [home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome] = await Promise.all([
+    $.env.get('HOME'),
+    $.env.get('USERPROFILE'),
+    $.env.get('APPDATA'),
+    $.env.get('LOCALAPPDATA'),
+    $.env.get('XDG_CONFIG_HOME'),
+    $.env.get('XDG_CACHE_HOME'),
+  ])
+  return computeHomePaths({ home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome })
 }
 
 /** The home directory alone, for building a `~/.claude/...` path -- Claude Code's own convention, unrelated to this plugin's `.config`/`.cache` choice. */
@@ -111,6 +159,14 @@ export function makeSkillFs($: EngineInterface): SkillFs {
 }
 
 // ---------------------------------------------------------------------------
+// Tool inventory: $.tool.list, adapted to ToolLister
+// ---------------------------------------------------------------------------
+
+export function makeToolLister($: EngineInterface): ToolLister {
+  return () => $.tool.list()
+}
+
+// ---------------------------------------------------------------------------
 // Orca context: $.process.run, adapted to ProcessRun, with its own short
 // budget so a hung or missing `orca` binary can never hold up a prompt --
 // resolveOrcaContext's own try/catch turns this timeout into the cwd-only
@@ -124,7 +180,7 @@ export function makeProcessRun($: EngineInterface): ProcessRun {
     const result = await Promise.race([
       $.process.run(argv),
       $.clock.sleep(ORCA_PROCESS_BUDGET_MS).then((): never => {
-        throw new Error(`${argv[0]} no respondió dentro de ${ORCA_PROCESS_BUDGET_MS}ms`)
+        throw new Error(`${argv[0]} didn't respond within ${ORCA_PROCESS_BUDGET_MS}ms`)
       }),
     ])
     return { exitCode: result.exitCode, stdout: result.stdout }
@@ -185,16 +241,30 @@ export async function resolveApiKey($: EngineInterface, options: PluginOptions):
 }
 
 // ---------------------------------------------------------------------------
-// Measurement log: append-only JSONL under the user's cache dir
+// Measurement logs: append-only JSONL under the user's cache dir
 // ---------------------------------------------------------------------------
+
+async function appendToFile($: EngineInterface, path: string, line: string): Promise<void> {
+  const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+  await $.fs.write(path, existing + line)
+}
 
 export async function appendMeasurement($: EngineInterface, line: string): Promise<void> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return
-    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
-    const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-    await $.fs.write(path, existing + line)
+    await appendToFile($, `${paths.cacheDir}/mod-skills-measurements.jsonl`, line)
+  } catch {
+    // Measurement is best-effort and must never block or fail a prompt.
+  }
+}
+
+/** Same shape as `appendMeasurement`, in its own file, for tool-selection records (src/core/tool_measurement.ts). */
+export async function appendToolMeasurement($: EngineInterface, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/mod-tools-measurements.jsonl`, line)
   } catch {
     // Measurement is best-effort and must never block or fail a prompt.
   }

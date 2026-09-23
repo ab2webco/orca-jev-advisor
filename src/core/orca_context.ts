@@ -1,7 +1,7 @@
 // Resolves the Orca worktree/project/branch a session is running in --
 // the whole reason this mod is written instead of installing
-// jev-skill-suggestion as is (see the feature document's "Por qué uno
-// nuestro"): a third-party mod sees one session; this one can see which
+// jev-skill-suggestion as is (see the feature document's "Why our own, not
+// a third party's"): a third-party mod sees one session; this one can see which
 // worktree, project and branch it is in, because Orca already tracks that.
 //
 // `orca worktree current --json` is the source, run as a child process.
