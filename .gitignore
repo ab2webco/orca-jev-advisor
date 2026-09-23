@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 *.log
+
+# Measurement data: calibration knowledge, kept out of the published repo.
+.private/

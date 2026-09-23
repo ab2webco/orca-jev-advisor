@@ -2,7 +2,7 @@
   {
     "id": "read_and_test",
     "kind": "permits",
-    "rule": "Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always. They're reversible and never leave the machine. This also covers cleaning build artifacts and reinstalling dependencies -- node_modules, dist, .next, cache folders -- because they regenerate with one command."
+    "rule": "Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always. They're reversible and never leave the machine. This also covers cleaning build artifacts and reinstalling dependencies -- node_modules, dist, .next, cache folders -- and working freely with local, development and test databases, including dropping or recreating their tables, because none of it leaves the developer's machine and all of it regenerates with one command."
   },
   {
     "id": "own_branch",
