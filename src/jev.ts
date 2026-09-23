@@ -288,19 +288,19 @@ export async function askJev(request: JevRequest, apiKey: string | null): Promis
         body: JSON.stringify(request),
       });
     } catch (error) {
-      throw new Error(`No se pudo contactar a Jev: ${error instanceof Error ? error.message : String(error)}`);
+      throw new Error(`Could not contact Jev: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     if (response.ok) {
       const parsed: unknown = await response.json();
       if (!isJevResponse(parsed)) {
-        throw new Error("Jev respondió 200 pero el cuerpo no tiene la forma esperada {model, answers, usage}");
+        throw new Error("Jev responded 200 but the body does not have the expected shape {model, answers, usage}");
       }
       return { kind: "answered", request, response: parsed };
     }
 
     const bodyText = await response.text().catch(() => "");
-    lastError = new Error(`Jev respondió ${response.status}: ${bodyText || response.statusText}`);
+    lastError = new Error(`Jev responded ${response.status}: ${bodyText || response.statusText}`);
 
     if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_RETRIES) {
       throw lastError;
@@ -308,5 +308,5 @@ export async function askJev(request: JevRequest, apiKey: string | null): Promis
     await sleep(500 * 2 ** attempt);
   }
 
-  throw lastError ?? new Error("Jev: fallo desconocido tras reintentos");
+  throw lastError ?? new Error("Jev: unknown failure after retries");
 }
