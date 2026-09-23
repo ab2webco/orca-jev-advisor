@@ -1,0 +1,136 @@
+// Loads and validates catalog.json: the list of destinations (services,
+// client sites, projects, support inboxes) this supervisor is allowed to
+// route encargos to, along with each destination's autonomy thresholds.
+
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { isArrayOf, isNumber, isRecord, isString } from "../guards.ts";
+import { DELICATENESS_LEVELS } from "../jev.ts";
+
+export type DestinationKind = "service" | "client-site" | "project" | "support";
+
+function isDestinationKind(value: unknown): value is DestinationKind {
+  return value === "service" || value === "client-site" || value === "project" || value === "support";
+}
+
+export interface AutonomyConfig {
+  actThreshold: number;
+  confirmThreshold: number;
+  // The highest delicateness level index (0..DELICATENESS_LEVELS - 1,
+  // zero-based, measured live against the real API) this destination may
+  // reach and still be acted on automatically. Above it, decide.ts always
+  // asks a human, regardless of how unambiguous the encargo was. Set to 0
+  // for a destination where 'act' must stay effectively unreachable (see
+  // the client-site policy in README.md): the real delicateness score is a
+  // continuous expectation over the scale and only equals exactly 0 when
+  // the model is fully certain the encargo is trivial, which practically
+  // never happens for a client site.
+  maxAutoDelicateness: number;
+}
+
+function isAutonomyConfig(value: unknown): value is AutonomyConfig {
+  return isRecord(value) && isNumber(value.actThreshold) && isNumber(value.confirmThreshold) && isNumber(value.maxAutoDelicateness);
+}
+
+export interface Destination {
+  id: string;
+  label: string;
+  kind: DestinationKind;
+  worktreePath: string;
+  terminalTitleMatch?: string;
+  autonomy: AutonomyConfig;
+}
+
+function isDestination(value: unknown): value is Destination {
+  if (!isRecord(value)) return false;
+  if (!isString(value.id) || !isString(value.label) || !isDestinationKind(value.kind)) return false;
+  if (!isString(value.worktreePath)) return false;
+  if ("terminalTitleMatch" in value && value.terminalTitleMatch !== undefined && !isString(value.terminalTitleMatch)) {
+    return false;
+  }
+  return isAutonomyConfig(value.autonomy);
+}
+
+export interface Catalog {
+  destinations: Destination[];
+}
+
+function isCatalogShape(value: unknown): value is Catalog {
+  return isRecord(value) && isArrayOf(value.destinations, isDestination);
+}
+
+/**
+ * Business rules beyond the raw shape: thresholds must live in (0, 1],
+ * acting always requires at least as much confidence as merely confirming,
+ * and maxAutoDelicateness must be a whole, zero-based level index within
+ * the delicateness scale (see jev.ts's DELICATENESS_LEVELS -- the two must
+ * never drift).
+ */
+function validateAutonomyRules(catalog: Catalog): string[] {
+  const errors: string[] = [];
+  const maxLevelIndex = DELICATENESS_LEVELS - 1;
+  for (const destination of catalog.destinations) {
+    const { actThreshold, confirmThreshold, maxAutoDelicateness } = destination.autonomy;
+    if (!(actThreshold > 0 && actThreshold <= 1)) {
+      errors.push(`Destino '${destination.id}': actThreshold debe estar en (0, 1], recibido ${actThreshold}`);
+    }
+    if (!(confirmThreshold > 0 && confirmThreshold <= 1)) {
+      errors.push(`Destino '${destination.id}': confirmThreshold debe estar en (0, 1], recibido ${confirmThreshold}`);
+    }
+    if (actThreshold < confirmThreshold) {
+      errors.push(`Destino '${destination.id}': actThreshold (${actThreshold}) debe ser >= confirmThreshold (${confirmThreshold})`);
+    }
+    if (!Number.isInteger(maxAutoDelicateness) || maxAutoDelicateness < 0 || maxAutoDelicateness > maxLevelIndex) {
+      errors.push(
+        `Destino '${destination.id}': maxAutoDelicateness debe ser un entero entre 0 y ${maxLevelIndex}, recibido ${maxAutoDelicateness}`,
+      );
+    }
+  }
+  return errors;
+}
+
+/**
+ * Loads and validates catalog.json. Defaults to the file next to this
+ * module's project root; accepts an explicit path for tests or alternate
+ * deployments.
+ */
+export async function loadCatalog(catalogPath?: string): Promise<Catalog> {
+  const defaultPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "catalog.json");
+  const path = catalogPath ?? defaultPath;
+
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`No se pudo leer el catálogo en ${path}: ${message}`);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`El catálogo en ${path} no es JSON válido: ${message}`);
+  }
+
+  if (!isCatalogShape(parsed)) {
+    throw new Error(
+      `El catálogo en ${path} no tiene la forma esperada {destinations: [{id, label, kind, worktreePath, autonomy: {actThreshold, confirmThreshold, maxAutoDelicateness}, ...}]}`,
+    );
+  }
+
+  const ruleErrors = validateAutonomyRules(parsed);
+  if (ruleErrors.length > 0) {
+    throw new Error(`El catálogo en ${path} tiene valores de autonomía inválidos:\n- ${ruleErrors.join("\n- ")}`);
+  }
+
+  const ids = parsed.destinations.map((d) => d.id);
+  const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
+  if (duplicateIds.length > 0) {
+    throw new Error(`El catálogo en ${path} tiene ids de destino duplicados: ${duplicateIds.join(", ")}`);
+  }
+
+  return parsed;
+}

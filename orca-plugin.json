@@ -1,0 +1,89 @@
+{
+  "manifestVersion": 1,
+  "id": "orca-jev-advisor",
+  "publisher": "ab2web",
+  "name": "Jev Advisor",
+  "version": "0.1.0",
+  "description": "Capa de decision respaldada por Jev (TypeSafe) para juzgar acciones propuestas y mantener un tablero de estado entre worktrees de Orca.",
+  "engines": {
+    "orca": ">=1.4.0"
+  },
+  "pluginApi": 1,
+  "main": "adapters/orca/main.mjs",
+  "_automationsNote": "Sin automations todavia. Cuando se agreguen (p. ej. una revision periodica del log o del tablero), van dentro de contributes.automations, siguiendo la forma vista en otros plugins de Orca (id, title, provider, trigger, prompt).",
+  "contributes": {
+    "panels": [
+      {
+        "id": "advisor-board",
+        "title": "Advisor",
+        "icon": "adapters/orca/icons/advisor.svg",
+        "entry": "adapters/orca/panels/board.html",
+        "surface": "nav"
+      },
+      {
+        "id": "advisor-config",
+        "title": "Jev Advisor",
+        "icon": "adapters/orca/icons/advisor.svg",
+        "entry": "adapters/orca/panels/config.html",
+        "surface": "settings"
+      }
+    ],
+    "commands": [
+      {
+        "id": "advisor.decide",
+        "title": "Advisor: Juzgar accion(es) propuestas"
+      },
+      {
+        "id": "advisor.board",
+        "title": "Advisor: Ver tablero entre worktrees"
+      },
+      {
+        "id": "advisor.doctor",
+        "title": "Advisor: Verificar configuracion"
+      },
+      {
+        "id": "advisor.installClaude",
+        "title": "Advisor: Instalar el lado de Claude Code"
+      },
+      {
+        "id": "advisor.uninstallClaude",
+        "title": "Advisor: Revertir el lado de Claude Code"
+      }
+    ],
+    "events": [
+      {
+        "on": "agent.status.changed"
+      },
+      {
+        "on": "worktree.created"
+      },
+      {
+        "on": "worktree.removed"
+      }
+    ],
+    "automations": []
+  },
+  "capabilities": [
+    {
+      "kind": "process:spawn"
+    },
+    {
+      "kind": "storage"
+    },
+    {
+      "kind": "secrets"
+    },
+    {
+      "kind": "events:subscribe"
+    },
+    {
+      "kind": "notifications:show"
+    },
+    {
+      "kind": "net:fetch",
+      "hosts": [
+        "api.typesafe.ai"
+      ]
+    }
+  ]
+}

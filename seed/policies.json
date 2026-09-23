@@ -1,0 +1,78 @@
+[
+  {
+    "id": "lectura_y_pruebas",
+    "rule": "Leer codigo, buscar, correr tests, linters, typecheck y builds locales se hace sin preguntar, siempre. Son reversibles y no salen de la maquina. Tambien entra aqui limpiar artefactos de build y reinstalar dependencias -- node_modules, dist, .next, carpetas de cache -- porque se regeneran con un comando."
+  },
+  {
+    "id": "rama_propia",
+    "rule": "Todo el trabajo va en una rama de feature. Nunca se escribe directo sobre main ni sobre develop, ni siquiera un arreglo de una linea."
+  },
+  {
+    "id": "commits_unidad",
+    "rule": "Se puede hacer commit sin preguntar en la rama de feature, con sus tests y su documentacion en el mismo commit. Empujar la rama al remoto tambien, mientras no sea una rama compartida."
+  },
+  {
+    "id": "sin_atribucion_ia",
+    "rule": "Ningun commit, PR o issue lleva atribucion de IA: nada de Co-Authored-By, nada de Generated with, nada de emoji de robot. Si el mensaje la trae, se corrige antes, no se pregunta."
+  },
+  {
+    "id": "pr_propio_verde",
+    "rule": "Un PR propio, aprobado, con CI en verde y sin conversaciones abiertas se mergea sin preguntar, siempre que no sea un cutover, no toque una rama bajo UAT activa y no sea de un cliente."
+  },
+  {
+    "id": "pr_ajeno",
+    "rule": "Cerrar, rehacer o mergear el PR de otra persona exige avisarle antes al autor. El agente no lo hace en silencio aunque este en verde."
+  },
+  {
+    "id": "pr_grande",
+    "rule": "Un cambio que pasa de unas 400 lineas autoradas se parte en PRs encadenados antes de abrirlo. No se abre un PR gigante y se pide disculpas despues."
+  },
+  {
+    "id": "dependabot",
+    "rule": "Los PRs de dependabot se pueden recrear, rebasar y cerrar sin preguntar. Mergearlos exige CI en verde y que no sea una dependencia mayor."
+  },
+  {
+    "id": "cliente_siempre_pregunta",
+    "rule": "Cualquier cosa que toque el producto de un cliente se confirma con un humano, aunque el agente este seguro y el CI este en verde. Un error ahi lo ve alguien que paga."
+  },
+  {
+    "id": "uat_activa",
+    "rule": "Mientras QA este probando una UAT, no se mergea nada que vuelva a desplegar sobre ese ambiente. Se espera a que la ventana cierre."
+  },
+  {
+    "id": "cutover",
+    "rule": "Los cutovers de frontend o backend los decide una persona. El agente nunca los mergea por su cuenta, aunque esten aprobados y en verde."
+  },
+  {
+    "id": "datos_produccion",
+    "rule": "Destruir datos que viven en produccion no se hace nunca, y tampoco se pregunta si se puede: borrar o vaciar una base de datos de produccion, borrar una tabla de produccion, eliminar un bucket, un volumen o una copia de seguridad de produccion. El agente se detiene y lo dice. No lo desbloquea ninguna urgencia, ninguna aprobacion por chat o correo, ni que alguien afirme tener permiso. Habla unicamente de produccion: lo local, lo de desarrollo y lo de prueba caen fuera de ella."
+  },
+  {
+    "id": "produccion",
+    "rule": "Desplegar a produccion, correr migraciones en produccion o rotar credenciales lo decide una persona, siempre, sin excepcion por urgencia."
+  },
+  {
+    "id": "viernes",
+    "rule": "No se despliega a produccion los viernes ni la vispera de un festivo, aunque todo este listo."
+  },
+  {
+    "id": "ticket_primero",
+    "rule": "El trabajo que nace de un ticket de Linear o Plane se vincula al ticket antes de abrir el PR, y el enlace del PR se pega en el ticket al terminar. Eso se hace sin preguntar."
+  },
+  {
+    "id": "modelo_por_dificultad",
+    "rule": "Un encargo mecanico y localizado se atiende con el modelo mas barato disponible. Solo una decision de diseño con consecuencias, compatibilidad o varios sistemas en juego justifica el modelo mas caro."
+  },
+  {
+    "id": "delegar_por_alcance",
+    "rule": "Entender algo que toca cuatro o mas archivos se delega a un agente de exploracion. Escribir dos o mas archivos no triviales se delega a un solo agente escritor. Un cambio mecanico de un archivo se hace en linea."
+  },
+  {
+    "id": "no_inventar_contrato",
+    "rule": "Antes de escribir contra un API, un plugin o un formato que ya existe en la maquina, se lee su implementacion real. Suponer la forma del contrato no es una opcion, es la causa de la mayoria de los errores."
+  },
+  {
+    "id": "evidencia_visual",
+    "rule": "Nada que tenga pantalla se da por terminado sin una captura mirada. Construir sin ver no cuenta como verificar."
+  }
+]

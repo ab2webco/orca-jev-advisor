@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Jev Advisor</title>
+    <!--
+      Sandboxed panels may call ONLY `notifications.show`, `storage.get` and
+      `storage.set` over the postMessage bridge (isPluginPanelAction,
+      orca-oss plugin-host-api.ts / plugin-panel-bridge.ts); `secrets.*` is
+      worker-only. This panel never calls `secrets.get`/`secrets.set`/
+      `secrets.delete` directly -- it writes a request into storage and polls
+      a result key that `main.mjs` fills in, same shape as orca-wa-inbox's
+      SIDECAR_REQUEST_KEY/SIDECAR_RESULT_KEY pair. The full key is never read
+      back here: this panel only ever shows the masked status the worker
+      publishes (`secretStatus`).
+
+      Every user-facing string in this file comes from CATALOG (es/en)
+      below, looked up by key -- never typed inline at the point it is
+      shown. This is NOT Orca's own `contributes.languagePacks`: that
+      mechanism replaces Orca's whole UI language and a plugin can only
+      offer it as a value of Orca's OWN `uiLanguage` setting (verified in
+      orca-oss: I18nProvider.tsx resolves a plugin's pack only when
+      `uiLanguage === pack.id`); nothing tells a plugin what language Orca
+      is already in (`settings.get` is this plugin's own config, not the
+      app's, and the panel shell injects no locale token). So this plugin
+      carries its own small, explicit choice instead -- the two buttons
+      next to the title -- kept in its own storage and mirrored to
+      ~/.config/orca-supervisor/locale for gate-bash.ts and mod-skills,
+      which run outside Orca and read it directly (see src/core/i18n.ts).
+    -->
+
+    <style>
+      /* El host inyecta una lista corta de tokens en el <style> del shell
+         (PANEL_DESIGN_TOKEN_ALLOWLIST, orca-oss src/shared/plugins/plugin-panel-shell.ts)
+         y pone light/dark en <html>. Nada mas llega aca. Los respaldos son los
+         valores reales de main.css, no un gris inventado, para que el panel se
+         lea bien aunque el host no inyecte nada (host viejo, o el arnes de
+         pruebas). */
+      :root {
+        color-scheme: light dark;
+        --radius-md: calc(var(--radius, 0.625rem) * 0.8);
+        --fb-background: #fff; --fb-foreground: #0a0a0a;
+        --fb-primary: #171717; --fb-primary-foreground: #fafafa;
+        --fb-secondary: #f5f5f5; --fb-secondary-foreground: #171717;
+        --fb-muted: #f5f5f5; --fb-muted-foreground: #737373;
+        --fb-accent: #f5f5f5; --fb-accent-foreground: #171717;
+        --fb-destructive: #e40014;
+        --fb-border: #e5e5e5; --fb-input: #e5e5e5; --fb-ring: #a1a1a1;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fb-background: #0a0a0a; --fb-foreground: #fafafa;
+          --fb-primary: #e5e5e5; --fb-primary-foreground: #171717;
+          --fb-secondary: #262626; --fb-secondary-foreground: #fafafa;
+          --fb-muted: #262626; --fb-muted-foreground: #a1a1a1;
+          --fb-accent: #404040; --fb-accent-foreground: #fafafa;
+          --fb-destructive: #ff6568;
+          --fb-border: rgb(255 255 255 / 0.07); --fb-input: rgb(255 255 255 / 0.15);
+          --fb-ring: #737373;
+        }
+      }
+      html.light { color-scheme: light; }
+      html.dark { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; padding: 0 0 24px;
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 13px; letter-spacing: 0.01em;
+        color: var(--foreground, var(--fb-foreground));
+        background: var(--background, var(--fb-background));
+      }
+      .wrap { max-width: 760px; }
+      .titlebar { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 12px 12px 0; }
+      h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+      .lang-switch { display: flex; gap: 4px; }
+      .lang-switch button { padding: 3px 8px; font-size: 11px; font-weight: 500; }
+      .lang-switch button[aria-pressed="true"] { background: var(--primary, var(--fb-primary)); color: var(--primary-foreground, var(--fb-primary-foreground)); border-color: transparent; }
+      .sub:first-child { margin-top: 0; }
+      .sub { color: var(--muted-foreground, var(--fb-muted-foreground));
+             margin: 0; padding: 2px 12px 12px; font-size: 12px; }
+      /* Los paneles propios de Orca no usan tarjetas por seccion: son planos, a
+         sangre, separados por un filete de --border y una etiqueta chica en
+         mayusculas, igual que activity.html y wa-inbox/config.html. */
+      section { padding: 12px; margin: 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+           color: var(--muted-foreground, var(--fb-muted-foreground));
+           margin: 0 0 10px; font-weight: 600; }
+      label { display: block; font-size: 12px; margin: 10px 0 4px;
+              color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      label:first-of-type { margin-top: 0; }
+      input, select {
+        font: inherit; width: 100%; padding: 7px 9px; border-radius: var(--radius-md);
+        border: 1px solid var(--input, var(--fb-input)); background: transparent;
+        color: var(--foreground, var(--fb-foreground));
+      }
+      select { background-color: var(--background, var(--fb-background));
+               color: var(--foreground, var(--fb-foreground)); }
+      select option { background-color: var(--background, var(--fb-background));
+                      color: var(--foreground, var(--fb-foreground)); }
+      input:focus-visible, select:focus-visible {
+        outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; border-color: transparent;
+      }
+      button {
+        font: inherit; font-weight: 500; padding: 7px 14px;
+        border-radius: var(--radius-md); cursor: pointer;
+        border: 1px solid var(--border, var(--fb-border));
+        background: var(--secondary, var(--fb-secondary));
+        color: var(--secondary-foreground, var(--fb-secondary-foreground));
+        transition: background-color 90ms ease, color 90ms ease, transform 60ms ease;
+      }
+      button:hover { background: var(--accent, var(--fb-accent));
+                     color: var(--accent-foreground, var(--fb-accent-foreground)); }
+      button:active { transform: translateY(1px); }
+      button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      button[disabled] { opacity: 0.5; cursor: default; transform: none; }
+      button.primary { background: var(--primary, var(--fb-primary));
+                       color: var(--primary-foreground, var(--fb-primary-foreground));
+                       border-color: transparent; }
+      button.primary:hover { background: var(--primary, var(--fb-primary));
+                             color: var(--primary-foreground, var(--fb-primary-foreground));
+                             filter: brightness(1.12); }
+      /* Subrayado siempre, no solo en hover: en tema claro --destructive es muy
+         cercano al texto pleno, y sin subrayar "Quitar" no se lee como accionable. */
+      button.link { border: 0; background: none; padding: 0; margin-left: 10px;
+                    color: var(--destructive, var(--fb-destructive)); font-size: 11px; font-weight: 400;
+                    text-decoration: underline; text-underline-offset: 2px; }
+      button.link:hover { background: none; color: var(--destructive, var(--fb-destructive));
+                          text-decoration-thickness: 2px; }
+      .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+      .row.two { grid-template-columns: 1fr 1fr; }
+      .row.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
+      @media (max-width: 560px) { .row, .row.two, .row.four { grid-template-columns: 1fr; } }
+      .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+      /* La allowlist no trae color de exito, y no se inventa uno: el peso y el
+         texto pleno cargan la confirmacion. El fallo si tiene token, --destructive. */
+      .said { font-size: 12px; font-weight: 500; color: var(--foreground, var(--fb-foreground)); }
+      .said.bad { font-weight: 400; color: var(--destructive, var(--fb-destructive)); }
+      .entry {
+        border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md);
+        padding: 10px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px;
+      }
+      .entry:first-child { margin-top: 0; }
+      .entry-actions { display: flex; justify-content: flex-end; }
+      .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
+              font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
+      code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="titlebar">
+        <h1>Jev Advisor</h1>
+        <div class="lang-switch" id="lang-switch" role="group" aria-label="idioma / language">
+          <button type="button" id="lang-es" aria-pressed="true">ES</button>
+          <button type="button" id="lang-en" aria-pressed="false">EN</button>
+        </div>
+      </div>
+      <p class="sub" data-i18n="app.subtitle"></p>
+
+      <section id="secret-section">
+        <h2 data-i18n="secret.heading"></h2>
+        <div class="sub" id="secret-status" style="padding:0 0 6px"></div>
+        <label for="api-key" data-i18n="secret.label"></label>
+        <input id="api-key" type="password" autocomplete="off" data-i18n-placeholder="secret.placeholder" />
+        <div class="actions">
+          <button id="save-key" class="primary" type="button" data-i18n="secret.save"></button>
+          <button id="clear-key" class="link" type="button" data-i18n="secret.clear"></button>
+          <span class="said" id="key-said"></span>
+        </div>
+      </section>
+
+      <section id="claude-integration-section">
+        <h2 data-i18n="integration.heading"></h2>
+        <p class="hint" id="integration-hint"></p>
+        <ul id="claude-integration-status" style="margin:0; padding-left:18px; font-size:12px; line-height:1.7;"></ul>
+        <div class="actions">
+          <button id="claude-integration-setup" class="primary" type="button" data-i18n="integration.setup"></button>
+          <button id="claude-integration-revert" class="link" type="button" data-i18n="integration.revert"></button>
+          <span class="said" id="claude-integration-said"></span>
+        </div>
+      </section>
+
+      <section id="thresholds-section">
+        <h2 data-i18n="thresholds.heading"></h2>
+        <div class="row">
+          <div><label for="actThreshold" data-i18n="thresholds.act"></label>
+            <input id="actThreshold" type="number" step="0.01" min="0" max="1" /></div>
+          <div><label for="confirmThreshold" data-i18n="thresholds.confirm"></label>
+            <input id="confirmThreshold" type="number" step="0.01" min="0" max="1" /></div>
+          <div><label for="reversibleGate">reversibleGate</label>
+            <input id="reversibleGate" type="number" step="0.01" min="0" max="1" /></div>
+        </div>
+        <div class="row">
+          <div><label for="externalGate">externalGate</label>
+            <input id="externalGate" type="number" step="0.01" min="0" max="1" /></div>
+          <div><label for="consequenceCeiling">consequenceCeiling</label>
+            <input id="consequenceCeiling" type="number" step="0.01" min="0" /></div>
+          <div><label for="logMaxEntries" data-i18n="thresholds.logMaxEntries"></label>
+            <input id="logMaxEntries" type="number" step="1" min="1" /></div>
+        </div>
+      </section>
+
+      <section id="catalog-section">
+        <h2 data-i18n="catalog.heading"></h2>
+        <p class="hint" data-i18n="catalog.hint"></p>
+        <div id="catalog-list"></div>
+        <div class="actions"><button id="add-catalog-row" type="button" data-i18n="catalog.add"></button></div>
+      </section>
+
+      <section id="policies-section">
+        <h2 data-i18n="policies.heading"></h2>
+        <p class="hint" data-i18n="policies.hint"></p>
+        <div id="policies-list"></div>
+        <div class="actions"><button id="add-policy-row" type="button" data-i18n="policies.add"></button></div>
+      </section>
+
+      <section id="save-section">
+        <div class="actions">
+          <button id="save-all" class="primary" type="button" data-i18n="save.button"></button>
+          <span class="said" id="save-said"></span>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      'use strict'
+
+      var el = function (id) { return document.getElementById(id) }
+
+      // ---------- catalogo de idioma (es/en) --------------------------------
+      // Cada clave que este panel muestra vive aca, en los dos idiomas. Nada
+      // de texto de cara al usuario se escribe suelto en el resto del
+      // archivo -- todo pasa por t(clave, parametros). Ver el comentario
+      // grande en <head> sobre por que esto no es contributes.languagePacks
+      // de Orca.
+      var CATALOG = {
+        es: {
+          'app.subtitle': 'Configuración del plugin. Todo se guarda a través del host de Orca — nada de esto llama a una URL externa desde este panel.',
+          'secret.heading': 'Clave de TypeSafe',
+          'secret.checking': 'Comprobando…',
+          'secret.label': 'Nueva clave (se guarda cifrada; nunca se vuelve a mostrar completa)',
+          'secret.placeholder': 'api...',
+          'secret.save': 'Guardar clave',
+          'secret.clear': 'Eliminar clave guardada',
+          'secret.saving': 'Guardando…',
+          'secret.saved': 'Clave guardada.',
+          'secret.clearing': 'Eliminando…',
+          'secret.cleared': 'Clave eliminada.',
+          'secret.configured': 'Clave configurada (termina en …{{tail}}).',
+          'secret.notConfigured': 'Sin clave configurada.',
+          'integration.heading': 'Integración con Claude Code',
+          'integration.hint': 'Este plugin escribe cuatro cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, y un enlace al mod de skills. Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
+          'integration.checking': 'Comprobando…',
+          'integration.statusUnavailable': 'No se pudo leer el estado.',
+          'integration.hookInstalled': 'Hook de Bash: puesto, en {{path}}',
+          'integration.hookWrongPath': 'Hook de Bash: puesto, pero apunta a otra ruta de gate-bash.ts',
+          'integration.hookNotInstalled': 'Hook de Bash: no puesto.',
+          'integration.envInstalled': 'Variable de entorno: puesta ({{name}}=1).',
+          'integration.envNotInstalled': 'Variable de entorno: no puesta.',
+          'integration.mirrorPresent': 'Archivo de la clave: presente, permisos {{mode}}, en {{path}}',
+          'integration.mirrorPresentWindows': 'Archivo de la clave: presente, en {{path}} (Windows no tiene permisos POSIX; protégelo con los permisos NTFS de tu cuenta).',
+          'integration.mirrorMissing': 'Archivo de la clave: no existe todavía ({{path}}).',
+          'integration.mirrorUnknown': 'Archivo de la clave: no se pudo comprobar.',
+          'integration.modLinked': 'Mod de skills: enlazado en {{path}}',
+          'integration.modNotLinked': 'Mod de skills: no enlazado.',
+          'integration.setup': 'Configurar',
+          'integration.revert': 'Revertir todo',
+          'integration.configuring': 'Configurando…',
+          'integration.done': 'Listo.',
+          'integration.reverting': 'Revirtiendo…',
+          'integration.reverted': 'Revertido.',
+          'thresholds.heading': 'Umbrales',
+          'thresholds.act': 'actThreshold (actuar)',
+          'thresholds.confirm': 'confirmThreshold (confirmar)',
+          'thresholds.logMaxEntries': 'Tamaño máximo del log',
+          'catalog.heading': 'Catálogo de destinos',
+          'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
+          'catalog.add': '+ Agregar destino',
+          'catalog.fieldId': 'id',
+          'catalog.fieldIdPlaceholder': 'id-corto',
+          'catalog.fieldLabel': 'Etiqueta',
+          'catalog.fieldLabelPlaceholder': 'Nombre legible',
+          'catalog.fieldKind': 'kind',
+          'catalog.fieldPath': 'worktreePath',
+          'catalog.fieldPathPlaceholder': '/ruta/exacta',
+          'catalog.fieldTitleMatch': 'terminalTitleMatch (opcional)',
+          'catalog.fieldTitleMatchPlaceholder': 'fragmento del título',
+          'catalog.remove': 'Quitar',
+          'policies.heading': 'Políticas del equipo',
+          'policies.hint': 'Cada fila es una decisión ya tomada: un id corto y la regla en una frase.',
+          'policies.add': '+ Agregar política',
+          'policies.fieldId': 'id',
+          'policies.fieldIdPlaceholder': 'id-corto',
+          'policies.fieldRule': 'rule',
+          'policies.fieldRulePlaceholder': 'La regla en una frase',
+          'policies.remove': 'Quitar',
+          'save.button': 'Guardar configuración',
+          'save.saving': 'Guardando…',
+          'save.saved': 'Guardado.',
+          'common.timeout': 'Tiempo de espera agotado.',
+          'common.hostRejectedRequest': 'El host rechazó el pedido.',
+          'common.couldNotSend': 'No se pudo enviar el pedido.',
+          'common.hostRejectedWrite': 'El host rechazó la escritura.'
+        },
+        en: {
+          'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
+          'secret.heading': 'TypeSafe key',
+          'secret.checking': 'Checking…',
+          'secret.label': 'New key (saved encrypted; never shown in full again)',
+          'secret.placeholder': 'api...',
+          'secret.save': 'Save key',
+          'secret.clear': 'Remove saved key',
+          'secret.saving': 'Saving…',
+          'secret.saved': 'Key saved.',
+          'secret.clearing': 'Removing…',
+          'secret.cleared': 'Key removed.',
+          'secret.configured': 'Key configured (ends in …{{tail}}).',
+          'secret.notConfigured': 'No key configured.',
+          'integration.heading': 'Claude Code integration',
+          'integration.hint': "This plugin writes four things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, and a link to the skills mod. None of this happens without showing it here, and \"Revert everything\" puts it all back.",
+          'integration.checking': 'Checking…',
+          'integration.statusUnavailable': 'Could not read the status.',
+          'integration.hookInstalled': 'Bash hook: installed, at {{path}}',
+          'integration.hookWrongPath': 'Bash hook: installed, but points at a different gate-bash.ts path',
+          'integration.hookNotInstalled': 'Bash hook: not installed.',
+          'integration.envInstalled': 'Environment variable: set ({{name}}=1).',
+          'integration.envNotInstalled': 'Environment variable: not set.',
+          'integration.mirrorPresent': 'Key file: present, permissions {{mode}}, at {{path}}',
+          'integration.mirrorPresentWindows': 'Key file: present, at {{path}} (Windows has no POSIX permissions; protect it with your account NTFS permissions).',
+          'integration.mirrorMissing': "Key file: doesn't exist yet ({{path}}).",
+          'integration.mirrorUnknown': 'Key file: could not check.',
+          'integration.modLinked': 'Skills mod: linked at {{path}}',
+          'integration.modNotLinked': 'Skills mod: not linked.',
+          'integration.setup': 'Set up',
+          'integration.revert': 'Revert everything',
+          'integration.configuring': 'Setting up…',
+          'integration.done': 'Done.',
+          'integration.reverting': 'Reverting…',
+          'integration.reverted': 'Reverted.',
+          'thresholds.heading': 'Thresholds',
+          'thresholds.act': 'actThreshold (act)',
+          'thresholds.confirm': 'confirmThreshold (confirm)',
+          'thresholds.logMaxEntries': 'Maximum log size',
+          'catalog.heading': 'Destination catalog',
+          'catalog.hint': 'One destination per worktree this plugin may judge or route.',
+          'catalog.add': '+ Add destination',
+          'catalog.fieldId': 'id',
+          'catalog.fieldIdPlaceholder': 'short-id',
+          'catalog.fieldLabel': 'Label',
+          'catalog.fieldLabelPlaceholder': 'Readable name',
+          'catalog.fieldKind': 'kind',
+          'catalog.fieldPath': 'worktreePath',
+          'catalog.fieldPathPlaceholder': '/exact/path',
+          'catalog.fieldTitleMatch': 'terminalTitleMatch (optional)',
+          'catalog.fieldTitleMatchPlaceholder': 'title fragment',
+          'catalog.remove': 'Remove',
+          'policies.heading': 'Team policies',
+          'policies.hint': 'Each row is a decision already made: a short id and the rule in one sentence.',
+          'policies.add': '+ Add policy',
+          'policies.fieldId': 'id',
+          'policies.fieldIdPlaceholder': 'short-id',
+          'policies.fieldRule': 'rule',
+          'policies.fieldRulePlaceholder': 'The rule, in one sentence',
+          'policies.remove': 'Remove',
+          'save.button': 'Save configuration',
+          'save.saving': 'Saving…',
+          'save.saved': 'Saved.',
+          'common.timeout': 'Timed out.',
+          'common.hostRejectedRequest': 'The host rejected the request.',
+          'common.couldNotSend': 'Could not send the request.',
+          'common.hostRejectedWrite': 'The host rejected the write.'
+        }
+      }
+
+      var currentLocale = 'es'
+      function t (key, params) {
+        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
+        if (!params) return template
+        return template.replace(/\{\{(\w+)\}\}/g, function (_m, name) {
+          return Object.prototype.hasOwnProperty.call(params, name) ? params[name] : ''
+        })
+      }
+
+      // ---------- puente real con el host --------------------------------
+      // Mismo protocolo que panels/board.html y wa-inbox/config.html: el
+      // iframe es sandboxed con origen opaco, asi que el unico canal es
+      // postMessage con el frame padre (orca-oss
+      // src/shared/plugins/plugin-panel-bridge.ts). '*' es el unico
+      // targetOrigin usable; el host valida la ventana que lo manda.
+      //
+      // Toda escritura de este panel nace de un clic -- guardar la clave,
+      // guardar la configuracion -- asi que viaja por el carril de usuario:
+      // cupo reservado, prioridad sobre cualquier lectura de fondo y
+      // reintento con backoff si el host la rechaza por `rate_limited`
+      // (PANEL_MESSAGE_RATE_LIMIT). Simplificado del mecanismo de cola de
+      // wa-inbox/config.html a lo que este panel necesita: unas pocas
+      // lecturas al abrir y unas pocas escrituras por clic, nunca sondeo.
+      var seq = 0
+      var pending = {}
+      var CUPO = { max: 30, ventanaMs: 10000, reserva: 4 }
+      var gastados = []
+      var cola = []
+      var colaTimer = null
+      var frenoHasta = 0
+      var RECHAZADO = { ok: false, errorCode: 'rate_limited' }
+
+      function hayLugarDeSondeo () {
+        var corte = Date.now() - CUPO.ventanaMs
+        while (gastados.length && gastados[0] <= corte) gastados.shift()
+        return gastados.length < CUPO.max - CUPO.reserva
+      }
+      function proximoHueco () {
+        var ahora = Date.now()
+        if (cola[0] && cola[0].usuario) return Math.max(60, (cola[0].desde || 0) - ahora)
+        var falta = frenoHasta - ahora
+        if (gastados.length) falta = Math.max(falta, gastados[0] + CUPO.ventanaMs - ahora)
+        return Math.max(60, Math.min(falta, CUPO.ventanaMs))
+      }
+      function despachar (it) {
+        var requestId = 'req-' + (++seq)
+        pending[requestId] = function (d) {
+          if (!(d && d.errorCode === 'rate_limited')) { it.resolve(d); return }
+          frenoHasta = Date.now() + 1000
+          if (!it.usuario || Date.now() >= it.vence) { it.resolve(d); return }
+          it.espera = Math.min((it.espera || 300) * 2, 2500)
+          it.desde = Date.now() + it.espera
+          encolar(it)
+        }
+        window.parent.postMessage(
+          { type: 'orca-panel-action', requestId: requestId, action: it.action, params: it.params }, '*')
+      }
+      function drenar () {
+        if (colaTimer) { clearTimeout(colaTimer); colaTimer = null }
+        var ahora = Date.now()
+        while (cola.length) {
+          var it = cola[0]
+          if (it.vence <= ahora) { cola.shift(); it.resolve(RECHAZADO); continue }
+          if (it.usuario ? (it.desde || 0) > ahora : (ahora < frenoHasta || !hayLugarDeSondeo())) break
+          cola.shift()
+          if (!it.usuario) gastados.push(ahora)
+          despachar(it)
+        }
+        if (cola.length) colaTimer = setTimeout(drenar, proximoHueco())
+      }
+      function encolar (it) {
+        var i = cola.length
+        if (it.usuario) { i = 0; while (i < cola.length && cola[i].usuario) i++ }
+        cola.splice(i, 0, it)
+        drenar()
+      }
+      function call (action, params, usuario) {
+        return new Promise(function (resolve) {
+          encolar({
+            action: action, params: params, usuario: !!usuario,
+            vence: Date.now() + (usuario ? 30000 : 12000), resolve: resolve
+          })
+        })
+      }
+      window.addEventListener('message', function (event) {
+        var d = event.data
+        if (!d || d.type !== 'orca-panel-action-result') return
+        var resolve = pending[d.requestId]
+        if (!resolve) return
+        delete pending[d.requestId]
+        resolve(d)
+      })
+
+      // storage.get devuelve { value: <dato> } y el bridge lo envuelve otra vez.
+      function stored (result) {
+        if (!result || !result.ok || !result.value) return null
+        return result.value.value === undefined ? null : result.value.value
+      }
+      function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
+      function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
+      // Escritura de fondo (no la pidio un clic): sondeo y latido usan esta,
+      // nunca la de usuario, para no gastar el cupo reservado a un clic real.
+      function writeBackground (key, value) { return call('storage.set', { key: key, value: value }, false) }
+
+      // ---------- clave secreta: pedido/resultado ---------------------------
+      // Un panel sandboxed no puede llamar `secrets.get`/`secrets.set`/
+      // `secrets.delete` (isPluginPanelAction, orca-oss plugin-host-api.ts):
+      // solo `notifications.show`, `storage.get` y `storage.set`. Este panel
+      // deja un pedido en storage y `main.mjs` lo atiende con un temporizador,
+      // igual que SIDECAR_REQUEST_KEY/SIDECAR_RESULT_KEY en orca-wa-inbox. La
+      // clave nunca se relee: solo se muestra el estado enmascarado que el
+      // worker publica en SECRET_STATUS_KEY.
+      var SECRET_REQUEST_KEY = 'secretRequest'
+      var SECRET_RESULT_KEY = 'secretResult'
+      var SECRET_STATUS_KEY = 'secretStatus'
+      var PANEL_SEEN_KEY = 'configPanelSeen'
+
+      function signalPanelOpen () {
+        writeBackground(PANEL_SEEN_KEY, { at: new Date().toISOString() })
+      }
+
+      function waitForSecretResult (requestId, deadline) {
+        return read(SECRET_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw new Error(result.error || t('common.hostRejectedRequest'))
+          }
+          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForSecretResult(requestId, deadline) })
+        })
+      }
+
+      function sendSecretRequest (intent, value) {
+        var requestId = 'secret-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), intent: intent }
+        if (value !== undefined) request.value = value
+        // Empuja al worker a su sondeo rapido antes de esperar el resultado.
+        signalPanelOpen()
+        return write(SECRET_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          return waitForSecretResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- integracion con Claude Code: pedido/resultado -------------
+      // Mismo patron que la clave secreta arriba: un panel sandboxed no puede
+      // instalar/revertir directamente (eso corre en el worker, a traves de
+      // install-claude-integration.mjs), asi que deja un pedido en storage y
+      // main.mjs lo atiende en el mismo sondeo que ya usa para la clave.
+      var CLAUDE_INTEGRATION_REQUEST_KEY = 'claudeIntegrationRequest'
+      var CLAUDE_INTEGRATION_RESULT_KEY = 'claudeIntegrationResult'
+      var CLAUDE_INTEGRATION_STATUS_KEY = 'claudeIntegrationStatus'
+
+      function waitForClaudeIntegrationResult (requestId, deadline) {
+        return read(CLAUDE_INTEGRATION_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw new Error(result.detail || result.reason || t('common.hostRejectedRequest'))
+          }
+          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForClaudeIntegrationResult(requestId, deadline) })
+        })
+      }
+
+      function sendClaudeIntegrationRequest (intent) {
+        var requestId = 'claude-integration-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), intent: intent }
+        signalPanelOpen()
+        return write(CLAUDE_INTEGRATION_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          return waitForClaudeIntegrationResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- idioma: pedido/resultado/estado ---------------------------
+      // Mismo patron otra vez: este panel no puede escribir el archivo espejo
+      // del idioma el mismo (permission sandbox del worker), asi que pide y
+      // main.mjs lo atiende. LOCALE_STATUS_KEY es lo que este panel lee al
+      // abrir para saber en que idioma pintar.
+      var LOCALE_REQUEST_KEY = 'localeRequest'
+      var LOCALE_RESULT_KEY = 'localeResult'
+      var LOCALE_STATUS_KEY = 'localeStatus'
+
+      function waitForLocaleResult (requestId, deadline) {
+        return read(LOCALE_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw new Error(result.detail || result.reason || t('common.hostRejectedRequest'))
+          }
+          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForLocaleResult(requestId, deadline) })
+        })
+      }
+
+      function sendLocaleRequest (locale) {
+        var requestId = 'locale-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), locale: locale }
+        signalPanelOpen()
+        return write(LOCALE_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          return waitForLocaleResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- aplicar el catalogo al DOM ---------------------------------
+
+      function applyStaticI18n () {
+        document.querySelectorAll('[data-i18n]').forEach(function (node) {
+          node.textContent = t(node.getAttribute('data-i18n'))
+        })
+        document.querySelectorAll('[data-i18n-placeholder]').forEach(function (node) {
+          node.placeholder = t(node.getAttribute('data-i18n-placeholder'))
+        })
+        el('integration-hint').innerHTML = t('integration.hint')
+      }
+
+      function setLangButtons (locale) {
+        el('lang-es').setAttribute('aria-pressed', String(locale === 'es'))
+        el('lang-en').setAttribute('aria-pressed', String(locale === 'en'))
+      }
+
+      // Al cambiar de idioma, las filas dinamicas (catalogo/politicas) ya
+      // tienen sus etiquetas fijadas al crearse: se leen sus valores, se
+      // reconstruyen con las etiquetas del idioma nuevo, y el resto del
+      // panel se repinta por catalogo.
+      function applyLocale (locale) {
+        currentLocale = (locale === 'en') ? 'en' : 'es'
+        document.documentElement.lang = currentLocale
+        setLangButtons(currentLocale)
+        var savedCatalog = readCatalog()
+        var savedPolicies = readPolicies()
+        applyStaticI18n()
+        renderSecretStatus(lastSecretStatus)
+        renderClaudeIntegrationStatus(lastClaudeIntegrationStatus)
+        catalogListEl.innerHTML = ''
+        savedCatalog.destinations.forEach(addCatalogRow)
+        policiesListEl.innerHTML = ''
+        savedPolicies.forEach(addPolicyRow)
+      }
+
+      el('lang-es').addEventListener('click', function () {
+        if (currentLocale === 'es') return
+        applyLocale('es')
+        sendLocaleRequest('es').catch(function () { /* la vista ya cambio; un fallo de red no la revierte */ })
+      })
+      el('lang-en').addEventListener('click', function () {
+        if (currentLocale === 'en') return
+        applyLocale('en')
+        sendLocaleRequest('en').catch(function () { /* idem */ })
+      })
+
+      // ---------- catalogo ----------------------------------------------
+      var DESTINATION_KINDS = ['service', 'client-site', 'project', 'support']
+
+      function elMake (tag, className) {
+        var e = document.createElement(tag)
+        if (className) e.className = className
+        return e
+      }
+
+      function fieldInput (labelText, value, placeholder, type) {
+        var wrap = elMake('div')
+        var label = elMake('label')
+        label.textContent = labelText
+        var input = elMake('input')
+        input.type = type || 'text'
+        input.value = value || ''
+        if (placeholder) input.placeholder = placeholder
+        wrap.appendChild(label)
+        wrap.appendChild(input)
+        return { wrap: wrap, input: input }
+      }
+
+      var catalogListEl = el('catalog-list')
+
+      function addCatalogRow (row) {
+        row = row || {
+          id: '', label: '', kind: 'project', worktreePath: '', terminalTitleMatch: '',
+          autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 }
+        }
+        var entry = elMake('div', 'entry')
+
+        var row1 = elMake('div', 'row two')
+        var idField = fieldInput(t('catalog.fieldId'), row.id, t('catalog.fieldIdPlaceholder'))
+        var labelField = fieldInput(t('catalog.fieldLabel'), row.label, t('catalog.fieldLabelPlaceholder'))
+        row1.appendChild(idField.wrap)
+        row1.appendChild(labelField.wrap)
+        entry.appendChild(row1)
+
+        var row2 = elMake('div', 'row two')
+        var kindWrap = elMake('div')
+        var kindLabel = elMake('label')
+        kindLabel.textContent = t('catalog.fieldKind')
+        var kindSelect = elMake('select')
+        DESTINATION_KINDS.forEach(function (k) {
+          var opt = elMake('option')
+          opt.value = k
+          opt.textContent = k
+          if (k === row.kind) opt.selected = true
+          kindSelect.appendChild(opt)
+        })
+        kindWrap.appendChild(kindLabel)
+        kindWrap.appendChild(kindSelect)
+        var pathField = fieldInput(t('catalog.fieldPath'), row.worktreePath, t('catalog.fieldPathPlaceholder'))
+        row2.appendChild(kindWrap)
+        row2.appendChild(pathField.wrap)
+        entry.appendChild(row2)
+
+        var row3 = elMake('div', 'row four')
+        var titleField = fieldInput(t('catalog.fieldTitleMatch'), row.terminalTitleMatch || '', t('catalog.fieldTitleMatchPlaceholder'))
+        var actField = fieldInput('actThreshold', String(row.autonomy.actThreshold), '0.9', 'number')
+        var confirmField = fieldInput('confirmThreshold', String(row.autonomy.confirmThreshold), '0.6', 'number')
+        var delicatenessField = fieldInput('maxAutoDelicateness', String(row.autonomy.maxAutoDelicateness), '2', 'number')
+        row3.appendChild(titleField.wrap)
+        row3.appendChild(actField.wrap)
+        row3.appendChild(confirmField.wrap)
+        row3.appendChild(delicatenessField.wrap)
+        entry.appendChild(row3)
+
+        var actions = elMake('div', 'entry-actions')
+        var removeBtn = elMake('button', 'link')
+        removeBtn.type = 'button'
+        removeBtn.textContent = t('catalog.remove')
+        removeBtn.addEventListener('click', function () { entry.remove() })
+        actions.appendChild(removeBtn)
+        entry.appendChild(actions)
+
+        entry._read = function () {
+          return {
+            id: idField.input.value.trim(),
+            label: labelField.input.value.trim(),
+            kind: kindSelect.value,
+            worktreePath: pathField.input.value.trim(),
+            terminalTitleMatch: titleField.input.value.trim() || undefined,
+            autonomy: {
+              actThreshold: Number(actField.input.value),
+              confirmThreshold: Number(confirmField.input.value),
+              maxAutoDelicateness: Number(delicatenessField.input.value)
+            }
+          }
+        }
+
+        catalogListEl.appendChild(entry)
+      }
+
+      el('add-catalog-row').addEventListener('click', function () { addCatalogRow() })
+
+      function readCatalog () {
+        var rows = []
+        catalogListEl.querySelectorAll('.entry').forEach(function (entryEl) {
+          if (typeof entryEl._read === 'function') rows.push(entryEl._read())
+        })
+        return { destinations: rows.filter(function (r) { return r.id.length > 0 }) }
+      }
+
+      // ---------- politicas -----------------------------------------------
+
+      var policiesListEl = el('policies-list')
+
+      function addPolicyRow (row) {
+        row = row || { id: '', rule: '' }
+        var entry = elMake('div', 'entry')
+        var rowEl = elMake('div', 'row two')
+        var idField = fieldInput(t('policies.fieldId'), row.id, t('policies.fieldIdPlaceholder'))
+        var ruleField = fieldInput(t('policies.fieldRule'), row.rule, t('policies.fieldRulePlaceholder'))
+        rowEl.appendChild(idField.wrap)
+        rowEl.appendChild(ruleField.wrap)
+        entry.appendChild(rowEl)
+
+        var actions = elMake('div', 'entry-actions')
+        var removeBtn = elMake('button', 'link')
+        removeBtn.type = 'button'
+        removeBtn.textContent = t('policies.remove')
+        removeBtn.addEventListener('click', function () { entry.remove() })
+        actions.appendChild(removeBtn)
+        entry.appendChild(actions)
+
+        entry._read = function () {
+          return { id: idField.input.value.trim(), rule: ruleField.input.value.trim() }
+        }
+
+        policiesListEl.appendChild(entry)
+      }
+
+      el('add-policy-row').addEventListener('click', function () { addPolicyRow() })
+
+      function readPolicies () {
+        var rows = []
+        policiesListEl.querySelectorAll('.entry').forEach(function (entryEl) {
+          if (typeof entryEl._read === 'function') rows.push(entryEl._read())
+        })
+        return rows.filter(function (r) { return r.id.length > 0 && r.rule.length > 0 })
+      }
+
+      // ---------- umbrales --------------------------------------------------
+
+      function fillThresholds (config) {
+        config = config || {}
+        var thresholds = config.thresholds || {}
+        el('actThreshold').value = thresholds.actThreshold != null ? thresholds.actThreshold : 0.9
+        el('confirmThreshold').value = thresholds.confirmThreshold != null ? thresholds.confirmThreshold : 0.6
+        el('reversibleGate').value = thresholds.reversibleGate != null ? thresholds.reversibleGate : 0.7
+        el('externalGate').value = thresholds.externalGate != null ? thresholds.externalGate : 0.35
+        el('consequenceCeiling').value = thresholds.consequenceCeiling != null ? thresholds.consequenceCeiling : 1.5
+        el('logMaxEntries').value = config.logMaxEntries != null ? config.logMaxEntries : 500
+      }
+
+      function readConfig (previous) {
+        return {
+          thresholds: {
+            actThreshold: Number(el('actThreshold').value),
+            confirmThreshold: Number(el('confirmThreshold').value),
+            reversibleGate: Number(el('reversibleGate').value),
+            externalGate: Number(el('externalGate').value),
+            consequenceCeiling: Number(el('consequenceCeiling').value)
+          },
+          logMaxEntries: Number(el('logMaxEntries').value),
+          jevBudgetMs: (previous && previous.jevBudgetMs) || 4000
+        }
+      }
+
+      // ---------- clave secreta --------------------------------------------
+
+      var secretStatusEl = el('secret-status')
+      var keySaidEl = el('key-said')
+      var lastSecretStatus = null
+
+      // El panel nunca relee la clave: solo pinta lo que el worker publico en
+      // SECRET_STATUS_KEY (isConfigured/endsWith), nunca el valor completo.
+      function renderSecretStatus (status) {
+        lastSecretStatus = status
+        if (status === null) { secretStatusEl.textContent = t('secret.checking'); return }
+        if (status && status.configured) {
+          secretStatusEl.textContent = t('secret.configured', { tail: status.endsWith || '????' })
+        } else {
+          secretStatusEl.textContent = t('secret.notConfigured')
+        }
+      }
+
+      function loadSecretStatus () {
+        return read(SECRET_STATUS_KEY, false).then(renderSecretStatus)
+      }
+
+      function said (node, text, bad) {
+        node.textContent = text || ''
+        node.className = 'said' + (bad ? ' bad' : '')
+      }
+
+      el('save-key').addEventListener('click', function () {
+        var input = el('api-key')
+        var value = input.value.trim()
+        if (value.length === 0) return
+        said(keySaidEl, t('secret.saving'))
+        sendSecretRequest('save', value).then(function () {
+          input.value = ''
+          said(keySaidEl, t('secret.saved'))
+          return loadSecretStatus()
+        }).catch(function (error) {
+          said(keySaidEl, String(error && error.message || error), true)
+        })
+      })
+
+      el('clear-key').addEventListener('click', function () {
+        said(keySaidEl, t('secret.clearing'))
+        sendSecretRequest('clear').then(function () {
+          said(keySaidEl, t('secret.cleared'))
+          return loadSecretStatus()
+        }).catch(function (error) {
+          said(keySaidEl, String(error && error.message || error), true)
+        })
+      })
+
+      // ---------- integracion con Claude Code -------------------------------
+
+      var claudeIntegrationStatusEl = el('claude-integration-status')
+      var claudeIntegrationSaidEl = el('claude-integration-said')
+      var lastClaudeIntegrationStatus = null
+
+      function li (text) {
+        var item = elMake('li')
+        item.textContent = text
+        return item
+      }
+
+      // Pinta exactamente lo que el worker publico en CLAUDE_INTEGRATION_STATUS_KEY
+      // -- nunca la clave, y nunca mas detalle del que el panel necesita para
+      // que el usuario sepa que hay puesto y donde.
+      function renderClaudeIntegrationStatus (status) {
+        lastClaudeIntegrationStatus = status
+        claudeIntegrationStatusEl.innerHTML = ''
+        if (status === null) { claudeIntegrationStatusEl.appendChild(li(t('integration.checking'))); return }
+        if (!status || !status.ok) {
+          claudeIntegrationStatusEl.appendChild(li(t('integration.statusUnavailable')))
+          return
+        }
+        var hookLine = status.hook && status.hook.installed
+          ? (status.hook.pathMatches ? t('integration.hookInstalled', { path: status.hook.path }) : t('integration.hookWrongPath'))
+          : t('integration.hookNotInstalled')
+        claudeIntegrationStatusEl.appendChild(li(hookLine))
+
+        var envLine = status.env && status.env.installed
+          ? t('integration.envInstalled', { name: status.env.name })
+          : t('integration.envNotInstalled')
+        claudeIntegrationStatusEl.appendChild(li(envLine))
+
+        var mirror = status.secretMirror
+        var mirrorLine = mirror && mirror.ok
+          ? (mirror.exists ? (mirror.platform === 'win32' ? t('integration.mirrorPresentWindows', { path: mirror.path }) : t('integration.mirrorPresent', { mode: mirror.mode, path: mirror.path })) : t('integration.mirrorMissing', { path: mirror.path }))
+          : t('integration.mirrorUnknown')
+        claudeIntegrationStatusEl.appendChild(li(mirrorLine))
+
+        var modLine = status.modLink && status.modLink.installed
+          ? t('integration.modLinked', { path: status.modLink.path })
+          : t('integration.modNotLinked')
+        claudeIntegrationStatusEl.appendChild(li(modLine))
+      }
+
+      function loadClaudeIntegrationStatus () {
+        return read(CLAUDE_INTEGRATION_STATUS_KEY, false).then(renderClaudeIntegrationStatus)
+      }
+
+      el('claude-integration-setup').addEventListener('click', function () {
+        said(claudeIntegrationSaidEl, t('integration.configuring'))
+        sendClaudeIntegrationRequest('install').then(function () {
+          said(claudeIntegrationSaidEl, t('integration.done'))
+          return loadClaudeIntegrationStatus()
+        }).catch(function (error) {
+          said(claudeIntegrationSaidEl, String(error && error.message || error), true)
+        })
+      })
+
+      el('claude-integration-revert').addEventListener('click', function () {
+        said(claudeIntegrationSaidEl, t('integration.reverting'))
+        sendClaudeIntegrationRequest('uninstall').then(function () {
+          said(claudeIntegrationSaidEl, t('integration.reverted'))
+          return loadClaudeIntegrationStatus()
+        }).catch(function (error) {
+          said(claudeIntegrationSaidEl, String(error && error.message || error), true)
+        })
+      })
+
+      // ---------- guardar / cargar ------------------------------------------
+
+      var saveSaidEl = el('save-said')
+      var currentConfig = null
+
+      el('save-all').addEventListener('click', function () {
+        said(saveSaidEl, t('save.saving'))
+        var config = readConfig(currentConfig)
+        Promise.all([
+          write('config', config),
+          write('catalog', readCatalog()),
+          write('policies', readPolicies())
+        ]).then(function (results) {
+          var failed = results.find(function (r) { return !r || !r.ok })
+          if (failed) throw new Error(failed.error || t('common.hostRejectedWrite'))
+          currentConfig = config
+          said(saveSaidEl, t('save.saved'))
+        }).catch(function (error) {
+          said(saveSaidEl, String(error && error.message || error), true)
+        })
+      })
+
+      function load () {
+        fillThresholds({})
+        return read(LOCALE_STATUS_KEY, false).then(function (localeStatus) {
+          var locale = (localeStatus && localeStatus.value) || 'es'
+          currentLocale = (locale === 'en') ? 'en' : 'es'
+          document.documentElement.lang = currentLocale
+          setLangButtons(currentLocale)
+          applyStaticI18n()
+          renderSecretStatus(null)
+          renderClaudeIntegrationStatus(null)
+          return Promise.all([
+            read('config', false),
+            read('catalog', false),
+            read('policies', false),
+            loadSecretStatus(),
+            loadClaudeIntegrationStatus()
+          ])
+        }).then(function (results) {
+          currentConfig = results[0]
+          fillThresholds(currentConfig)
+          catalogListEl.innerHTML = ''
+          ;((results[1] && results[1].destinations) || []).forEach(addCatalogRow)
+          policiesListEl.innerHTML = ''
+          ;(results[2] || []).forEach(addPolicyRow)
+        }).catch(function (error) {
+          said(saveSaidEl, String(error && error.message || error), true)
+        })
+      }
+
+      // Latido: mientras el panel este visible, avisa que sigue abierto para
+      // que el worker sondee su pedido cada ~1s en lugar de cada ~15s.
+      var heartbeatTimer = null
+      function startHeartbeat () {
+        if (heartbeatTimer) return
+        heartbeatTimer = setInterval(function () {
+          if (document.visibilityState === 'visible') signalPanelOpen()
+        }, 2000)
+      }
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') signalPanelOpen()
+      })
+
+      signalPanelOpen()
+      startHeartbeat()
+      load()
+    </script>
+  </body>
+</html>
