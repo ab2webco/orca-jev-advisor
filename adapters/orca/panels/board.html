@@ -247,6 +247,7 @@
           'live.unknownWorktree': '(worktree desconocido)',
           'live.agentsCount': '{{n}} agente(s)',
           'live.updating': 'Actualizando…',
+          'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
@@ -306,6 +307,7 @@
           'live.unknownWorktree': '(unknown worktree)',
           'live.agentsCount': '{{n}} agent(s)',
           'live.updating': 'Updating…',
+          'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
       }
@@ -426,6 +428,21 @@
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
+
+      // ---------- worker liveness: heartbeat ----------------------------------
+      // Mirrors main.mjs's WORKER_HEARTBEAT_KEY/WORKER_HEARTBEAT_STALE_MS and
+      // isHeartbeatFresh -- see the tested original at
+      // adapters/orca/panels/worker-status.mjs (and config.html's own copy)
+      // for why this is a hand-copy rather than an import.
+      var WORKER_HEARTBEAT_KEY = 'workerHeartbeat'
+      var WORKER_HEARTBEAT_STALE_MS = 40 * 1000
+      function isHeartbeatFresh (heartbeat, nowMs, staleAfterMs) {
+        if (!heartbeat || typeof heartbeat !== 'object' || typeof heartbeat.at !== 'string') return false
+        var at = Date.parse(heartbeat.at)
+        if (isNaN(at)) return false
+        var age = nowMs - at
+        return age >= 0 && age <= staleAfterMs
+      }
 
       // This panel only reads. The locale mirror for the gate and the skills
       // mod is written by config.html alone; both panels doing it would race
@@ -670,14 +687,31 @@
         statusEl.textContent = t('live.agentsCount', { n: String(entries.length) })
       }
 
+      // Every number on this board (board entries, measurementsSummary) is
+      // written only by the worker -- if it has never run, both stay
+      // legitimately absent forever, and "No data yet" is honest but does
+      // not say why. This note names the real cause once the worker's own
+      // heartbeat (T1 in odd/tasks/panel-worker-wakeup.md) says nobody is
+      // running right now.
+      function renderWorkerNote (heartbeat) {
+        if (isHeartbeatFresh(heartbeat, Date.now(), WORKER_HEARTBEAT_STALE_MS)) {
+          noteEl.className = 'meta nota'
+          noteEl.textContent = ''
+          return
+        }
+        noteEl.className = 'meta nota stale'
+        noteEl.textContent = t('common.workerSilent')
+      }
+
       function reload (usuario) {
         return Promise.all([
           read('board', usuario),
-          read('measurementsSummary', usuario)
+          read('measurementsSummary', usuario),
+          read(WORKER_HEARTBEAT_KEY, false)
         ]).then(function (results) {
-          noteEl.textContent = ''
           render(results[0] || { entries: [] })
           renderStats(results[1])
+          renderWorkerNote(results[2])
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
           // Same rule as config.html: a raw fault message is written for
