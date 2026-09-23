@@ -45,7 +45,8 @@ import {
   interpretDestinationPolicy
 } from '../../src/core/decisions.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
-import { getBoard, getCatalog, getConfig, getPolicies, setBoard } from '../../src/core/store.ts'
+import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog } from '../../src/core/store.ts'
+import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
@@ -191,6 +192,78 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
   const policiesResult = await runSecretMirrorScript('policies-save', JSON.stringify(policies))
   if (!policiesResult.ok) {
     orca.log(`policies mirror failed: ${String(policiesResult.reason ?? 'unknown')} -- ${String(policiesResult.detail ?? '').slice(0, 160)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Catalog derivation -- the previous seed/catalog.json was generated from
+// one machine and named that person's own clients and paths, matching
+// nothing on anyone else's disk (see src/core/worktree_catalog.ts's module
+// comment). Orca already knows the installing developer's own worktrees, so
+// the catalog is derived from `orca worktree ps --json` instead of shipped.
+// This is a DIFFERENT subcommand from `orca worktree list --json`, used by
+// resolveWorktreeProjects above for an unrelated purpose (resolving a
+// worktreeId to project/branch for the board) -- not the same call, not
+// reusing that cache.
+// ---------------------------------------------------------------------------
+
+/** Runs `orca worktree ps --json` and turns the result into destinations.
+ *  Never throws: a derivation that cannot run leaves the catalog exactly as
+ *  it was, which is always a safe, working state -- same fail-open shape as
+ *  resolveWorktreeProjects's own `orca worktree list` call. */
+async function deriveCatalogFromOrca (orca) {
+  try {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+    const { stdout } = await execFileAsync('orca', ['worktree', 'ps', '--json'], { timeout: 5000 })
+    const worktrees = parseWorktreeList(JSON.parse(stdout))
+    return deriveDestinations(worktrees)
+  } catch (error) {
+    orca.log(`catalog derivation (orca worktree ps) failed: ${String(error?.message ?? error).slice(0, 160)}`)
+    return []
+  }
+}
+
+/** Bootstraps the catalog from Orca's own worktree list, but ONLY when it
+ *  is still empty -- destination ids key the developer's own per-destination
+ *  settings (thresholds, policy scoping), so a catalog they have already
+ *  edited, even down to one row, is never touched here. Never throws: this
+ *  is a nice-to-have bootstrap, not something that should ever block
+ *  activation. */
+async function deriveInitialCatalogIfEmpty (orca, storageHost) {
+  try {
+    const catalog = await getCatalog(storageHost)
+    if (catalog.destinations.length > 0) return
+    const derived = await deriveCatalogFromOrca(orca)
+    if (derived.length === 0) return
+    await setCatalog(storageHost, { destinations: derived })
+  } catch (error) {
+    orca.log(`initial catalog derivation failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+/** advisor.refreshCatalog -- adds destinations for worktrees Orca has seen
+ *  that are not yet in the catalog. Every id already present (and every
+ *  field on it: thresholds, consequenceCeiling, everything) is left
+ *  completely untouched, and nothing already in the catalog is ever
+ *  removed -- a worktree disappearing from Orca's list is not this
+ *  plugin's call to prune. Re-mirrors to catalog.json when it changes
+ *  anything, so the gate sees the addition without waiting for the panel's
+ *  own save button. */
+async function cmdRefreshCatalog (orca, storageHost) {
+  try {
+    const current = await getCatalog(storageHost)
+    const derived = await deriveCatalogFromOrca(orca)
+    const existingIds = new Set(current.destinations.map((d) => d.id))
+    const additions = derived.filter((d) => !existingIds.has(d.id))
+    if (additions.length > 0) {
+      await setCatalog(storageHost, { destinations: [...current.destinations, ...additions] })
+      await mirrorCatalogAndPolicies(orca, storageHost)
+    }
+    return { ok: true, added: additions.length }
+  } catch (error) {
+    return { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
 }
 
@@ -618,6 +691,34 @@ async function attendCatalogPolicyMirrorRequest (orca, storageHost, lastSeen) {
 }
 
 // ---------------------------------------------------------------------------
+// Catalog refresh -- same request/result shape as the secret/Claude-
+// integration/locale channels: the panel cannot call
+// orca.commands.register'd 'advisor.refreshCatalog' directly (the
+// sandboxed bridge only allows notifications.show/storage.get/
+// storage.set), so its "Refresh from Orca" button leaves a request here.
+// ---------------------------------------------------------------------------
+
+const CATALOG_REFRESH_REQUEST_KEY = 'catalogRefreshRequest'
+const CATALOG_REFRESH_RESULT_KEY = 'catalogRefreshResult'
+
+/** Attends one pending catalog-refresh request from the panel, if any. */
+async function attendCatalogRefreshRequest (orca, storageHost) {
+  const request = await storageHost.get(CATALOG_REFRESH_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(CATALOG_REFRESH_REQUEST_KEY).catch((error) =>
+    orca.log(`catalog refresh request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) return
+
+  const result = await cmdRefreshCatalog(orca, storageHost)
+  await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`catalog refresh result publish failed: ${err.message}`))
+}
+
+// ---------------------------------------------------------------------------
 // Board maintenance -- the only cross-worktree awareness this plugin has
 // that does not require spawning the `orca` CLI, since `agent.status.changed`
 // is the one global event and storage is shared across worktree instances.
@@ -932,6 +1033,7 @@ export default function activate (orca) {
   orca.commands.register('advisor.doctor', () => cmdDoctor(orca, storageHost, secretsHost))
   orca.commands.register('advisor.installClaude', () => installClaudeIntegration(orca))
   orca.commands.register('advisor.uninstallClaude', () => uninstallClaudeIntegration(orca))
+  orca.commands.register('advisor.refreshCatalog', () => cmdRefreshCatalog(orca, storageHost))
 
   // Secret AND Claude-integration request/result polling loop (see
   // attendSecretRequest / attendClaudeIntegrationRequest above). Polls fast
@@ -950,6 +1052,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
       .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
+      .then(() => attendCatalogRefreshRequest(orca, storageHost))
+      .catch((error) => orca.log(`catalog refresh request handling failed: ${error.message}`))
       .then(() => storageHost.get(PANEL_SEEN_KEY).catch(() => null))
       .then((seen) => {
         if (secretPollStopped) return
@@ -978,11 +1082,17 @@ export default function activate (orca) {
   secretsHost.get(SECRET_KEY_NAME)
     .then((value) => mirrorSecretToEnvFile(orca, typeof value === 'string' && value.trim().length > 0 ? value.trim() : null))
     .catch((error) => orca.log(`initial secret mirror failed: ${error.message}`))
-  // Same convergence guarantee as the key above: a worker restarted after
-  // the catalog/policies mirror files were lost or never written by an
-  // older version of this plugin catches up without the user having to
-  // touch the panel's save button again.
-  mirrorCatalogAndPolicies(orca, storageHost)
+  // Bootstraps the catalog from Orca's own worktrees when it is still
+  // empty (never otherwise -- see deriveInitialCatalogIfEmpty), chained
+  // before the mirror below so a freshly-derived catalog reaches
+  // catalog.json on this same activation. Same convergence guarantee as
+  // the key above for the mirror itself: a worker restarted after the
+  // catalog/policies mirror files were lost or never written by an older
+  // version of this plugin catches up without the user having to touch
+  // the panel's save button again.
+  deriveInitialCatalogIfEmpty(orca, storageHost)
+    .catch((error) => orca.log(`initial catalog derivation failed: ${error.message}`))
+    .then(() => mirrorCatalogAndPolicies(orca, storageHost))
     .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
   // "Al activarse, el worker debe dejar funcionando todo lo que hoy es
   // manual" (T8): every activation re-asserts the hook, the env var and the
