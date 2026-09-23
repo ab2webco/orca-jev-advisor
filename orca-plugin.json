@@ -4,13 +4,13 @@
   "publisher": "ab2web",
   "name": "Jev Advisor",
   "version": "0.1.0",
-  "description": "Capa de decision respaldada por Jev (TypeSafe) para juzgar acciones propuestas y mantener un tablero de estado entre worktrees de Orca.",
+  "description": "Jev (TypeSafe)-backed decision layer for judging proposed actions and keeping a status board across Orca worktrees.",
   "engines": {
     "orca": ">=1.4.0"
   },
   "pluginApi": 1,
   "main": "adapters/orca/main.mjs",
-  "_automationsNote": "Sin automations todavia. Cuando se agreguen (p. ej. una revision periodica del log o del tablero), van dentro de contributes.automations, siguiendo la forma vista en otros plugins de Orca (id, title, provider, trigger, prompt).",
+  "_automationsNote": "No automations yet. When added (e.g. a periodic log or board review), they go inside contributes.automations, following the shape seen in other Orca plugins (id, title, provider, trigger, prompt).",
   "contributes": {
     "panels": [
       {
@@ -31,23 +31,23 @@
     "commands": [
       {
         "id": "advisor.decide",
-        "title": "Advisor: Juzgar accion(es) propuestas"
+        "title": "Advisor: Judge proposed action(s)"
       },
       {
         "id": "advisor.board",
-        "title": "Advisor: Ver tablero entre worktrees"
+        "title": "Advisor: View cross-worktree board"
       },
       {
         "id": "advisor.doctor",
-        "title": "Advisor: Verificar configuracion"
+        "title": "Advisor: Check configuration"
       },
       {
         "id": "advisor.installClaude",
-        "title": "Advisor: Instalar el lado de Claude Code"
+        "title": "Advisor: Install the Claude Code side"
       },
       {
         "id": "advisor.uninstallClaude",
-        "title": "Advisor: Revertir el lado de Claude Code"
+        "title": "Advisor: Revert the Claude Code side"
       }
     ],
     "events": [
