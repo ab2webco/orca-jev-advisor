@@ -49,8 +49,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy } from '../../src/core/decisions.ts'
+import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { matchDestination } from '../../src/core/destination_match.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
@@ -61,7 +62,7 @@ import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
 import type { GateKey } from '../../src/core/i18n_gate.ts'
 import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
-import { buildGateDecisionRecord, serializeGateRecord } from '../../src/core/gate_measurement.ts'
+import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
@@ -87,6 +88,7 @@ const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
+const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // Written by adapters/orca/write-secret-mirror.mjs, refreshed on plugin
 // activation and on every config-panel save -- this hook has no channel
 // into Orca's own `storage`, so this file mirror is its only way to see
@@ -148,7 +150,7 @@ const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey
   { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell' },
 ]
 
-type HookInput = { readonly command: string; readonly cwd: string }
+type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null }
 
 function readHookInput(): HookInput | null {
   let raw = ''
@@ -170,7 +172,12 @@ function readHookInput(): HookInput | null {
   const command = (toolInput as Record<string, unknown>)['command']
   if (typeof command !== 'string' || command.trim().length === 0) return null
   const cwd = typeof record['cwd'] === 'string' ? record['cwd'] : process.cwd()
-  return { command, cwd }
+  // Carried so a later PostToolUse/PermissionDenied can be joined back to the
+  // question this process asked. Absent in a hand-made payload, which only
+  // means that one decision goes unlabelled.
+  const rawId = record['tool_use_id']
+  const toolUseId = typeof rawId === 'string' && rawId.length > 0 ? rawId : null
+  return { command, cwd, toolUseId }
 }
 
 /**
@@ -329,6 +336,49 @@ function projectName(cwd: string): string | null {
   }
 }
 
+/**
+ * Leaves the question behind, so the answer can be joined to it later.
+ *
+ * Only written when the gate actually stops something: a command that passed
+ * was never a question, and recording it would drown the few real decisions
+ * in hundreds of non-events. Carries no command -- the shape hash and a
+ * coarse family are enough to calibrate against and cannot be read back.
+ */
+function appendPendingApproval(
+  toolUseId: string | null,
+  cwd: string,
+  command: string,
+  shape: string | null,
+  destinationId: string | null,
+  axes: { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null },
+  ceiling: number,
+): void {
+  if (toolUseId === null) return
+  try {
+    mkdirSync(CACHE_DIR, { recursive: true })
+    appendFileSync(
+      APPROVALS_PATH,
+      serializeApprovalRecord(
+        buildPendingApprovalRecord({
+          toolUseId,
+          at: new Date().toISOString(),
+          project: projectName(cwd),
+          destinationId,
+          commandFamily: commandFamily(command),
+          shape,
+          reversible: axes.reversible,
+          external: axes.external,
+          consequence: axes.consequence,
+          ceiling,
+        }),
+      ),
+    )
+  } catch {
+    // Best effort, exactly like the measurement log: never a reason to delay
+    // or change a verdict.
+  }
+}
+
 /** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
 function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null): void {
   try {
@@ -374,8 +424,10 @@ function repoContext(cwd: string): string {
   return parts.join(', ')
 }
 
+type GateAxes = { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null; readonly ceiling: number } | null
+
 type JevOutcome =
-  | { readonly kind: 'verdict'; readonly decision: Decision; readonly reason: string }
+  | { readonly kind: 'verdict'; readonly decision: Decision; readonly reason: string; readonly axes: GateAxes; readonly destinationId: string | null }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
 
@@ -413,7 +465,7 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       noDestinationMatched: matched === null,
     })
     const reason = gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
-    return { kind: 'verdict', decision: gate.verdict, reason }
+    return { kind: 'verdict', decision: gate.verdict, reason, axes: gate.axes, destinationId: matched?.id ?? null }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
       return { kind: 'auth-rejected', status: error.status }
@@ -425,12 +477,16 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
 async function main(): Promise<void> {
   const input = readHookInput()
   if (input === null) passThrough()
-  const { command, cwd } = input as HookInput
+  const { command, cwd, toolUseId } = input as HookInput
 
   if (isObviouslySafeCommand(command)) passThrough()
   for (const { pattern, why } of NEVER_SILENTLY) {
     if (pattern.test(command)) {
       appendGateRecord(cwd, command, 'local-rule', 'ask', null)
+      // Recorded like any other stop, with no scores: a local rule needs no
+      // model and no threshold, so there is nothing here to calibrate -- but
+      // whether the person accepted the interruption is still worth knowing.
+      appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
       emit('ask', t('localRule', { why: t(why) }))
       return
     }
@@ -450,6 +506,11 @@ async function main(): Promise<void> {
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
     appendGateRecord(cwd, command, 'cache', hit.decision, null)
+    if (hit.decision !== 'allow') {
+      // A cached stop is still a question the person has to answer, so it is
+      // recorded -- without scores, which the cache does not keep.
+      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
+    }
     emit(hit.decision, t('cached', { reason: hit.reason }))
     return
   }
@@ -479,6 +540,16 @@ async function main(): Promise<void> {
     writeCache(cache)
   }
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs)
+  // Only a stop becomes a question worth an answer. A pass was never asked
+  // about, so recording it would bury the handful of real decisions under
+  // hundreds of non-events.
+  if (resolved.decision !== 'allow') {
+    appendPendingApproval(
+      toolUseId, cwd, command, key, resolved.destinationId,
+      { reversible: resolved.axes?.reversible ?? null, external: resolved.axes?.external ?? null, consequence: resolved.axes?.consequence ?? null },
+      resolved.axes?.ceiling ?? GATE_CONSEQUENCE_CEILING,
+    )
+  }
   emit(resolved.decision, resolved.reason)
 }
 

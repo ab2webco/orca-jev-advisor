@@ -374,7 +374,7 @@ const GATE_EXTERNAL_GATE = 0.5;
  * force push, a recursive delete from / or $HOME, a dropped table and
  * `curl | bash` with no network and no threshold.
  */
-const GATE_CONSEQUENCE_CEILING = 1.78;
+export const GATE_CONSEQUENCE_CEILING = 1.78;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
@@ -554,6 +554,16 @@ export type GateActionReason = LocalizedReason<GateKey> | LocalizedReason<Destin
 export interface GateActionResult {
   readonly verdict: GateVerdict;
   readonly reasons: readonly GateActionReason[];
+  /**
+   * The raw axis scores behind the verdict, and the ceiling it was judged
+   * against. Null when a policy settled it and the risk stage never ran.
+   *
+   * Carried out so a stop can be recorded next to the answer the person gives
+   * it. Without these numbers an approval says only "they let it through";
+   * with them it says where the line should have been, which is the only way
+   * a threshold stops being somebody's guess.
+   */
+  readonly axes: { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null; readonly ceiling: number } | null;
 }
 
 export interface DecideGateActionInput {
@@ -604,7 +614,9 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
     // the commands a policy would permit are cheap ones the risk rule already
     // allows on its own.
     if (policyDecision !== null && policyDecision.outcome !== "act") {
-      return { verdict: "ask", reasons: policyDecision.rationale };
+      // A policy settled it, so the risk stage never ran and there are no
+      // scores to record against this stop.
+      return { verdict: "ask", reasons: policyDecision.rationale, axes: null };
     }
   }
 
@@ -613,7 +625,16 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
   if (input.noDestinationMatched === true) {
     reasons.push({ key: "reason.noDestinationMatched" });
   }
-  return { verdict: riskDecision.verdict, reasons };
+  return {
+    verdict: riskDecision.verdict,
+    reasons,
+    axes: {
+      reversible: riskDecision.reversible,
+      external: riskDecision.external,
+      consequence: riskDecision.consequence,
+      ceiling: input.consequenceCeiling ?? GATE_CONSEQUENCE_CEILING,
+    },
+  };
 }
 
 // ===========================================================================
