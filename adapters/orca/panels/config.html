@@ -349,6 +349,7 @@
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
           'common.timeout': 'Tiempo de espera agotado.',
+          'common.workerSilent': 'El plugin no respondió. Su proceso no está corriendo: revisa que el plugin esté activado en Orca y que hayas aprobado sus permisos (necesita lanzar procesos auxiliares). Después vuelve a abrir este panel.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
           'common.couldNotSend': 'No se pudo enviar el pedido.',
           'common.hostRejectedWrite': 'El host rechazó la escritura.',
@@ -449,6 +450,7 @@
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
           'common.timeout': 'Timed out.',
+          'common.workerSilent': "The plugin did not answer. Its worker is not running: check that the plugin is enabled in Orca and that you approved its permissions (it needs to start helper processes). Then reopen this panel.",
           'common.hostRejectedRequest': 'The host rejected the request.',
           'common.couldNotSend': 'Could not send the request.',
           'common.hostRejectedWrite': 'The host rejected the write.',
@@ -647,7 +649,7 @@
             if (result.ok) return result
             throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForSecretResult(requestId, deadline) })
         })
@@ -680,7 +682,7 @@
             if (result.ok) return result
             throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForClaudeIntegrationResult(requestId, deadline) })
         })
@@ -716,7 +718,7 @@
             if (result.ok) return result
             throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForLocaleResult(requestId, deadline) })
         })
@@ -747,7 +749,7 @@
             if (result.ok) return result
             throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForCatalogRefreshResult(requestId, deadline) })
         })
@@ -1241,10 +1243,26 @@
       // Paints exactly what the worker published in
       // CLAUDE_INTEGRATION_STATUS_KEY -- never the key, and never more detail
       // than the panel needs for the user to know what's set up and where.
+      var integrationCheckTimer = null
       function renderClaudeIntegrationStatus (status) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
-        if (status === null) { claudeIntegrationStatusEl.appendChild(li(t('integration.checking'))); return }
+        if (status === null) {
+          // "Checking…" is honest for a second and a lie after twenty: on a
+          // fresh install the worker may never publish anything, and a
+          // spinner that never resolves tells nobody what to do about it.
+          claudeIntegrationStatusEl.appendChild(li(t('integration.checking')))
+          if (integrationCheckTimer === null) {
+            integrationCheckTimer = setTimeout(function () {
+              if (lastClaudeIntegrationStatus === null) {
+                claudeIntegrationStatusEl.innerHTML = ''
+                claudeIntegrationStatusEl.appendChild(li(t('common.workerSilent')))
+              }
+            }, 20000)
+          }
+          return
+        }
+        if (integrationCheckTimer !== null) { clearTimeout(integrationCheckTimer); integrationCheckTimer = null }
         if (!status || !status.ok) {
           claudeIntegrationStatusEl.appendChild(li(t('integration.statusUnavailable')))
           return
