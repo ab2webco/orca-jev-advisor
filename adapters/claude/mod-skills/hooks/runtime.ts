@@ -69,8 +69,20 @@ export function computeHomePaths(env: ModPathEnv): ModHomePaths | null {
     const cacheBase = env.localAppData && env.localAppData.length > 0 ? env.localAppData : `${home}/AppData/Local`
     return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor/Cache` }
   }
-  const configBase = env.xdgConfigHome && env.xdgConfigHome.length > 0 ? env.xdgConfigHome : `${home}/.config`
-  const cacheBase = env.xdgCacheHome && env.xdgCacheHome.length > 0 ? env.xdgCacheHome : `${home}/.cache`
+  // XDG on Linux only, matching src/core/paths.ts. The two must agree or the
+  // gate and this mod look for the API key in different places and one of
+  // them silently finds nothing -- which is exactly what happened on a macOS
+  // machine with XDG_CONFIG_HOME set, because this function honoured it and
+  // paths.ts deliberately does not.
+  //
+  // This sandbox exposes no platform noun, so the home directory's own shape
+  // is the signal: macOS puts users under /Users, Linux under /home. It is a
+  // convention rather than a guarantee, and it errs toward macOS -- an
+  // unrecognised layout ignores XDG, which is the behaviour that matches
+  // paths.ts everywhere except Linux.
+  const isLinux = home.startsWith('/home/') || home === '/root'
+  const configBase = isLinux && env.xdgConfigHome && env.xdgConfigHome.length > 0 ? env.xdgConfigHome : `${home}/.config`
+  const cacheBase = isLinux && env.xdgCacheHome && env.xdgCacheHome.length > 0 ? env.xdgCacheHome : `${home}/.cache`
   return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor` }
 }
 

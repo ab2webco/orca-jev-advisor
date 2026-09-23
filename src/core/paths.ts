@@ -89,6 +89,35 @@ export function resolveConfigDir(platform: SupportedPlatform, paths: HomePaths):
 }
 
 /**
+ * Every directory a reader should look in, best first.
+ *
+ * Honouring `XDG_CONFIG_HOME` on Linux was the right fix and it silently
+ * orphaned anyone who already had this plugin set up: their API key, locale
+ * and install state sat in `~/.config/orca-supervisor`, the code started
+ * looking in `$XDG_CONFIG_HOME/orca-supervisor`, and nothing said so -- the
+ * gate would simply behave as though no key had ever been entered.
+ *
+ * Rather than migrate files behind the user's back, readers try each
+ * candidate in order and writers use the first. A legacy directory is left
+ * exactly where it is, so downgrading or unsetting the variable finds it
+ * again. On every other platform, and on Linux without the variable, there
+ * is one candidate and this changes nothing.
+ */
+export function resolveConfigDirCandidates(platform: SupportedPlatform, paths: HomePaths): readonly string[] {
+  const primary = resolveConfigDir(platform, paths);
+  if (platform !== "linux") return [primary];
+  const legacy = joinPath(platform, paths.home, ".config", "orca-supervisor");
+  return primary === legacy ? [primary] : [primary, legacy];
+}
+
+export function resolveCacheDirCandidates(platform: SupportedPlatform, paths: HomePaths): readonly string[] {
+  const primary = resolveCacheDir(platform, paths);
+  if (platform !== "linux") return [primary];
+  const legacy = joinPath(platform, paths.home, ".cache", "orca-supervisor");
+  return primary === legacy ? [primary] : [primary, legacy];
+}
+
+/**
  * Where this plugin's own cache/log files live: `~/.cache/orca-supervisor`
  * on macOS, `$XDG_CACHE_HOME/orca-supervisor` (falling back to
  * `~/.cache/orca-supervisor`) on Linux, `%LOCALAPPDATA%/orca-supervisor/Cache`
