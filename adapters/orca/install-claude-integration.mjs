@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * install-claude-integration.mjs — sidecar for orca-jev-advisor's Claude
- * Code side: the PreToolUse hook in ~/.claude/settings.json, the
+ * Code side: the gate and outcome hooks in ~/.claude/settings.json, the
  * CLAUDE_CODE_ENABLE_FUNCTION_HOOKS env var, and the mod-skills symlink
  * under ~/.claude/skills/. Runs as a clean child of the plugin worker
  * (main.mjs's `sidecarEnv`), for the same reason write-secret-mirror.mjs
@@ -10,27 +10,38 @@
  *
  * Usage: node install-claude-integration.mjs <install|uninstall|status> <pluginRoot>
  *
+ * Three hook entries are managed, one per Claude Code event, each in that
+ * event's own `Bash`-matcher group:
+ *
+ *   PreToolUse        adapters/claude/gate-bash.ts     asks Jev before running
+ *   PostToolUse       adapters/claude/gate-outcome.ts  the command ran -> approved
+ *   PermissionDenied  adapters/claude/gate-outcome.ts  it did not run -> rejected
+ *
  * install     Idempotent. Adds our entry to the `Bash`-matcher group of
- *             hooks.PreToolUse (creating the group if none exists),
- *             merging into whatever hooks other owners already put there
- *             -- never replacing the group, never touching another
- *             entry. Sets CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 in `env`,
- *             remembering (once, on the FIRST install only) whether that
- *             key already existed and what it held, so uninstall can put
- *             it back exactly. Symlinks <pluginRoot>/adapters/claude/
+ *             each of the three event arrays above (creating the array
+ *             and the group when none exists), merging into whatever
+ *             hooks other owners already put there -- never replacing a
+ *             group, never touching another entry. Sets
+ *             CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 in `env`, remembering
+ *             (once, on the FIRST install only) whether that key already
+ *             existed and what it held, so uninstall can put it back
+ *             exactly -- the same "captured once, never recomputed" rule
+ *             applies per event to whether its array and its `Bash` group
+ *             already existed. Symlinks <pluginRoot>/adapters/claude/
  *             mod-skills to ~/.claude/skills/orca-jev-mod-skills, which
  *             Claude Code auto-loads from (the "skills-dir" mechanism).
  *             Every settings.json write is atomic (temp file + rename)
  *             and preceded, on the very first install, by a full backup.
- * uninstall   Surgical: removes only the one hook entry our own
- *             `statusMessage` marks (dropping the `Bash` group entirely
- *             if that was its only entry), restores the env var to
+ * uninstall   Surgical: removes only the hook entry each event's own
+ *             `statusMessage` marks (dropping that event's `Bash` group
+ *             entirely if that was its only entry, and the event's own
+ *             array if that was its only group), restores the env var to
  *             whatever it held before we ever touched it (or removes it,
  *             if it was never there), and removes the mod-skills symlink
  *             -- but only if it still points at OUR pluginRoot. Every
  *             other hook, and anything the user changed in between, is
  *             left exactly as found.
- * status      Read-only: reports whether each of the three is in place
+ * status      Read-only: reports whether each of the four is in place
  *             right now, for the config panel and advisor.doctor.
  *
  * Always prints exactly one JSON line to stdout, nothing else. Never
@@ -125,6 +136,31 @@ const ENV_VAR_VALUE = '1'
 const HOOK_STATUS_MESSAGE = 'orca-jev-advisor: asking Jev before running this command'
 const HOOK_TIMEOUT_SECONDS = 6
 
+// The outcome hook (gate-outcome.ts) only appends one line to a log after
+// the command already ran or was denied -- it decides nothing and must
+// never be the reason a command's result is delayed, so its timeout is far
+// shorter than the gate's own (which has to allow time for a real Jev call).
+const OUTCOME_HOOK_STATUS_MESSAGE = 'orca-jev-advisor: recording what you decided'
+const OUTCOME_HOOK_TIMEOUT_SECONDS = 2
+
+/** One `Bash`-matcher hook entry per Claude Code event this installer
+ *  manages. `marker` is the `statusMessage` `findOwnHookIndex` looks for --
+ *  distinct per hook, so the gate and the outcome recorder are never
+ *  confused with each other or with a third party's hook. */
+function hookSpecs (pluginRoot) {
+  const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
+  const outcomePath = join(pluginRoot, 'adapters', 'claude', 'gate-outcome.ts')
+  const node = resolveNodeCommand()
+  return {
+    node,
+    specs: [
+      { event: 'PreToolUse', marker: HOOK_STATUS_MESSAGE, path: gatePath, entry: gateHookEntry(node.command, gatePath) },
+      { event: 'PostToolUse', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      { event: 'PermissionDenied', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) }
+    ]
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Small guards -- settings.json is a host-boundary value (unknown), and it
 // is not ours: only the shape we read is checked, everything else survives
@@ -153,6 +189,14 @@ function isRecord (value) {
  */
 function gateHookEntry (nodeCommand, gatePath) {
   return { type: 'command', command: nodeCommand, args: [gatePath], timeout: HOOK_TIMEOUT_SECONDS, statusMessage: HOOK_STATUS_MESSAGE }
+}
+
+/** Same shape as {@link gateHookEntry}, for the after-the-fact recorder
+ *  (adapters/claude/gate-outcome.ts) registered on PostToolUse and
+ *  PermissionDenied. Its own short timeout is the point: this hook never
+ *  decides anything, so it must never be why a command's result is late. */
+function outcomeHookEntry (nodeCommand, outcomePath) {
+  return { type: 'command', command: nodeCommand, args: [outcomePath], timeout: OUTCOME_HOOK_TIMEOUT_SECONDS, statusMessage: OUTCOME_HOOK_STATUS_MESSAGE }
 }
 
 /**
@@ -251,63 +295,103 @@ async function writeInstallState (state) {
 
 // ---------------------------------------------------------------------------
 // Hook merge -- idempotent by construction: re-running install finds our
-// own marked entry and replaces it in place rather than adding a second one.
+// own marked entry (per event) and replaces it in place rather than adding
+// a second one.
 //
 // Uninstall's goal is byte-identical restoration when nothing else changed
 // in between, not merely "our entry is gone": a container we CREATED
-// (`hooks`, `hooks.PreToolUse`, the `Bash` group) is removed once emptying
-// it leaves nothing else in it, but a container that already existed before
-// we ever touched it -- even one that happens to end up empty -- is left in
-// place exactly as it was, empty or not. That distinction is only knowable
-// once, at the moment of the very first install (a second install would see
-// the shape OUR OWN first install already left), so it is captured into
-// `state` then and reused on every run after.
+// (`hooks`, one event's array, that event's `Bash` group) is removed once
+// emptying it leaves nothing else in it, but a container that already
+// existed before we ever touched it -- even one that happens to end up
+// empty -- is left in place exactly as it was, empty or not. That
+// distinction is only knowable once, at the moment of the very first
+// install (a second install would see the shape OUR OWN first install
+// already left), so it is captured into `state` then and reused on every
+// run after.
+//
+// `hooks` itself is one container shared by all three events, so its own
+// "did it exist before" flag stays a single per-target fact
+// (`hooksObjectExistedBefore`). Each event's array and each event's own
+// `Bash` group are separate containers, tracked per event under
+// `state.events[event]` -- one event having pre-existed the day we started
+// must never be mistaken for another one having pre-existed too.
 // ---------------------------------------------------------------------------
 
-function findOwnHookIndex (hooks) {
-  return hooks.findIndex((h) => isRecord(h) && h.statusMessage === HOOK_STATUS_MESSAGE)
+function findOwnHookIndex (hooks, marker) {
+  return hooks.findIndex((h) => isRecord(h) && h.statusMessage === marker)
 }
 
-function installHookEntry (settings, gatePath, state) {
+/** A pre-change install-state record kept its PreToolUse bookkeeping as two
+ *  flat fields (`preToolUseArrayExistedBefore`, `bashGroupExistedBefore`),
+ *  from back when this installer only ever touched one event. Folded into
+ *  `state.events.PreToolUse` here, once, so an upgrade never re-derives
+ *  "did it exist before" from settings.json as it stands NOW -- by then it
+ *  already carries our own first install's shape, which is exactly the
+ *  mistake this bookkeeping exists to avoid. A record that already has
+ *  `events` (this version, or a fresh one) is left untouched. */
+function migrateLegacyPreToolUseFlags (state) {
+  if (state.events !== undefined) return
+  if (state.preToolUseArrayExistedBefore === undefined && state.bashGroupExistedBefore === undefined) return
+  state.events = {
+    PreToolUse: {
+      arrayExistedBefore: state.preToolUseArrayExistedBefore,
+      bashGroupExistedBefore: state.bashGroupExistedBefore
+    }
+  }
+  delete state.preToolUseArrayExistedBefore
+  delete state.bashGroupExistedBefore
+}
+
+/** The per-event bookkeeping slot for `event`, creating it (empty) the
+ *  first time this event is touched -- which is exactly the moment its
+ *  `arrayExistedBefore`/`bashGroupExistedBefore` flags get their one real
+ *  capture, below. */
+function eventState (state, event) {
+  if (!isRecord(state.events)) state.events = {}
+  if (!isRecord(state.events[event])) state.events[event] = {}
+  return state.events[event]
+}
+
+function installHookEntry (settings, event, marker, entry, state) {
   if (state.hooksObjectExistedBefore === undefined) state.hooksObjectExistedBefore = isRecord(settings.hooks)
   if (!isRecord(settings.hooks)) settings.hooks = {}
 
-  if (state.preToolUseArrayExistedBefore === undefined) state.preToolUseArrayExistedBefore = Array.isArray(settings.hooks.PreToolUse)
-  if (!Array.isArray(settings.hooks.PreToolUse)) settings.hooks.PreToolUse = []
+  const es = eventState(state, event)
+  if (es.arrayExistedBefore === undefined) es.arrayExistedBefore = Array.isArray(settings.hooks[event])
+  if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = []
 
-  let group = settings.hooks.PreToolUse.find((g) => isRecord(g) && g.matcher === 'Bash')
-  if (state.bashGroupExistedBefore === undefined) state.bashGroupExistedBefore = group !== undefined
+  let group = settings.hooks[event].find((g) => isRecord(g) && g.matcher === 'Bash')
+  if (es.bashGroupExistedBefore === undefined) es.bashGroupExistedBefore = group !== undefined
   if (!group) {
     group = { matcher: 'Bash', hooks: [] }
-    settings.hooks.PreToolUse.push(group)
+    settings.hooks[event].push(group)
   }
   if (!Array.isArray(group.hooks)) group.hooks = []
 
-  const node = resolveNodeCommand()
-  const entry = gateHookEntry(node.command, gatePath)
-  const existingIndex = findOwnHookIndex(group.hooks)
+  const existingIndex = findOwnHookIndex(group.hooks, marker)
   const changed = existingIndex === -1 || JSON.stringify(group.hooks[existingIndex]) !== JSON.stringify(entry)
   if (existingIndex === -1) group.hooks.push(entry)
   else group.hooks[existingIndex] = entry
-  return { changed, nodeVerified: node.verified }
+  return changed
 }
 
-/** Removes only our own entry, then unwinds exactly the containers install
- *  created (never one that pre-existed, however empty it now is) -- see the
- *  note above. */
-function uninstallHookEntry (settings, state) {
-  if (!isRecord(settings.hooks) || !Array.isArray(settings.hooks.PreToolUse)) return false
-  const preToolUse = settings.hooks.PreToolUse
-  const groupIndex = preToolUse.findIndex((g) => isRecord(g) && g.matcher === 'Bash')
+/** Removes only our own entry for `event`, then unwinds exactly the
+ *  containers install created for that event (never one that pre-existed,
+ *  however empty it now is) -- see the note above. */
+function uninstallHookEntry (settings, event, marker, state) {
+  if (!isRecord(settings.hooks) || !Array.isArray(settings.hooks[event])) return false
+  const eventHooks = settings.hooks[event]
+  const groupIndex = eventHooks.findIndex((g) => isRecord(g) && g.matcher === 'Bash')
   if (groupIndex === -1) return false
-  const group = preToolUse[groupIndex]
+  const group = eventHooks[groupIndex]
   if (!Array.isArray(group.hooks)) return false
-  const hookIndex = findOwnHookIndex(group.hooks)
+  const hookIndex = findOwnHookIndex(group.hooks, marker)
   if (hookIndex === -1) return false
 
+  const es = eventState(state, event)
   group.hooks.splice(hookIndex, 1)
-  if (group.hooks.length === 0 && !state.bashGroupExistedBefore) preToolUse.splice(groupIndex, 1)
-  if (preToolUse.length === 0 && !state.preToolUseArrayExistedBefore) delete settings.hooks.PreToolUse
+  if (group.hooks.length === 0 && !es.bashGroupExistedBefore) eventHooks.splice(groupIndex, 1)
+  if (eventHooks.length === 0 && !es.arrayExistedBefore) delete settings.hooks[event]
   if (Object.keys(settings.hooks).length === 0 && !state.hooksObjectExistedBefore) delete settings.hooks
   return true
 }
@@ -407,16 +491,17 @@ function modLinkPathFor (target) {
 }
 
 async function install (pluginRoot) {
-  const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
+  const { node, specs } = hookSpecs(pluginRoot)
   const discovery = await discoverTargets()
   const stored = (await readInstallState()) ?? {}
   const states = targetStates(stored)
 
   const perTarget = []
-  let nodeVerified = true
+  let nodeVerified = node.verified
   for (const target of discovery.targets) {
     const settingsPath = settingsPathFor(PLATFORM, target)
     const state = isRecord(states[target.id]) ? states[target.id] : {}
+    migrateLegacyPreToolUseFlags(state)
     try {
       const rawBefore = await readFile(settingsPath, 'utf8').catch((error) => {
         if (error?.code === 'ENOENT') return '{}\n'
@@ -425,11 +510,12 @@ async function install (pluginRoot) {
       await backupSettingsOnce(backupPathFor(target), rawBefore)
 
       const settings = await readSettings(settingsPath)
-      const hook = installHookEntry(settings, gatePath, state)
+      const hookChanged = installHookEntry(settings, specs[0].event, specs[0].marker, specs[0].entry, state)
+      const postChanged = installHookEntry(settings, specs[1].event, specs[1].marker, specs[1].entry, state)
+      const deniedChanged = installHookEntry(settings, specs[2].event, specs[2].marker, specs[2].entry, state)
       const envChanged = installEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
       states[target.id] = state
-      if (!hook.nodeVerified) nodeVerified = false
 
       const modResult = await installModLink(pluginRoot, modLinkPathFor(target))
       perTarget.push({
@@ -437,7 +523,7 @@ async function install (pluginRoot) {
         label: target.label,
         orcaManaged: target.orcaManaged,
         ok: true,
-        changes: { hook: hook.changed, env: envChanged, modLink: modResult.changed },
+        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged, env: envChanged, modLink: modResult.changed },
         modLinkWarning: modResult.error ?? null
       })
     } catch (error) {
@@ -446,7 +532,7 @@ async function install (pluginRoot) {
       perTarget.push({ id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: false, detail: String(error?.message ?? error).slice(0, 300) })
     }
   }
-  await writeInstallState({ version: 2, targets: states, installedAt: stored.installedAt ?? new Date().toISOString() })
+  await writeInstallState({ version: 3, targets: states, installedAt: stored.installedAt ?? new Date().toISOString() })
 
   const failed = perTarget.filter((t) => !t.ok)
   const orcaTargets = perTarget.filter((t) => t.orcaManaged && t.ok).length
@@ -460,6 +546,7 @@ async function install (pluginRoot) {
     orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
     changes: {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
+      outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
       modLink: perTarget.some((t) => t.ok && t.changes.modLink)
     },
@@ -469,7 +556,16 @@ async function install (pluginRoot) {
   }
 }
 
+/** The safe fallback per-event bookkeeping used when a target has no
+ *  install-state record at all: every "existed before" flag defaults to
+ *  true, so an absent record only ever under-cleans (see the note above
+ *  `uninstall`'s own state fallback). */
+function defaultEventState () {
+  return { arrayExistedBefore: true, bashGroupExistedBefore: true }
+}
+
 async function uninstall (pluginRoot) {
+  const { specs } = hookSpecs(pluginRoot)
   const discovery = await discoverTargets()
   const stored = (await readInstallState()) ?? {}
   const states = targetStates(stored)
@@ -491,18 +587,22 @@ async function uninstall (pluginRoot) {
     // record only ever under-cleans.
     const state = isRecord(states[target.id]) ? states[target.id] : {
       hadEnvVarBefore: false, priorEnvValue: null, envObjectExistedBefore: true,
-      hooksObjectExistedBefore: true, preToolUseArrayExistedBefore: true, bashGroupExistedBefore: true
+      hooksObjectExistedBefore: true,
+      events: { PreToolUse: defaultEventState(), PostToolUse: defaultEventState(), PermissionDenied: defaultEventState() }
     }
+    migrateLegacyPreToolUseFlags(state)
     try {
       const settings = await readSettings(settingsPath)
-      const hookChanged = uninstallHookEntry(settings, state)
+      const hookChanged = uninstallHookEntry(settings, specs[0].event, specs[0].marker, state)
+      const postChanged = uninstallHookEntry(settings, specs[1].event, specs[1].marker, state)
+      const deniedChanged = uninstallHookEntry(settings, specs[2].event, specs[2].marker, state)
       const envChanged = uninstallEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
       const modResult = await uninstallModLink(pluginRoot, modLinkPathFor(target))
       await rm(backupPathFor(target), { force: true })
       perTarget.push({
         id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: true,
-        changes: { hook: hookChanged, env: envChanged, modLink: modResult.changed },
+        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged, env: envChanged, modLink: modResult.changed },
         modLinkWarning: modResult.skipped ? 'mod-skills link did not point at this plugin; left untouched' : null
       })
     } catch (error) {
@@ -516,6 +616,7 @@ async function uninstall (pluginRoot) {
     targets: perTarget,
     changes: {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
+      outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
       modLink: perTarget.some((t) => t.ok && t.changes.modLink)
     },
@@ -524,8 +625,21 @@ async function uninstall (pluginRoot) {
   }
 }
 
+/** Read-only lookup of `event`'s own `Bash`-matcher group, or undefined when
+ *  the event has no hooks array, or no such group, at all. */
+function findBashGroup (settings, event) {
+  return isRecord(settings.hooks) && Array.isArray(settings.hooks[event])
+    ? settings.hooks[event].find((g) => isRecord(g) && g.matcher === 'Bash')
+    : undefined
+}
+
+function findMarkedHook (group, marker) {
+  return group && Array.isArray(group.hooks) ? group.hooks.find((h) => isRecord(h) && h.statusMessage === marker) : undefined
+}
+
 async function status (pluginRoot) {
-  const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
+  const { specs } = hookSpecs(pluginRoot)
+  const [gateSpec, postSpec, deniedSpec] = specs
   const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
   const discovery = await discoverTargets()
 
@@ -539,10 +653,9 @@ async function status (pluginRoot) {
     } catch (error) {
       readError = String(error?.message ?? error).slice(0, 200)
     }
-    const group = isRecord(settings.hooks) && Array.isArray(settings.hooks.PreToolUse)
-      ? settings.hooks.PreToolUse.find((g) => isRecord(g) && g.matcher === 'Bash')
-      : undefined
-    const ownHook = group && Array.isArray(group.hooks) ? group.hooks.find((h) => isRecord(h) && h.statusMessage === HOOK_STATUS_MESSAGE) : undefined
+    const ownGateHook = findMarkedHook(findBashGroup(settings, gateSpec.event), gateSpec.marker)
+    const ownPostHook = findMarkedHook(findBashGroup(settings, postSpec.event), postSpec.marker)
+    const ownDeniedHook = findMarkedHook(findBashGroup(settings, deniedSpec.event), deniedSpec.marker)
     const modLink = await currentModLinkTarget(modLinkPathFor(target)).catch(() => ({ isSymlink: false, target: null }))
     perTarget.push({
       id: target.id,
@@ -550,7 +663,12 @@ async function status (pluginRoot) {
       orcaManaged: target.orcaManaged,
       settingsPath,
       readError,
-      hook: { installed: ownHook !== undefined, pathMatches: ownHook !== undefined && Array.isArray(ownHook.args) && ownHook.args.includes(gatePath) },
+      hook: { installed: ownGateHook !== undefined, pathMatches: ownGateHook !== undefined && Array.isArray(ownGateHook.args) && ownGateHook.args.includes(gateSpec.path) },
+      outcomeHook: {
+        installed: ownPostHook !== undefined && ownDeniedHook !== undefined,
+        pathMatches: ownPostHook !== undefined && Array.isArray(ownPostHook.args) && ownPostHook.args.includes(postSpec.path) &&
+          ownDeniedHook !== undefined && Array.isArray(ownDeniedHook.args) && ownDeniedHook.args.includes(deniedSpec.path)
+      },
       env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
       modLink: { installed: modLink.isSymlink && modLink.target === modSource }
     })
@@ -568,6 +686,13 @@ async function status (pluginRoot) {
       installedCount: perTarget.filter((t) => t.hook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.hook.installed),
+      orcaPaneCount: orcaTargets.length
+    },
+    outcomeHook: {
+      installed: perTarget.every((t) => t.outcomeHook.installed),
+      installedCount: perTarget.filter((t) => t.outcomeHook.installed).length,
+      totalCount: perTarget.length,
+      orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.outcomeHook.installed),
       orcaPaneCount: orcaTargets.length
     },
     env: { installed: perTarget.every((t) => t.env.installed), name: ENV_VAR_NAME },
