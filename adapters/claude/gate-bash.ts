@@ -46,13 +46,15 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { GATE_CONSEQUENCE_CEILING, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy } from '../../src/core/decisions.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
+import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
+import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
 import { matchDestination } from '../../src/core/destination_match.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
@@ -89,6 +91,7 @@ const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
+const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // Written by adapters/orca/write-secret-mirror.mjs, refreshed on plugin
 // activation and on every config-panel save -- this hook has no channel
 // into Orca's own `storage`, so this file mirror is its only way to see
@@ -474,10 +477,68 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
   }
 }
 
+/**
+ * True when Orca has this plugin switched off.
+ *
+ * The gate is a Claude Code hook, so nothing about it stopped when the plugin
+ * was disabled in Orca: it kept judging every command, and kept interrupting,
+ * with the plugin visibly off. It consults Orca's own `disabledPlugins` now.
+ *
+ * That file holds the whole profile and runs to megabytes, so parsing it on
+ * every command would cost more than the judgement does. The answer is cached
+ * against the file's size and mtime -- a stat, measured at a fifth of a
+ * millisecond -- and only re-read when Orca has actually written to it.
+ *
+ * Every failure answers false and leaves the gate running. A plugin that
+ * silently stops protecting because a file moved is worse than one that keeps
+ * asking after being switched off: the second at least announces itself to
+ * the person it annoys.
+ */
+function pluginDisabledInOrca(): boolean {
+  try {
+    const userData = resolveOrcaUserDataDir(PLATFORM, {
+      home: HOME_PATHS.home,
+      appDataDir: process.env.APPDATA,
+      xdgConfigHome: process.env.XDG_CONFIG_HOME,
+      orcaUserDataPath: process.env[ORCA_USER_DATA_ENV],
+    })
+    const profileId = activeProfileId(JSON.parse(readFileSync(join(userData.path, 'orca-profile-index.json'), 'utf8')))
+    if (profileId === null) return false
+    const dataPath = profileDataPath(PLATFORM, userData.path, profileId)
+    const stat = statSync(dataPath)
+    const stamp = `${stat.size}:${stat.mtimeMs}`
+
+    try {
+      const cached: unknown = JSON.parse(readFileSync(ENABLEMENT_CACHE_PATH, 'utf8'))
+      if (typeof cached === 'object' && cached !== null) {
+        const record = cached as Record<string, unknown>
+        if (record['stamp'] === stamp && typeof record['disabled'] === 'boolean') return record['disabled']
+      }
+    } catch {
+      // No usable cache yet; fall through and read the file once.
+    }
+
+    const disabled = isPluginDisabled(JSON.parse(readFileSync(dataPath, 'utf8')))
+    try {
+      mkdirSync(CACHE_DIR, { recursive: true })
+      writeFileSync(ENABLEMENT_CACHE_PATH, JSON.stringify({ stamp, disabled }))
+    } catch {
+      // A cache that cannot be written only costs the next command a re-read.
+    }
+    return disabled
+  } catch {
+    return false
+  }
+}
+
 async function main(): Promise<void> {
   const input = readHookInput()
   if (input === null) passThrough()
   const { command, cwd, toolUseId } = input as HookInput
+
+  // Before anything else, and before any work: if Orca has the plugin
+  // switched off, this hook has no business judging anything.
+  if (pluginDisabledInOrca()) passThrough()
 
   if (isObviouslySafeCommand(command)) passThrough()
   for (const { pattern, why } of NEVER_SILENTLY) {
