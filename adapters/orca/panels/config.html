@@ -359,7 +359,8 @@
           'error.noJson': 'El proceso auxiliar no devolvió una respuesta válida.',
           'error.launchFailed': 'No se pudo iniciar el proceso auxiliar.',
           'error.exception': 'Ocurrió un error inesperado.',
-          'error.missingPluginRoot': 'Falta la ruta del plugin.'
+          'error.missingPluginRoot': 'Falta la ruta del plugin.',
+          'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
@@ -458,7 +459,8 @@
           'error.noJson': "The helper process didn't return a valid response.",
           'error.launchFailed': 'Could not start the helper process.',
           'error.exception': 'An unexpected error occurred.',
-          'error.missingPluginRoot': 'The plugin path is missing.'
+          'error.missingPluginRoot': 'The plugin path is missing.',
+          'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
       }
 
@@ -478,6 +480,27 @@
         exception: 'error.exception',
         'missing-plugin-root': 'error.missingPluginRoot'
       }
+      /**
+       * An error whose text is safe to put in front of a person.
+       *
+       * Everything this panel throws is already a catalog sentence, but a
+       * genuine fault -- a bug here, a host error, a broken bridge -- is not:
+       * its message is English, written for whoever is debugging, and it is
+       * the last thing someone installing a plugin should be handed. So a
+       * message is only shown when it was built here on purpose; anything
+       * else becomes one translated sentence.
+       */
+      function shownError (message) {
+        var e = new Error(message)
+        e.userFacing = true
+        return e
+      }
+
+      /** The text for a caught error: its own when we wrote it, a translated sentence otherwise. */
+      function errorText (error) {
+        return error && error.userFacing === true && error.message ? error.message : t('error.unexpected')
+      }
+
       function errorMessageFor (result) {
         var key = result && typeof result.reason === 'string' ? ERROR_REASON_KEYS[result.reason] : undefined
         return t(key || 'common.hostRejectedRequest')
@@ -622,9 +645,9 @@
         return read(SECRET_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(errorMessageFor(result))
+            throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForSecretResult(requestId, deadline) })
         })
@@ -637,7 +660,7 @@
         // Nudges the worker into its fast poll before waiting for the result.
         signalPanelOpen()
         return write(SECRET_REQUEST_KEY, request).then(function (r) {
-          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForSecretResult(requestId, Date.now() + 20000)
         })
       }
@@ -655,9 +678,9 @@
         return read(CLAUDE_INTEGRATION_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(errorMessageFor(result))
+            throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForClaudeIntegrationResult(requestId, deadline) })
         })
@@ -668,7 +691,7 @@
         var request = { id: requestId, at: new Date().toISOString(), intent: intent }
         signalPanelOpen()
         return write(CLAUDE_INTEGRATION_REQUEST_KEY, request).then(function (r) {
-          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForClaudeIntegrationResult(requestId, Date.now() + 20000)
         })
       }
@@ -691,9 +714,9 @@
         return read(LOCALE_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(errorMessageFor(result))
+            throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForLocaleResult(requestId, deadline) })
         })
@@ -704,7 +727,7 @@
         var request = { id: requestId, at: new Date().toISOString(), locale: locale }
         signalPanelOpen()
         return write(LOCALE_REQUEST_KEY, request).then(function (r) {
-          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForLocaleResult(requestId, Date.now() + 20000)
         })
       }
@@ -722,9 +745,9 @@
         return read(CATALOG_REFRESH_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(errorMessageFor(result))
+            throw shownError(errorMessageFor(result))
           }
-          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          if (Date.now() >= deadline) throw shownError(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
             .then(function () { return waitForCatalogRefreshResult(requestId, deadline) })
         })
@@ -735,7 +758,7 @@
         var request = { id: requestId, at: new Date().toISOString() }
         signalPanelOpen()
         return write(CATALOG_REFRESH_REQUEST_KEY, request).then(function (r) {
-          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForCatalogRefreshResult(requestId, Date.now() + 20000)
         })
       }
@@ -902,7 +925,7 @@
           catalogListEl.innerHTML = ''
           ;(catalog.destinations || []).forEach(addCatalogRow)
         }).catch(function (error) {
-          said(catalogRefreshSaidEl, String(error && error.message || error), true)
+          said(catalogRefreshSaidEl, errorText(error), true)
         })
       })
 
@@ -1189,7 +1212,7 @@
           secretUiMode = 'idle'
           return loadSecretStatus()
         }).catch(function (error) {
-          said(keySaidEl, String(error && error.message || error), true)
+          said(keySaidEl, errorText(error), true)
         })
       })
 
@@ -1199,7 +1222,7 @@
           said(keySaidEl, t('secret.cleared'))
           return loadSecretStatus()
         }).catch(function (error) {
-          said(keySaidEl, String(error && error.message || error), true)
+          said(keySaidEl, errorText(error), true)
         })
       })
 
@@ -1267,7 +1290,7 @@
           said(claudeIntegrationSaidEl, t('integration.done'))
           return loadClaudeIntegrationStatus()
         }).catch(function (error) {
-          said(claudeIntegrationSaidEl, String(error && error.message || error), true)
+          said(claudeIntegrationSaidEl, errorText(error), true)
         })
       })
 
@@ -1277,7 +1300,7 @@
           said(claudeIntegrationSaidEl, t('integration.reverted'))
           return loadClaudeIntegrationStatus()
         }).catch(function (error) {
-          said(claudeIntegrationSaidEl, String(error && error.message || error), true)
+          said(claudeIntegrationSaidEl, errorText(error), true)
         })
       })
 
@@ -1295,12 +1318,12 @@
           write('policies', readPolicies())
         ]).then(function (results) {
           var failed = results.find(function (r) { return !r || !r.ok })
-          if (failed) throw new Error(failed.error || t('common.hostRejectedWrite'))
+          if (failed) throw shownError(t('common.hostRejectedWrite'))
           writeBackground(CATALOG_POLICY_MIRROR_REQUEST_KEY, new Date().toISOString())
           currentConfig = config
           said(saveSaidEl, t('save.saved'))
         }).catch(function (error) {
-          said(saveSaidEl, String(error && error.message || error), true)
+          said(saveSaidEl, errorText(error), true)
         })
       })
 
@@ -1329,7 +1352,7 @@
           policiesListEl.innerHTML = ''
           ;(results[2] || []).forEach(addPolicyRow)
         }).catch(function (error) {
-          said(saveSaidEl, String(error && error.message || error), true)
+          said(saveSaidEl, errorText(error), true)
         })
       }
 
