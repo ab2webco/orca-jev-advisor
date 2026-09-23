@@ -565,6 +565,12 @@ async function publishSecretStatus (orca, storageHost, secretsHost) {
 async function attendSecretRequest (orca, storageHost, secretsHost) {
   const request = await storageHost.get(SECRET_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+  // A panel that gave up waiting overwrites its own pending request with a
+  // redacted tombstone (buildSecretTombstone in worker-status.mjs and its
+  // config.html copy) rather than let a plaintext key linger in storage --
+  // a panel cannot delete a key. This is never a live request: leave it
+  // exactly as it is, redacted, and never attend it.
+  if (request.tombstone === true) return
 
   await storageHost.delete(SECRET_REQUEST_KEY).catch((error) =>
     orca.log(`secret request cleanup failed: ${error.message}`))
@@ -1182,7 +1188,9 @@ export default function activate (orca) {
 // ---------------------------------------------------------------------------
 
 export {
+  attendSecretRequest,
   publishWorkerHeartbeat,
+  SECRET_RESULT_KEY,
   WORKER_HEARTBEAT_KEY,
   WORKER_HEARTBEAT_STALE_MS
 }
