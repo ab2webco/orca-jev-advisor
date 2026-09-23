@@ -576,7 +576,17 @@ async function attendSecretRequest (orca, storageHost, secretsHost) {
     orca.log(`secret request cleanup failed: ${error.message}`))
 
   const age = Date.now() - Date.parse(request.at)
-  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) return
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    // Was a silent discard: the person was already told the save/clear
+    // failed once the panel's own 20s wait ran out, so simply dropping the
+    // request here lost the only record of what actually happened to it.
+    // 'expired' is a stable reason code (see the note below) so a panel
+    // open later can still show the real cause instead of nothing.
+    await storageHost.set(SECRET_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`secret result publish failed: ${err.message}`))
+    return
+  }
 
   // `reason` is a stable code, never prose: the config panel translates it
   // through its own catalog rather than surfacing whatever language this
@@ -650,7 +660,12 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
     orca.log(`claude integration request cleanup failed: ${error.message}`))
 
   const age = Date.now() - Date.parse(request.at)
-  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) return
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(CLAUDE_INTEGRATION_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`claude integration result publish failed: ${err.message}`))
+    return
+  }
 
   let result
   if (request.intent === 'install') {
@@ -694,7 +709,12 @@ async function attendLocaleRequest (orca, storageHost) {
     orca.log(`locale request cleanup failed: ${error.message}`))
 
   const age = Date.now() - Date.parse(request.at)
-  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) return
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(LOCALE_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`locale result publish failed: ${err.message}`))
+    return
+  }
 
   const locale = request.locale === 'en' ? 'en' : request.locale === 'es' ? 'es' : null
   const result = locale === null
@@ -750,7 +770,12 @@ async function attendCatalogRefreshRequest (orca, storageHost) {
     orca.log(`catalog refresh request cleanup failed: ${error.message}`))
 
   const age = Date.now() - Date.parse(request.at)
-  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) return
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, added: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`catalog refresh result publish failed: ${err.message}`))
+    return
+  }
 
   const result = await cmdRefreshCatalog(orca, storageHost)
   await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
@@ -1188,7 +1213,13 @@ export default function activate (orca) {
 // ---------------------------------------------------------------------------
 
 export {
+  attendCatalogRefreshRequest,
+  attendClaudeIntegrationRequest,
+  attendLocaleRequest,
   attendSecretRequest,
+  CATALOG_REFRESH_RESULT_KEY,
+  CLAUDE_INTEGRATION_RESULT_KEY,
+  LOCALE_RESULT_KEY,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   WORKER_HEARTBEAT_KEY,
