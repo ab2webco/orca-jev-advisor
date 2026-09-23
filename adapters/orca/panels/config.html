@@ -639,6 +639,24 @@
       var SECRET_STATUS_KEY = 'secretStatus'
       var PANEL_SEEN_KEY = 'configPanelSeen'
 
+      // ---------- worker liveness: heartbeat ----------------------------------
+      // Mirrors main.mjs's WORKER_HEARTBEAT_KEY/WORKER_HEARTBEAT_STALE_MS and
+      // isHeartbeatFresh -- see the tested original at
+      // adapters/orca/panels/worker-status.mjs and that file's module
+      // comment for why this is a hand-copy rather than an import (this
+      // panel is a single sandboxed HTML file with no module graph reaching
+      // it). Keep the two in sync; `grep -n isHeartbeatFresh` across both
+      // files is how to check they still agree.
+      var WORKER_HEARTBEAT_KEY = 'workerHeartbeat'
+      var WORKER_HEARTBEAT_STALE_MS = 40 * 1000
+      function isHeartbeatFresh (heartbeat, nowMs, staleAfterMs) {
+        if (!heartbeat || typeof heartbeat !== 'object' || typeof heartbeat.at !== 'string') return false
+        var at = Date.parse(heartbeat.at)
+        if (isNaN(at)) return false
+        var age = nowMs - at
+        return age >= 0 && age <= staleAfterMs
+      }
+
       function signalPanelOpen () {
         writeBackground(PANEL_SEEN_KEY, { at: new Date().toISOString() })
       }
@@ -657,13 +675,23 @@
 
       function sendSecretRequest (intent, value) {
         var requestId = 'secret-' + Date.now() + '-' + Math.random().toString(36).slice(2)
-        var request = { id: requestId, at: new Date().toISOString(), intent: intent }
-        if (value !== undefined) request.value = value
-        // Nudges the worker into its fast poll before waiting for the result.
-        signalPanelOpen()
-        return write(SECRET_REQUEST_KEY, request).then(function (r) {
-          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
-          return waitForSecretResult(requestId, Date.now() + 20000)
+        // The key-carrying path: refuses to write anything at all when no
+        // worker is provably alive right now, rather than let the request
+        // sit unattended in storage.json for up to 10 minutes (see T1 in
+        // odd/tasks/panel-worker-wakeup.md). The other three request
+        // senders below carry no secret and stay optimistic.
+        return read(WORKER_HEARTBEAT_KEY, false).then(function (heartbeat) {
+          if (!isHeartbeatFresh(heartbeat, Date.now(), WORKER_HEARTBEAT_STALE_MS)) {
+            throw shownError(t('common.workerSilent'))
+          }
+          var request = { id: requestId, at: new Date().toISOString(), intent: intent }
+          if (value !== undefined) request.value = value
+          // Nudges the worker into its fast poll before waiting for the result.
+          signalPanelOpen()
+          return write(SECRET_REQUEST_KEY, request).then(function (r) {
+            if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+            return waitForSecretResult(requestId, Date.now() + 20000)
+          })
         })
       }
 

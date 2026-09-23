@@ -448,6 +448,34 @@ const SECRET_POLL_ACTIVE_MS = 1 * 1000
 const SECRET_POLL_IDLE_MS = 15 * 1000
 
 // ---------------------------------------------------------------------------
+// Worker heartbeat -- a panel cannot wake a reaped worker (see this module's
+// header and odd/tasks/panel-worker-wakeup.md): the only five panel-callable
+// host actions are answered in Orca's Electron main process without ever
+// reaching this worker. So before a panel writes anything secret-carrying it
+// needs to know whether a worker is actually alive right now, rather than
+// trust a poll that will never come. This key is that signal: written once
+// at activation and again on every runSecretPoll tick, so its age tracks how
+// long ago a worker was last definitely running.
+// ---------------------------------------------------------------------------
+
+const WORKER_HEARTBEAT_KEY = 'workerHeartbeat'
+/**
+ * Must exceed SECRET_POLL_IDLE_MS (15s) -- otherwise a live worker idling
+ * between its own slow-poll ticks would look dead to a panel. 40s is a
+ * little under 3x that interval: generous enough to absorb one missed or
+ * slow tick and ordinary event-loop jitter, but still short enough that
+ * "no worker is running" is reported within under a minute of it actually
+ * not running, not after however long a panel happens to have been open.
+ */
+const WORKER_HEARTBEAT_STALE_MS = 40 * 1000
+
+/** Written once at activation and on every poll tick -- see the module note above. */
+async function publishWorkerHeartbeat (orca, storageHost) {
+  await storageHost.set(WORKER_HEARTBEAT_KEY, { at: new Date().toISOString() })
+    .catch((error) => orca.log(`worker heartbeat publish failed: ${error.message}`))
+}
+
+// ---------------------------------------------------------------------------
 // Host adapters -- src/core/store.ts and src/core/secrets.ts each declare a
 // small interface (StorageHost, SecretsHost) so the same decision logic
 // runs against a real host and against a fake one in tests. Here they are
@@ -1050,7 +1078,8 @@ export default function activate (orca) {
   let secretTimer = null
   const catalogPolicyMirrorSeen = { value: null }
   const runSecretPoll = () => {
-    attendSecretRequest(orca, storageHost, secretsHost)
+    publishWorkerHeartbeat(orca, storageHost)
+      .then(() => attendSecretRequest(orca, storageHost, secretsHost))
       .catch((error) => orca.log(`secret request handling failed: ${error.message}`))
       .then(() => attendClaudeIntegrationRequest(orca, storageHost))
       .catch((error) => orca.log(`claude integration request handling failed: ${error.message}`))
@@ -1110,6 +1139,7 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial claude integration install failed: ${error.message}`))
   publishLocaleStatus(orca, storageHost)
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
+  publishWorkerHeartbeat(orca, storageHost)
   runSecretPoll()
 
   // Measurements refresh on its own light cadence -- these two JSONL files
@@ -1141,4 +1171,18 @@ export default function activate (orca) {
     if (secretTimer) clearTimeout(secretTimer)
     clearInterval(measurementsTimer)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Named exports -- for `node --test` only. `activate` above is the one
+// export Orca itself loads (see this module's header); everything below is
+// already a plain function taking its host(s) as a parameter, so exporting
+// it needs no restructuring, just a name to import by
+// (adapters/orca/main.test.mjs, odd/tasks/panel-worker-wakeup.md).
+// ---------------------------------------------------------------------------
+
+export {
+  publishWorkerHeartbeat,
+  WORKER_HEARTBEAT_KEY,
+  WORKER_HEARTBEAT_STALE_MS
 }
