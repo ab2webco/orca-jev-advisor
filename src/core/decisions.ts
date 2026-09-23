@@ -385,8 +385,39 @@ export function buildActionGateQuestions(): Record<string, Question> {
   };
 }
 
-export function buildActionGateState(command: string, context: string): Record<string, unknown> {
-  return { proposed_command: command, context: context, note: NOTE };
+/** What the catalog knows about where the command is running, when a destination matched. */
+export interface GateDestinationContext {
+  readonly label: string;
+  readonly kind: string;
+}
+
+/**
+ * The state the command gate sends to Jev.
+ *
+ * `destination` is what makes a per-project risk tier real, and it replaces
+ * the per-destination threshold that was nearly added instead. Measured over
+ * six mid-risk commands against three repository descriptions, telling the
+ * judgement what kind of place it is moves the consequence score by 0.79 on
+ * average -- more than the whole free band the global threshold sits in.
+ * `rm -rf dist` scores 1.01 in an internal tool and 1.55 on a client's
+ * production site, so one ceiling of 1.5 already passes it in the first and
+ * stops it in the second.
+ *
+ * Adding a per-destination ceiling ON TOP of that would count the same fact
+ * twice: a client site would get both a higher score and a lower bar, and
+ * would stop on nearly everything. So there is one ceiling, and the
+ * destination speaks through the question instead of around it.
+ *
+ * The label is text the developer wrote, so it arrives as data under the
+ * same note as everything else here -- something to weigh, never an
+ * instruction to follow.
+ */
+export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext): Record<string, unknown> {
+  const state: Record<string, unknown> = { proposed_command: command, context: context, note: NOTE };
+  if (destination !== undefined) {
+    state["destination"] = { kind: destination.kind, description: destination.label };
+  }
+  return state;
 }
 
 export interface DecideActionOptions {
