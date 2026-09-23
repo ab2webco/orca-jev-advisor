@@ -237,7 +237,12 @@
         <h2 data-i18n="catalog.heading"></h2>
         <p class="hint" data-i18n="catalog.hint"></p>
         <div id="catalog-list"></div>
-        <div class="actions"><button id="add-catalog-row" type="button" data-i18n="catalog.add"></button></div>
+        <div class="actions">
+          <button id="add-catalog-row" type="button" data-i18n="catalog.add"></button>
+          <button id="refresh-catalog" type="button" data-i18n="catalog.refresh"></button>
+          <span class="said" id="catalog-refresh-said"></span>
+        </div>
+        <p class="hint" data-i18n="catalog.refreshHint"></p>
       </section>
 
       <section id="policies-section">
@@ -315,6 +320,11 @@
           'thresholds.logMaxEntries': 'Tamaño máximo del log',
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
+          'catalog.refresh': 'Actualizar desde Orca',
+          'catalog.refreshHint': 'Agrega los worktrees nuevos que Orca ya conoce, sin tocar los destinos que ya editaste.',
+          'catalog.refreshing': 'Actualizando…',
+          'catalog.refreshDone': 'Se agregaron {{count}} destino(s) nuevo(s).',
+          'catalog.refreshNone': 'No había destinos nuevos.',
           'catalog.add': '+ Agregar destino',
           'catalog.fieldId': 'id',
           'catalog.fieldIdPlaceholder': 'id-corto',
@@ -409,6 +419,11 @@
           'thresholds.logMaxEntries': 'Maximum log size',
           'catalog.heading': 'Destination catalog',
           'catalog.hint': 'One destination per worktree this plugin may judge or route.',
+          'catalog.refresh': 'Refresh from Orca',
+          'catalog.refreshHint': 'Adds newly-seen worktrees without touching the destinations you already edited.',
+          'catalog.refreshing': 'Refreshing…',
+          'catalog.refreshDone': '{{count}} new destination(s) added.',
+          'catalog.refreshNone': 'No new destinations.',
           'catalog.add': '+ Add destination',
           'catalog.fieldId': 'id',
           'catalog.fieldIdPlaceholder': 'short-id',
@@ -690,6 +705,37 @@
         })
       }
 
+      // ---------- catalog refresh: request/result -----------------------------
+      // Same request/result pattern as the secret/Claude-integration/locale
+      // channels above: this panel cannot call orca.commands.register'd
+      // 'advisor.refreshCatalog' directly (the sandboxed bridge only allows
+      // notifications.show/storage.get/storage.set), so it leaves a request
+      // and main.mjs's poll loop attends it.
+      var CATALOG_REFRESH_REQUEST_KEY = 'catalogRefreshRequest'
+      var CATALOG_REFRESH_RESULT_KEY = 'catalogRefreshResult'
+
+      function waitForCatalogRefreshResult (requestId, deadline) {
+        return read(CATALOG_REFRESH_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw new Error(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw new Error(t('common.timeout'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForCatalogRefreshResult(requestId, deadline) })
+        })
+      }
+
+      function sendCatalogRefreshRequest () {
+        var requestId = 'catalog-refresh-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString() }
+        signalPanelOpen()
+        return write(CATALOG_REFRESH_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
+          return waitForCatalogRefreshResult(requestId, Date.now() + 20000)
+        })
+      }
+
       // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
@@ -862,6 +908,22 @@
       }
 
       el('add-catalog-row').addEventListener('click', function () { addCatalogRow() })
+
+      var catalogRefreshSaidEl = el('catalog-refresh-said')
+      el('refresh-catalog').addEventListener('click', function () {
+        said(catalogRefreshSaidEl, t('catalog.refreshing'))
+        sendCatalogRefreshRequest().then(function (result) {
+          var added = (result && typeof result.added === 'number') ? result.added : 0
+          said(catalogRefreshSaidEl, added > 0 ? t('catalog.refreshDone', { count: String(added) }) : t('catalog.refreshNone'))
+          return read('catalog', false)
+        }).then(function (catalog) {
+          if (!catalog) return
+          catalogListEl.innerHTML = ''
+          ;(catalog.destinations || []).forEach(addCatalogRow)
+        }).catch(function (error) {
+          said(catalogRefreshSaidEl, String(error && error.message || error), true)
+        })
+      })
 
       function readCatalog () {
         var rows = []
