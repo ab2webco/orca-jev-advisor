@@ -22,6 +22,7 @@
 // Jev-answers boundary.
 import { isArrayOf, isNumber, isRecord, isString } from '../guards.ts'
 import type { MatchableDestination } from './destination_match.ts'
+import { migratePolicyKind } from './decisions.ts'
 import type { Policy, PolicyKind } from './decisions.ts'
 
 /**
@@ -39,11 +40,16 @@ export interface MirroredCatalog {
   readonly destinations: readonly MirroredDestination[]
 }
 
-/** Same technique store.ts's own isPolicyKind already uses: PolicyKind is a type, so its runtime members are listed once, here. */
-const POLICY_KINDS: readonly PolicyKind[] = ['permits', 'requires_human', 'prohibits']
-
+/**
+ * Accepts the pre-rename Spanish spellings as well as the current ones.
+ *
+ * A policy stored before the rename to English is valid data that needs
+ * mapping, not a row to discard. Discarding it emptied the mirror silently
+ * and the gate simply found no policy that applied -- no error, no warning,
+ * just a stage that stopped working.
+ */
 function isPolicyKind(value: unknown): value is PolicyKind {
-  return isString(value) && (POLICY_KINDS as readonly string[]).includes(value)
+  return migratePolicyKind(value) !== null
 }
 
 function isAutonomyOverride(value: unknown): value is { readonly consequenceCeiling?: number } {
