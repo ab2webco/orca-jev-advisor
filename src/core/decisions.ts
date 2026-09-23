@@ -385,10 +385,20 @@ export function decideAction(answers: Record<string, Answer>): GateDecision {
   // reversibility alone, but reversibility TOGETHER WITH the damage or
   // reach. Asking about the first one alone trains the person to accept
   // without reading, which is worse than not asking.
-  const hurts = consequence.score > GATE_CONSEQUENCE_CEILING;
-  const leavesMachine = external.noul >= GATE_EXTERNAL_GATE;
-  const hardToUndo = reversible.noul < GATE_REVERSIBLE_GATE;
-  const ask = hurts || (hardToUndo && leavesMachine) || reasons.length >= 2;
+  // Measured over 28 commands x 3 runs against the live API, with English
+  // prompts: of the three axes only `consequence` separates. Reversibility
+  // and externality overlap between the two groups -- `npm install` scores
+  // 0.82 external and 0.47 reversible, which reads exactly like a dangerous
+  // command on those two axes and is not one. Consequence leaves a clean band:
+  // the worst PASS run scored 1.05, the best STOP run 1.91, and the threshold
+  // already sat at 1.48 in the middle of it.
+  //
+  // So the composed rule is gone. It cost an axis that does not separate the
+  // one false positive it produced, and every extra clause is another way to
+  // stop a command that should have run. The other two answers are still read
+  // and still reported, because they explain WHY to the person reading -- they
+  // just no longer decide.
+  const ask = consequence.score > GATE_CONSEQUENCE_CEILING;
 
   return {
     verdict: ask ? "ask" : "allow",

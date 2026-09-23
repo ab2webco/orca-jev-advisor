@@ -11,6 +11,7 @@ import { DEFAULT_LOCALE, parseLocaleFile } from '../../../../src/core/i18n.ts'
 import type { Locale } from '../../../../src/core/i18n.ts'
 import type { ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory.ts'
+import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
 
 // ---------------------------------------------------------------------------
 // Home/config/cache directories, without node:os or node:path -- neither
@@ -111,6 +112,14 @@ export function makeSkillFs($: EngineInterface): SkillFs {
 }
 
 // ---------------------------------------------------------------------------
+// Tool inventory: $.tool.list, adapted to ToolLister
+// ---------------------------------------------------------------------------
+
+export function makeToolLister($: EngineInterface): ToolLister {
+  return () => $.tool.list()
+}
+
+// ---------------------------------------------------------------------------
 // Orca context: $.process.run, adapted to ProcessRun, with its own short
 // budget so a hung or missing `orca` binary can never hold up a prompt --
 // resolveOrcaContext's own try/catch turns this timeout into the cwd-only
@@ -185,16 +194,30 @@ export async function resolveApiKey($: EngineInterface, options: PluginOptions):
 }
 
 // ---------------------------------------------------------------------------
-// Measurement log: append-only JSONL under the user's cache dir
+// Measurement logs: append-only JSONL under the user's cache dir
 // ---------------------------------------------------------------------------
+
+async function appendToFile($: EngineInterface, path: string, line: string): Promise<void> {
+  const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+  await $.fs.write(path, existing + line)
+}
 
 export async function appendMeasurement($: EngineInterface, line: string): Promise<void> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return
-    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
-    const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-    await $.fs.write(path, existing + line)
+    await appendToFile($, `${paths.cacheDir}/mod-skills-measurements.jsonl`, line)
+  } catch {
+    // Measurement is best-effort and must never block or fail a prompt.
+  }
+}
+
+/** Same shape as `appendMeasurement`, in its own file, for tool-selection records (src/core/tool_measurement.ts). */
+export async function appendToolMeasurement($: EngineInterface, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/mod-tools-measurements.jsonl`, line)
   } catch {
     // Measurement is best-effort and must never block or fail a prompt.
   }
