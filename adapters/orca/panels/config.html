@@ -144,6 +144,28 @@
       }
       .entry:first-child { margin-top: 0; }
       .entry-actions { display: flex; justify-content: flex-end; }
+      /* Twenty destinations and twenty policies rendered as open forms push
+         this document past 15000px, and Orca clamps a panel's reported height
+         to 8000 -- past that the document scrolls inside a settings pane that
+         already scrolls, which is two scrollbars. Collapsed, each row costs a
+         line until someone opens it. */
+      details.entry > summary {
+        cursor: pointer; list-style: none; display: flex; gap: 8px;
+        align-items: baseline; padding: 7px 2px; font-size: 12px;
+      }
+      details.entry > summary::-webkit-details-marker { display: none; }
+      details.entry > summary::before {
+        content: '\25B8'; font-size: 9px; opacity: 0.5; transition: transform 0.12s;
+      }
+      details.entry[open] > summary::before { transform: rotate(90deg); }
+      details.entry > summary:hover { color: var(--foreground, var(--fb-foreground)); }
+      .entry-name { font-weight: 600; flex: 0 0 auto; }
+      #claude-integration-status li { overflow-wrap: anywhere; }
+      .entry-meta { color: var(--muted-foreground, var(--fb-muted-foreground));
+        /* min-width:0 is what lets a flex child shrink below its content and
+           actually ellipsize; without it the summary widens the document. */
+        min-width: 0; flex: 1 1 auto;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .hint { color: var(--muted-foreground, var(--fb-muted-foreground));
               font-size: 11px; margin: 6px 0 0; line-height: 1.5; }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
@@ -264,6 +286,12 @@
           'integration.mirrorMissing': 'Archivo de la clave: no existe todavía ({{path}}).',
           'integration.mirrorUnknown': 'Archivo de la clave: no se pudo comprobar.',
           'integration.modLinked': 'Mod de skills: enlazado en {{path}}',
+          'entry.untitled': '(sin nombre)',
+          'integration.hookCount': 'Hook de Bash: puesto en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
+          'integration.hookPanesCovered': 'Paneles de Orca: los {{panes}} cubiertos.',
+          'integration.hookPanesMissing': 'Paneles de Orca: NO cubiertos. El hook no corre dentro de Orca.',
+          'integration.hookPanesNone': 'Paneles de Orca: no se encontró ninguna cuenta ({{reason}}).',
+          'integration.modLinkedCount': 'Mod de skills: enlazado en {{installed}} de {{total}} sitios.',
           'integration.modNotLinked': 'Mod de skills: no enlazado.',
           'integration.setup': 'Configurar',
           'integration.revert': 'Revertir todo',
@@ -340,6 +368,12 @@
           'integration.mirrorMissing': "Key file: doesn't exist yet ({{path}}).",
           'integration.mirrorUnknown': 'Key file: could not check.',
           'integration.modLinked': 'Skills mod: linked at {{path}}',
+          'entry.untitled': '(unnamed)',
+          'integration.hookCount': 'Bash hook: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
+          'integration.hookPanesCovered': 'Orca panes: all {{panes}} covered.',
+          'integration.hookPanesMissing': 'Orca panes: NOT covered. The hook does not run inside Orca.',
+          'integration.hookPanesNone': 'Orca panes: no account found ({{reason}}).',
+          'integration.modLinkedCount': 'Skills mod: linked in {{installed}} of {{total}} places.',
           'integration.modNotLinked': 'Skills mod: not linked.',
           'integration.setup': 'Set up',
           'integration.revert': 'Revert everything',
@@ -690,16 +724,43 @@
 
       var catalogListEl = el('catalog-list')
 
+      /** Wraps one editable row in a disclosure whose summary stays in step
+       *  with the id field, so a collapsed list still says what is in it. */
+      function makeCollapsible (isNew, nameOf, metaOf) {
+        var entry = elMake('details', 'entry')
+        var summary = elMake('summary')
+        var name = elMake('span', 'entry-name')
+        var meta = elMake('span', 'entry-meta')
+        summary.appendChild(name)
+        summary.appendChild(meta)
+        entry.appendChild(summary)
+        entry.open = isNew
+        entry._sync = function () {
+          name.textContent = nameOf() || t('entry.untitled')
+          meta.textContent = metaOf()
+        }
+        // Deliberately NOT called here: the closures above read fields the
+        // caller declares after this point, so at construction they are still
+        // hoisted-undefined. Each builder calls _sync() once it is complete.
+        return entry
+      }
+
       function addCatalogRow (row) {
         row = row || {
           id: '', label: '', kind: 'project', worktreePath: '', terminalTitleMatch: '',
           autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 }
         }
-        var entry = elMake('div', 'entry')
-
-        var row1 = elMake('div', 'row two')
         var idField = fieldInput(t('catalog.fieldId'), row.id, t('catalog.fieldIdPlaceholder'))
         var labelField = fieldInput(t('catalog.fieldLabel'), row.label, t('catalog.fieldLabelPlaceholder'))
+        var entry = makeCollapsible(
+          !row.id,
+          function () { return idField.input.value.trim() },
+          function () { return kindSelect.value + ' \u00b7 ' + (labelField.input.value.trim() || row.worktreePath) }
+        )
+        idField.input.addEventListener('input', function () { entry._sync() })
+        labelField.input.addEventListener('input', function () { entry._sync() })
+
+        var row1 = elMake('div', 'row two')
         row1.appendChild(idField.wrap)
         row1.appendChild(labelField.wrap)
         entry.appendChild(row1)
@@ -716,6 +777,7 @@
           if (k === row.kind) opt.selected = true
           kindSelect.appendChild(opt)
         })
+        kindSelect.addEventListener('change', function () { entry._sync() })
         kindWrap.appendChild(kindLabel)
         kindWrap.appendChild(kindSelect)
         var pathField = fieldInput(t('catalog.fieldPath'), row.worktreePath, t('catalog.fieldPathPlaceholder'))
@@ -733,6 +795,8 @@
         row3.appendChild(confirmField.wrap)
         row3.appendChild(delicatenessField.wrap)
         entry.appendChild(row3)
+
+        entry._sync()
 
         var actions = elMake('div', 'entry-actions')
         var removeBtn = elMake('button', 'link')
@@ -776,13 +840,21 @@
 
       function addPolicyRow (row) {
         row = row || { id: '', rule: '' }
-        var entry = elMake('div', 'entry')
-        var rowEl = elMake('div', 'row two')
         var idField = fieldInput(t('policies.fieldId'), row.id, t('policies.fieldIdPlaceholder'))
         var ruleField = fieldInput(t('policies.fieldRule'), row.rule, t('policies.fieldRulePlaceholder'))
+        var entry = makeCollapsible(
+          !row.id,
+          function () { return idField.input.value.trim() },
+          function () { return ruleField.input.value.trim() }
+        )
+        idField.input.addEventListener('input', function () { entry._sync() })
+        ruleField.input.addEventListener('input', function () { entry._sync() })
+        var rowEl = elMake('div', 'row two')
         rowEl.appendChild(idField.wrap)
         rowEl.appendChild(ruleField.wrap)
         entry.appendChild(rowEl)
+
+        entry._sync()
 
         var actions = elMake('div', 'entry-actions')
         var removeBtn = elMake('button', 'link')
@@ -912,9 +984,18 @@
           return
         }
         var hookLine = status.hook && status.hook.installed
-          ? (status.hook.pathMatches ? t('integration.hookInstalled', { path: status.hook.path }) : t('integration.hookWrongPath'))
+          ? t('integration.hookCount', { installed: String(status.hook.installedCount), total: String(status.hook.totalCount) })
           : t('integration.hookNotInstalled')
         claudeIntegrationStatusEl.appendChild(li(hookLine))
+
+        // Orca's own panes are the ones that matter most for a plugin shipped
+        // for Orca, and they read a different settings.json than ~/.claude --
+        // so they get their own line rather than hiding inside a total.
+        var panes = status.hook && status.hook.orcaPaneCount
+        var paneLine = !panes
+          ? t('integration.hookPanesNone', { reason: (status.orcaUserData && status.orcaUserData.reason) || '-' })
+          : (status.hook.orcaPanesCovered ? t('integration.hookPanesCovered', { panes: String(panes) }) : t('integration.hookPanesMissing'))
+        claudeIntegrationStatusEl.appendChild(li(paneLine))
 
         var envLine = status.env && status.env.installed
           ? t('integration.envInstalled', { name: status.env.name })
@@ -928,7 +1009,7 @@
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
         var modLine = status.modLink && status.modLink.installed
-          ? t('integration.modLinked', { path: status.modLink.path })
+          ? t('integration.modLinkedCount', { installed: String(status.hook.totalCount), total: String(status.hook.totalCount) })
           : t('integration.modNotLinked')
         claudeIntegrationStatusEl.appendChild(li(modLine))
       }
