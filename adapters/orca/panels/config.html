@@ -31,12 +31,12 @@
     -->
 
     <style>
-      /* El host inyecta una lista corta de tokens en el <style> del shell
+      /* The host injects a short list of tokens into the shell's <style>
          (PANEL_DESIGN_TOKEN_ALLOWLIST, orca-oss src/shared/plugins/plugin-panel-shell.ts)
-         y pone light/dark en <html>. Nada mas llega aca. Los respaldos son los
-         valores reales de main.css, no un gris inventado, para que el panel se
-         lea bien aunque el host no inyecte nada (host viejo, o el arnes de
-         pruebas). */
+         and sets light/dark on <html>. Nothing else reaches here. The
+         fallbacks are main.css's real values, not a made-up grey, so the
+         panel still reads well even when the host injects nothing (an old
+         host, or the test harness). */
       :root {
         color-scheme: light dark;
         --radius-md: calc(var(--radius, 0.625rem) * 0.8);
@@ -79,9 +79,9 @@
       .sub:first-child { margin-top: 0; }
       .sub { color: var(--muted-foreground, var(--fb-muted-foreground));
              margin: 0; padding: 2px 12px 12px; font-size: 12px; }
-      /* Los paneles propios de Orca no usan tarjetas por seccion: son planos, a
-         sangre, separados por un filete de --border y una etiqueta chica en
-         mayusculas, igual que activity.html y wa-inbox/config.html. */
+      /* Orca's own panels don't use per-section cards: they're flat, full
+         bleed, separated by a thin --border rule and a small uppercase
+         label, same as activity.html and wa-inbox/config.html. */
       section { padding: 12px; margin: 0; border-top: 1px solid var(--border, var(--fb-border)); }
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
            color: var(--muted-foreground, var(--fb-muted-foreground));
@@ -120,8 +120,9 @@
       button.primary:hover { background: var(--primary, var(--fb-primary));
                              color: var(--primary-foreground, var(--fb-primary-foreground));
                              filter: brightness(1.12); }
-      /* Subrayado siempre, no solo en hover: en tema claro --destructive es muy
-         cercano al texto pleno, y sin subrayar "Quitar" no se lee como accionable. */
+      /* Always underlined, not only on hover: in light theme --destructive is
+         very close to plain text, and without an underline "Remove" doesn't
+         read as actionable. */
       button.link { border: 0; background: none; padding: 0; margin-left: 10px;
                     color: var(--destructive, var(--fb-destructive)); font-size: 11px; font-weight: 400;
                     text-decoration: underline; text-underline-offset: 2px; }
@@ -132,8 +133,9 @@
       .row.four { grid-template-columns: 1fr 1fr 1fr 1fr; }
       @media (max-width: 560px) { .row, .row.two, .row.four { grid-template-columns: 1fr; } }
       .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-      /* La allowlist no trae color de exito, y no se inventa uno: el peso y el
-         texto pleno cargan la confirmacion. El fallo si tiene token, --destructive. */
+      /* The allowlist carries no success color, and none is invented here:
+         weight and plain text carry the confirmation. Failure does get a
+         token, --destructive. */
       .said { font-size: 12px; font-weight: 500; color: var(--foreground, var(--fb-foreground)); }
       .said.bad { font-weight: 400; color: var(--destructive, var(--fb-destructive)); }
       .entry {
@@ -228,12 +230,11 @@
 
       var el = function (id) { return document.getElementById(id) }
 
-      // ---------- catalogo de idioma (es/en) --------------------------------
-      // Cada clave que este panel muestra vive aca, en los dos idiomas. Nada
-      // de texto de cara al usuario se escribe suelto en el resto del
-      // archivo -- todo pasa por t(clave, parametros). Ver el comentario
-      // grande en <head> sobre por que esto no es contributes.languagePacks
-      // de Orca.
+      // ---------- language catalog (es/en) -----------------------------------
+      // Every key this panel shows lives here, in both languages. No
+      // user-facing text is ever written loose anywhere else in this file --
+      // everything goes through t(key, params). See the big comment in
+      // <head> for why this isn't Orca's own contributes.languagePacks.
       var CATALOG = {
         es: {
           'app.subtitle': 'Configuración del plugin. Todo se guarda a través del host de Orca — nada de esto llama a una URL externa desde este panel.',
@@ -301,7 +302,15 @@
           'common.timeout': 'Tiempo de espera agotado.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
           'common.couldNotSend': 'No se pudo enviar el pedido.',
-          'common.hostRejectedWrite': 'El host rechazó la escritura.'
+          'common.hostRejectedWrite': 'El host rechazó la escritura.',
+          'error.emptyKey': 'La clave no puede estar vacía.',
+          'error.unknownIntent': 'Pedido no reconocido.',
+          'error.invalidLocale': 'Idioma no reconocido.',
+          'error.unknownMode': 'Modo no reconocido.',
+          'error.noJson': 'El proceso auxiliar no devolvió una respuesta válida.',
+          'error.launchFailed': 'No se pudo iniciar el proceso auxiliar.',
+          'error.exception': 'Ocurrió un error inesperado.',
+          'error.missingPluginRoot': 'Falta la ruta del plugin.'
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
@@ -369,8 +378,37 @@
           'common.timeout': 'Timed out.',
           'common.hostRejectedRequest': 'The host rejected the request.',
           'common.couldNotSend': 'Could not send the request.',
-          'common.hostRejectedWrite': 'The host rejected the write.'
+          'common.hostRejectedWrite': 'The host rejected the write.',
+          'error.emptyKey': "The key can't be empty.",
+          'error.unknownIntent': 'Unrecognized request.',
+          'error.invalidLocale': 'Unrecognized language.',
+          'error.unknownMode': 'Unrecognized mode.',
+          'error.noJson': "The helper process didn't return a valid response.",
+          'error.launchFailed': 'Could not start the helper process.',
+          'error.exception': 'An unexpected error occurred.',
+          'error.missingPluginRoot': 'The plugin path is missing.'
         }
+      }
+
+      // Maps a producer's stable `reason` code (write-secret-mirror.mjs,
+      // install-claude-integration.mjs, main.mjs's own request handlers --
+      // never already-localized prose, see those files' own notes) to this
+      // panel's own catalog key. An unrecognized or missing code falls back
+      // to the generic 'common.hostRejectedRequest' rather than ever
+      // surfacing the producer's raw (English, diagnostic-only) `detail`.
+      var ERROR_REASON_KEYS = {
+        'empty-key': 'error.emptyKey',
+        'unknown-intent': 'error.unknownIntent',
+        'invalid-locale': 'error.invalidLocale',
+        'unknown-mode': 'error.unknownMode',
+        'no-json': 'error.noJson',
+        'launch-failed': 'error.launchFailed',
+        exception: 'error.exception',
+        'missing-plugin-root': 'error.missingPluginRoot'
+      }
+      function errorMessageFor (result) {
+        var key = result && typeof result.reason === 'string' ? ERROR_REASON_KEYS[result.reason] : undefined
+        return t(key || 'common.hostRejectedRequest')
       }
 
       var currentLocale = 'es'
@@ -382,20 +420,20 @@
         })
       }
 
-      // ---------- puente real con el host --------------------------------
-      // Mismo protocolo que panels/board.html y wa-inbox/config.html: el
-      // iframe es sandboxed con origen opaco, asi que el unico canal es
-      // postMessage con el frame padre (orca-oss
-      // src/shared/plugins/plugin-panel-bridge.ts). '*' es el unico
-      // targetOrigin usable; el host valida la ventana que lo manda.
+      // ---------- real bridge to the host -------------------------------
+      // Same protocol as panels/board.html and wa-inbox/config.html: the
+      // iframe is sandboxed with an opaque origin, so the only channel is
+      // postMessage with the parent frame (orca-oss
+      // src/shared/plugins/plugin-panel-bridge.ts). '*' is the only usable
+      // targetOrigin; the host validates which window sends it.
       //
-      // Toda escritura de este panel nace de un clic -- guardar la clave,
-      // guardar la configuracion -- asi que viaja por el carril de usuario:
-      // cupo reservado, prioridad sobre cualquier lectura de fondo y
-      // reintento con backoff si el host la rechaza por `rate_limited`
-      // (PANEL_MESSAGE_RATE_LIMIT). Simplificado del mecanismo de cola de
-      // wa-inbox/config.html a lo que este panel necesita: unas pocas
-      // lecturas al abrir y unas pocas escrituras por clic, nunca sondeo.
+      // Every write this panel makes is born from a click -- saving the key,
+      // saving the configuration -- so it travels the user lane: a reserved
+      // quota, priority over any background read, and a backoff retry if the
+      // host rejects it with `rate_limited` (PANEL_MESSAGE_RATE_LIMIT).
+      // Simplified from wa-inbox/config.html's own queue mechanism down to
+      // what this panel needs: a few reads on open and a few writes per
+      // click, never polling.
       var seq = 0
       var pending = {}
       var CUPO = { max: 30, ventanaMs: 10000, reserva: 4 }
@@ -466,25 +504,26 @@
         resolve(d)
       })
 
-      // storage.get devuelve { value: <dato> } y el bridge lo envuelve otra vez.
+      // storage.get returns { value: <data> } and the bridge wraps it again.
       function stored (result) {
         if (!result || !result.ok || !result.value) return null
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
       function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
-      // Escritura de fondo (no la pidio un clic): sondeo y latido usan esta,
-      // nunca la de usuario, para no gastar el cupo reservado a un clic real.
+      // Background write (not requested by a click): polling and the
+      // heartbeat use this one, never the user lane, so a real click's
+      // reserved quota is never spent by them.
       function writeBackground (key, value) { return call('storage.set', { key: key, value: value }, false) }
 
-      // ---------- clave secreta: pedido/resultado ---------------------------
-      // Un panel sandboxed no puede llamar `secrets.get`/`secrets.set`/
+      // ---------- secret key: request/result ---------------------------------
+      // A sandboxed panel cannot call `secrets.get`/`secrets.set`/
       // `secrets.delete` (isPluginPanelAction, orca-oss plugin-host-api.ts):
-      // solo `notifications.show`, `storage.get` y `storage.set`. Este panel
-      // deja un pedido en storage y `main.mjs` lo atiende con un temporizador,
-      // igual que SIDECAR_REQUEST_KEY/SIDECAR_RESULT_KEY en orca-wa-inbox. La
-      // clave nunca se relee: solo se muestra el estado enmascarado que el
-      // worker publica en SECRET_STATUS_KEY.
+      // only `notifications.show`, `storage.get` and `storage.set`. This
+      // panel leaves a request in storage and `main.mjs` attends it on a
+      // timer, same as SIDECAR_REQUEST_KEY/SIDECAR_RESULT_KEY in
+      // orca-wa-inbox. The key is never read back: only the masked status
+      // the worker publishes in SECRET_STATUS_KEY is shown.
       var SECRET_REQUEST_KEY = 'secretRequest'
       var SECRET_RESULT_KEY = 'secretResult'
       var SECRET_STATUS_KEY = 'secretStatus'
@@ -498,7 +537,7 @@
         return read(SECRET_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(result.error || t('common.hostRejectedRequest'))
+            throw new Error(errorMessageFor(result))
           }
           if (Date.now() >= deadline) throw new Error(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
@@ -510,7 +549,7 @@
         var requestId = 'secret-' + Date.now() + '-' + Math.random().toString(36).slice(2)
         var request = { id: requestId, at: new Date().toISOString(), intent: intent }
         if (value !== undefined) request.value = value
-        // Empuja al worker a su sondeo rapido antes de esperar el resultado.
+        // Nudges the worker into its fast poll before waiting for the result.
         signalPanelOpen()
         return write(SECRET_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw new Error((r && r.error) || t('common.couldNotSend'))
@@ -518,11 +557,11 @@
         })
       }
 
-      // ---------- integracion con Claude Code: pedido/resultado -------------
-      // Mismo patron que la clave secreta arriba: un panel sandboxed no puede
-      // instalar/revertir directamente (eso corre en el worker, a traves de
-      // install-claude-integration.mjs), asi que deja un pedido en storage y
-      // main.mjs lo atiende en el mismo sondeo que ya usa para la clave.
+      // ---------- Claude Code integration: request/result -------------------
+      // Same pattern as the secret above: a sandboxed panel cannot
+      // install/revert directly (that runs in the worker, through
+      // install-claude-integration.mjs), so it leaves a request in storage
+      // and main.mjs attends it in the same poll it already uses for the key.
       var CLAUDE_INTEGRATION_REQUEST_KEY = 'claudeIntegrationRequest'
       var CLAUDE_INTEGRATION_RESULT_KEY = 'claudeIntegrationResult'
       var CLAUDE_INTEGRATION_STATUS_KEY = 'claudeIntegrationStatus'
@@ -531,7 +570,7 @@
         return read(CLAUDE_INTEGRATION_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(result.detail || result.reason || t('common.hostRejectedRequest'))
+            throw new Error(errorMessageFor(result))
           }
           if (Date.now() >= deadline) throw new Error(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
@@ -549,11 +588,11 @@
         })
       }
 
-      // ---------- idioma: pedido/resultado/estado ---------------------------
-      // Mismo patron otra vez: este panel no puede escribir el archivo espejo
-      // del idioma el mismo (permission sandbox del worker), asi que pide y
-      // main.mjs lo atiende. LOCALE_STATUS_KEY es lo que este panel lee al
-      // abrir para saber en que idioma pintar.
+      // ---------- language: request/result/status -----------------------------
+      // Same pattern again: this panel cannot write the language's mirror
+      // file itself (the worker's permission sandbox), so it requests and
+      // main.mjs attends it. LOCALE_STATUS_KEY is what this panel reads on
+      // open to know which language to paint.
       var LOCALE_REQUEST_KEY = 'localeRequest'
       var LOCALE_RESULT_KEY = 'localeResult'
       var LOCALE_STATUS_KEY = 'localeStatus'
@@ -562,7 +601,7 @@
         return read(LOCALE_RESULT_KEY, false).then(function (result) {
           if (result && result.id === requestId) {
             if (result.ok) return result
-            throw new Error(result.detail || result.reason || t('common.hostRejectedRequest'))
+            throw new Error(errorMessageFor(result))
           }
           if (Date.now() >= deadline) throw new Error(t('common.timeout'))
           return new Promise(function (resolve) { setTimeout(resolve, 700) })
@@ -580,7 +619,7 @@
         })
       }
 
-      // ---------- aplicar el catalogo al DOM ---------------------------------
+      // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
         document.querySelectorAll('[data-i18n]').forEach(function (node) {
@@ -597,10 +636,10 @@
         el('lang-en').setAttribute('aria-pressed', String(locale === 'en'))
       }
 
-      // Al cambiar de idioma, las filas dinamicas (catalogo/politicas) ya
-      // tienen sus etiquetas fijadas al crearse: se leen sus valores, se
-      // reconstruyen con las etiquetas del idioma nuevo, y el resto del
-      // panel se repinta por catalogo.
+      // On a language change, the dynamic rows (catalog/policies) already
+      // have their labels fixed at creation time: their values are read,
+      // they're rebuilt with the new language's labels, and the rest of the
+      // panel repaints through the catalog.
       function applyLocale (locale) {
         currentLocale = (locale === 'en') ? 'en' : 'es'
         document.documentElement.lang = currentLocale
@@ -803,8 +842,9 @@
       var keySaidEl = el('key-said')
       var lastSecretStatus = null
 
-      // El panel nunca relee la clave: solo pinta lo que el worker publico en
-      // SECRET_STATUS_KEY (isConfigured/endsWith), nunca el valor completo.
+      // The panel never reads the key back: it only paints what the worker
+      // published in SECRET_STATUS_KEY (isConfigured/endsWith), never the
+      // full value.
       function renderSecretStatus (status) {
         lastSecretStatus = status
         if (status === null) { secretStatusEl.textContent = t('secret.checking'); return }
@@ -848,7 +888,7 @@
         })
       })
 
-      // ---------- integracion con Claude Code -------------------------------
+      // ---------- Claude Code integration ------------------------------------
 
       var claudeIntegrationStatusEl = el('claude-integration-status')
       var claudeIntegrationSaidEl = el('claude-integration-said')
@@ -860,9 +900,9 @@
         return item
       }
 
-      // Pinta exactamente lo que el worker publico en CLAUDE_INTEGRATION_STATUS_KEY
-      // -- nunca la clave, y nunca mas detalle del que el panel necesita para
-      // que el usuario sepa que hay puesto y donde.
+      // Paints exactly what the worker published in
+      // CLAUDE_INTEGRATION_STATUS_KEY -- never the key, and never more detail
+      // than the panel needs for the user to know what's set up and where.
       function renderClaudeIntegrationStatus (status) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
@@ -968,8 +1008,8 @@
         })
       }
 
-      // Latido: mientras el panel este visible, avisa que sigue abierto para
-      // que el worker sondee su pedido cada ~1s en lugar de cada ~15s.
+      // Heartbeat: while the panel is visible, it signals that it's still
+      // open so the worker polls its request every ~1s instead of every ~15s.
       var heartbeatTimer = null
       function startHeartbeat () {
         if (heartbeatTimer) return

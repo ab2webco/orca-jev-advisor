@@ -111,7 +111,7 @@ async function writeAtomic (content, path = MIRROR_PATH) {
 }
 
 async function save (key) {
-  if (key.length === 0) return { ok: false, reason: 'clave-vacia', detail: 'stdin no traía una clave.' }
+  if (key.length === 0) return { ok: false, reason: 'empty-key', detail: 'stdin carried no key.' }
 
   const existing = await readExisting()
   const lines = existing !== null ? existing.split('\n') : []
@@ -167,7 +167,7 @@ async function statMirror () {
 
 async function localeSave (value) {
   const locale = String(value ?? '').trim()
-  if (locale !== 'es' && locale !== 'en') return { ok: false, reason: 'locale-invalida', detail: `locale no reconocida: ${locale.slice(0, 20)}` }
+  if (locale !== 'es' && locale !== 'en') return { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${locale.slice(0, 20)}` }
   await writeAtomic(`${locale}\n`, LOCALE_PATH)
   return { ok: true }
 }
@@ -199,10 +199,10 @@ async function main () {
     } else if (mode === 'stat') {
       result = await statMirror()
     } else {
-      result = { ok: false, reason: 'modo-desconocido', detail: `modo no reconocido: ${String(mode).slice(0, 60)}` }
+      result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
     }
   } catch (error) {
-    result = { ok: false, reason: 'excepcion', detail: String(error?.message ?? error).slice(0, 300) }
+    result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
   process.stdout.write(JSON.stringify(result))
 }
