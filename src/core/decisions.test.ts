@@ -213,7 +213,13 @@ test("decideAction: an explicit per-destination ceiling overrides the global one
 // decideGateAction: policy first, risk fallback, per-destination ceiling
 // ===========================================================================
 
-test("decideGateAction: a permits policy match turns what would otherwise be an ask into allow", () => {
+test("decideGateAction: a permits policy can NEVER turn an ask into an allow", () => {
+  // Measured against the live API over a labelled corpus, `same_kind` does
+  // not separate a policy that genuinely covers a command from one that
+  // merely sounds close -- 0.69-0.75 against 0.64-0.72, a band of -0.03. At
+  // coverage confidence 1.00, a policy about reading code and running tests
+  // waved through `rm -rf dist`. A wrong stop costs a prompt; a wrong pass is
+  // how something irreversible happens, so permits never short-circuits risk.
   const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
   const highRisk = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.1, external: 0.9, consequence: 2.5 });
 
@@ -221,8 +227,13 @@ test("decideGateAction: a permits policy match turns what would otherwise be an 
   assert.equal(withoutPolicy.verdict, "ask");
 
   const withPolicy = decideGateAction({ action: ACTION, policies: [permits], answers: highRisk });
-  assert.equal(withPolicy.verdict, "allow");
-  assert.deepEqual(withPolicy.reasons, [{ key: "policy.allowed", params: { policyId: "rule", rule: permits.rule } }]);
+  assert.equal(withPolicy.verdict, "ask", "a permissive rule must not overrule the risk judgement");
+});
+
+test("decideGateAction: a permits policy leaves an already-safe command alone", () => {
+  const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
+  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  assert.equal(decideGateAction({ action: ACTION, policies: [permits], answers: safe }).verdict, "allow");
 });
 
 test("decideGateAction: a prohibits policy match turns what would otherwise be a safe allow into ask", () => {
@@ -273,9 +284,11 @@ test("decideGateAction: noDestinationMatched appends a fallback reason only when
 });
 
 test("decideGateAction: noDestinationMatched is NOT added when a policy resolved the decision", () => {
-  const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
+  // Only a policy that STOPS resolves the decision now; a permissive one
+  // falls through to risk, so this is checked with a prohibiting rule.
+  const prohibits: Policy = { id: "rule", rule: "a forbidding rule", kind: "prohibits" };
   const match = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
-  const result = decideGateAction({ action: ACTION, policies: [permits], answers: match, noDestinationMatched: true });
+  const result = decideGateAction({ action: ACTION, policies: [prohibits], answers: match, noDestinationMatched: true });
   assert.equal(
     result.reasons.some((r) => r.key === "reason.noDestinationMatched"),
     false,
