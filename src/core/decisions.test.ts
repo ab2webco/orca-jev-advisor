@@ -14,9 +14,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { interpretDestinationPolicy } from "./decisions.ts";
+import { decideAction, decideGateAction, filterPoliciesForDestination, interpretDestinationPolicy } from "./decisions.ts";
 import type { Policy } from "./decisions.ts";
-import type { Answer, ChoiceAnswer, NoulAnswer } from "./jev.ts";
+import type { Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer } from "./jev.ts";
 
 const ACTION = "do something";
 
@@ -34,6 +34,30 @@ function matchAnswer(noul: number): NoulAnswer {
 
 function answers(choice: string, confidence: number, match: number): Record<string, Answer> {
   return { coverage: coverageAnswer(choice, confidence), same_kind: matchAnswer(match) };
+}
+
+// --- helpers shared by decideAction / decideGateAction tests ---------------
+
+function noulAnswer(value: number): NoulAnswer {
+  return { type: "noul", noul: value };
+}
+
+function scoreAnswer(value: number): ScoreAnswer {
+  return { type: "score", score: value, legend: {}, probabilities: {}, confidence: 1 };
+}
+
+function riskAnswers(reversible: number, external: number, consequence: number): Record<string, Answer> {
+  return { reversible: noulAnswer(reversible), external: noulAnswer(external), consequence: scoreAnswer(consequence) };
+}
+
+function combinedAnswers(
+  policy: { choice: string; confidence: number; match: number } | null,
+  risk: { reversible: number; external: number; consequence: number },
+): Record<string, Answer> {
+  return {
+    ...(policy ? answers(policy.choice, policy.confidence, policy.match) : {}),
+    ...riskAnswers(risk.reversible, risk.external, risk.consequence),
+  };
 }
 
 // --- kind x match table (6 cells) -----------------------------------------
@@ -129,4 +153,131 @@ test("match just under the gate does not count as a match", () => {
 test("unknown policy id in coverage's choice (not in the provided policies list) -> null", () => {
   const decision = interpretDestinationPolicy(ACTION, policies("permits"), answers("some_other_rule_not_listed", 0.9, 0.9));
   assert.equal(decision, null);
+});
+
+// ===========================================================================
+// filterPoliciesForDestination
+// ===========================================================================
+
+test("filterPoliciesForDestination: a global policy (no destinations field) applies to any destination id, including null", () => {
+  const global: Policy = { id: "global", rule: "applies everywhere", kind: "permits" };
+  assert.deepEqual(filterPoliciesForDestination([global], "site-a"), [global]);
+  assert.deepEqual(filterPoliciesForDestination([global], "site-b"), [global]);
+  assert.deepEqual(filterPoliciesForDestination([global], null), [global]);
+});
+
+test("filterPoliciesForDestination: an empty destinations array is global too, same as the field being absent", () => {
+  const global: Policy = { id: "global-empty", rule: "applies everywhere too", kind: "permits", destinations: [] };
+  assert.deepEqual(filterPoliciesForDestination([global], "site-a"), [global]);
+  assert.deepEqual(filterPoliciesForDestination([global], null), [global]);
+});
+
+test("filterPoliciesForDestination: a scoped policy applies only in its own destination id, not in another", () => {
+  const scoped: Policy = { id: "scoped", rule: "only for site-a", kind: "prohibits", destinations: ["site-a"] };
+  assert.deepEqual(filterPoliciesForDestination([scoped], "site-a"), [scoped]);
+  assert.deepEqual(filterPoliciesForDestination([scoped], "site-b"), []);
+});
+
+test("filterPoliciesForDestination: a policy naming an unrecognized destination id doesn't crash and simply doesn't match", () => {
+  const scoped: Policy = { id: "scoped", rule: "only for a destination that isn't in the catalog", kind: "prohibits", destinations: ["ghost-destination"] };
+  assert.doesNotThrow(() => filterPoliciesForDestination([scoped], "site-a"));
+  assert.deepEqual(filterPoliciesForDestination([scoped], "site-a"), []);
+});
+
+test("filterPoliciesForDestination: when destinationId is null, scoped policies are excluded but global ones remain", () => {
+  const global: Policy = { id: "global", rule: "applies everywhere", kind: "permits" };
+  const scoped: Policy = { id: "scoped", rule: "only for site-a", kind: "prohibits", destinations: ["site-a"] };
+  assert.deepEqual(filterPoliciesForDestination([global, scoped], null), [global]);
+});
+
+// ===========================================================================
+// decideAction: options.consequenceCeiling override (backward compatible)
+// ===========================================================================
+
+test("decideAction: still callable with a single argument, using the global ceiling", () => {
+  const highRisk = riskAnswers(0.1, 0.9, 2.5);
+  assert.equal(decideAction(highRisk).verdict, "ask");
+});
+
+test("decideAction: an explicit per-destination ceiling overrides the global one, in both directions", () => {
+  const midRisk = riskAnswers(0.9, 0.1, 1.6); // above the global 1.5 ceiling
+  assert.equal(decideAction(midRisk).verdict, "ask");
+  assert.equal(decideAction(midRisk, { consequenceCeiling: 2.0 }).verdict, "allow");
+
+  const lowRisk = riskAnswers(0.9, 0.1, 0.5); // below the global ceiling
+  assert.equal(decideAction(lowRisk).verdict, "allow");
+  assert.equal(decideAction(lowRisk, { consequenceCeiling: 0.1 }).verdict, "ask");
+});
+
+// ===========================================================================
+// decideGateAction: policy first, risk fallback, per-destination ceiling
+// ===========================================================================
+
+test("decideGateAction: a permits policy match turns what would otherwise be an ask into allow", () => {
+  const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
+  const highRisk = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.1, external: 0.9, consequence: 2.5 });
+
+  const withoutPolicy = decideGateAction({ action: ACTION, policies: [], answers: highRisk });
+  assert.equal(withoutPolicy.verdict, "ask");
+
+  const withPolicy = decideGateAction({ action: ACTION, policies: [permits], answers: highRisk });
+  assert.equal(withPolicy.verdict, "allow");
+  assert.deepEqual(withPolicy.reasons, [{ key: "policy.allowed", params: { policyId: "rule", rule: permits.rule } }]);
+});
+
+test("decideGateAction: a prohibits policy match turns what would otherwise be a safe allow into ask", () => {
+  const prohibits: Policy = { id: "rule", rule: "a forbidding rule", kind: "prohibits" };
+  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+
+  const withoutPolicy = decideGateAction({ action: ACTION, policies: [], answers: safe });
+  assert.equal(withoutPolicy.verdict, "allow");
+
+  const withPolicy = decideGateAction({ action: ACTION, policies: [prohibits], answers: safe });
+  assert.equal(withPolicy.verdict, "ask");
+  assert.deepEqual(withPolicy.reasons, [{ key: "policy.forbidden", params: { policyId: "rule", rule: prohibits.rule } }]);
+});
+
+test("decideGateAction: a requires_human policy match also produces ask", () => {
+  const requiresHuman: Policy = { id: "rule", rule: "needs a human", kind: "requires_human" };
+  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+
+  const result = decideGateAction({ action: ACTION, policies: [requiresHuman], answers: safe });
+  assert.equal(result.verdict, "ask");
+  assert.deepEqual(result.reasons, [{ key: "policy.needsHuman", params: { policyId: "rule", rule: requiresHuman.rule } }]);
+});
+
+test("decideGateAction: no policy match falls through to the consequence-ceiling rule, using the per-destination ceiling when provided and the global one when not", () => {
+  const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
+  // Match is below MATCH_GATE, so interpretDestinationPolicy returns null and this falls through.
+  const noMatch = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.2 }, { reversible: 0.9, external: 0.1, consequence: 1.6 });
+
+  const withGlobalCeiling = decideGateAction({ action: ACTION, policies: [permits], answers: noMatch });
+  assert.equal(withGlobalCeiling.verdict, "ask");
+
+  const withDestinationCeiling = decideGateAction({ action: ACTION, policies: [permits], answers: noMatch, consequenceCeiling: 2.0 });
+  assert.equal(withDestinationCeiling.verdict, "allow");
+});
+
+test("decideGateAction: fail-open is preserved -- incomplete/null answers still allow, even with policies present", () => {
+  const prohibits: Policy = { id: "rule", rule: "a forbidding rule", kind: "prohibits" };
+  const incomplete: Record<string, Answer> = {};
+  const result = decideGateAction({ action: ACTION, policies: [prohibits], answers: incomplete });
+  assert.equal(result.verdict, "allow");
+});
+
+test("decideGateAction: noDestinationMatched appends a fallback reason only when the risk rule was actually reached", () => {
+  const safe = riskAnswers(0.9, 0.1, 0.2);
+  const result = decideGateAction({ action: ACTION, policies: [], answers: safe, noDestinationMatched: true });
+  assert.equal(result.verdict, "allow");
+  assert.ok(result.reasons.some((r) => r.key === "reason.noDestinationMatched"));
+});
+
+test("decideGateAction: noDestinationMatched is NOT added when a policy resolved the decision", () => {
+  const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
+  const match = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const result = decideGateAction({ action: ACTION, policies: [permits], answers: match, noDestinationMatched: true });
+  assert.equal(
+    result.reasons.some((r) => r.key === "reason.noDestinationMatched"),
+    false,
+  );
 });

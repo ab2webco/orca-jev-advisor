@@ -68,6 +68,12 @@ export interface Policy {
   readonly id: string;
   readonly rule: string;
   readonly kind: PolicyKind;
+  /**
+   * Optional per-destination scope. Absent or empty means "global" -- the
+   * policy applies everywhere, exactly like every policy did before this
+   * field existed. See filterPoliciesForDestination below.
+   */
+  readonly destinations?: readonly string[];
 }
 
 export type DestinationOutcome = "act" | "do_not" | "ask";
@@ -214,6 +220,24 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
   }
 }
 
+/**
+ * Narrows `policies` to the ones that apply at `destinationId`: a policy
+ * with no `destinations` (or an empty one) is global and always applies; a
+ * policy naming specific destinations applies only when `destinationId` is
+ * one of them. When `destinationId` is null (the gate could not match the
+ * cwd to any catalog destination), every scoped policy is excluded and only
+ * global policies remain -- a policy scoped to destinations it can't
+ * confirm it is inside of must never apply by default. An id that doesn't
+ * name any policy simply doesn't match anything; that's a configuration gap
+ * for a UI layer to surface, not this pure function's job to throw on.
+ */
+export function filterPoliciesForDestination(policies: readonly Policy[], destinationId: string | null): readonly Policy[] {
+  return policies.filter((policy) => {
+    if (policy.destinations === undefined || policy.destinations.length === 0) return true;
+    return destinationId !== null && policy.destinations.includes(destinationId);
+  });
+}
+
 /** Interprets the risk-stage answers. Always resolves (never returns null). */
 export function interpretDestinationRisk(action: string, answers: Record<string, Answer>): DestinationDecision {
   const reversible = getNoulAnswer(answers, "reversible");
@@ -335,6 +359,15 @@ export function buildActionGateState(command: string, context: string): Record<s
   return { proposed_command: command, context: context, note: NOTE };
 }
 
+export interface DecideActionOptions {
+  /**
+   * Per-destination override of GATE_CONSEQUENCE_CEILING (e.g. from
+   * AutonomyConfig.consequenceCeiling in store.ts/catalog.ts). Omit to use
+   * the module's global default, exactly as before this option existed.
+   */
+  readonly consequenceCeiling?: number;
+}
+
 /**
  * Interprets the gate's three axes. Ported verbatim from adapters/claude/gate-bash.ts's
  * askJev: a command is only 'allow'ed when NONE of the three axes flags it;
@@ -342,8 +375,15 @@ export function buildActionGateState(command: string, context: string): Record<s
  * branch is unreachable beyond `flags.length >= 2` -- any consequence above
  * 2.3 is already above 1.5, so it always already contributed a flag).
  * Incomplete answers fail closed to 'ask', never to a silent 'allow'.
+ *
+ * `options.consequenceCeiling` lets a caller (decideGateAction below)
+ * substitute a per-destination ceiling for the module's global
+ * GATE_CONSEQUENCE_CEILING; omitting `options` entirely keeps every
+ * existing single-argument call site (adapters/claude/gate-bash.ts)
+ * working identically.
  */
-export function decideAction(answers: Record<string, Answer>): GateDecision {
+export function decideAction(answers: Record<string, Answer>, options?: DecideActionOptions): GateDecision {
+  const consequenceCeiling = options?.consequenceCeiling ?? GATE_CONSEQUENCE_CEILING;
   const reversible = getNoulAnswer(answers, "reversible");
   const external = getNoulAnswer(answers, "external");
   const consequence = getScoreAnswer(answers, "consequence");
@@ -374,7 +414,7 @@ export function decideAction(answers: Record<string, Answer>): GateDecision {
   } else if (external.noul >= GATE_EXTERNAL_GATE) {
     reasons.push({ key: "reason.someoneElseWillNotice" });
   }
-  if (consequence.score > GATE_CONSEQUENCE_CEILING) {
+  if (consequence.score > consequenceCeiling) {
     reasons.push({ key: consequence.score > 2.3 ? "reason.breaksSomethingImportant" : "reason.needsCleanupAfter" });
   }
 
@@ -398,7 +438,7 @@ export function decideAction(answers: Record<string, Answer>): GateDecision {
   // stop a command that should have run. The other two answers are still read
   // and still reported, because they explain WHY to the person reading -- they
   // just no longer decide.
-  const ask = consequence.score > GATE_CONSEQUENCE_CEILING;
+  const ask = consequence.score > consequenceCeiling;
 
   return {
     verdict: ask ? "ask" : "allow",
@@ -407,6 +447,65 @@ export function decideAction(answers: Record<string, Answer>): GateDecision {
     external: external.noul,
     consequence: consequence.score,
   };
+}
+
+// ---------------------------------------------------------------------------
+// decideGateAction: the gate's full decision order -- destination policy
+// first (permits/prohibits/requires_human), the consequence-ceiling risk
+// rule as fallback when no policy resolves it.
+// ---------------------------------------------------------------------------
+
+/** Either family's own reason keys -- a policy citation resolves through DESTINATION_CATALOG, a risk reason through GATE_CATALOG. */
+export type GateActionReason = LocalizedReason<GateKey> | LocalizedReason<DestinationKey>;
+
+export interface GateActionResult {
+  readonly verdict: GateVerdict;
+  readonly reasons: readonly GateActionReason[];
+}
+
+export interface DecideGateActionInput {
+  readonly action: string;
+  readonly policies: readonly Policy[];
+  /** Same Jev answers map used by both stages: coverage/same_kind for the policy stage, reversible/external/consequence for the risk stage. */
+  readonly answers: Record<string, Answer>;
+  /** Per-destination override of GATE_CONSEQUENCE_CEILING; omit to use the global default. */
+  readonly consequenceCeiling?: number;
+  /** True when the gate could not match the cwd to any catalog destination -- appends an explanatory reason if the risk rule ends up deciding. */
+  readonly noDestinationMatched?: boolean;
+}
+
+/**
+ * Composes interpretDestinationPolicy and decideAction into the gate's
+ * actual decision order:
+ *
+ *   1. A matching `permits` policy allows.
+ *   2. A matching `prohibits` or `requires_human` policy asks -- the gate
+ *      itself is only 2-way (allow/ask), so both 3-way DestinationOutcomes
+ *      (`do_not`, `ask`) collapse onto the same `ask` verdict here.
+ *   3. No policy resolves it (none configured, or none matched strongly
+ *      enough) -> fall through to decideAction's consequence-ceiling rule,
+ *      which keeps its own fail-open guarantee completely intact.
+ *
+ * A policy match can move the verdict in EITHER direction relative to what
+ * the risk rule alone would have said: `permits` can turn a would-be `ask`
+ * into `allow`, and `prohibits`/`requires_human` can turn a would-be `allow`
+ * into `ask`. Nothing else overrides the risk rule's outcome.
+ */
+export function decideGateAction(input: DecideGateActionInput): GateActionResult {
+  if (input.policies.length > 0) {
+    const policyDecision = interpretDestinationPolicy(input.action, input.policies, input.answers);
+    if (policyDecision !== null) {
+      const verdict: GateVerdict = policyDecision.outcome === "act" ? "allow" : "ask";
+      return { verdict, reasons: policyDecision.rationale };
+    }
+  }
+
+  const riskDecision = decideAction(input.answers, { consequenceCeiling: input.consequenceCeiling });
+  const reasons: GateActionReason[] = [...riskDecision.reasons];
+  if (input.noDestinationMatched === true) {
+    reasons.push({ key: "reason.noDestinationMatched" });
+  }
+  return { verdict: riskDecision.verdict, reasons };
 }
 
 // ===========================================================================

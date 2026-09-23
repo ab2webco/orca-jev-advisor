@@ -171,6 +171,30 @@ async function statSecretMirror () {
 }
 
 // ---------------------------------------------------------------------------
+// Catalog and policies -- gate-bash.ts (outside this worker's process, same
+// as the key and locale above) needs the destination catalog and team
+// policies to decide, but has zero channel into `storage`. Neither is
+// secret -- the config panel already shows both in the clear -- so they
+// mirror to their own plain-permission JSON files next to the key's env
+// file, via the same sidecar and the same clean-child sandbox.
+// ---------------------------------------------------------------------------
+
+/** Mirrors the current catalog and policies to their JSON files. Best-effort
+ *  on each: a mirror failure is logged, never thrown, so it can never turn
+ *  a successful panel save into a reported failure. */
+async function mirrorCatalogAndPolicies (orca, storageHost) {
+  const [catalog, policies] = await Promise.all([getCatalog(storageHost), getPolicies(storageHost)])
+  const catalogResult = await runSecretMirrorScript('catalog-save', JSON.stringify(catalog))
+  if (!catalogResult.ok) {
+    orca.log(`catalog mirror failed: ${String(catalogResult.reason ?? 'unknown')} -- ${String(catalogResult.detail ?? '').slice(0, 160)}`)
+  }
+  const policiesResult = await runSecretMirrorScript('policies-save', JSON.stringify(policies))
+  if (!policiesResult.ok) {
+    orca.log(`policies mirror failed: ${String(policiesResult.reason ?? 'unknown')} -- ${String(policiesResult.detail ?? '').slice(0, 160)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Locale -- the panel's own message-language choice (not Orca's
 // `contributes.languagePacks`; see src/core/i18n.ts for why), mirrored to
 // its own plain-text file next to the key's, for gate-bash.ts and
@@ -572,6 +596,28 @@ async function attendLocaleRequest (orca, storageHost) {
 }
 
 // ---------------------------------------------------------------------------
+// Catalog/policies mirror trigger -- unlike the secret/Claude-integration/
+// locale channels above, nothing in the UI waits on this: the panel already
+// writes the catalog and policies straight to storage on save, so this is
+// only a fire-and-forget nudge telling the poll loop to re-mirror them. One
+// plain timestamp string, compared against the last value this poll saw
+// (`lastSeen`, a tiny mutable box the caller owns across ticks) rather than
+// the delete-on-read id/at request shape the other channels use, since there
+// is no result to report back and no request to consume.
+// ---------------------------------------------------------------------------
+
+const CATALOG_POLICY_MIRROR_REQUEST_KEY = 'catalog-policy-mirror-request'
+
+/** Re-mirrors the catalog and policies only when the panel's trigger value
+ *  has changed since the last tick that looked at it. */
+async function attendCatalogPolicyMirrorRequest (orca, storageHost, lastSeen) {
+  const request = await storageHost.get(CATALOG_POLICY_MIRROR_REQUEST_KEY)
+  if (typeof request !== 'string' || request.length === 0 || request === lastSeen.value) return
+  lastSeen.value = request
+  await mirrorCatalogAndPolicies(orca, storageHost)
+}
+
+// ---------------------------------------------------------------------------
 // Board maintenance -- the only cross-worktree awareness this plugin has
 // that does not require spawning the `orca` CLI, since `agent.status.changed`
 // is the one global event and storage is shared across worktree instances.
@@ -894,6 +940,7 @@ export default function activate (orca) {
   // minutes idle, so this timer must be (and is) cleared by teardown below.
   let secretPollStopped = false
   let secretTimer = null
+  const catalogPolicyMirrorSeen = { value: null }
   const runSecretPoll = () => {
     attendSecretRequest(orca, storageHost, secretsHost)
       .catch((error) => orca.log(`secret request handling failed: ${error.message}`))
@@ -901,6 +948,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`claude integration request handling failed: ${error.message}`))
       .then(() => attendLocaleRequest(orca, storageHost))
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
+      .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
+      .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => storageHost.get(PANEL_SEEN_KEY).catch(() => null))
       .then((seen) => {
         if (secretPollStopped) return
@@ -929,6 +978,12 @@ export default function activate (orca) {
   secretsHost.get(SECRET_KEY_NAME)
     .then((value) => mirrorSecretToEnvFile(orca, typeof value === 'string' && value.trim().length > 0 ? value.trim() : null))
     .catch((error) => orca.log(`initial secret mirror failed: ${error.message}`))
+  // Same convergence guarantee as the key above: a worker restarted after
+  // the catalog/policies mirror files were lost or never written by an
+  // older version of this plugin catches up without the user having to
+  // touch the panel's save button again.
+  mirrorCatalogAndPolicies(orca, storageHost)
+    .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
   // "Al activarse, el worker debe dejar funcionando todo lo que hoy es
   // manual" (T8): every activation re-asserts the hook, the env var and the
   // mod-skills link, idempotently -- a fresh install where none of this

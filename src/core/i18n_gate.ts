@@ -25,7 +25,8 @@ export type GateKey =
   | "reason.cannotUndo"
   | "reason.someoneElseWillNotice"
   | "reason.breaksSomethingImportant"
-  | "reason.needsCleanupAfter";
+  | "reason.needsCleanupAfter"
+  | "reason.noDestinationMatched";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -51,6 +52,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.someoneElseWillNotice": "el efecto lo va a notar alguien mas",
     "reason.breaksSomethingImportant": "si esta mal, rompe algo que le importa a alguien",
     "reason.needsCleanupAfter": "si esta mal, hay que limpiar despues",
+    "reason.noDestinationMatched": "no se pudo relacionar el directorio actual con ningun destino del catalogo -- se usaron los umbrales globales por defecto",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -75,5 +77,6 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.someoneElseWillNotice": "someone else is going to notice the effect",
     "reason.breaksSomethingImportant": "if it's wrong, it breaks something that matters to someone",
     "reason.needsCleanupAfter": "if it's wrong, there's cleanup to do afterward",
+    "reason.noDestinationMatched": "couldn't match the current directory to any catalog destination -- fell back to the default global thresholds",
   },
 };
