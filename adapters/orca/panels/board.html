@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -385,21 +385,10 @@
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
-      function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
 
-      // ---------- idioma (comparte localeStatus/localeRequest con config.html) ----
-      function sendLocaleRequest (locale) {
-        var requestId = 'locale-' + Date.now() + '-' + Math.random().toString(36).slice(2)
-        return write('localeRequest', { id: requestId, at: new Date().toISOString(), locale: locale })
-      }
-      function applyLocale (locale) {
-        currentLocale = (locale === 'en') ? 'en' : 'es'
-        document.documentElement.lang = currentLocale
-        applyStaticI18n()
-        renderStats(lastStats)
-        render(lastBoard)
-      }
-
+      // This panel only reads. The locale mirror for the gate and the skills
+      // mod is written by config.html alone; both panels doing it would race
+      // for no gain, so there is no storage.set helper here.
       // ---------- render: stats ---------------------------------------------
       function esc (text) {
         return String(text == null ? '' : text)

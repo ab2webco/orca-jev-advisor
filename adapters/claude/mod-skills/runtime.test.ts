@@ -100,3 +100,27 @@ test("an %APPDATA% present alongside HOME still reads as Windows (the isWindows 
   const result = computeHomePaths({ home: "C:/Users/dev", appData: "C:/Users/dev/AppData/Roaming" });
   assert.equal(result?.configDir, "C:/Users/dev/AppData/Roaming/orca-supervisor");
 });
+
+// The gate and this mod read the same API key from the same file. If their
+// two resolvers ever disagree, one of them finds nothing and says nothing --
+// which is what a live macOS machine with XDG_CONFIG_HOME set did before
+// this was fixed. These tests exist to keep the two in step, so they assert
+// agreement with src/core/paths.ts rather than a hardcoded string.
+test('agrees with src/core/paths.ts on every platform shape', async () => {
+  const { resolveConfigDir, resolveCacheDir } = await import('../../../src/core/paths.ts');
+  const cases = [
+    { name: 'macOS, no XDG', platform: 'darwin' as const, home: '/Users/dev', env: {} },
+    { name: 'macOS WITH XDG set', platform: 'darwin' as const, home: '/Users/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
+    { name: 'Linux, no XDG', platform: 'linux' as const, home: '/home/dev', env: {} },
+    { name: 'Linux WITH XDG set', platform: 'linux' as const, home: '/home/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
+  ];
+  for (const c of cases) {
+    const mine = computeHomePaths({ home: c.home, ...c.env });
+    const theirs = {
+      configDir: resolveConfigDir(c.platform, { home: c.home, xdgConfigHome: c.env.xdgConfigHome }),
+      cacheDir: resolveCacheDir(c.platform, { home: c.home, xdgCacheHome: c.env.xdgCacheHome }),
+    };
+    assert.equal(mine?.configDir, theirs.configDir, `${c.name}: config dir diverged`);
+    assert.equal(mine?.cacheDir, theirs.cacheDir, `${c.name}: cache dir diverged`);
+  }
+});
