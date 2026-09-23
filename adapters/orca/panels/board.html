@@ -65,7 +65,7 @@
         border-bottom: 1px solid var(--border, var(--fb-border));
       }
       header .meta { margin-left: auto; }
-      header button, .lang-switch button {
+      header button {
         font: inherit; font-size: 13px; line-height: 1; padding: 3px 8px; cursor: pointer;
         border: 1px solid var(--border, var(--fb-border));
         border-radius: var(--radius-md);
@@ -73,17 +73,15 @@
         color: var(--muted-foreground, var(--fb-muted-foreground));
         transition: background-color 90ms ease, color 90ms ease;
       }
-      header button:hover, .lang-switch button:hover { background: var(--accent, var(--fb-accent));
+      header button:hover { background: var(--accent, var(--fb-accent));
                             color: var(--accent-foreground, var(--fb-accent-foreground)); }
-      header button:active, .lang-switch button:active { transform: translateY(1px); }
-      header button:focus-visible, .lang-switch button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      header button:active { transform: translateY(1px); }
+      header button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
       header button[disabled] { opacity: 0.5; cursor: default; }
       h1 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
       .meta { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .nota { margin: 0 0 8px; padding: 0 12px; }
       .nota:empty { display: none; }
-      .lang-switch { display: flex; gap: 4px; }
-      .lang-switch button[aria-pressed="true"] { background: var(--primary, var(--fb-primary)); color: var(--primary-foreground, var(--fb-primary-foreground)); border-color: transparent; }
 
       section { padding: 10px 12px; }
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
@@ -130,10 +128,6 @@
   <body>
     <header>
       <h1>Advisor</h1>
-      <div class="lang-switch" id="lang-switch" role="group" aria-label="idioma / language">
-        <button type="button" id="lang-es" aria-pressed="true">ES</button>
-        <button type="button" id="lang-en" aria-pressed="false">EN</button>
-      </div>
       <span class="meta" id="status"></span>
       <button id="refresh" data-i18n-title="board.refresh" data-i18n-aria="board.refresh">&#8635;</button>
     </header>
@@ -274,7 +268,20 @@
           'live.updating': 'Updating…'
         }
       }
-      var currentLocale = 'es'
+      /**
+       * The language Orca is running in.
+       *
+       * Orca substitutes the resolved UI locale into the panel shell's
+       * `<html lang>`, so the plugin no longer has to ask a question the
+       * user already answered in Orca's own settings. Anything this plugin
+       * has no catalog for falls back to English.
+       */
+      function localeFromOrca () {
+        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      var currentLocale = localeFromOrca()
       function t (key, params) {
         var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
         if (!params) return template
@@ -286,10 +293,6 @@
         document.querySelectorAll('[data-i18n]').forEach(function (node) { node.textContent = t(node.getAttribute('data-i18n')) })
         document.querySelectorAll('[data-i18n-title]').forEach(function (node) { node.title = t(node.getAttribute('data-i18n-title')) })
         document.querySelectorAll('[data-i18n-aria]').forEach(function (node) { node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria'))) })
-      }
-      function setLangButtons (locale) {
-        el('lang-es').setAttribute('aria-pressed', String(locale === 'es'))
-        el('lang-en').setAttribute('aria-pressed', String(locale === 'en'))
       }
 
       // ---------- puente real con el host --------------------------------
@@ -392,13 +395,10 @@
       function applyLocale (locale) {
         currentLocale = (locale === 'en') ? 'en' : 'es'
         document.documentElement.lang = currentLocale
-        setLangButtons(currentLocale)
         applyStaticI18n()
         renderStats(lastStats)
         render(lastBoard)
       }
-      el('lang-es').addEventListener('click', function () { if (currentLocale !== 'es') { applyLocale('es'); sendLocaleRequest('es').catch(function () {}) } })
-      el('lang-en').addEventListener('click', function () { if (currentLocale !== 'en') { applyLocale('en'); sendLocaleRequest('en').catch(function () {}) } })
 
       // ---------- render: stats ---------------------------------------------
       function esc (text) {
@@ -628,11 +628,8 @@
         })
       })
 
-      read('localeStatus', true).then(function (localeStatus) {
-        var locale = (localeStatus && localeStatus.value) || 'es'
-        currentLocale = (locale === 'en') ? 'en' : 'es'
-        document.documentElement.lang = currentLocale
-        setLangButtons(currentLocale)
+      // Orca's language decides; see the note in config.html.
+      Promise.resolve().then(function () {
         applyStaticI18n()
         return reload(true)
       }).then(startPolling)
