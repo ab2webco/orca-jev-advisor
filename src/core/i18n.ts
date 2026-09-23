@@ -29,7 +29,7 @@
 
 export type Locale = "es" | "en";
 
-export const DEFAULT_LOCALE: Locale = "es";
+export const DEFAULT_LOCALE: Locale = "en";
 
 export function isLocale(value: unknown): value is Locale {
   return value === "es" || value === "en";

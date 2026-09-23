@@ -58,8 +58,8 @@ type Result = {
 
 async function evaluate(apiKey: string, action: string, policies: readonly Policy[], context: string): Promise<Result> {
   const response = await callJev(apiKey, buildDestinationState(action, context, policies), buildPolicyQuestions(policies))
-  const coverage = getChoiceAnswer(response.answers, 'cobertura')
-  const match = getNoulAnswer(response.answers, 'es_del_tipo')
+  const coverage = getChoiceAnswer(response.answers, 'coverage')
+  const match = getNoulAnswer(response.answers, 'same_kind')
 
   const decision = interpretDestinationPolicy(action, policies, response.answers)
   if (decision === null) {

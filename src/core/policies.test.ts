@@ -28,23 +28,23 @@ async function withPoliciesFile(content: unknown, run: (path: string) => Promise
 test("loads a well-formed policies file with a valid kind on every row", async () => {
   await withPoliciesFile(
     [
-      { id: "a", rule: "regla a", kind: "permits" },
-      { id: "b", rule: "regla b", kind: "requires_human" },
-      { id: "c", rule: "regla c", kind: "prohibits" },
+      { id: "a", rule: "rule a", kind: "permits" },
+      { id: "b", rule: "rule b", kind: "requires_human" },
+      { id: "c", rule: "rule c", kind: "prohibits" },
     ],
     async (path) => {
       const policies = await loadPolicies(path);
       assert.deepEqual(policies, [
-        { id: "a", rule: "regla a", kind: "permits" },
-        { id: "b", rule: "regla b", kind: "requires_human" },
-        { id: "c", rule: "regla c", kind: "prohibits" },
+        { id: "a", rule: "rule a", kind: "permits" },
+        { id: "b", rule: "rule b", kind: "requires_human" },
+        { id: "c", rule: "rule c", kind: "prohibits" },
       ]);
     },
   );
 });
 
 test("throws a descriptive error naming the row index when kind is missing", async () => {
-  await withPoliciesFile([{ id: "a", rule: "regla a" }], async (path) => {
+  await withPoliciesFile([{ id: "a", rule: "rule a" }], async (path) => {
     await assert.rejects(() => loadPolicies(path), (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /posicion 0/);
@@ -56,7 +56,7 @@ test("throws a descriptive error naming the row index when kind is missing", asy
 });
 
 test("throws a descriptive error naming the row index when kind is an invalid value", async () => {
-  await withPoliciesFile([{ id: "a", rule: "regla a", kind: "permits" }, { id: "b", rule: "regla b", kind: "quizas" }], async (path) => {
+  await withPoliciesFile([{ id: "a", rule: "rule a", kind: "permits" }, { id: "b", rule: "rule b", kind: "maybe" }], async (path) => {
     await assert.rejects(() => loadPolicies(path), (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /posicion 1/);
@@ -67,7 +67,7 @@ test("throws a descriptive error naming the row index when kind is an invalid va
 });
 
 test("still rejects a row missing id/rule before it ever looks at kind", async () => {
-  await withPoliciesFile([{ rule: "sin id", kind: "permits" }], async (path) => {
+  await withPoliciesFile([{ rule: "no id", kind: "permits" }], async (path) => {
     await assert.rejects(() => loadPolicies(path), (error: unknown) => {
       assert.ok(error instanceof Error);
       assert.match(error.message, /'id' y 'rule'/);
