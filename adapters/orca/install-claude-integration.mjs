@@ -42,7 +42,7 @@ import { lstat, mkdir, readdir, readFile, readlink, rename, rm, symlink, unlink,
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
+import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
 import {
   ORCA_USER_DATA_ENV,
   accountConfigTarget,
@@ -61,7 +61,13 @@ import {
 // does control -- see src/core/paths.ts.
 const HOME = homedir()
 const PLATFORM = normalizePlatform(process.platform)
-const STATE_DIR = resolveConfigDir(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
+// Writes go to the first candidate; reads try each in turn. On Linux, once
+// XDG_CONFIG_HOME is honoured, an existing install's state and backup sit in
+// ~/.config/orca-supervisor -- and losing sight of them would mean uninstall
+// could no longer restore what install captured, which is the one file that
+// cannot be reconstructed later.
+const STATE_DIRS = resolveConfigDirCandidates(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
+const STATE_DIR = STATE_DIRS[0]
 const STATE_PATH = join(STATE_DIR, 'claude-settings-install-state.json')
 
 // ---------------------------------------------------------------------------
@@ -225,12 +231,15 @@ async function backupSettingsOnce (backupPath, currentRawText) {
 // ---------------------------------------------------------------------------
 
 async function readInstallState () {
-  try {
-    const parsed = JSON.parse(await readFile(STATE_PATH, 'utf8'))
-    return isRecord(parsed) ? parsed : null
-  } catch {
-    return null
+  for (const dir of STATE_DIRS) {
+    try {
+      const parsed = JSON.parse(await readFile(join(dir, 'claude-settings-install-state.json'), 'utf8'))
+      if (isRecord(parsed)) return parsed
+    } catch {
+      continue
+    }
   }
+  return null
 }
 
 async function writeInstallState (state) {

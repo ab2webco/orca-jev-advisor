@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="es">
+<html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -17,17 +17,15 @@
 
       Every user-facing string in this file comes from CATALOG (es/en)
       below, looked up by key -- never typed inline at the point it is
-      shown. This is NOT Orca's own `contributes.languagePacks`: that
-      mechanism replaces Orca's whole UI language and a plugin can only
-      offer it as a value of Orca's OWN `uiLanguage` setting (verified in
-      orca-oss: I18nProvider.tsx resolves a plugin's pack only when
-      `uiLanguage === pack.id`); nothing tells a plugin what language Orca
-      is already in (`settings.get` is this plugin's own config, not the
-      app's, and the panel shell injects no locale token). So this plugin
-      carries its own small, explicit choice instead -- the two buttons
-      next to the title -- kept in its own storage and mirrored to
-      ~/.config/orca-supervisor/locale for gate-bash.ts and mod-skills,
-      which run outside Orca and read it directly (see src/core/i18n.ts).
+      shown. The language is Orca's: the panel shell substitutes the
+      resolved UI locale into `<html lang>`, so this panel reads
+      `document.documentElement.lang` and no longer asks a question the
+      user already answered in Orca's settings. This is NOT Orca's own
+      `contributes.languagePacks`, which replaces Orca's whole UI language
+      and a plugin can only offer as a value of Orca's own `uiLanguage`.
+      The resolved locale is still mirrored to the plugin's config
+      directory for gate-bash.ts and mod-skills, which run outside Orca and
+      cannot read this document (see src/core/i18n.ts).
     -->
 
     <style>
@@ -755,22 +753,10 @@
       }
 
 
-      // On a language change, the dynamic rows (catalog/policies) already
-      // have their labels fixed at creation time: their values are read,
-      // they're rebuilt with the new language's labels, and the rest of the
-      // panel repaints through the catalog.
-      function applyLocale (locale) {
-        currentLocale = (locale === 'en') ? 'en' : 'es'
-        var savedCatalog = readCatalog()
-        var savedPolicies = readPolicies()
-        applyStaticI18n()
-        renderSecretStatus(lastSecretStatus)
-        renderClaudeIntegrationStatus(lastClaudeIntegrationStatus)
-        catalogListEl.innerHTML = ''
-        savedCatalog.destinations.forEach(addCatalogRow)
-        policiesListEl.innerHTML = ''
-        savedPolicies.forEach(addPolicyRow)
-      }
+      // There is no applyLocale here any more. It existed to repaint the panel
+      // when the in-panel language switch was used, and the switch is gone:
+      // the language comes from Orca, which remounts the whole panel when it
+      // changes, so nothing needs to repaint in place.
 
       // The gate and the skills mod run OUTSIDE Orca and cannot read the
       // panel's `<html lang>`, so the locale Orca reports is mirrored out to
