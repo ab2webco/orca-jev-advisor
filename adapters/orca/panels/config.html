@@ -1217,10 +1217,19 @@
       // The panel never reads the key back: it only paints what the worker
       // published in SECRET_STATUS_KEY (isConfigured/endsWith), never the
       // full value.
-      function renderSecretStatus (status) {
+      // `heartbeat` is `undefined` for the very first, synchronous paint
+      // (before the real storage reads in load() below have even started --
+      // "Checking..." is simply true there) and either `null` or a real
+      // heartbeat object once loadSecretStatus has actually asked. Only in
+      // that second case does an absent/stale heartbeat mean "no worker is
+      // running" rather than "still finding out" (see T4 in
+      // odd/tasks/panel-worker-wakeup.md).
+      function renderSecretStatus (status, heartbeat) {
         lastSecretStatus = status
         if (status === null) {
-          secretStatusEl.textContent = t('secret.checking')
+          secretStatusEl.textContent = (heartbeat === undefined || isHeartbeatFresh(heartbeat, Date.now(), WORKER_HEARTBEAT_STALE_MS))
+            ? t('secret.checking')
+            : t('common.workerSilent')
           secretUiMode = 'empty'
           applySecretUiMode()
           return
@@ -1247,7 +1256,9 @@
       })
 
       function loadSecretStatus () {
-        return read(SECRET_STATUS_KEY, false).then(renderSecretStatus)
+        return Promise.all([read(SECRET_STATUS_KEY, false), read(WORKER_HEARTBEAT_KEY, false)]).then(function (results) {
+          renderSecretStatus(results[0], results[1])
+        })
       }
 
       function said (node, text, bad) {
@@ -1295,26 +1306,26 @@
       // Paints exactly what the worker published in
       // CLAUDE_INTEGRATION_STATUS_KEY -- never the key, and never more detail
       // than the panel needs for the user to know what's set up and where.
-      var integrationCheckTimer = null
-      function renderClaudeIntegrationStatus (status) {
+      //
+      // `heartbeat` follows the same undefined/null/object convention as
+      // renderSecretStatus above: `undefined` only for the very first,
+      // synchronous paint before load() has asked storage anything, where
+      // "Checking..." is simply true. Once loadClaudeIntegrationStatus has
+      // actually read the heartbeat, an absent or stale one means no worker
+      // is running -- a fixed 20s guess used to stand in for this and could
+      // say "not running" about a worker that was, in fact, running (see T4
+      // in odd/tasks/panel-worker-wakeup.md).
+      function renderClaudeIntegrationStatus (status, heartbeat) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
         if (status === null) {
-          // "Checking…" is honest for a second and a lie after twenty: on a
-          // fresh install the worker may never publish anything, and a
-          // spinner that never resolves tells nobody what to do about it.
-          claudeIntegrationStatusEl.appendChild(li(t('integration.checking')))
-          if (integrationCheckTimer === null) {
-            integrationCheckTimer = setTimeout(function () {
-              if (lastClaudeIntegrationStatus === null) {
-                claudeIntegrationStatusEl.innerHTML = ''
-                claudeIntegrationStatusEl.appendChild(li(t('common.workerSilent')))
-              }
-            }, 20000)
-          }
+          claudeIntegrationStatusEl.appendChild(li(
+            (heartbeat === undefined || isHeartbeatFresh(heartbeat, Date.now(), WORKER_HEARTBEAT_STALE_MS))
+              ? t('integration.checking')
+              : t('common.workerSilent')
+          ))
           return
         }
-        if (integrationCheckTimer !== null) { clearTimeout(integrationCheckTimer); integrationCheckTimer = null }
         if (!status || !status.ok) {
           claudeIntegrationStatusEl.appendChild(li(t('integration.statusUnavailable')))
           return
@@ -1351,7 +1362,9 @@
       }
 
       function loadClaudeIntegrationStatus () {
-        return read(CLAUDE_INTEGRATION_STATUS_KEY, false).then(renderClaudeIntegrationStatus)
+        return Promise.all([read(CLAUDE_INTEGRATION_STATUS_KEY, false), read(WORKER_HEARTBEAT_KEY, false)]).then(function (results) {
+          renderClaudeIntegrationStatus(results[0], results[1])
+        })
       }
 
       el('claude-integration-setup').addEventListener('click', function () {
