@@ -2,9 +2,6 @@
 // client sites, projects, support inboxes) this supervisor is allowed to
 // route encargos to, along with each destination's autonomy thresholds.
 
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { isArrayOf, isNumber, isRecord, isString } from "../guards.ts";
 /**
  * How many levels a destination's `maxAutoDelicateness` can range over.
@@ -107,49 +104,4 @@ function validateAutonomyRules(catalog: Catalog): string[] {
     }
   }
   return errors;
-}
-
-/**
- * Loads and validates catalog.json. Defaults to the file next to this
- * module's project root; accepts an explicit path for tests or alternate
- * deployments.
- */
-export async function loadCatalog(catalogPath?: string): Promise<Catalog> {
-  const defaultPath = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "catalog.json");
-  const path = catalogPath ?? defaultPath;
-
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Couldn't read the catalog at ${path}: ${message}`);
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`The catalog at ${path} isn't valid JSON: ${message}`);
-  }
-
-  if (!isCatalogShape(parsed)) {
-    throw new Error(
-      `The catalog at ${path} doesn't have the expected shape {destinations: [{id, label, kind, worktreePath, autonomy: {actThreshold, confirmThreshold, maxAutoDelicateness}, ...}]}`,
-    );
-  }
-
-  const ruleErrors = validateAutonomyRules(parsed);
-  if (ruleErrors.length > 0) {
-    throw new Error(`The catalog at ${path} has invalid autonomy values:\n- ${ruleErrors.join("\n- ")}`);
-  }
-
-  const ids = parsed.destinations.map((d) => d.id);
-  const duplicateIds = [...new Set(ids.filter((id, index) => ids.indexOf(id) !== index))];
-  if (duplicateIds.length > 0) {
-    throw new Error(`The catalog at ${path} has duplicate destination ids: ${duplicateIds.join(", ")}`);
-  }
-
-  return parsed;
 }
