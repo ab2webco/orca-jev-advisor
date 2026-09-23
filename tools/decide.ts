@@ -12,7 +12,7 @@
  *
  * Asking purely by risk, with no policies, sends things to review that the
  * team already settled months ago. Measured: "comment @dependabot recreate"
- * comes out `pregunta` by risk and `actua` as soon as the covering rule exists.
+ * comes out `ask` by risk and `act` as soon as the covering rule exists.
  *
  * Every action that falls into step 2 is also a policy gap: the list of gaps
  * printed at the end is the list of rules still worth writing.
@@ -65,7 +65,7 @@ function pad(value: string, width: number): string {
   return value.length >= width ? value.slice(0, width - 1) + '…' : value + ' '.repeat(width - value.length)
 }
 
-const MARK: Record<DestinationDecision['outcome'], string> = { actua: '✓ DO IT   ', no_hagas: "✗ DON'T   ", pregunta: '! ASK     ' }
+const MARK: Record<DestinationDecision['outcome'], string> = { act: '✓ DO IT   ', do_not: "✗ DON'T   ", ask: '! ASK     ' }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
@@ -103,9 +103,9 @@ async function main(): Promise<void> {
     console.log(`             ${renderRationale(d)}`)
   }
 
-  const act = decisions.filter((d) => d.outcome === 'actua').length
-  const blocked = decisions.filter((d) => d.outcome === 'no_hagas').length
-  const ask = decisions.filter((d) => d.outcome === 'pregunta').length
+  const act = decisions.filter((d) => d.outcome === 'act').length
+  const blocked = decisions.filter((d) => d.outcome === 'do_not').length
+  const ask = decisions.filter((d) => d.outcome === 'ask').length
   console.log(`\n${act} done · ${blocked} blocked by rule · ${ask} land on you`)
 
   const gaps = decisions.filter((d) => d.isPolicyGap)

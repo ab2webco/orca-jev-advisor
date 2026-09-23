@@ -12,9 +12,9 @@
  *      describes (noul, kind-neutral -- match or no match)
  *
  * The covering policy's own `kind` then decides what a match means:
- *   permite + match  -> do it, cite the policy.
- *   pregunta + match -> ask a human, cite the policy.
- *   prohibe + match  -> do not do it, and say which rule it breaks.
+ *   permits + match         -> do it, cite the policy.
+ *   requires_human + match  -> ask a human, cite the policy.
+ *   prohibits + match       -> do not do it, and say which rule it breaks.
  *   no match / not covered -> fall back to judging risk: this is a real gap
  *                             in the policy, and it is worth naming as such.
  *
@@ -68,7 +68,7 @@ async function evaluate(apiKey: string, action: string, policies: readonly Polic
       policyId: NO_POLICY_ID,
       policyConfidence: coverage?.confidence ?? 0,
       match: match?.noul ?? 0,
-      outcome: 'pregunta',
+      outcome: 'ask',
       rationale:
         coverage === null || coverage.choice === NO_POLICY_ID
           ? "No policy covers this: it's a gap in the team's rules, not the model's doubt."
@@ -92,7 +92,7 @@ function pad(value: string, width: number): string {
   return value.length >= width ? value.slice(0, width - 1) + '…' : value + ' '.repeat(width - value.length)
 }
 
-const MARK: Record<DestinationDecision['outcome'], string> = { actua: '✓ DO IT   ', no_hagas: "✗ DON'T   ", pregunta: '! ASK     ' }
+const MARK: Record<DestinationDecision['outcome'], string> = { act: '✓ DO IT   ', do_not: "✗ DON'T   ", ask: '! ASK     ' }
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2)
@@ -132,9 +132,9 @@ async function main(): Promise<void> {
     console.log(`${MARK[r.outcome]}  ${pad(r.action, 50)} ${pad(r.policyId, 22)} match ${r.match.toFixed(2)}`)
     console.log(`             ${r.rationale}`)
   }
-  const act = results.filter((r) => r.outcome === 'actua').length
-  const blocked = results.filter((r) => r.outcome === 'no_hagas').length
-  const ask = results.filter((r) => r.outcome === 'pregunta').length
+  const act = results.filter((r) => r.outcome === 'act').length
+  const blocked = results.filter((r) => r.outcome === 'do_not').length
+  const ask = results.filter((r) => r.outcome === 'ask').length
   console.log(`\n${act} resolved by policy · ${blocked} blocked by policy · ${ask} land on you`)
   const gaps = results.filter((r) => r.policyId === NO_POLICY_ID)
   if (gaps.length > 0) {
