@@ -6,6 +6,7 @@ import {
   buildApprovalOutcomeRecord,
   buildPendingApprovalRecord,
   ceilingEvidence,
+  parsePendingToolUseIds,
   serializeApprovalRecord,
   summarizeApprovals,
 } from "./approval_record.ts";
@@ -130,4 +131,32 @@ test("reports how much evidence each side rests on, so a suggestion from two sam
   const e = ceilingEvidence([label(1.2, "approved"), label(2.2, "rejected")]);
   assert.equal(e.approvedCount, 1);
   assert.equal(e.rejectedCount, 1);
+});
+
+test("parsePendingToolUseIds collects only gate-pending tool_use_ids, ignoring gate-outcome lines", () => {
+  const raw = [
+    serializeApprovalRecord(pending("a", 1.9)),
+    serializeApprovalRecord(outcome("a", "approved")),
+    serializeApprovalRecord(pending("b", 2.1)),
+  ].join("");
+  const ids = parsePendingToolUseIds(raw);
+  assert.equal(ids.has("a"), true);
+  assert.equal(ids.has("b"), true);
+  assert.equal(ids.has("c"), false, "an id that never appeared as gate-pending must not be reported as joinable");
+});
+
+test("parsePendingToolUseIds skips malformed lines instead of throwing -- must be at least as forgiving as the file it reads", () => {
+  const raw = [
+    "not json at all\n",
+    serializeApprovalRecord(pending("a", 1.9)),
+    "{\"broken\": \n",
+    "",
+  ].join("");
+  const ids = parsePendingToolUseIds(raw);
+  assert.equal(ids.has("a"), true);
+  assert.equal(ids.size, 1);
+});
+
+test("parsePendingToolUseIds on empty input returns an empty set", () => {
+  assert.equal(parsePendingToolUseIds("").size, 0);
 });
