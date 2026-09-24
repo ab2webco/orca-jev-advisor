@@ -258,5 +258,22 @@ match.
     ticked. This is intended: the choose list stays reachable via "Import
     baseline policies". Pinned by no test.
 
+- Commit `7ced589` review: assessed high, consent `granted`, 4 lenses `approved`,
+  lineage `review-52caeee6379a2275` acknowledged. The findings were advisory
+  and are left as follow-ups; the review contract allows no
+  loop-until-clean:
+  - R3-001/R1 (WARNING): after a wrapper, the jump lands on the first
+    git/eval/shell word. If a wrapper option's VALUE is itself such a name
+    (`sudo -u git git restore .`, `env -u bash git restore .`), the real
+    git is missed. Fix idea: try every candidate position after the wrapper.
+  - R2 (WARNING): the comment "an argument of an ordinary program is still
+    never read as a run" overstates it. Inside a wrapped segment, including
+    shell keywords like `do`/`then`, an UNQUOTED `git restore` in another
+    program's arguments is read as a run. Quoted text is still safe (one token).
+  - R4-001: a store that stays broken makes the poll log one line per tick.
+  - R3-002: an offered-marker write failure is not retried until the decision
+    changes.
+  - R2: the logged-boolean write pattern is duplicated.
+
 ## Next step
 Push and open the PR.
