@@ -1,6 +1,6 @@
 {
   "name": "orca-supervisor",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "type": "module",
   "description": "Multi-project supervisor that routes work to Orca terminals, using Jev (TypeSafe) for judgment and code for the facts.",
