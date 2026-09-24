@@ -144,9 +144,37 @@ function destination(autonomyExtra: Record<string, unknown> = {}): Record<string
     label: "Destination A",
     kind: "project",
     worktreePath: "/path/to/dest-a",
-    autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2, ...autonomyExtra },
+    autonomy: { ...autonomyExtra },
   };
 }
+
+// ---------------------------------------------------------------------------
+// AutonomyConfig.{actThreshold,confirmThreshold,maxAutoDelicateness} -- the
+// AB-benchmark pass's finding: traced to zero decisions anywhere (see
+// store.ts's own note on AutonomyConfig) and removed, the same way
+// production-honesty-pass P2 removed PluginConfig.thresholds' four dead
+// fields. Backward compatible: a catalog saved before this removal still
+// has all three sitting on disk; isAutonomyConfig no longer looks at them,
+// so they are ignored, never rejected.
+// ---------------------------------------------------------------------------
+
+test("getCatalog: a destination with an empty autonomy object (no consequenceCeiling, no legacy fields) loads fine -- there is nothing left to require", async () => {
+  const host = fakeHost({ catalog: { destinations: [destination()] } });
+  const catalog: CatalogData = await getCatalog(host);
+  assert.equal(catalog.destinations.length, 1);
+  assert.equal(catalog.destinations[0]?.autonomy.consequenceCeiling, undefined);
+});
+
+test("getCatalog: a destination still carrying the removed actThreshold/confirmThreshold/maxAutoDelicateness (saved before this pass) loads unchanged -- an old catalog is not a corrupt one", async () => {
+  const host = fakeHost({
+    catalog: { destinations: [destination({ actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 })] },
+  });
+  const catalog: CatalogData = await getCatalog(host);
+  assert.equal(catalog.destinations.length, 1);
+  const autonomy = catalog.destinations[0]?.autonomy as Record<string, unknown>;
+  assert.equal(Object.hasOwn(autonomy, "actThreshold"), true, "isAutonomyConfig ignores the extra key rather than stripping it");
+  assert.equal(catalog.destinations[0]?.autonomy.consequenceCeiling, undefined);
+});
 
 test("getCatalog: a destination missing consequenceCeiling loads fine (today's real seeded data)", async () => {
   const host = fakeHost({ catalog: { destinations: [destination()] } });

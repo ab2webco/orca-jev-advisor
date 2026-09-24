@@ -469,7 +469,7 @@ test('cmdRefreshCatalog: surfaces derivation-failed instead of reporting success
 test('deriveInitialCatalogIfEmpty: the "only when empty" guard leaves an already-populated catalog untouched', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
-    catalog: { destinations: [{ id: 'x', label: 'x', kind: 'project', worktreePath: '/x', autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 } }] }
+    catalog: { destinations: [{ id: 'x', label: 'x', kind: 'project', worktreePath: '/x', autonomy: {} }] }
   })
   await withoutPath(() => deriveInitialCatalogIfEmpty(orca, storageHost))
   const catalog = await storageHost.get('catalog')

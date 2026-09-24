@@ -56,10 +56,25 @@ function isDestinationKind(value: unknown): value is DestinationKind {
   return value === "service" || value === "client-site" || value === "project" || value === "support";
 }
 
+/**
+ * `actThreshold`, `confirmThreshold` and `maxAutoDelicateness` used to live
+ * here too. Removed in the AB-benchmark pass: they were seeded by the panel
+ * (a bare literal next to the widget, `config.html`'s old
+ * `{ actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 }`),
+ * validated for shape here, and read by no decision anywhere. The comment
+ * that used to sit on `consequenceCeiling` below claimed they "belong to
+ * decideDestination's unrelated delicateness-level family" -- traced and
+ * found false: `decideDestination` (decisions.ts) takes `{ action, policies,
+ * policyAnswers, riskAnswers }` and never receives a destination's
+ * `AutonomyConfig` at all; its risk stage judges against the module-level
+ * `REVERSIBLE_GATE`/`EXTERNAL_GATE`/`CONSEQUENCE_CEILING` constants, the
+ * same for every destination. `src/core/catalog.ts`, the other module that
+ * declared these three fields, is itself imported by nothing in `src/` or
+ * `adapters/` -- dead code, not merely dead fields. Removed rather than
+ * defaulted, matching production-honesty-pass P2's precedent for the same
+ * class of defect.
+ */
 export interface AutonomyConfig {
-  readonly actThreshold: number;
-  readonly confirmThreshold: number;
-  readonly maxAutoDelicateness: number;
   /**
    * Per-destination override for decisions.ts's GATE_CONSEQUENCE_CEILING.
    * Optional -- absent means the gate falls back to GATE_CONSEQUENCE_CEILING
@@ -68,20 +83,14 @@ export interface AutonomyConfig {
    * consequenceCeiling on PluginConfig.thresholds below that this comment
    * pointed to -- removed in production-honesty-pass P2 once it turned out
    * getConfig() never fed it back into a decision either; this is the only
-   * consequenceCeiling actually read anywhere. This is the only
-   * field compatible with decideAction's `consequence.score` axis (a
-   * continuous value with the same ~1.78 ceiling shape); the other
-   * AutonomyConfig fields (actThreshold, confirmThreshold,
-   * maxAutoDelicateness) belong to decideDestination's unrelated
-   * delicateness-level family and are never a substitute for this.
+   * consequenceCeiling actually read anywhere, and (since the removal
+   * above) the only field AutonomyConfig has left.
    */
   readonly consequenceCeiling?: number;
 }
 
 function isAutonomyConfig(value: unknown): value is AutonomyConfig {
-  if (!isRecord(value) || !isNumber(value.actThreshold) || !isNumber(value.confirmThreshold) || !isNumber(value.maxAutoDelicateness)) {
-    return false;
-  }
+  if (!isRecord(value)) return false;
   if ("consequenceCeiling" in value && value.consequenceCeiling !== undefined && !isNumber(value.consequenceCeiling)) {
     return false;
   }
