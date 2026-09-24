@@ -58,13 +58,39 @@ function isWindowsAbsolutePath(token: string): boolean {
 }
 
 /**
- * Shell constructs whose meaning cannot be known without running them.
+ * Command substitution and process substitution: `$(...)`, backticks,
+ * `${...}`, `<(...)` and `>(...)`. A command carrying any of these cannot be
+ * judged by looking at it -- its real behavior depends on running an
+ * embedded command first, which can expand to anything.
  *
- * A command substitution can expand to anything, so two commands that look
- * identical may do entirely different things. Rather than guess a class for
- * the result, the whole command becomes uncacheable.
+ * Shared with adapters/claude/gate_safe_command.ts's tier-1a fast path (see
+ * hasCommandSubstitution below, and that module's own comment on
+ * isSafeSegment): a cache that must never authorise the wrong command, and a
+ * fast path that must never skip judgment on the wrong one, both need
+ * exactly this same "cannot be known without running it" test, so this is
+ * the one place that decides it rather than two drifting copies.
+ *
+ * Presence-only, not parse-aware: it does not distinguish an escaped `\$(`
+ * from a real substitution, or a single-quoted `'$(...)'` (which the shell
+ * never expands) from an unquoted one. Both ambiguous cases are treated as
+ * a substitution -- the cheap, conservative answer is "cannot be judged
+ * from the text alone", never "assume it's inert".
  */
-const UNKNOWABLE = /\$\(|`|\$\{|<\(|\*|\?\[/;
+const SUBSTITUTION_PATTERN = /\$\(|`|\$\{|<\(|>\(/;
+
+/** True when `text` contains a command or process substitution -- see SUBSTITUTION_PATTERN above for exactly which forms and why detection stops there. */
+export function hasCommandSubstitution(text: string): boolean {
+  return SUBSTITUTION_PATTERN.test(text);
+}
+
+/**
+ * Everything this module additionally refuses to cache beyond a
+ * substitution: `*` and `?[`, glob-like tokens whose expansion depends on
+ * the filesystem at run time rather than on the text itself. Built from
+ * SUBSTITUTION_PATTERN's own source so the substitution half can never
+ * drift between the two checks.
+ */
+const UNKNOWABLE = new RegExp(`${SUBSTITUTION_PATTERN.source}|\\*|\\?\\[`);
 
 function normalizeSeparators(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");

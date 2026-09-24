@@ -9,13 +9,20 @@
 //
 // The rule this implements: a command is obviously safe only when EVERY
 // one of its segments -- after splitting on `&&`, `||`, `;`, `|` and
-// stripping leading `VAR=value` assignments -- is itself obviously safe.
+// stripping leading `VAR=value` assignments -- is itself obviously safe,
+// AND carries no command/process substitution (`$(...)`, backticks,
+// `${...}`, `<(...)`, `>(...)` -- see isSafeSegment/hasCommandSubstitution
+// below): a segment starting with a safe verb but embedding one of these
+// can do anything the embedded command can do, which a leading-verb check
+// alone cannot see (measured: `grep foo $(rm -rf ~)`, `ls $(cat /tmp/x)`,
+// `echo ${IFS}test` and others all passed tier 1a silently before this).
 // Splitting and assignment-stripping reuse gate_measurement.ts's own
 // `splitSegments`/`stripAssignments`, not a second implementation of the
 // same thing. Anything that can't be confidently classified is NOT safe:
 // an unclassifiable command only costs latency (it falls through to the
 // existing NEVER_SILENTLY/Jev path), it never causes a wrong "safe".
 import { commandFamily, splitSegments } from './gate_measurement.ts'
+import { hasCommandSubstitution } from './command_shape.ts'
 
 /**
  * The one command family gate_measurement.ts already judges by looking at
@@ -61,18 +68,80 @@ function isSafeFindSegment(segment: string): boolean {
 }
 
 /**
- * `splitSegments` only splits on `&&`/`||`/`;`/`|`, never on redirection --
- * so `echo x > /etc/passwd` or `cat a > b` stays ONE segment that still
- * starts with a safe verb. Any `<`/`>` in a segment means it can write to,
- * or read from, a file outside its own arguments, so it is never obviously
- * safe -- it just falls through to the existing path, same as any other
- * unclassifiable command.
+ * The exact redirection forms that only DISCARD or MERGE a stream, never
+ * write it anywhere a person or another process could read it back:
+ *
+ *   - `2>/dev/null` / `2> /dev/null` -- discard stderr
+ *   - `2>&1`                         -- merge stderr into stdout
+ *   - `>/dev/null` / `> /dev/null`   -- discard stdout (a bare `>` is fd 1)
+ *
+ * Silencing a stream cannot make a read-only command dangerous, and this is
+ * the single most common habit in agent-written commands (measured: 5-6
+ * such calls sinking pure-inspection commands into a paid Jev call in one
+ * evening). Deliberately narrow and literal -- `>>` (append), any target
+ * other than exactly `/dev/null`, and `1>&2` (merge the other direction)
+ * are NOT matched here and fall straight through to hasRedirection's
+ * catch-all below. Each pattern requires the redirection to start at the
+ * beginning of the segment or after whitespace, so it can never accidentally
+ * eat part of a `>>` or a real path that merely starts with `/dev/null`-like
+ * text.
  */
-function hasRedirection(segment: string): boolean {
-  return /[<>]/.test(segment)
+const SAFE_REDIRECTIONS: readonly RegExp[] = [
+  /(?:^|\s)2>\s*\/dev\/null(?=\s|$)/,
+  /(?:^|\s)2>&1(?=\s|$)/,
+  /(?:^|\s)[1]?>\s*\/dev\/null(?=\s|$)/,
+]
+
+/** Removes every safe-redirection occurrence (see SAFE_REDIRECTIONS) so hasRedirection only ever sees what is left. Global so `> /dev/null 2>&1` (both in one segment) is fully cleared. */
+function stripSafeRedirections(segment: string): string {
+  let stripped = segment
+  for (const pattern of SAFE_REDIRECTIONS) {
+    stripped = stripped.replace(new RegExp(pattern, 'g'), ' ')
+  }
+  return stripped
 }
 
+/**
+ * `splitSegments` only splits on `&&`/`||`/`;`/`|`, never on redirection --
+ * so `echo x > /etc/passwd` or `cat a > b` stays ONE segment that still
+ * starts with a safe verb. Any `<`/`>` left in a segment AFTER stripping the
+ * safe discard/merge forms above means it can write to, or read from, a
+ * file outside its own arguments, so it is never obviously safe -- it just
+ * falls through to the existing path, same as any other unclassifiable
+ * command. Tested against the ORIGINAL segment text (SAFE_SEGMENT_PATTERNS
+ * below still match a safe verb regardless of trailing redirection), only
+ * this check itself runs against the stripped copy.
+ */
+function hasRedirection(segment: string): boolean {
+  return /[<>]/.test(stripSafeRedirections(segment))
+}
+
+/**
+ * Checked FIRST, before hasRedirection or any safe-verb pattern -- exactly
+ * the same placement hasRedirection itself uses, so no safe verb can ever
+ * carry a substitution through on a technicality. `hasCommandSubstitution`
+ * is imported from src/core/command_shape.ts rather than reimplemented
+ * here: that module already refuses to CACHE a command for the identical
+ * reason ("cannot be known without running it"), and tier 1a needs that
+ * same fact at least as much, since it skips judgment entirely rather than
+ * merely skipping a cache.
+ *
+ * Running this ahead of hasRedirection also sidesteps the question of
+ * whether stripSafeRedirections' `/dev/null`/`2>&1` patterns could ever
+ * accidentally clear the `<`/`>` that opens `<(...)`/`>(...)`: it can't (the
+ * `(?=\s|$)` boundary in every SAFE_REDIRECTIONS pattern refuses to match
+ * unless a clean token follows, and `<(`/`>(` never leaves one), but this
+ * ordering means that question never even has to be asked at call time.
+ *
+ * Safe against splitSegments' own naive split, too: `String.split` only
+ * ever removes the separator text it matches (`&&`, `||`, `;`, `|`), never
+ * any other character, so a substitution's opening token can never be torn
+ * apart by a split -- it always survives intact inside whichever resulting
+ * segment it started in, even when the substitution's own argument (e.g.
+ * `$(a; b)`) contains one of those same separator characters.
+ */
 function isSafeSegment(segment: string): boolean {
+  if (hasCommandSubstitution(segment)) return false
   if (hasRedirection(segment)) return false
   if (isSafeFindSegment(segment)) return true
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
