@@ -112,7 +112,7 @@ const READY = {
     gate: {
       totalDecisions: 2297,
       byVerdict: { allow: 2013, ask: 279, deny: 5 },
-      bySource: { jev: 2029, cache: 149, 'local-rule': 119 },
+      bySource: { jev: 2029, cache: 149, 'local-rule': 119, none: 0 },
       jevLatency: { sampleCount: 2029, medianMs: 447, maxMs: 1742 },
       byCommandFamily: [
         { commandFamily: 'cd', total: 511, byVerdict: { allow: 498, ask: 13, deny: 0 } },
@@ -189,7 +189,32 @@ const READY = {
   },
 }
 
-const SCENARIOS = { fresh: FRESH, ready: READY }
+/**
+ * The gate disarmed: Jev was asked and did not answer, so commands passed
+ * unjudged and were recorded as `source: 'none'`. These counts are synthetic
+ * -- the author's own log cannot contain `none` rows, since nothing wrote
+ * them before this change -- and they exist only so the alarm path is
+ * photographed instead of shipped unseen. Nothing here is ever shown to a
+ * user as a measurement; it is a fixture, and the rest of the object is the
+ * real `ready` data.
+ */
+const DEGRADED = {
+  ...READY,
+  measurementsSummary: {
+    ...READY.measurementsSummary,
+    gate: {
+      ...READY.measurementsSummary.gate,
+      totalDecisions: 2354,
+      bySource: { ...READY.measurementsSummary.gate.bySource, none: 57 },
+      recent: [
+        { at: '2026-09-24T17:33:10.004Z', project: 'orca-supervisor', commandFamily: 'other', source: 'none', verdict: 'allow', latencyMs: null },
+        ...READY.measurementsSummary.gate.recent,
+      ],
+    },
+  },
+}
+
+const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED }
 
 /**
  * Impersonates the host bridge. Installed before the panel's own script runs,

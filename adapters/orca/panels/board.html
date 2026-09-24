@@ -285,6 +285,7 @@
           'stats.recentCached': 'caché',
           'stats.recentLocalRule': 'regla local',
           'stats.recentJev': 'jev',
+          'stats.recentNone': 'sin respuesta',
           'stats.na': 'sin datos suficientes',
           'stats.unknownProject': '(proyecto desconocido)',
           'gate.heading': 'Lo que hizo el gate de Jev',
@@ -295,6 +296,8 @@
           'gate.source.localRule': 'Regla local (~1ms, sin red)',
           'gate.source.cache': 'Caché (sin red)',
           'gate.source.jev': 'Jev (con red)',
+          'gate.source.none': 'Nadie: Jev no contestó',
+          'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso -- fallar abierto es lo correcto -- pero nadie lo revisó, así que no cuentan arriba.',
           'gate.latency': 'Latencia de Jev: mediana {{median}}ms · máxima {{max}}ms ({{n}} llamada(s) medida(s))',
           'gate.latency.none': 'Latencia de Jev: sin llamadas a la red todavía (todo se resolvió por regla local o por caché).',
           'gate.byFamilyHeading': 'Por familia de comando',
@@ -366,6 +369,7 @@
           'stats.recentCached': 'cache',
           'stats.recentLocalRule': 'local rule',
           'stats.recentJev': 'jev',
+          'stats.recentNone': 'no answer',
           'stats.na': 'not enough data',
           'stats.unknownProject': '(unknown project)',
           'gate.heading': 'What the Jev gate did',
@@ -376,6 +380,8 @@
           'gate.source.localRule': 'Local rule (~1ms, no network)',
           'gate.source.cache': 'Cache (no network)',
           'gate.source.jev': 'Jev (network)',
+          'gate.source.none': 'Nobody: Jev did not answer',
+          'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead -- failing open is correct -- but nobody reviewed it, so they are not counted above.',
           'gate.latency': 'Jev latency: median {{median}}ms · max {{max}}ms ({{n}} measured call(s))',
           'gate.latency.none': 'Jev latency: no network calls yet (everything resolved by local rule or cache).',
           'gate.byFamilyHeading': 'By command family',
@@ -683,16 +689,25 @@
         var total = gate.totalDecisions || 0
         if (total <= 0) { fill('load-body', 'load-empty', '', t('gate.empty')); return }
         var source = gate.bySource || {}
+        // A `none` record is a command that reached the point of asking Jev
+        // and got no answer -- it passed UNJUDGED. Counting it as a decision
+        // the gate made would be the exact overstatement this panel exists
+        // not to make, so the headline counts judged commands only and the
+        // unjudged ones get their own sentence.
+        var unjudged = source.none || 0
+        var judged = total - unjudged
         var segments = [
           { value: source.jev || 0, cls: 'v1', label: t('gate.source.jev') },
           { value: source.cache || 0, cls: 'v2', label: t('gate.source.cache') },
-          { value: source['local-rule'] || 0, cls: 'v3', label: t('gate.source.localRule') }
+          { value: source['local-rule'] || 0, cls: 'v3', label: t('gate.source.localRule') },
+          { value: unjudged, cls: 'vd', label: t('gate.source.none') }
         ]
         fill('load-body', 'load-empty',
-          '<div class="kpi"><span class="kpi-n">' + esc(num(total)) + '</span>' +
+          '<div class="kpi"><span class="kpi-n">' + esc(num(judged)) + '</span>' +
           '<span class="kpi-unit">' + esc(t('load.unit')) + '</span></div>' +
           '<p class="kpi-sub">' + esc(t('load.sub')) + '</p>' +
-          stackedBar(segments, total) + legendList(segments, total))
+          stackedBar(segments, total) + legendList(segments, total) +
+          (unjudged > 0 ? line(t('load.unjudged', { n: String(unjudged) })) : ''))
       }
 
       function renderSpeed (ab) {
@@ -849,7 +864,8 @@
           return
         }
         var sourceLabel = {
-          'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'), jev: t('stats.recentJev')
+          'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'),
+          jev: t('stats.recentJev'), none: t('stats.recentNone')
         }
         el('stats-recent').innerHTML = recent.map(function (r) {
           var latency = r.latencyMs != null ? ' · ' + r.latencyMs + 'ms' : ''
