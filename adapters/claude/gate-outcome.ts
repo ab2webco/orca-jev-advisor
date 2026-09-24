@@ -7,19 +7,27 @@
  * outright, and every threshold in this plugin was calibrated against a
  * corpus written by hand because that answer was never captured.
  *
- * Claude Code reports it through two later hooks, both carrying the same
+ * Claude Code reports it through three later hooks, all carrying the same
  * `tool_use_id` the gate saw:
  *
- *   PostToolUse       the command ran         -> the stop was not worth making
- *   PermissionDenied  it did not run          -> the stop earned its interruption
+ *   PostToolUse        the command ran and succeeded -> the stop was not worth making
+ *   PostToolUseFailure the command ran and failed     -> still approved: they said yes
+ *   PermissionDenied   it did not run                 -> the stop earned its interruption
+ *
+ * PostToolUseFailure is still an approval, not a rejection: the question
+ * this log answers is "was interrupting the person worth it", and they
+ * already answered it by letting the command run. Whether the command then
+ * succeeded or failed on its own is the command's business, never the
+ * gate's -- a failed command is not a rejected one.
  *
  * This process is that recorder and nothing else. It never decides anything,
  * never emits a permission verdict, and never delays a tool: it appends one
  * line and exits. Anything that goes wrong is swallowed, because a recorder
  * that can break a command is not worth having.
  *
- * Usage: registered by install-claude-integration.mjs on PostToolUse and
- * PermissionDenied. Reads the hook payload on stdin, writes nothing to stdout.
+ * Usage: registered by install-claude-integration.mjs on PostToolUse,
+ * PostToolUseFailure and PermissionDenied. Reads the hook payload on stdin,
+ * writes nothing to stdout.
  */
 import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -53,6 +61,11 @@ function done(): never {
 function outcomeFor(event: string, toolName: unknown): ApprovalOutcome | null {
   if (toolName !== 'Bash') return null
   if (event === 'PostToolUse') return 'approved'
+  // The command ran -- the person already approved it -- and then failed on
+  // its own. That failure is the command's business, not the gate's: the
+  // question this log answers is "was interrupting the person worth it",
+  // and they said yes. A failed command is not a rejected one.
+  if (event === 'PostToolUseFailure') return 'approved'
   if (event === 'PermissionDenied') return 'rejected'
   return null
 }

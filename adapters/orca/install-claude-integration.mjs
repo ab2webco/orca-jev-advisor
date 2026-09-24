@@ -10,15 +10,16 @@
  *
  * Usage: node install-claude-integration.mjs <install|uninstall|status> <pluginRoot>
  *
- * Three hook entries are managed, one per Claude Code event, each in that
+ * Four hook entries are managed, one per Claude Code event, each in that
  * event's own `Bash`-matcher group:
  *
- *   PreToolUse        adapters/claude/gate-bash.ts     asks Jev before running
- *   PostToolUse       adapters/claude/gate-outcome.ts  the command ran -> approved
- *   PermissionDenied  adapters/claude/gate-outcome.ts  it did not run -> rejected
+ *   PreToolUse         adapters/claude/gate-bash.ts     asks Jev before running
+ *   PostToolUse        adapters/claude/gate-outcome.ts  the command ran and succeeded -> approved
+ *   PostToolUseFailure adapters/claude/gate-outcome.ts  the command ran and failed -> still approved
+ *   PermissionDenied   adapters/claude/gate-outcome.ts  it did not run -> rejected
  *
  * install     Idempotent. Adds our entry to the `Bash`-matcher group of
- *             each of the three event arrays above (creating the array
+ *             each of the four event arrays above (creating the array
  *             and the group when none exists), merging into whatever
  *             hooks other owners already put there -- never replacing a
  *             group, never touching another entry. Sets
@@ -156,7 +157,12 @@ function hookSpecs (pluginRoot) {
     specs: [
       { event: 'PreToolUse', marker: HOOK_STATUS_MESSAGE, path: gatePath, entry: gateHookEntry(node.command, gatePath) },
       { event: 'PostToolUse', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
-      { event: 'PermissionDenied', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) }
+      { event: 'PermissionDenied', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      // Appended, never inserted before PermissionDenied: every other spot in
+      // this file addresses specs[0..2] by their original positional index,
+      // and a new entry at the end keeps every one of those indices meaning
+      // exactly what it always meant.
+      { event: 'PostToolUseFailure', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) }
     ]
   }
 }
@@ -513,6 +519,7 @@ async function install (pluginRoot) {
       const hookChanged = installHookEntry(settings, specs[0].event, specs[0].marker, specs[0].entry, state)
       const postChanged = installHookEntry(settings, specs[1].event, specs[1].marker, specs[1].entry, state)
       const deniedChanged = installHookEntry(settings, specs[2].event, specs[2].marker, specs[2].entry, state)
+      const postFailureChanged = installHookEntry(settings, specs[3].event, specs[3].marker, specs[3].entry, state)
       const envChanged = installEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
       states[target.id] = state
@@ -523,7 +530,7 @@ async function install (pluginRoot) {
         label: target.label,
         orcaManaged: target.orcaManaged,
         ok: true,
-        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged, env: envChanged, modLink: modResult.changed },
+        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modLink: modResult.changed },
         modLinkWarning: modResult.error ?? null
       })
     } catch (error) {
@@ -588,7 +595,7 @@ async function uninstall (pluginRoot) {
     const state = isRecord(states[target.id]) ? states[target.id] : {
       hadEnvVarBefore: false, priorEnvValue: null, envObjectExistedBefore: true,
       hooksObjectExistedBefore: true,
-      events: { PreToolUse: defaultEventState(), PostToolUse: defaultEventState(), PermissionDenied: defaultEventState() }
+      events: { PreToolUse: defaultEventState(), PostToolUse: defaultEventState(), PermissionDenied: defaultEventState(), PostToolUseFailure: defaultEventState() }
     }
     migrateLegacyPreToolUseFlags(state)
     try {
@@ -596,13 +603,14 @@ async function uninstall (pluginRoot) {
       const hookChanged = uninstallHookEntry(settings, specs[0].event, specs[0].marker, state)
       const postChanged = uninstallHookEntry(settings, specs[1].event, specs[1].marker, state)
       const deniedChanged = uninstallHookEntry(settings, specs[2].event, specs[2].marker, state)
+      const postFailureChanged = uninstallHookEntry(settings, specs[3].event, specs[3].marker, state)
       const envChanged = uninstallEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
       const modResult = await uninstallModLink(pluginRoot, modLinkPathFor(target))
       await rm(backupPathFor(target), { force: true })
       perTarget.push({
         id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: true,
-        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged, env: envChanged, modLink: modResult.changed },
+        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modLink: modResult.changed },
         modLinkWarning: modResult.skipped ? 'mod-skills link did not point at this plugin; left untouched' : null
       })
     } catch (error) {
@@ -639,7 +647,7 @@ function findMarkedHook (group, marker) {
 
 async function status (pluginRoot) {
   const { specs } = hookSpecs(pluginRoot)
-  const [gateSpec, postSpec, deniedSpec] = specs
+  const [gateSpec, postSpec, deniedSpec, postFailureSpec] = specs
   const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
   const discovery = await discoverTargets()
 
@@ -656,6 +664,7 @@ async function status (pluginRoot) {
     const ownGateHook = findMarkedHook(findBashGroup(settings, gateSpec.event), gateSpec.marker)
     const ownPostHook = findMarkedHook(findBashGroup(settings, postSpec.event), postSpec.marker)
     const ownDeniedHook = findMarkedHook(findBashGroup(settings, deniedSpec.event), deniedSpec.marker)
+    const ownPostFailureHook = findMarkedHook(findBashGroup(settings, postFailureSpec.event), postFailureSpec.marker)
     const modLink = await currentModLinkTarget(modLinkPathFor(target)).catch(() => ({ isSymlink: false, target: null }))
     perTarget.push({
       id: target.id,
@@ -665,9 +674,10 @@ async function status (pluginRoot) {
       readError,
       hook: { installed: ownGateHook !== undefined, pathMatches: ownGateHook !== undefined && Array.isArray(ownGateHook.args) && ownGateHook.args.includes(gateSpec.path) },
       outcomeHook: {
-        installed: ownPostHook !== undefined && ownDeniedHook !== undefined,
+        installed: ownPostHook !== undefined && ownDeniedHook !== undefined && ownPostFailureHook !== undefined,
         pathMatches: ownPostHook !== undefined && Array.isArray(ownPostHook.args) && ownPostHook.args.includes(postSpec.path) &&
-          ownDeniedHook !== undefined && Array.isArray(ownDeniedHook.args) && ownDeniedHook.args.includes(deniedSpec.path)
+          ownDeniedHook !== undefined && Array.isArray(ownDeniedHook.args) && ownDeniedHook.args.includes(deniedSpec.path) &&
+          ownPostFailureHook !== undefined && Array.isArray(ownPostFailureHook.args) && ownPostFailureHook.args.includes(postFailureSpec.path)
       },
       env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
       modLink: { installed: modLink.isSymlink && modLink.target === modSource }

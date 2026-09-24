@@ -4,11 +4,14 @@
 // gets its own temp directory so runs never interfere with each other or
 // with a real machine's ~/.claude.
 //
-// Focus: the per-event ("PreToolUse", "PostToolUse", "PermissionDenied")
-// bookkeeping this change adds. In particular, that uninstall restores
-// byte-identical settings.json, and that it removes only the containers
-// THIS installer created -- never one that already existed, even an event
-// array or `Bash` group that ends up empty once our own entry is gone.
+// Focus: the per-event ("PreToolUse", "PostToolUse", "PostToolUseFailure",
+// "PermissionDenied") bookkeeping this change adds. In particular, that
+// uninstall restores byte-identical settings.json, and that it removes only
+// the containers THIS installer created -- never one that already existed,
+// even an event array or `Bash` group that ends up empty once our own entry
+// is gone. Also: that an existing install made before PostToolUseFailure
+// existed picks up the new hook on the next install, without duplicating or
+// disturbing the other three.
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
@@ -68,7 +71,7 @@ function ownEntries (settings, event, marker) {
 const GATE_MARKER = 'orca-jev-advisor: asking Jev before running this command'
 const OUTCOME_MARKER = 'orca-jev-advisor: recording what you decided'
 
-test('a fresh install registers all three events, each with its own hook', () => {
+test('a fresh install registers all four events, each with its own hook', () => {
   const home = makeHome()
   const result = run('install', home)
   assert.equal(result.ok, true)
@@ -88,17 +91,22 @@ test('a fresh install registers all three events, each with its own hook', () =>
   assert.equal(deniedEntries.length, 1)
   assert.deepEqual(deniedEntries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')])
 
+  const postFailureEntries = ownEntries(settings, 'PostToolUseFailure', OUTCOME_MARKER)
+  assert.equal(postFailureEntries.length, 1)
+  assert.deepEqual(postFailureEntries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')])
+
   // The outcome hook must never be able to delay a command it did not gate:
   // its timeout is short, and strictly shorter than the gate's own.
   assert.ok(postEntries[0].timeout < gateEntries[0].timeout)
   assert.equal(postEntries[0].timeout, deniedEntries[0].timeout)
+  assert.equal(postEntries[0].timeout, postFailureEntries[0].timeout)
 
   const status = run('status', home)
   assert.equal(status.hook.installed, true)
   assert.equal(status.outcomeHook.installed, true)
 })
 
-test('re-running install is idempotent: no duplicate entries in any of the three events', () => {
+test('re-running install is idempotent: no duplicate entries in any of the four events', () => {
   const home = makeHome()
   run('install', home)
   run('install', home)
@@ -107,9 +115,10 @@ test('re-running install is idempotent: no duplicate entries in any of the three
   assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1)
   assert.equal(ownEntries(settings, 'PostToolUse', OUTCOME_MARKER).length, 1)
   assert.equal(ownEntries(settings, 'PermissionDenied', OUTCOME_MARKER).length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUseFailure', OUTCOME_MARKER).length, 1)
 })
 
-test('status reports the outcome hook installed only once BOTH PostToolUse and PermissionDenied carry it', () => {
+test('status reports the outcome hook installed only once PostToolUse, PermissionDenied AND PostToolUseFailure all carry it', () => {
   const home = makeHome()
   run('install', home)
   const settings = readSettings(home)
@@ -118,7 +127,18 @@ test('status reports the outcome hook installed only once BOTH PostToolUse and P
   writeSettings(home, settings)
   const status = run('status', home)
   assert.equal(status.hook.installed, true, 'the gate hook is untouched')
-  assert.equal(status.outcomeHook.installed, false, 'the outcome hook is incomplete without both halves')
+  assert.equal(status.outcomeHook.installed, false, 'the outcome hook is incomplete without all three halves')
+})
+
+test('status reports the outcome hook incomplete when only PostToolUseFailure is missing', () => {
+  const home = makeHome()
+  run('install', home)
+  const settings = readSettings(home)
+  settings.hooks.PostToolUseFailure = []
+  writeSettings(home, settings)
+  const status = run('status', home)
+  assert.equal(status.hook.installed, true, 'the gate hook is untouched')
+  assert.equal(status.outcomeHook.installed, false, 'the outcome hook is incomplete without PostToolUseFailure')
 })
 
 test('uninstall after a fresh install restores the exact original state (the file did not exist)', () => {
@@ -160,6 +180,8 @@ test('uninstall removes only the containers THIS install created, leaving pre-ex
   assert.equal(ownEntries(afterInstall, 'PostToolUse', OUTCOME_MARKER).length, 1)
   // PermissionDenied was created fresh.
   assert.equal(ownEntries(afterInstall, 'PermissionDenied', OUTCOME_MARKER).length, 1)
+  // PostToolUseFailure never existed before either, and was created fresh too.
+  assert.equal(ownEntries(afterInstall, 'PostToolUseFailure', OUTCOME_MARKER).length, 1)
 
   run('uninstall', home)
   const afterUninstall = readSettings(home)
@@ -176,6 +198,11 @@ test('uninstall removes only the containers THIS install created, leaving pre-ex
   // PermissionDenied never existed before install: uninstall must remove the
   // key entirely, not leave an empty array behind.
   assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks, 'PermissionDenied'), false)
+
+  // PostToolUseFailure never existed before install either, and must be
+  // removed entirely too -- reverting must never leave a hook behind that
+  // points at gate-outcome.ts.
+  assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks, 'PostToolUseFailure'), false)
 
   // Unrelated env var: untouched throughout.
   assert.equal(afterUninstall.env.SOME_OTHER_VAR, 'kept')
@@ -203,4 +230,63 @@ test('the "captured once" fact is never re-derived from a settings.json an insta
   // behind. The original capture (false, from the very first install) must
   // win, so the key is removed entirely.
   assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks ?? {}, 'PermissionDenied'), false)
+})
+
+test('an existing install made before PostToolUseFailure existed gains it on the next install, without duplicating or disturbing the other three', () => {
+  const home = makeHome()
+  // The exact shape a real machine has after a v0.2.3 install: three events,
+  // no PostToolUseFailure anywhere, plus the env var this installer sets.
+  const preExisting = {
+    hooks: {
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-bash.ts')], timeout: 6, statusMessage: GATE_MARKER }] }],
+      PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')], timeout: 2, statusMessage: OUTCOME_MARKER }] }],
+      PermissionDenied: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')], timeout: 2, statusMessage: OUTCOME_MARKER }] }]
+    },
+    env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' }
+  }
+  writeSettings(home, preExisting)
+
+  // The install-state a pre-change install would have written: `events`
+  // only has the three keys that existed back then.
+  const stateDir = join(home, '.config', 'orca-supervisor')
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(join(stateDir, 'claude-settings-install-state.json'), JSON.stringify({
+    version: 3,
+    targets: {
+      home: {
+        hooksObjectExistedBefore: false,
+        events: {
+          PreToolUse: { arrayExistedBefore: false, bashGroupExistedBefore: false },
+          PostToolUse: { arrayExistedBefore: false, bashGroupExistedBefore: false },
+          PermissionDenied: { arrayExistedBefore: false, bashGroupExistedBefore: false }
+        },
+        envObjectExistedBefore: false,
+        hadEnvVarBefore: false,
+        priorEnvValue: null
+      }
+    },
+    installedAt: new Date().toISOString()
+  }, null, 2), 'utf8')
+
+  const result = run('install', home)
+  assert.equal(result.ok, true)
+
+  const settings = readSettings(home)
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1, 'the pre-existing gate hook is untouched')
+  assert.equal(ownEntries(settings, 'PostToolUse', OUTCOME_MARKER).length, 1, 'the pre-existing PostToolUse hook is untouched, not duplicated')
+  assert.equal(ownEntries(settings, 'PermissionDenied', OUTCOME_MARKER).length, 1, 'the pre-existing PermissionDenied hook is untouched, not duplicated')
+  assert.equal(ownEntries(settings, 'PostToolUseFailure', OUTCOME_MARKER).length, 1, 'the new hook was added')
+
+  // Running install again must not duplicate the newly-added event either.
+  run('install', home)
+  const settingsAgain = readSettings(home)
+  assert.equal(ownEntries(settingsAgain, 'PostToolUseFailure', OUTCOME_MARKER).length, 1)
+  assert.equal(ownEntries(settingsAgain, 'PreToolUse', GATE_MARKER).length, 1)
+  assert.equal(ownEntries(settingsAgain, 'PostToolUse', OUTCOME_MARKER).length, 1)
+  assert.equal(ownEntries(settingsAgain, 'PermissionDenied', OUTCOME_MARKER).length, 1)
+
+  // Reverting must remove the new hook cleanly, exactly like the other three.
+  run('uninstall', home)
+  const afterUninstall = readSettings(home)
+  assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks ?? {}, 'PostToolUseFailure'), false)
 })
