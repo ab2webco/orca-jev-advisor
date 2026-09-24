@@ -17,8 +17,13 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { fileURLToPath } from 'node:url'
 
-const GATE = new URL('./gate-bash.ts', import.meta.url).pathname
+// fileURLToPath, never `.pathname`: a file URL percent-encodes, so `.pathname`
+// hands back "Application%20Support" and the spawn fails with ENOENT at the
+// one path that matters -- where Orca actually installs the plugin on macOS.
+// This repo's own checkout has no spaces, so CI would never have caught it.
+const GATE = fileURLToPath(new URL('./gate-bash.ts', import.meta.url))
 const phrase = (...parts) => parts.join(' ')
 
 function decide(command) {
