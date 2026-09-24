@@ -9,10 +9,17 @@
 // they said yes; whether the command then succeeded or failed is the
 // command's own business, not the gate's. A failed command is not a
 // rejected one.
+//
+// Also: joinability. gate-outcome.ts only appends an outcome when a
+// gate-pending record for the same tool_use_id already exists in the log --
+// an outcome with no matching pending answers no question the gate ever
+// asked (measured on the real log: 2697 outcomes, 15 pendings, 11 joinable).
+// Every test below except the two explicitly testing that gate ("no
+// matching pending") seeds one first with seedPending.
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,6 +42,27 @@ function outcomesPathFor (home) {
   return join(home, '.cache', 'orca-supervisor', 'gate-approvals.jsonl')
 }
 
+/** Writes a minimal gate-pending record for `toolUseId`, exactly as
+ *  gate-bash.ts would when it stops a command -- so the recorder under
+ *  test has a question to join its outcome against. */
+function seedPending (home, toolUseId) {
+  const path = outcomesPathFor(home)
+  mkdirSync(dirname(path), { recursive: true })
+  appendFileSync(path, JSON.stringify({
+    type: 'gate-pending',
+    toolUseId,
+    at: new Date().toISOString(),
+    project: null,
+    destinationId: null,
+    commandFamily: 'test',
+    shape: null,
+    reversible: null,
+    external: null,
+    consequence: null,
+    ceiling: 1.78
+  }) + '\n')
+}
+
 /** Runs the recorder against a throwaway HOME with a given hook payload on
  *  stdin, exactly as Claude Code itself invokes it. */
 function run (home, payload) {
@@ -48,14 +76,19 @@ function run (home, payload) {
   })
 }
 
+/** Only the recorded outcome lines -- the log also carries the gate-pending
+ *  lines seedPending writes, which are a different record shape entirely. */
 function readOutcomes (home) {
   const path = outcomesPathFor(home)
   if (!existsSync(path)) return []
-  return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line))
+  return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line))
+    .filter((record) => record.type === 'gate-outcome')
 }
 
-test('PostToolUse on Bash is recorded as approved', () => {
+test('PostToolUse on Bash with a matching pending record is recorded as approved', () => {
   const home = makeHome()
+  seedPending(home, 'tool-1')
   run(home, { hook_event_name: 'PostToolUse', tool_use_id: 'tool-1', tool_name: 'Bash' })
   const outcomes = readOutcomes(home)
   assert.equal(outcomes.length, 1)
@@ -63,8 +96,15 @@ test('PostToolUse on Bash is recorded as approved', () => {
   assert.equal(outcomes[0].outcome, 'approved')
 })
 
-test('PermissionDenied on Bash is recorded as rejected', () => {
+test('PostToolUse on Bash with NO matching pending record writes nothing -- most commands were never a question', () => {
   const home = makeHome()
+  run(home, { hook_event_name: 'PostToolUse', tool_use_id: 'tool-1b', tool_name: 'Bash' })
+  assert.deepEqual(readOutcomes(home), [])
+})
+
+test('PermissionDenied on Bash with a matching pending record is recorded as rejected', () => {
+  const home = makeHome()
+  seedPending(home, 'tool-2')
   run(home, { hook_event_name: 'PermissionDenied', tool_use_id: 'tool-2', tool_name: 'Bash' })
   const outcomes = readOutcomes(home)
   assert.equal(outcomes.length, 1)
@@ -72,8 +112,15 @@ test('PermissionDenied on Bash is recorded as rejected', () => {
   assert.equal(outcomes[0].outcome, 'rejected')
 })
 
-test('PostToolUseFailure on Bash is recorded as approved -- the person approved the run, the failure is the command\'s own business', () => {
+test('PermissionDenied on Bash with NO matching pending record writes nothing', () => {
   const home = makeHome()
+  run(home, { hook_event_name: 'PermissionDenied', tool_use_id: 'tool-2b', tool_name: 'Bash' })
+  assert.deepEqual(readOutcomes(home), [])
+})
+
+test('PostToolUseFailure on Bash with a matching pending record is recorded as approved -- the person approved the run, the failure is the command\'s own business', () => {
+  const home = makeHome()
+  seedPending(home, 'tool-3')
   run(home, { hook_event_name: 'PostToolUseFailure', tool_use_id: 'tool-3', tool_name: 'Bash' })
   const outcomes = readOutcomes(home)
   assert.equal(outcomes.length, 1, 'an approved command that later fails must still be recorded, not silently dropped')
@@ -81,14 +128,16 @@ test('PostToolUseFailure on Bash is recorded as approved -- the person approved 
   assert.equal(outcomes[0].outcome, 'approved')
 })
 
-test('PostToolUseFailure on a non-Bash tool is not recorded -- the gate only ever judged Bash', () => {
+test('PostToolUseFailure on a non-Bash tool is not recorded even with a matching pending record -- the gate only ever judged Bash', () => {
   const home = makeHome()
+  seedPending(home, 'tool-4')
   run(home, { hook_event_name: 'PostToolUseFailure', tool_use_id: 'tool-4', tool_name: 'Edit' })
   assert.deepEqual(readOutcomes(home), [])
 })
 
-test('an unrecognized event is not recorded', () => {
+test('an unrecognized event is not recorded, even with a matching pending record', () => {
   const home = makeHome()
+  seedPending(home, 'tool-5')
   run(home, { hook_event_name: 'Notification', tool_use_id: 'tool-5', tool_name: 'Bash' })
   assert.deepEqual(readOutcomes(home), [])
 })

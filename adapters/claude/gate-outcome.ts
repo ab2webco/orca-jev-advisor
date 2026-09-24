@@ -33,7 +33,7 @@ import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { buildApprovalOutcomeRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
+import { buildApprovalOutcomeRecord, parsePendingToolUseIds, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import type { ApprovalOutcome } from '../../src/core/approval_record.ts'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 
@@ -58,6 +58,27 @@ function done(): never {
  * file edit or a web fetch would be a row that can never be joined to a
  * question -- noise in a file whose whole purpose is to be counted.
  */
+/**
+ * Whether the gate actually stopped for this tool_use_id -- i.e. whether a
+ * gate-pending record for it already sits in the log. An outcome with no
+ * matching pending answers no question the gate ever asked: most Bash
+ * commands are never stopped, so writing an outcome for every one of them
+ * buried the few real calibration answers (measured: 2697 outcomes, 15
+ * pendings, 11 joinable -- a 245:1 ratio of noise to signal).
+ *
+ * Best-effort like everything else here: an unreadable log answers false
+ * (nothing to join, so nothing to write), never a throw.
+ */
+function hasPendingApproval(toolUseId: string): boolean {
+  let raw: string
+  try {
+    raw = readFileSync(OUTCOMES_PATH, 'utf8')
+  } catch {
+    return false
+  }
+  return parsePendingToolUseIds(raw).has(toolUseId)
+}
+
 function outcomeFor(event: string, toolName: unknown): ApprovalOutcome | null {
   if (toolName !== 'Bash') return null
   if (event === 'PostToolUse') return 'approved'
@@ -92,6 +113,9 @@ function main(): void {
 
   const outcome = outcomeFor(event, parsed['tool_name'])
   if (outcome === null) done()
+
+  // Only a joinable outcome answers a real question -- see hasPendingApproval.
+  if (!hasPendingApproval(toolUseId)) done()
 
   try {
     mkdirSync(CACHE_DIR, { recursive: true })

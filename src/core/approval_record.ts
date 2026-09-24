@@ -63,6 +63,41 @@ export function serializeApprovalRecord(record: PendingApprovalRecord | Approval
   return `${JSON.stringify(record)}\n`;
 }
 
+/**
+ * The set of tool_use_ids the gate actually stopped for, parsed straight
+ * from the approvals log's raw text -- used by gate-outcome.ts to decide
+ * whether an outcome is joinable BEFORE appending it.
+ *
+ * Why this exists: gate-outcome.ts used to append an outcome for every
+ * completed Bash command, but a gate-pending record only exists for the
+ * commands the gate actually stopped. Measured on the real log: 2697
+ * outcomes, 15 pendings, 11 joinable -- the only real calibration data this
+ * plugin has was buried at a ratio of 245 to 1. An outcome with no matching
+ * pending answers no question and should never have been written.
+ *
+ * Malformed lines are skipped, never thrown on: this reader must be at
+ * least as forgiving as the file it reads, which grows from the exact same
+ * best-effort, swallow-everything appends this module's own writers use.
+ */
+export function parsePendingToolUseIds(raw: string): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const line of raw.split("\n")) {
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const record = parsed as Record<string, unknown>;
+    if (record.type === "gate-pending" && typeof record.toolUseId === "string") {
+      ids.add(record.toolUseId);
+    }
+  }
+  return ids;
+}
+
 /** A prompt the person walked away from: neither hook ever fires, so it must not be counted as either answer. */
 export const UNRESOLVED_AFTER_MS = 6 * 60 * 60 * 1000;
 

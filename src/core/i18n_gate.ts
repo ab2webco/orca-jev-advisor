@@ -18,6 +18,7 @@ export type GateKey =
   | "cached"
   | "statusLine"
   | "authRejected"
+  | "noApiKey"
   | "notice"
   | "reason.allowClear"
   | "reason.incompleteAnswers"
@@ -44,6 +45,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
+    noApiKey: "sin llave configurada: la mitad del gate que juzga con Jev no está corriendo — solo las reglas locales siguen activas. Configúrala en el panel de ajustes del plugin en Orca.",
     notice: "jev · {{message}}",
     "reason.allowClear": "reversible, local y barato",
     "reason.incompleteAnswers": "Jev no devolvió respuestas completas para 'reversible', 'externa' o 'consecuencia'.",
@@ -69,6 +71,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "not judging: the key was rejected ({{status}})",
+    noApiKey: "no key configured: the Jev-backed half of the gate is not running — only the local rules are still active. Set one in the plugin's settings panel in Orca.",
     notice: "jev · {{message}}",
     "reason.allowClear": "reversible, local and cheap",
     "reason.incompleteAnswers": "Jev didn't return complete answers for 'reversible', 'external' or 'consequence'.",

