@@ -372,8 +372,7 @@
           'error.exception': 'Ocurrió un error inesperado.',
           'error.missingPluginRoot': 'Falta la ruta del plugin.',
           'error.expired': 'La solicitud expiró antes de que el plugin la atendiera. Vuelve a intentarlo.',
-          'error.orcaCliNotFound': 'No se encontró el CLI de Orca. Reinicia Orca; si el problema sigue, la instalación podría estar dañada.',
-          'error.orcaCliFailed': 'El CLI de Orca devolvió un error al listar los worktrees. Revisa el registro de Orca.',
+          'error.derivationFailed': 'No se pudo consultar la lista de worktrees de Orca, así que no se agregó ningún destino. El registro de Orca tiene el motivo exacto.',
           'error.seedUnavailable': 'No se pudieron cargar las políticas base incluidas con el plugin.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
@@ -482,8 +481,7 @@
           'error.exception': 'An unexpected error occurred.',
           'error.missingPluginRoot': 'The plugin path is missing.',
           'error.expired': 'The request expired before the plugin attended it. Try again.',
-          'error.orcaCliNotFound': 'Could not find the Orca CLI. Restart Orca; if this keeps happening, the install may be damaged.',
-          'error.orcaCliFailed': "The Orca CLI returned an error while listing worktrees. Check Orca's log.",
+          'error.derivationFailed': "Orca's worktree list could not be read, so no destination was added. Orca's log has the exact cause.",
           'error.seedUnavailable': "Could not load the plugin's baseline policies.",
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
@@ -505,8 +503,7 @@
         exception: 'error.exception',
         'missing-plugin-root': 'error.missingPluginRoot',
         expired: 'error.expired',
-        'orca-cli-not-found': 'error.orcaCliNotFound',
-        'orca-cli-failed': 'error.orcaCliFailed',
+        'derivation-failed': 'error.derivationFailed',
         'seed-unavailable': 'error.seedUnavailable'
       }
       /**
