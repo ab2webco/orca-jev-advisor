@@ -1,85 +1,90 @@
-// Resolves which "orca" executable to invoke from inside this plugin's own
-// worker, without hardcoding anyone's install location.
+// ---------------------------------------------------------------------------
+// Invoking the `orca` CLI on the three platforms this plugin runs on.
 //
-// Why this exists: Orca forks the plugin worker with an allowlisted
-// environment (measured: 19 vars) that DOES include PATH, but that PATH is
-// inherited from the Electron *main* process, not a login shell. A macOS
-// app launched from the Dock or Finder gets `/usr/bin:/bin:/usr/sbin:/sbin`
-// -- verified live: `command -v orca` finds nothing there -- so it never
-// sees `/usr/local/bin`, where a Homebrew (or otherwise manually placed)
-// `orca` actually lives. `execFile('orca', ...)` under that PATH fails with
-// ENOENT before it ever runs anything.
+// Three places shell out to `orca` (catalog derivation, board project
+// resolution, the doctor's reachability probe) and all three did it the same
+// way: `execFile('orca', args)`. That is correct on macOS and Linux, where the
+// CLI on PATH is an executable file with a shebang and `execvp` runs it.
 //
-// The fix is not a hardcoded path (that would only work on the machine it
-// was measured on): the worker runs inside the Orca installation, so its
-// own `process.execPath` locates the CLI Orca bundles right alongside
-// itself, one platform-specific hop away -- see resolveBundledOrcaCliPath.
-// A bare "orca" on PATH is kept as a fallback for the case that actually
-// works today (a shell-launched Orca, or a machine where /usr/local/bin is
-// on the inherited PATH after all).
+// It cannot work on Windows. There, a CLI installed on PATH is a `.cmd` (or
+// `.ps1`, or `.bat`) shim, and `execFile` hands the name to CreateProcess,
+// which runs `.exe` images only and resolves nothing through PATHEXT. The call
+// fails with ENOENT -- and since all three call sites catch and fall back to
+// an empty result, a Windows install showed an empty catalog, a board with no
+// project names and a doctor reporting the CLI unreachable, with the actual
+// cause visible only in the plugin log.
 //
-// Pure and platform-INDEPENDENT-of-the-running-OS, same convention as
-// paths.ts: every function here takes the target platform (and execPath) as
-// a plain argument, using node:path's own `win32`/`posix` namespaces so it
-// is testable for all three platforms from one machine.
+// Running the command through the platform's shell is what makes PATHEXT
+// apply. It is enabled on Windows ONLY: elsewhere a shell adds a process, adds
+// quoting rules, and buys nothing, because the shebang already works.
+//
+// On the safety of `shell: true` here, there are TWO exposures, not one, and
+// the second is the one that is easy to miss:
+//
+//   1. Arguments are re-parsed by cmd.exe, whose quoting cannot be made
+//      reliably injection-proof. Acceptable in this one place only because
+//      every argument this plugin passes is a compile-time literal -- see
+//      ORCA_CLI_ARGUMENTS and the test that holds it to that. Nothing derived
+//      from a repository, a branch name, a panel field or a Jev response is
+//      ever passed. If that changes, this helper is the wrong tool and the
+//      call must move to `spawn` with an explicit interpreter.
+//   2. cmd.exe resolves a bare command name from the CURRENT DIRECTORY before
+//      it consults PATH. The worker's cwd is not ours to assume, and this
+//      plugin's whole job is to sit inside repositories: a checkout carrying
+//      an `orca.cmd` at its root would be executed at plugin activation. That
+//      is why `cwd` is required below rather than inherited -- callers pass a
+//      directory this plugin controls, so the first place cmd.exe looks is a
+//      place no repository can write to.
+//
+// Node 24 (which package.json requires) raises DEP0190 for args + shell:true.
+// The warning is about exposure 1, which the literal-arguments invariant
+// already answers; it is recorded here so the next person does not have to
+// rediscover why the deprecation was accepted rather than silenced.
+// ---------------------------------------------------------------------------
 
-import { posix, win32 } from "node:path";
-import { isRecord } from "../guards.ts";
 import type { SupportedPlatform } from "./paths.ts";
 
-function pathModuleFor(platform: SupportedPlatform): typeof posix {
-  return platform === "win32" ? win32 : posix;
-}
+/**
+ * Every argument list this plugin passes to the CLI.
+ *
+ * Kept here as data so the "all arguments are literals" claim the shell
+ * decision rests on is checkable by a test rather than by reading three call
+ * sites and trusting them to stay that way.
+ */
+export const ORCA_CLI_ARGUMENTS = {
+  worktreePs: ["worktree", "ps", "--json"],
+  worktreeList: ["worktree", "list", "--json"],
+  status: ["status", "--json"],
+} as const;
 
-/** The bundled CLI's own filename, per platform's executable-extension convention. */
-export function cliBinaryName(platform: SupportedPlatform): string {
-  return platform === "win32" ? "orca.exe" : "orca";
-}
+/** How long any one CLI call may take before it is abandoned. */
+export const ORCA_CLI_TIMEOUT_MS = 5000;
 
 /**
- * Where the bundled Orca CLI should live relative to the worker's own
- * `process.execPath`.
+ * `execFile` options for invoking the CLI on `platform`.
  *
- * macOS: Electron's own convention places the app's executable at
- * `<App>.app/Contents/MacOS/<Executable>`. The bundled CLI ships as a plain
- * resource file (not inside the app's own asar) at
- * `Contents/Resources/bin/orca` -- one hop up from `MacOS`, then into
- * `Resources`.
- *
- * Windows and Linux: electron-builder puts a `resources/` directory as a
- * sibling of the main executable, not nested under a macOS-style bundle, so
- * the bundled CLI is expected at `resources/bin/<name>` next to it.
+ * `maxBuffer` is raised well above Node's 1MB default: the output is one JSON
+ * document describing every worktree Orca knows, which on a working machine
+ * with 65 of them is already ~130KB. The default leaves far less headroom than
+ * it appears to, and exceeding it kills the child and surfaces as the same
+ * empty result every other failure here produces.
  */
-export function resolveBundledOrcaCliPath(execPath: string, platform: SupportedPlatform): string {
-  const { dirname, join } = pathModuleFor(platform);
-  const execDir = dirname(execPath);
-  if (platform === "darwin") {
-    const contentsDir = dirname(execDir);
-    return join(contentsDir, "Resources", "bin", "orca");
-  }
-  return join(execDir, "resources", "bin", cliBinaryName(platform));
-}
-
-/**
- * Every command worth trying to run `orca`, most-specific first: the
- * bundled CLI at its expected location, then bare name(s) relying on the
- * worker's own PATH (a last resort -- see this module's own header for why
- * that PATH is often not what a real shell would have).
- *
- * Windows gets `.exe` then `.cmd` before the extensionless name: `execFile`
- * does not apply PATHEXT resolution to a bare command the way a real shell
- * does, so a bare "orca" would silently never match an `orca.cmd` shim even
- * when it is right there on PATH.
- */
-export function resolveOrcaCliCandidates(execPath: string, platform: SupportedPlatform): readonly string[] {
-  const bundled = resolveBundledOrcaCliPath(execPath, platform);
-  if (platform === "win32") {
-    return [bundled, "orca.exe", "orca.cmd", "orca"];
-  }
-  return [bundled, "orca"];
-}
-
-/** True for the one error shape that means "there is nothing at this path/on this PATH to run" -- as opposed to a command that was found and then failed on its own. */
-export function isMissingCommandError(error: unknown): boolean {
-  return isRecord(error) && error.code === "ENOENT";
+export function orcaCliOptions(platform: SupportedPlatform, cwd: string): {
+  timeout: number;
+  maxBuffer: number;
+  shell: boolean;
+  cwd: string;
+  windowsHide: boolean;
+} {
+  return {
+    timeout: ORCA_CLI_TIMEOUT_MS,
+    maxBuffer: 16 * 1024 * 1024,
+    // See the module note: PATHEXT resolution for `.cmd` shims, Windows only.
+    shell: platform === "win32",
+    // Required, never inherited -- see exposure 2 in the module note.
+    cwd,
+    // Without this every call flashes a console window on Windows, three
+    // times at activation alone.
+    windowsHide: true,
+  };
 }
