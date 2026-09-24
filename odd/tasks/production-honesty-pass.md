@@ -49,13 +49,13 @@ Strategy: `ask-on-risk`. TDD: strict. Runner:
 `node --test --experimental-strip-types`. 391 tests pass at `a7fceb3`.
 
 ## Tasks
-- [ ] P1 Every panel default comes from the constant it mirrors, or the field
+- [x] P1 Every panel default comes from the constant it mirrors, or the field
       does not exist. One guard test that fails when a panel literal drifts
       from its source of truth, covering the ceiling AND the external gate.
-- [ ] P2 The four dead threshold fields are either wired to a decision or
+- [x] P2 The four dead threshold fields are either wired to a decision or
       removed from the config, the panel and the store. Do not leave an
       editable control that changes nothing.
-- [ ] P3 `store.ts`'s default ceiling comes from `GATE_CONSEQUENCE_CEILING`
+- [x] P3 `store.ts`'s default ceiling comes from `GATE_CONSEQUENCE_CEILING`
       rather than a literal.
 - [ ] P4 The skills mod is copied rather than symlinked, with a content marker
       so an update replaces a stale copy; uninstall removes it.
@@ -78,4 +78,46 @@ Strategy: `ask-on-risk`. TDD: strict. Runner:
 - All tests pass; screenshots read at 1440/768/390/320 in both themes.
 
 ## Progress
-Inventory measured and recorded above. Not started.
+Inventory measured and recorded above.
+
+P1, P2 and P3 done on `fix/thresholds-honesty` (off `main`, not merged). P4-P7
+belong to a different writer and were left untouched.
+
+- **P2 decision: removed, not wired.** `actThreshold`, `confirmThreshold`,
+  `reversibleGate` and `externalGate` are gone from `PluginThresholds`
+  (`src/core/store.ts`), the config panel (`adapters/orca/panels/config.html`)
+  and their validators/defaults. Confirmed by grep (whole `src/` and
+  `adapters/`, excluding tests/panels/i18n) that no decision anywhere read
+  them, matching this doc's own inventory. Backward compatible: a stored
+  config still carrying the four keys loads through unchanged, because
+  `isPluginThresholds` now only requires `consequenceCeiling` to be a number
+  and ignores unknown keys instead of rejecting the object.
+  - Caveat this pass surfaced: `consequenceCeiling` on `PluginConfig.thresholds`
+    (the one field this doc named as live) is *also* not read by any decision
+    at runtime -- `gate-bash.ts`'s `decideGateAction` call takes its ceiling
+    from `catalog.ts`'s per-destination `autonomy.consequenceCeiling` (a
+    different, live object with the same field name) or straight from
+    `decisions.ts`'s `GATE_CONSEQUENCE_CEILING`, never from `getConfig()`.
+    Only `jevBudgetMs` (the sibling field) is actually consumed, in
+    `main.mjs`'s `cmdDecide`. Kept the field per this task's explicit
+    instruction (P3 says to fix its default, not remove it) rather than
+    expanding scope; flagged here rather than silently agreeing with the
+    inventory.
+- **P3.** `DEFAULT_CONFIG.thresholds.consequenceCeiling` in `store.ts` now
+  imports and uses `GATE_CONSEQUENCE_CEILING` from `decisions.ts` instead of
+  repeating `1.5`.
+- **P1 guard.** New test `adapters/orca/panels/config_html_thresholds.test.mjs`
+  reads `config.html` as text (it cannot import from `src/core`) and asserts:
+  the four removed fields have no input element and no `el(id)` reference
+  left in the panel; `consequenceCeiling`'s fallback chain never hardcodes a
+  bare decimal (only defers to the worker-published `gateDefaults` mirror or
+  stays blank). A self-check test proves the detector actually flags the
+  historical shape of the defect (`... : 1.78`) before trusting it against
+  the real file. `externalGate`'s own drift (0.35 vs `GATE_EXTERNAL_GATE`
+  0.5) is moot: the field no longer exists, so there is nothing left to drift.
+
+Tests: `node --test --experimental-strip-types` -- 398 pass (391 baseline +
+4 in `store.test.ts` + 3 in the new panel guard file), 0 fail. Extracted
+`config.html`'s inline `<script>` and ran `node --check` on it: syntax OK.
+
+Not verified: panel screenshots (developer takes those; not run here).
