@@ -77,6 +77,36 @@ test("redirection turns an otherwise-safe verb unsafe, since it can write outsid
   assert.equal(isObviouslySafeCommand("cat a > b"), false);
 });
 
+test("stderr silenced to /dev/null does not sink an otherwise-safe command -- silencing stderr cannot make a read-only command dangerous", () => {
+  assert.equal(isObviouslySafeCommand("ls 2>/dev/null"), true);
+  assert.equal(isObviouslySafeCommand("git status 2>/dev/null"), true);
+  assert.equal(isObviouslySafeCommand("cat file.txt 2> /dev/null"), true);
+});
+
+test("stderr merged into stdout (2>&1) does not sink an otherwise-safe command", () => {
+  assert.equal(isObviouslySafeCommand("git status 2>&1"), true);
+  assert.equal(isObviouslySafeCommand("grep -rn foo src 2>&1"), true);
+});
+
+test("stdout silenced to /dev/null does not sink an otherwise-safe command", () => {
+  assert.equal(isObviouslySafeCommand("echo hi >/dev/null"), true);
+  assert.equal(isObviouslySafeCommand("echo hi > /dev/null"), true);
+});
+
+test("both streams silenced together does not sink an otherwise-safe command -- the most common agent-written habit", () => {
+  assert.equal(isObviouslySafeCommand("cat file.txt > /dev/null 2>&1"), true);
+  assert.equal(isObviouslySafeCommand("cd x && cat file.txt 2>/dev/null"), true);
+});
+
+test("a redirection to any real path is never waved through, even one that looks similar to the safe forms", () => {
+  assert.equal(isObviouslySafeCommand("cat file 2>/tmp/x"), false);
+  assert.equal(isObviouslySafeCommand("ls > results.txt"), false);
+  assert.equal(isObviouslySafeCommand("echo hi >> ~/.bashrc"), false);
+  assert.equal(isObviouslySafeCommand("echo hi >> /dev/null"), false, "append is not the same as discard, even to /dev/null");
+  assert.equal(isObviouslySafeCommand("cd x && cat file 2>/tmp/log"), false);
+  assert.equal(isObviouslySafeCommand("cat file 1>&2"), false, "merging stdout into stderr is not a discard, only 2>&1 is special-cased");
+});
+
 test("node/npx invocations other than a version check are left on the existing path", () => {
   assert.equal(isObviouslySafeCommand("node script.js"), false);
   assert.equal(isObviouslySafeCommand("node -e \"console.log(1)\""), false);

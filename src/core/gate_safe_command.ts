@@ -61,15 +61,52 @@ function isSafeFindSegment(segment: string): boolean {
 }
 
 /**
+ * The exact redirection forms that only DISCARD or MERGE a stream, never
+ * write it anywhere a person or another process could read it back:
+ *
+ *   - `2>/dev/null` / `2> /dev/null` -- discard stderr
+ *   - `2>&1`                         -- merge stderr into stdout
+ *   - `>/dev/null` / `> /dev/null`   -- discard stdout (a bare `>` is fd 1)
+ *
+ * Silencing a stream cannot make a read-only command dangerous, and this is
+ * the single most common habit in agent-written commands (measured: 5-6
+ * such calls sinking pure-inspection commands into a paid Jev call in one
+ * evening). Deliberately narrow and literal -- `>>` (append), any target
+ * other than exactly `/dev/null`, and `1>&2` (merge the other direction)
+ * are NOT matched here and fall straight through to hasRedirection's
+ * catch-all below. Each pattern requires the redirection to start at the
+ * beginning of the segment or after whitespace, so it can never accidentally
+ * eat part of a `>>` or a real path that merely starts with `/dev/null`-like
+ * text.
+ */
+const SAFE_REDIRECTIONS: readonly RegExp[] = [
+  /(?:^|\s)2>\s*\/dev\/null(?=\s|$)/,
+  /(?:^|\s)2>&1(?=\s|$)/,
+  /(?:^|\s)[1]?>\s*\/dev\/null(?=\s|$)/,
+]
+
+/** Removes every safe-redirection occurrence (see SAFE_REDIRECTIONS) so hasRedirection only ever sees what is left. Global so `> /dev/null 2>&1` (both in one segment) is fully cleared. */
+function stripSafeRedirections(segment: string): string {
+  let stripped = segment
+  for (const pattern of SAFE_REDIRECTIONS) {
+    stripped = stripped.replace(new RegExp(pattern, 'g'), ' ')
+  }
+  return stripped
+}
+
+/**
  * `splitSegments` only splits on `&&`/`||`/`;`/`|`, never on redirection --
  * so `echo x > /etc/passwd` or `cat a > b` stays ONE segment that still
- * starts with a safe verb. Any `<`/`>` in a segment means it can write to,
- * or read from, a file outside its own arguments, so it is never obviously
- * safe -- it just falls through to the existing path, same as any other
- * unclassifiable command.
+ * starts with a safe verb. Any `<`/`>` left in a segment AFTER stripping the
+ * safe discard/merge forms above means it can write to, or read from, a
+ * file outside its own arguments, so it is never obviously safe -- it just
+ * falls through to the existing path, same as any other unclassifiable
+ * command. Tested against the ORIGINAL segment text (SAFE_SEGMENT_PATTERNS
+ * below still match a safe verb regardless of trailing redirection), only
+ * this check itself runs against the stripped copy.
  */
 function hasRedirection(segment: string): boolean {
-  return /[<>]/.test(segment)
+  return /[<>]/.test(stripSafeRedirections(segment))
 }
 
 function isSafeSegment(segment: string): boolean {
