@@ -2,7 +2,7 @@
 /**
  * install-claude-integration.mjs — sidecar for orca-jev-advisor's Claude
  * Code side: the gate and outcome hooks in ~/.claude/settings.json, the
- * CLAUDE_CODE_ENABLE_FUNCTION_HOOKS env var, and the mod-skills symlink
+ * CLAUDE_CODE_ENABLE_FUNCTION_HOOKS env var, and the mod-skills copy
  * under ~/.claude/skills/. Runs as a clean child of the plugin worker
  * (main.mjs's `sidecarEnv`), for the same reason write-secret-mirror.mjs
  * does: the worker's own permission sandbox only lets it read its plugin
@@ -59,7 +59,7 @@ import { lstat, readdir, readFile, readlink } from 'node:fs/promises'
 // see guarded_fs.ts's module doc for why every write in this script goes
 // through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/cp.
 import {
-  guardedCp as cp,
+  guardedChmod as chmod,
   guardedMkdir as mkdir,
   guardedRename as rename,
   guardedRm as rm,
@@ -545,6 +545,54 @@ async function modCopyState (modCopyPath, markerPath, source) {
   return { exists: true, current: false }
 }
 
+/**
+ * Manual recursive tree copy, standing in for `fs.cp`. Measured on the exact
+ * flags the plugin worker spawns this script with: `fs.cp`'s recursive copy
+ * is denied outright (ERR_ACCESS_DENIED), on every real machine measured,
+ * even with `/*` wildcards added to both the read and write grants -- while
+ * `readdir`, `mkdir`, `readFile` and `writeFile` are all separately
+ * permitted under the same flags. This walks the tree with exactly those
+ * four permitted primitives instead of the one denied one.
+ *
+ * A symbolic link inside the source tree is skipped -- neither followed nor
+ * recreated. mod-skills, the only tree this ever copies, ships none, and a
+ * sandbox that denies `fs.symlink` outright (see the module note above on
+ * why this file copies rather than links in the first place) could not
+ * recreate one here even if the source had one.
+ */
+async function copyTree (source, destination, skipped) {
+  // Read the source before creating anything at the destination, so a
+  // missing or unreadable source (the P5 failure fixture, and any real
+  // permission problem) fails cleanly with nothing left behind.
+  const entries = await readdir(source, { withFileTypes: true })
+  await mkdir(destination, { recursive: true })
+  for (const entry of entries) {
+    const from = join(source, entry.name)
+    const to = join(destination, entry.name)
+    if (entry.isDirectory()) {
+      await copyTree(from, to, skipped)
+      continue
+    }
+    if (entry.isFile()) {
+      await writeFile(to, await readFile(from))
+      // writeFile creates 0644 regardless of the source, so the mode has to
+      // be carried over deliberately. Today every file in mod-skills is
+      // 0644 and this is a no-op -- but the day someone adds a file that
+      // has to be executable, losing the bit here would be silent, and a
+      // hook that cannot run looks exactly like a hook that was never
+      // installed. `chmod` is permitted under the worker's sandbox;
+      // measured, unlike `fs.cp`.
+      const mode = (await lstat(from)).mode & 0o777
+      if (mode !== 0o644) await chmod(to, mode)
+      continue
+    }
+    // A symlink, socket or FIFO is skipped -- see the doc comment above --
+    // but counted, because a tree that arrived incomplete must not report
+    // itself as a clean copy.
+    skipped.push(entry.name)
+  }
+}
+
 async function installModCopy (pluginRoot, modCopyPath, markerPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
   const stat = await lstat(modCopyPath).catch((error) => {
@@ -567,13 +615,24 @@ async function installModCopy (pluginRoot, modCopyPath, markerPath) {
     // settings.json container is never partially reused.
     await rm(modCopyPath, { recursive: true, force: true })
   }
+  const skipped = []
   try {
-    await mkdir(dirname(modCopyPath), { recursive: true })
-    await cp(source, modCopyPath, { recursive: true })
+    await copyTree(source, modCopyPath, skipped)
   } catch (error) {
     return { changed: false, reason: 'copy-failed', detail: `could not copy the skills mod (${String(error?.message ?? error)})` }
   }
   await writeModCopyMarker(markerPath, source)
+  // The copy happened, so this is not 'copy-failed' -- but an entry this
+  // walk cannot reproduce means the tree on disk is not the tree that
+  // shipped, and saying nothing about it is how the previous two failures
+  // stayed invisible for a whole release each.
+  if (skipped.length > 0) {
+    return {
+      changed: true,
+      reason: 'copy-incomplete',
+      detail: `copied the skills mod, but skipped ${skipped.length} entry/entries it cannot reproduce (${skipped.slice(0, 5).join(', ')})`
+    }
+  }
   return { changed: true }
 }
 
@@ -650,7 +709,14 @@ async function install (pluginRoot) {
         orcaManaged: target.orcaManaged,
         ok: true,
         changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modCopy: modResult.changed },
-        modCopyWarning: modResult.reason ?? null
+        // modCopyWarning stays the stable machine-readable reason code exactly
+        // as it always has -- panels key off it and must not break.
+        // modCopyDetail carries the underlying diagnosis (e.g. the real
+        // ERR_ACCESS_DENIED text) alongside it, so a failure is no longer
+        // just "copy-failed" with no way to tell a permission denial from a
+        // missing source apart.
+        modCopyWarning: modResult.reason ?? null,
+        modCopyDetail: modResult.detail ?? null
       })
     } catch (error) {
       // One unwritable target (a permission problem, a settings.json
@@ -662,10 +728,21 @@ async function install (pluginRoot) {
 
   const failed = perTarget.filter((t) => !t.ok)
   const orcaTargets = perTarget.filter((t) => t.orcaManaged && t.ok).length
+  // A target only actually got the mod when it was writable AND its copy
+  // did not report a warning -- `ok` alone says the hook/env install
+  // succeeded, which is a real result on its own but must never be read as
+  // "the mod landed everywhere": an unwritable target, or one whose copy
+  // failed under an `ok` target, both mean the mod is not on disk there.
+  const modCopyLanded = perTarget.filter((t) => t.ok && !t.modCopyWarning).length
   return {
     ok: failed.length < perTarget.length,
     targets: perTarget,
     orcaAccountsInstalled: orcaTargets,
+    // How many of the discovered targets actually got the skills-mod copy
+    // on disk versus how many did not (whether the target itself failed, or
+    // the target was writable but the copy itself failed) -- see
+    // modCopyWarning/modCopyDetail on each target for why a failed one did.
+    modCopyTargets: { landed: modCopyLanded, failed: perTarget.length - modCopyLanded },
     // Where the Orca accounts were looked for, and whether Orca itself said
     // so -- `convention` means we guessed a standard install path, which is
     // right on a normal machine but cannot tell two Orca installs apart.

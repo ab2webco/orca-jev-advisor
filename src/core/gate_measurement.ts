@@ -30,6 +30,20 @@ export interface GateDecisionRecord {
   readonly verdict: GateVerdict;
   /** Only meaningful for `source: "jev"`; null for a local-rule or cache verdict, which never call the network. */
   readonly latencyMs: number | null;
+  /**
+   * Which plugin build produced this decision (e.g. `"0.4.0"`).
+   *
+   * Optional ON READ, not on write: every new record is stamped with the
+   * build that wrote it, but a record already on disk from before this
+   * field existed simply lacks the key. That absence is exactly the case
+   * this field exists to make visible -- five `ask` records for the
+   * pipe-to-shell family looked like the deny tier failing until their
+   * version showed they predated 0.4.0, the release that introduced the
+   * deny tier at all. A time filter cannot separate that; the version can.
+   * A record missing this field must never be dropped or treated as
+   * corrupt -- see parseGateDecisionRecords below.
+   */
+  readonly pluginVersion?: string;
 }
 
 /** `spansPipe` marks a shape that only exists ACROSS a pipe, so it must be matched before the command is split. */
@@ -117,6 +131,8 @@ export interface BuildGateDecisionRecordInput {
   readonly source: GateSource;
   readonly verdict: GateVerdict;
   readonly latencyMs: number | null;
+  /** Required at construction time: whoever builds a record today always knows the build producing it. */
+  readonly pluginVersion: string;
 }
 
 export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): GateDecisionRecord {
@@ -129,6 +145,13 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     source: input.source,
     verdict: input.verdict,
     latencyMs: input.latencyMs,
+    // Conditionally spread, not `pluginVersion: input.pluginVersion`: an
+    // explicit `pluginVersion: undefined` key is a different shape than a
+    // truly absent one for JSON.stringify's own output (it drops the key
+    // either way) but NOT for object equality on the in-memory record, and
+    // this record must be indistinguishable from one parsed back off disk
+    // where the key never existed at all.
+    ...(input.pluginVersion !== undefined ? { pluginVersion: input.pluginVersion } : {}),
   };
 }
 
@@ -155,7 +178,10 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     typeof record.commandFamily === "string" &&
     isGateSource(record.source) &&
     isGateVerdict(record.verdict) &&
-    (record.latencyMs === null || typeof record.latencyMs === "number")
+    (record.latencyMs === null || typeof record.latencyMs === "number") &&
+    // Absent entirely (a record written before this field existed) is valid;
+    // present-but-wrong-type is not, same discipline as every other field.
+    (record.pluginVersion === undefined || typeof record.pluginVersion === "string")
   );
 }
 

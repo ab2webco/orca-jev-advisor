@@ -154,6 +154,95 @@ test('modSkills.readiness: reflects real comparable/match data, still short of t
 })
 
 // ---------------------------------------------------------------------------
+// odd/tasks/panel-interventions-and-mod-copy.md T2/T3/T4 -- the gate
+// aggregate now carries pluginVersion breakdowns, p95 latency, per-family
+// interventions, and (derived from the separate approvals log) a per-family
+// notRun count.
+// ---------------------------------------------------------------------------
+
+function gateLogPathFor (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-decisions.jsonl')
+}
+
+function writeGateLog (home, lines) {
+  const path = gateLogPathFor(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, lines.map((line) => `${JSON.stringify(line)}\n`).join(''), 'utf8')
+}
+
+function gateDecisionRow (id, overrides = {}) {
+  return {
+    type: 'gate-decision',
+    id,
+    at: '2026-09-24T00:00:00.000Z',
+    project: 'orca-supervisor',
+    commandFamily: 'terraform',
+    source: 'local-rule',
+    verdict: 'ask',
+    latencyMs: null,
+    ...overrides,
+  }
+}
+
+test('gate.byCommandFamily carries interventions per family and a familiesWithNoInterventions total, without dropping the zero-intervention families', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('a', { commandFamily: 'grep', verdict: 'allow', source: 'cache' }),
+    gateDecisionRow('b', { commandFamily: 'grep', verdict: 'allow', source: 'cache' }),
+    gateDecisionRow('c', { commandFamily: 'terraform', verdict: 'ask', source: 'local-rule' }),
+    gateDecisionRow('d', { commandFamily: 'terraform', verdict: 'deny', source: 'local-rule' }),
+  ])
+  const result = run(home)
+  const grep = result.gate.byCommandFamily.find((f) => f.commandFamily === 'grep')
+  const terraform = result.gate.byCommandFamily.find((f) => f.commandFamily === 'terraform')
+  assert.equal(grep.interventions, 0)
+  assert.equal(terraform.interventions, 2)
+  assert.equal(result.gate.familiesWithNoInterventions, 1)
+})
+
+test('gate.jevLatency exposes p95Ms alongside medianMs and maxMs', () => {
+  const home = makeHome()
+  writeGateLog(home, Array.from({ length: 20 }, (_, i) =>
+    gateDecisionRow(`jev-${i}`, { source: 'jev', verdict: 'allow', latencyMs: (i + 1) * 10 })))
+  const result = run(home)
+  assert.equal(result.gate.jevLatency.p95Ms, 190)
+  assert.equal(result.gate.jevLatency.maxMs, 200)
+})
+
+test('gate.byPluginVersion and gate.noPluginVersionCount reflect real per-record versions -- a record from before this field existed still counts, never dropped', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('a', { pluginVersion: '0.4.0' }),
+    gateDecisionRow('b', { pluginVersion: '0.4.0' }),
+    gateDecisionRow('c', { pluginVersion: '0.2.6' }),
+    // No `pluginVersion` key at all -- a record written before this field existed.
+    (() => { const row = gateDecisionRow('d'); return row })(),
+  ])
+  const result = run(home)
+  assert.deepEqual(result.gate.byPluginVersion, [
+    { pluginVersion: '0.4.0', total: 2 },
+    { pluginVersion: '0.2.6', total: 1 },
+  ])
+  assert.equal(result.gate.noPluginVersionCount, 1)
+  assert.equal(result.gate.totalDecisions, 4, 'the legacy record must still be counted, not dropped as corrupt')
+})
+
+test('gate.notRunByCommandFamily: derived from gate-approvals.jsonl, grouped by the family already recorded on each pending record -- no cross-log join by family needed, only the existing toolUseId join to resolve outcome', () => {
+  const home = makeHome()
+  const old = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString() // past UNRESOLVED_AFTER_MS (6h)
+  const recent = new Date().toISOString()
+  writeApprovalsLog(home, [
+    { ...pendingRow('a', old), commandFamily: 'terraform' },
+    { ...pendingRow('b', recent), commandFamily: 'kubectl' }, // not past the TTL yet -- must not count as notRun
+  ])
+  const result = run(home)
+  const terraform = result.gate.notRunByCommandFamily.find((f) => f.commandFamily === 'terraform')
+  const kubectl = result.gate.notRunByCommandFamily.find((f) => f.commandFamily === 'kubectl')
+  assert.equal(terraform.notRun, 1)
+  assert.equal(kubectl.notRun, 0)
+})
+
+// ---------------------------------------------------------------------------
 // odd/tasks/production-honesty-pass.md P7 -- src/core/approval_record.ts's
 // summarizeApprovals renamed `unresolved` to `notRun` (a pending past its
 // TTL with no outcome, classified rather than discarded -- see that
@@ -294,4 +383,16 @@ test('abBenchmark: a failed comparison is counted in failureCount and excluded f
   assert.equal(result.abBenchmark.failureCount, 1)
   assert.equal(result.abBenchmark.agreementCount, 1)
   assert.equal(result.abBenchmark.disagreementCount, 0)
+})
+
+test("a source:'none' record survives the guard instead of being dropped as malformed", () => {
+  // The 0.4.0 fail-open fix writes these rows; toGateDecisionRecord's source
+  // check did not list 'none', so every one of them was discarded here and
+  // the board's "passed unjudged" count could only ever render zero.
+  const home = makeHome()
+  writeGateLog(home, [gateDecisionRow('n1', { source: 'none', verdict: 'allow', latencyMs: null })])
+  const result = run(home)
+  assert.equal(result.gate.corruptLines, 0, "a 'none' row is valid, not corrupt")
+  assert.equal(result.gate.totalDecisions, 1)
+  assert.equal(result.gate.bySource.none, 1)
 })

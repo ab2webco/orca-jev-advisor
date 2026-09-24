@@ -361,6 +361,7 @@
           'integration.done': 'Listo.',
           'integration.doneWithWarning': 'Listo, con un aviso: {{warning}}',
           'integration.modCopyFailed': 'no se pudo copiar el mod de skills a su lugar; el hook de Bash y el resto de la integración sí quedaron instalados.',
+          'integration.modCopyIncomplete': 'el mod de skills se copió, pero quedaron entradas que el instalador no puede reproducir; lo que hay en el disco no es exactamente lo que trae el plugin.',
           'integration.reverting': 'Revirtiendo…',
           'integration.reverted': 'Revertido.',
           'thresholds.heading': 'Techo del gate y tamaño del log',
@@ -527,6 +528,7 @@
           'integration.done': 'Done.',
           'integration.doneWithWarning': 'Done, with a warning: {{warning}}',
           'integration.modCopyFailed': 'could not copy the skills mod into place; the Bash hook and the rest of the integration are still installed.',
+          'integration.modCopyIncomplete': "the skills mod was copied, but some entries the installer cannot reproduce were left out; what is on disk is not exactly what the plugin ships.",
           'integration.reverting': 'Reverting…',
           'integration.reverted': 'Reverted.',
           'thresholds.heading': 'Gate ceiling & log size',
@@ -695,7 +697,8 @@
       // already-localized prose, so it is mapped through the catalog here
       // rather than shown as-is (odd/tasks/production-honesty-pass.md P5).
       var MOD_COPY_WARNING_KEYS = {
-        'copy-failed': 'integration.modCopyFailed'
+        'copy-failed': 'integration.modCopyFailed',
+        'copy-incomplete': 'integration.modCopyIncomplete'
       }
       function modCopyWarningMessage (code) {
         return t(MOD_COPY_WARNING_KEYS[code] || 'integration.modCopyFailed')

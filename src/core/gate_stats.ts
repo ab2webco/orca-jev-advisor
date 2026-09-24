@@ -40,6 +40,18 @@ export interface GateLatencyStats {
   /** How many jev-sourced records actually carried a numeric latencyMs. */
   readonly sampleCount: number;
   readonly medianMs: number | null;
+  /**
+   * The 95th percentile, using the nearest-rank convention (the same
+   * convention every percentile in this module uses, should another be
+   * added later): for n samples sorted ascending, p95 is the value at
+   * index `ceil(0.95 * n) - 1`. That always names an ACTUAL recorded
+   * latency, never a value interpolated between two samples that never
+   * happened. A single sample's p95 is that sample, same as its median
+   * and its max -- there is nothing else it could honestly be. Null,
+   * never 0, when there is no sample at all: a latency of "0ms" would
+   * read as a real, suspiciously fast measurement, not as "no data".
+   */
+  readonly p95Ms: number | null;
   readonly maxMs: number | null;
 }
 
@@ -47,6 +59,13 @@ export interface GateCommandFamilyStat {
   readonly commandFamily: string;
   readonly total: number;
   readonly byVerdict: GateVerdictCounts;
+  /** `byVerdict.ask + byVerdict.deny` -- how often this family actually needed a human, independent of how often it merely ran. */
+  readonly interventions: number;
+}
+
+export interface GatePluginVersionStat {
+  readonly pluginVersion: string;
+  readonly total: number;
 }
 
 export interface GateProjectStat {
@@ -61,10 +80,22 @@ export interface GateStatsSummary {
   readonly bySource: GateSourceCounts;
   /** Latency is only ever meaningful for the `jev` source -- see gate_measurement.ts. */
   readonly jevLatency: GateLatencyStats;
-  /** Sorted by total, descending -- "donde se ha usado mas". */
+  /** Sorted by total, descending -- "donde se ha usado mas". The fold stays complete; a caller sorts or filters for "where it actually intervened" itself. */
   readonly byCommandFamily: readonly GateCommandFamilyStat[];
+  /** How many entries in {@link byCommandFamily} have `interventions === 0` -- everything the gate ever saw for them, it allowed. */
+  readonly familiesWithNoInterventions: number;
   /** Sorted by total, descending. */
   readonly byProject: readonly GateProjectStat[];
+  /**
+   * Which plugin builds appear in this folded set, sorted by total
+   * descending. See gate_measurement.ts's own doc on `pluginVersion` for
+   * why this exists: an accumulated count across builds can look like a
+   * broken deny tier when it is really an old build that predates the
+   * deny tier entirely, and a time window cannot tell the two apart.
+   */
+  readonly byPluginVersion: readonly GatePluginVersionStat[];
+  /** How many folded records carry no `pluginVersion` at all -- written before that field existed. */
+  readonly noPluginVersionCount: number;
 }
 
 function emptyVerdictCounts(): GateVerdictCounts {
@@ -87,6 +118,21 @@ function median(sortedAscending: readonly number[]): number | null {
   return (lower + upper) / 2;
 }
 
+/**
+ * Nearest-rank percentile: for n sorted-ascending samples, the p-th
+ * percentile is the value at 0-based index `ceil(p/100 * n) - 1`. Chosen
+ * over interpolation so a percentile always names an actual recorded
+ * latency, never a value nobody measured. Sorted-ascending input required,
+ * same as {@link median}. Null, never 0, when there is no sample.
+ */
+function percentile(sortedAscending: readonly number[], p: number): number | null {
+  const n = sortedAscending.length;
+  if (n === 0) return null;
+  const rank = Math.ceil((p / 100) * n);
+  const index = Math.min(Math.max(rank - 1, 0), n - 1);
+  return sortedAscending[index] ?? null;
+}
+
 interface MutableFamilyStat {
   total: number;
   byVerdict: GateVerdictCounts;
@@ -101,6 +147,8 @@ export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateS
   const bySource: { "local-rule": number; cache: number; jev: number; none: number } = { "local-rule": 0, cache: 0, jev: 0, none: 0 };
   const familyStats = new Map<string, MutableFamilyStat>();
   const projectCounts = new Map<string | null, number>();
+  const pluginVersionCounts = new Map<string, number>();
+  let noPluginVersionCount = 0;
   const jevLatencies: number[] = [];
 
   for (const record of records) {
@@ -114,6 +162,9 @@ export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateS
 
     projectCounts.set(record.project, (projectCounts.get(record.project) ?? 0) + 1);
 
+    if (record.pluginVersion === undefined) noPluginVersionCount += 1;
+    else pluginVersionCounts.set(record.pluginVersion, (pluginVersionCounts.get(record.pluginVersion) ?? 0) + 1);
+
     if (record.source === "jev" && record.latencyMs !== null && Number.isFinite(record.latencyMs)) {
       jevLatencies.push(record.latencyMs);
     }
@@ -123,11 +174,22 @@ export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateS
   const lastLatency = sortedLatencies[sortedLatencies.length - 1];
 
   const byCommandFamily: GateCommandFamilyStat[] = [...familyStats.entries()]
-    .map(([commandFamily, stat]) => ({ commandFamily, total: stat.total, byVerdict: stat.byVerdict }))
+    .map(([commandFamily, stat]) => ({
+      commandFamily,
+      total: stat.total,
+      byVerdict: stat.byVerdict,
+      interventions: stat.byVerdict.ask + stat.byVerdict.deny,
+    }))
     .sort((a, b) => b.total - a.total);
+
+  const familiesWithNoInterventions = byCommandFamily.filter((f) => f.interventions === 0).length;
 
   const byProject: GateProjectStat[] = [...projectCounts.entries()]
     .map(([project, total]) => ({ project, total }))
+    .sort((a, b) => b.total - a.total);
+
+  const byPluginVersion: GatePluginVersionStat[] = [...pluginVersionCounts.entries()]
+    .map(([pluginVersion, total]) => ({ pluginVersion, total }))
     .sort((a, b) => b.total - a.total);
 
   return {
@@ -137,10 +199,14 @@ export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateS
     jevLatency: {
       sampleCount: sortedLatencies.length,
       medianMs: median(sortedLatencies),
+      p95Ms: percentile(sortedLatencies, 95),
       maxMs: sortedLatencies.length > 0 && lastLatency !== undefined ? lastLatency : null,
     },
     byCommandFamily,
+    familiesWithNoInterventions,
     byProject,
+    byPluginVersion,
+    noPluginVersionCount,
   };
 }
 
