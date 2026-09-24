@@ -93,19 +93,7 @@
       h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
            color: var(--muted-foreground, var(--fb-muted-foreground));
            margin: 0 0 8px; font-weight: 600; }
-      .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
-      .stat { border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md); padding: 8px 10px; }
-      .stat .n { font-size: 20px; font-weight: 700; line-height: 1.2; }
-      .stat .label { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); margin-top: 2px; }
       .empty-line { color: var(--muted-foreground, var(--fb-muted-foreground)); font-size: 12px; }
-      table { width: 100%; border-collapse: collapse; font-size: 12px; }
-      /* At 320px the five-column family table is 386px wide. Let the table
-         scroll inside its own box instead of pushing the whole page sideways. */
-      #gate-by-family { overflow-x: auto; }
-      #gate-by-family table { min-width: 340px; }
-      th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border, var(--fb-border)); }
-      th { color: var(--muted-foreground, var(--fb-muted-foreground)); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; }
-      tr:last-child td { border-bottom: 0; }
       .divider { border-top: 1px solid var(--border, var(--fb-border)); margin-top: 4px; }
 
       .item { padding: 8px 12px; border-bottom: 1px solid var(--border, var(--fb-border)); }
@@ -129,6 +117,85 @@
       .tag.blocked { color: var(--destructive, var(--fb-destructive)); border-style: dashed; }
       .empty { color: var(--muted-foreground, var(--fb-muted-foreground)); padding: 8px 12px; }
       .stale { color: var(--destructive, var(--fb-destructive)); }
+
+      /* ---- charts ---------------------------------------------------
+         No chart library reaches this iframe (opaque origin, no network,
+         and the shell injects only PANEL_DESIGN_TOKEN_ALLOWLIST), so every
+         chart below is plain boxes sized by percentage. That is not a
+         downgrade: percentages reflow at 320px without a layout engine,
+         and painting them with the host's own tokens means they follow the
+         theme for free.
+
+         The palette is a three-step neutral ramp plus the single red the
+         allowlist carries. Deliberately not a rainbow: --primary,
+         --muted-foreground and --ring are the only three neutrals that
+         stay distinguishable in BOTH themes (light #171717/#737373/#a1a1a1,
+         dark #e5e5e5/#a1a1a1/#737373). A fourth invented hue would look
+         right here and wrong in somebody else's Orca. */
+      .v1 { --viz: var(--primary, var(--fb-primary)); }
+      .v2 { --viz: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .v3 { --viz: var(--ring, var(--fb-ring)); }
+      .vd { --viz: var(--destructive, var(--fb-destructive)); }
+
+      .cards { display: grid; gap: 10px; grid-template-columns: 1fr; padding: 10px 12px; }
+      @media (min-width: 720px) { .cards { grid-template-columns: 1fr 1fr; } .card.wide { grid-column: 1 / -1; } }
+      .card {
+        border: 1px solid var(--border, var(--fb-border));
+        border-radius: var(--radius-md); padding: 10px 12px; min-width: 0;
+      }
+      .card > h2 { margin: 0 0 8px; }
+
+      .kpi { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+      .kpi-n { font-size: 30px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em;
+               font-variant-numeric: tabular-nums; }
+      .kpi-unit { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .kpi-sub { margin: 4px 0 10px; font-size: 12px;
+                 color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      /* Stacked proportion bar. A 0-count segment renders nothing at all
+         rather than a hairline nobody can read or click. */
+      .bar { display: flex; height: 10px; border-radius: 9999px; overflow: hidden;
+             background: var(--secondary, var(--fb-secondary)); }
+      .bar .seg { background: var(--viz); min-width: 2px; }
+      .bar .seg + .seg { box-shadow: inset 1px 0 0 var(--background, var(--fb-background)); }
+
+      .legend { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
+      .legend li { display: flex; align-items: baseline; gap: 6px; font-size: 12px; min-width: 0; }
+      .legend .sw { width: 8px; height: 8px; border-radius: 2px; background: var(--viz); flex: none; }
+      .legend .lv { font-weight: 600; font-variant-numeric: tabular-nums; }
+      .legend .ll { color: var(--muted-foreground, var(--fb-muted-foreground));
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .legend .lp { margin-left: auto; color: var(--muted-foreground, var(--fb-muted-foreground));
+                    font-variant-numeric: tabular-nums; flex: none; }
+
+      /* Horizontal bars: label, track, value. The label column is capped
+         so one long project path cannot squeeze every bar to nothing. */
+      .hrows { display: grid; gap: 6px; }
+      .hrow { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+      @media (min-width: 720px) { .hrow { grid-template-columns: minmax(0, 16em) 1fr auto; } }
+      .hrow .hl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .htrack { background: var(--secondary, var(--fb-secondary)); border-radius: 9999px; height: 8px; overflow: hidden; }
+      .hfill { display: block; height: 100%; background: var(--viz); border-radius: 9999px; min-width: 2px; }
+      .hv { font-variant-numeric: tabular-nums; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+
+      /* Speed comparison: two bars on one shared axis, so the gap is the
+         thing you see first and the milliseconds only confirm it. */
+      .cmp { display: grid; gap: 8px; }
+      .cmp-row { display: grid; gap: 3px; }
+      .cmp-head { display: flex; gap: 8px; align-items: baseline; font-size: 12px; min-width: 0; }
+      .cmp-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .cmp-val { margin-left: auto; font-variant-numeric: tabular-nums; flex: none; }
+      .cmp-track { background: var(--secondary, var(--fb-secondary)); border-radius: var(--radius-md); height: 16px; overflow: hidden; }
+      .cmp-fill { display: block; height: 100%; background: var(--viz); border-radius: var(--radius-md); min-width: 3px; }
+      .cmp-foot { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); margin: 2px 0 0; }
+      .verdict-chip { font-variant-numeric: tabular-nums; }
+
+      /* The honesty card. Same border as the rest -- it is not a warning,
+         it is the part of the panel that says what these numbers do not
+         cover, and it should read as ordinary content, not an alarm. */
+      .unmeasured { margin: 0; padding-left: 1.1em; display: grid; gap: 4px;
+                    font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .unmeasured li { padding-left: 2px; }
     </style>
   </head>
   <body>
@@ -139,47 +206,61 @@
     </header>
     <p class="meta nota" id="note"></p>
 
-    <section id="stats-section">
-      <h2 data-i18n="stats.heading"></h2>
-      <div id="stats-empty" class="empty-line" style="display:none"></div>
-      <div id="stats-grid" class="stat-grid"></div>
+    <div class="cards">
+      <section class="card wide" id="card-load">
+        <h2 data-i18n="load.heading"></h2>
+        <div id="load-empty" class="empty-line" style="display:none"></div>
+        <div id="load-body"></div>
+      </section>
 
-      <div class="divider" style="margin-top:14px; padding-top:10px;">
-        <h2 data-i18n="gate.heading"></h2>
-        <div id="gate-empty" class="empty-line" style="display:none"></div>
-        <div id="gate-verdict-grid" class="stat-grid"></div>
-        <div id="gate-source-grid" class="stat-grid" style="margin-top:8px"></div>
-        <p id="gate-latency-line" class="empty-line" style="margin-top:8px"></p>
-      </div>
+      <section class="card wide" id="card-speed">
+        <h2 data-i18n="speed.heading"></h2>
+        <div id="speed-empty" class="empty-line" style="display:none"></div>
+        <div id="speed-body"></div>
+      </section>
 
-      <div class="divider" style="margin-top:14px; padding-top:10px;">
-        <h2 data-i18n="gate.byFamilyHeading"></h2>
-        <div id="gate-by-family"></div>
-      </div>
+      <section class="card" id="card-verdicts">
+        <h2 data-i18n="verdict.heading"></h2>
+        <div id="verdict-empty" class="empty-line" style="display:none"></div>
+        <div id="verdict-body"></div>
+      </section>
 
-      <div class="divider" style="margin-top:14px; padding-top:10px;">
+      <section class="card" id="card-approvals">
         <h2 data-i18n="approvals.heading"></h2>
         <div id="approvals-empty" class="empty-line" style="display:none"></div>
-        <div id="approvals-grid" class="stat-grid"></div>
-        <div id="approvals-notrun-hint" class="empty-line" style="margin-top:6px"></div>
-        <div id="approvals-ceiling" style="margin-top:8px"></div>
-      </div>
+        <div id="approvals-body"></div>
+      </section>
 
-      <div class="divider" style="margin-top:14px; padding-top:10px;">
+      <section class="card" id="card-families">
+        <h2 data-i18n="gate.byFamilyHeading"></h2>
+        <div id="families-body"></div>
+      </section>
+
+      <section class="card" id="card-projects">
         <h2 data-i18n="stats.byProjectHeading"></h2>
-        <div id="stats-by-project"></div>
-      </div>
+        <div id="projects-body"></div>
+      </section>
 
-      <div class="divider" style="margin-top:14px; padding-top:10px;">
+      <section class="card" id="card-skills">
+        <h2 data-i18n="skills.heading"></h2>
+        <div id="skills-body"></div>
+      </section>
+
+      <section class="card" id="card-unmeasured">
+        <h2 data-i18n="unmeasured.heading"></h2>
+        <ul class="unmeasured" id="unmeasured-body"></ul>
+      </section>
+
+      <section class="card wide" id="card-recent">
         <h2 data-i18n="stats.recentHeading"></h2>
         <div id="stats-recent"></div>
-      </div>
-    </section>
+      </section>
 
-    <section id="live-section">
-      <h2 data-i18n="live.heading"></h2>
-      <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
-    </section>
+      <section class="card wide" id="card-live">
+        <h2 data-i18n="live.heading"></h2>
+        <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
+      </section>
+    </div>
 
     <script>
       'use strict'
@@ -193,23 +274,17 @@
       var CATALOG = {
         es: {
           'board.refresh': 'Releer el tablero',
-          'stats.heading': 'Lo que Jev ha hecho',
-          'stats.noData': 'Sin datos todavía. Esta sección se llena a medida que el gate y el mod de skills registran decisiones reales.',
           'stats.skillsEmpty': 'El mod de skills todavía no ha registrado ninguna decisión.',
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
           'stats.listingChars': 'Caracteres de listado no enviados',
-          'stats.byProjectHeading': 'Dónde se usa más',
-          'stats.byProjectGate': 'Gate',
-          'stats.byProjectSkills': 'Skills',
+          'stats.byProjectHeading': 'Por proyecto',
           'stats.byProjectEmpty': 'Sin datos todavía.',
           'stats.recentHeading': 'Últimas decisiones del gate',
           'stats.recentEmpty': 'Sin decisiones todavía.',
           'stats.recentCached': 'caché',
           'stats.recentLocalRule': 'regla local',
           'stats.recentJev': 'jev',
-          'stats.tableProject': 'proyecto',
-          'stats.tableCount': 'decisiones',
           'stats.na': 'sin datos suficientes',
           'stats.unknownProject': '(proyecto desconocido)',
           'gate.heading': 'Lo que hizo el gate de Jev',
@@ -222,16 +297,10 @@
           'gate.source.jev': 'Jev (con red)',
           'gate.latency': 'Latencia de Jev: mediana {{median}}ms · máxima {{max}}ms ({{n}} llamada(s) medida(s))',
           'gate.latency.none': 'Latencia de Jev: sin llamadas a la red todavía (todo se resolvió por regla local o por caché).',
-          'gate.byFamilyHeading': 'Dónde se ha usado más (familia de comando)',
+          'gate.byFamilyHeading': 'Por familia de comando',
           'gate.byFamilyEmpty': 'Sin datos todavía.',
-          'gate.tableFamily': 'familia',
-          'gate.tableTotal': 'total',
-          'gate.tableAllowed': 'permitidas',
-          'gate.tableAsked': 'con pregunta',
-          'gate.tableBlocked': 'bloqueadas',
           'approvals.heading': 'Lo que la persona respondió',
           'approvals.empty': 'El gate todavía no ha detenido ningún comando. Esta sección se llena la próxima vez que se pregunte y la persona responda.',
-          'approvals.asked': 'Preguntas hechas',
           'approvals.approved': 'Aprobadas',
           'approvals.rejected': 'Rechazadas',
           // odd/tasks/production-honesty-pass.md P7: renombrado desde
@@ -245,7 +314,6 @@
           'approvals.notRunHint': 'No corrió: sin respuesta cuando venció la espera. La mayoría son comandos que el gate rechazó directo y que nunca llegaron a ejecutarse -- el freno funcionó -- pero una sesión que se cerró justo después de correr el comando deja el mismo rastro. Es una clasificación, no un hecho confirmado.',
           'approvals.highestApproved': 'Más alto aprobado',
           'approvals.lowestRejected': 'Más bajo rechazado',
-          'approvals.band': 'Banda entre ambos',
           'approvals.suggestedCeiling': 'Techo sugerido',
           'approvals.evidenceCount': 'Basado en {{approved}} aprobación(es) y {{rejected}} rechazo(s) con puntaje.',
           'approvals.noSuggestionInsufficient': 'Todavía no hay evidencia suficiente para sugerir un techo: hacen falta aprobaciones y rechazos con puntaje de ambos lados ({{approved}} aprobación(es), {{rejected}} rechazo(s) hasta ahora).',
@@ -257,27 +325,47 @@
           'live.agentsCount': '{{n}} agente(s)',
           'live.updating': 'Actualizando…',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
+          'load.heading': 'Decisiones que el modelo no tuvo que tomar',
+          'load.unit': 'comandos juzgados por el gate',
+          'load.sub': 'Cada uno es un comando que Claude Code propuso y que se resolvió aquí. El modelo no deliberó ninguno.',
+          'speed.heading': 'Cuánto tarda cada uno en decidir',
+          'speed.empty': 'Todavía no hay comparaciones emparejadas. Se llenan cuando el muestreo A/B corre: cada muestra manda el mismo comando a Jev y al modelo y guarda las dos respuestas.',
+          'speed.jev': 'Jev',
+          'speed.median': '{{ms}} ms',
+          'speed.samples': 'Medianas sobre {{n}} comparación(es) emparejada(s).',
+          'speed.agreement': 'Coinciden en {{agree}} de {{n}}.',
+          'speed.disagreementsHeading': 'Dónde discrepan:',
+          'speed.disagreement': '{{count}} × Jev «{{jev}}» / modelo «{{model}}»',
+          'speed.failures': '{{n}} comparación(es) se quedaron sin veredicto del modelo y están fuera de estas medianas.',
+          'speed.tokensHeading': 'Tokens en esas mismas decisiones',
+          'speed.tokensRowJev': 'Jev, la decisión entera',
+          'speed.tokensRowAnswer': 'El modelo, su respuesta',
+          'speed.tokensRowContext': 'El modelo, contexto cargado',
+          'speed.tokensJev': 'Jev: {{in}} de entrada · {{out}} de salida',
+          'speed.tokensBig': '{{model}}: {{in}} de entrada · {{out}} de salida · {{cache}} de contexto cargado',
+          'speed.tokensNote': 'Cada deliberación del modelo se midió en frío: «claude -p» carga su propio contexto cada vez. En una sesión viva ese contexto ya está cargado, así que esa cifra es el coste de decidir en frío, no el de cada decisión dentro de la sesión.',
+          'verdict.heading': 'En qué terminaron',
+          'skills.heading': 'Mod de skills',
+          'unmeasured.heading': 'Lo que estos números no miden',
+          'unmeasured.money': 'Dinero. Este panel no convierte nada a coste y no va a hacerlo.',
+          'unmeasured.extrapolation': 'El tiempo total ahorrado. La diferencia de arriba está medida por decisión; multiplicarla por todas las decisiones sería una extrapolación, no una medida.',
+          'unmeasured.quality': 'Quién acierta más. Una discrepancia dice que difieren, no cuál de los dos tenía razón.',
+          'unmeasured.counterfactual': 'Qué habría pasado sin el gate. Nadie ha corrido esos comandos sin él.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
           'board.refresh': 'Reload the board',
-          'stats.heading': 'What Jev has done',
-          'stats.noData': 'No data yet. This section fills in as the gate and the skills mod record real decisions.',
           'stats.skillsEmpty': 'The skills mod has not recorded any decision yet.',
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
           'stats.listingChars': 'Listing characters not sent',
-          'stats.byProjectHeading': 'Where it is used most',
-          'stats.byProjectGate': 'Gate',
-          'stats.byProjectSkills': 'Skills',
+          'stats.byProjectHeading': 'By project',
           'stats.byProjectEmpty': 'No data yet.',
           'stats.recentHeading': 'Latest gate decisions',
           'stats.recentEmpty': 'No decisions yet.',
           'stats.recentCached': 'cache',
           'stats.recentLocalRule': 'local rule',
           'stats.recentJev': 'jev',
-          'stats.tableProject': 'project',
-          'stats.tableCount': 'decisions',
           'stats.na': 'not enough data',
           'stats.unknownProject': '(unknown project)',
           'gate.heading': 'What the Jev gate did',
@@ -290,16 +378,10 @@
           'gate.source.jev': 'Jev (network)',
           'gate.latency': 'Jev latency: median {{median}}ms · max {{max}}ms ({{n}} measured call(s))',
           'gate.latency.none': 'Jev latency: no network calls yet (everything resolved by local rule or cache).',
-          'gate.byFamilyHeading': 'Where it is used most (command family)',
+          'gate.byFamilyHeading': 'By command family',
           'gate.byFamilyEmpty': 'No data yet.',
-          'gate.tableFamily': 'family',
-          'gate.tableTotal': 'total',
-          'gate.tableAllowed': 'allowed',
-          'gate.tableAsked': 'asked',
-          'gate.tableBlocked': 'blocked',
           'approvals.heading': 'What the person answered',
           'approvals.empty': 'The gate has not stopped any command yet. This section fills in the next time it asks and the person answers.',
-          'approvals.asked': 'Questions asked',
           'approvals.approved': 'Approved',
           'approvals.rejected': 'Rejected',
           // odd/tasks/production-honesty-pass.md P7: renamed from
@@ -313,7 +395,6 @@
           'approvals.notRunHint': "Did not run: no answer by the time the wait expired. Most of these are commands the gate denied outright and that never ran at all -- the stop worked -- but a session that closed right after the command ran leaves the same trace. This is a classification, not a confirmed fact.",
           'approvals.highestApproved': 'Highest approved',
           'approvals.lowestRejected': 'Lowest rejected',
-          'approvals.band': 'Band between them',
           'approvals.suggestedCeiling': 'Suggested ceiling',
           'approvals.evidenceCount': 'Based on {{approved}} approval(s) and {{rejected}} rejection(s) with a score.',
           'approvals.noSuggestionInsufficient': 'Not enough evidence yet to suggest a ceiling: scored approvals and rejections are needed on both sides ({{approved}} approval(s), {{rejected}} rejection(s) so far).',
@@ -325,6 +406,32 @@
           'live.agentsCount': '{{n}} agent(s)',
           'live.updating': 'Updating…',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
+          'load.heading': 'Decisions the model did not have to make',
+          'load.unit': 'commands judged by the gate',
+          'load.sub': 'Each one is a command Claude Code proposed and that was settled here. The model deliberated none of them.',
+          'speed.heading': 'How long each one takes to decide',
+          'speed.empty': 'No paired comparisons yet. They fill in when the A/B sampling runs: each sample sends the same command to Jev and to the model and keeps both answers.',
+          'speed.jev': 'Jev',
+          'speed.median': '{{ms}} ms',
+          'speed.samples': 'Medians over {{n}} paired comparison(s).',
+          'speed.agreement': 'They agree on {{agree}} of {{n}}.',
+          'speed.disagreementsHeading': 'Where they differ:',
+          'speed.disagreement': '{{count}} × Jev "{{jev}}" / model "{{model}}"',
+          'speed.failures': '{{n}} comparison(s) came back without a verdict from the model and are excluded from these medians.',
+          'speed.tokensHeading': 'Tokens on those same decisions',
+          'speed.tokensRowJev': 'Jev, the whole decision',
+          'speed.tokensRowAnswer': 'The model, its answer',
+          'speed.tokensRowContext': 'The model, context loaded',
+          'speed.tokensJev': 'Jev: {{in}} in · {{out}} out',
+          'speed.tokensBig': '{{model}}: {{in}} in · {{out}} out · {{cache}} of context loaded',
+          'speed.tokensNote': 'Every model deliberation was measured cold: "claude -p" loads its own context each time. Inside a live session that context is already resident, so this figure is the cost of deciding cold, not the cost of each in-session decision.',
+          'verdict.heading': 'How they ended',
+          'skills.heading': 'Skills mod',
+          'unmeasured.heading': 'What these numbers do not measure',
+          'unmeasured.money': 'Money. This panel converts nothing into cost and will not start.',
+          'unmeasured.extrapolation': 'Total time saved. The gap above is measured per decision; multiplying it by every decision would be an extrapolation, not a measurement.',
+          'unmeasured.quality': 'Who is more often right. A disagreement says the two differ, not which one was correct.',
+          'unmeasured.counterfactual': 'What would have happened without the gate. Nobody has run those commands without it.',
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
       }
@@ -472,10 +579,6 @@
       function pct (fraction) {
         return fraction === null || fraction === undefined ? null : Math.round(fraction * 1000) / 10
       }
-      function statTile (n, label) {
-        return '<div class="stat"><div class="n">' + esc(n) + '</div><div class="label">' + esc(label) + '</div></div>'
-      }
-
       /** null/undefined-safe project label -- a record whose project could
        *  not be resolved (gate-bash.ts's own projectName() returning null)
        *  is still shown, honestly, never silently dropped. */
@@ -483,189 +586,299 @@
         return (project === null || project === undefined || project === '') ? t('stats.unknownProject') : String(project)
       }
 
-      var lastStats = null
-      function renderStats (summary) {
-        lastStats = summary
-        var gridEl = el('stats-grid')
-        var emptyEl = el('stats-empty')
-        var byProjectEl = el('stats-by-project')
-        var recentEl = el('stats-recent')
-        var gateEmptyEl = el('gate-empty')
-        var gateVerdictGridEl = el('gate-verdict-grid')
-        var gateSourceGridEl = el('gate-source-grid')
-        var gateLatencyEl = el('gate-latency-line')
-        var gateByFamilyEl = el('gate-by-family')
-        var approvalsEmptyEl = el('approvals-empty')
-        var approvalsGridEl = el('approvals-grid')
-        var approvalsNotRunHintEl = el('approvals-notrun-hint')
-        var approvalsCeilingEl = el('approvals-ceiling')
+      // ---------- chart primitives -------------------------------------
+      // Every one of these takes numbers that were counted and returns
+      // markup. None of them invents, rounds up, or fills a gap: a series
+      // with no samples returns '' and its caller shows a sentence saying
+      // why, which is the same rule the ceiling section has followed since
+      // approval_record.ts's ceilingEvidence() started returning null.
 
-        if (!summary || !summary.ok) {
-          gridEl.innerHTML = ''
-          emptyEl.style.display = ''
-          emptyEl.textContent = t('stats.noData')
-          gateEmptyEl.style.display = ''
-          gateEmptyEl.textContent = t('gate.empty')
-          gateVerdictGridEl.innerHTML = ''
-          gateSourceGridEl.innerHTML = ''
-          gateLatencyEl.textContent = ''
-          gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
-          approvalsEmptyEl.style.display = ''
-          approvalsEmptyEl.textContent = t('approvals.empty')
-          approvalsGridEl.innerHTML = ''
-          approvalsNotRunHintEl.innerHTML = ''
-          approvalsCeilingEl.innerHTML = ''
-          byProjectEl.innerHTML = '<p class="empty-line">' + esc(t('stats.byProjectEmpty')) + '</p>'
-          recentEl.innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
+      function num (value) {
+        return (typeof value === 'number' && isFinite(value)) ? value.toLocaleString() : '—'
+      }
+      function share (part, total) {
+        return total > 0 ? Math.round((part / total) * 1000) / 10 : 0
+      }
+      function ms (value) {
+        return (typeof value === 'number' && isFinite(value)) ? Math.round(value).toLocaleString() : '—'
+      }
+
+      /** segments: [{ value, cls, label }]. A zero segment is dropped
+       *  entirely -- a 0%-wide sliver is unreadable and would still take a
+       *  legend row and a hairline of colour, implying something is there. */
+      function stackedBar (segments, total) {
+        var drawn = segments.filter(function (s) { return s.value > 0 })
+        if (drawn.length === 0 || total <= 0) return ''
+        var label = drawn.map(function (s) { return s.label + ': ' + num(s.value) }).join(', ')
+        return '<div class="bar" role="img" aria-label="' + esc(label) + '">' +
+          drawn.map(function (s) {
+            return '<span class="seg ' + s.cls + '" style="width:' + share(s.value, total) + '%"></span>'
+          }).join('') + '</div>'
+      }
+
+      function legendList (segments, total) {
+        var drawn = segments.filter(function (s) { return s.value > 0 })
+        if (drawn.length === 0) return ''
+        return '<ul class="legend">' + drawn.map(function (s) {
+          return '<li class="' + s.cls + '"><i class="sw"></i>' +
+            '<span class="lv">' + esc(num(s.value)) + '</span>' +
+            '<span class="ll">' + esc(s.label) + '</span>' +
+            '<span class="lp">' + share(s.value, total) + '%</span></li>'
+        }).join('') + '</ul>'
+      }
+
+      /** rows: [{ label, value }]. Bars are scaled against the largest row,
+       *  not against the total, so the shape of the tail stays visible when
+       *  one family dwarfs the rest. */
+      function hbars (rows, cls) {
+        if (!rows || rows.length === 0) return ''
+        var max = rows.reduce(function (m, r) { return Math.max(m, r.value || 0) }, 0)
+        if (max <= 0) return ''
+        return '<div class="hrows">' + rows.map(function (r) {
+          return '<div class="hrow ' + (cls || 'v1') + '">' +
+            '<span class="hl" title="' + esc(r.label) + '">' + esc(r.label) + '</span>' +
+            '<span class="htrack"><span class="hfill" style="width:' + share(r.value, max) + '%"></span></span>' +
+            '<span class="hv">' + esc(num(r.value)) + '</span></div>'
+        }).join('') + '</div>'
+      }
+
+      /** rows: [{ name, valueMs, cls }] on one shared axis. */
+      function compareBars (rows) {
+        var usable = rows.filter(function (r) { return typeof r.valueMs === 'number' && isFinite(r.valueMs) })
+        if (usable.length === 0) return ''
+        var max = usable.reduce(function (m, r) { return Math.max(m, r.valueMs) }, 0)
+        if (max <= 0) return ''
+        return '<div class="cmp">' + usable.map(function (r) {
+          return '<div class="cmp-row ' + r.cls + '">' +
+            '<div class="cmp-head"><span class="cmp-name" title="' + esc(r.name) + '">' + esc(r.name) + '</span>' +
+            '<span class="cmp-val">' + esc(t('speed.median', { ms: ms(r.valueMs) })) + '</span></div>' +
+            '<span class="cmp-track"><span class="cmp-fill" style="width:' + share(r.valueMs, max) + '%"></span></span>' +
+            '</div>'
+        }).join('') + '</div>'
+      }
+
+      function line (text, cls) {
+        return '<p class="' + (cls || 'cmp-foot') + '">' + esc(text) + '</p>'
+      }
+
+      var lastStats = null
+
+      /** Shows `body`, or hides it and shows `emptyText` in its place.
+       *  Every card on this board goes through here so that "nothing yet"
+       *  can never be rendered as a zero. */
+      function fill (bodyId, emptyId, markup, emptyText) {
+        var bodyEl = el(bodyId)
+        var emptyEl = emptyId ? el(emptyId) : null
+        if (markup) {
+          bodyEl.innerHTML = markup
+          if (emptyEl) { emptyEl.style.display = 'none'; emptyEl.textContent = '' }
           return
         }
+        bodyEl.innerHTML = ''
+        if (emptyEl) { emptyEl.style.display = ''; emptyEl.textContent = emptyText || '' }
+        else bodyEl.innerHTML = '<p class="empty-line">' + esc(emptyText || '') + '</p>'
+      }
 
-        var gate = summary.gate || {}
-        var mod = summary.modSkills || {}
-        var approvals = summary.approvals || {}
+      function renderLoad (gate) {
+        var total = gate.totalDecisions || 0
+        if (total <= 0) { fill('load-body', 'load-empty', '', t('gate.empty')); return }
+        var source = gate.bySource || {}
+        var segments = [
+          { value: source.jev || 0, cls: 'v1', label: t('gate.source.jev') },
+          { value: source.cache || 0, cls: 'v2', label: t('gate.source.cache') },
+          { value: source['local-rule'] || 0, cls: 'v3', label: t('gate.source.localRule') }
+        ]
+        fill('load-body', 'load-empty',
+          '<div class="kpi"><span class="kpi-n">' + esc(num(total)) + '</span>' +
+          '<span class="kpi-unit">' + esc(t('load.unit')) + '</span></div>' +
+          '<p class="kpi-sub">' + esc(t('load.sub')) + '</p>' +
+          stackedBar(segments, total) + legendList(segments, total))
+      }
 
-        // ---- resumen de skills (lo unico que queda en el grid de arriba) ----
-        if (!((mod.totalDecisions || 0) > 0)) {
-          gridEl.innerHTML = ''
-          emptyEl.style.display = ''
-          emptyEl.textContent = t('stats.skillsEmpty')
-        } else {
-          emptyEl.style.display = 'none'
-          var tiles = []
-          tiles.push(statTile(mod.suggestedCount || 0, t('stats.skillSuggestions')))
-          tiles.push(statTile(mod.matchRate == null ? t('stats.na') : pct(mod.matchRate) + '%', t('stats.skillMatchRate')))
-          if (mod.listingCharsTotal != null) {
-            tiles.push(statTile(mod.listingCharsTotal.toLocaleString(), t('stats.listingChars')))
-          }
-          gridEl.innerHTML = tiles.join('')
+      function renderSpeed (ab) {
+        var samples = (ab && ab.sampleCount) || 0
+        if (samples <= 0) { fill('speed-body', 'speed-empty', '', t('speed.empty')); return }
+
+        // The model is named, never called "the big model": the id comes
+        // straight off the comparison rows. More than one id in the window
+        // is possible (a config change mid-run), so they are all shown.
+        var modelIds = (ab.modelIds || [])
+        var modelName = modelIds.length > 0 ? modelIds.join(' / ') : t('stats.na')
+
+        var chart = compareBars([
+          { name: t('speed.jev'), valueMs: ab.jevLatency && ab.jevLatency.medianMs, cls: 'v1' },
+          { name: modelName, valueMs: ab.bigModelLatency && ab.bigModelLatency.medianMs, cls: 'v3' }
+        ])
+
+        var parts = [chart, line(t('speed.samples', { n: String(samples) }))]
+        if (typeof ab.agreementCount === 'number') {
+          parts.push(line(t('speed.agreement', { agree: String(ab.agreementCount), n: String(samples) })))
+        }
+        var disagreements = ab.disagreements || []
+        if (disagreements.length > 0) {
+          parts.push('<p class="cmp-foot">' + esc(t('speed.disagreementsHeading')) + ' ' +
+            disagreements.map(function (d) {
+              return esc(t('speed.disagreement', {
+                count: String(d.count), jev: String(d.jevVerdict), model: String(d.bigModelVerdict)
+              }))
+            }).join(' · ') + '</p>')
+        }
+        if ((ab.failureCount || 0) > 0) {
+          parts.push(line(t('speed.failures', { n: String(ab.failureCount) })))
         }
 
-        // ---- lo que hizo el gate de Jev: honesto, nunca "0 guardado" cuando
-        // en realidad es "todavia no corrio" ------------------------------
-        var gateHasData = (gate.totalDecisions || 0) > 0
-        if (!gateHasData) {
-          gateEmptyEl.style.display = ''
-          gateEmptyEl.textContent = t('gate.empty')
-          gateVerdictGridEl.innerHTML = ''
-          gateSourceGridEl.innerHTML = ''
-          gateLatencyEl.textContent = ''
-          gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
-        } else {
-          gateEmptyEl.style.display = 'none'
-          var verdict = gate.byVerdict || { allow: 0, ask: 0, deny: 0 }
-          gateVerdictGridEl.innerHTML = [
-            statTile(verdict.allow || 0, t('gate.verdict.allow')),
-            statTile(verdict.ask || 0, t('gate.verdict.ask')),
-            statTile(verdict.deny || 0, t('gate.verdict.deny'))
-          ].join('')
-
-          var source = gate.bySource || { 'local-rule': 0, cache: 0, jev: 0 }
-          gateSourceGridEl.innerHTML = [
-            statTile(source['local-rule'] || 0, t('gate.source.localRule')),
-            statTile(source.cache || 0, t('gate.source.cache')),
-            statTile(source.jev || 0, t('gate.source.jev'))
-          ].join('')
-
-          var latency = gate.jevLatency || { sampleCount: 0, medianMs: null, maxMs: null }
-          gateLatencyEl.textContent = latency.sampleCount > 0
-            ? t('gate.latency', { median: String(Math.round(latency.medianMs)), max: String(Math.round(latency.maxMs)), n: String(latency.sampleCount) })
-            : t('gate.latency.none')
-
-          var families = gate.byCommandFamily || []
-          if (families.length === 0) {
-            gateByFamilyEl.innerHTML = '<p class="empty-line">' + esc(t('gate.byFamilyEmpty')) + '</p>'
-          } else {
-            var familyRows = families.map(function (f) {
-              var v = f.byVerdict || { allow: 0, ask: 0, deny: 0 }
-              return '<tr><td>' + esc(f.commandFamily) + '</td><td>' + esc(f.total) + '</td><td>' + esc(v.allow || 0) + '</td><td>' + esc(v.ask || 0) + '</td><td>' + esc(v.deny || 0) + '</td></tr>'
-            }).join('')
-            gateByFamilyEl.innerHTML = '<table><thead><tr><th>' + esc(t('gate.tableFamily')) + '</th><th>' + esc(t('gate.tableTotal')) + '</th><th>' + esc(t('gate.tableAllowed')) + '</th><th>' + esc(t('gate.tableAsked')) + '</th><th>' + esc(t('gate.tableBlocked')) + '</th></tr></thead><tbody>' + familyRows + '</tbody></table>'
-          }
+        var jevTokens = ab.jevTokens || {}
+        var bigTokens = ab.bigModelTokens || {}
+        if (typeof jevTokens.inputTotal === 'number' && typeof bigTokens.outputTotal === 'number') {
+          var loadedContext = (bigTokens.cacheCreationInputTotal || 0) + (bigTokens.cacheReadInputTotal || 0)
+          parts.push('<div class="divider" style="margin-top:10px;padding-top:8px">' +
+            '<h2>' + esc(t('speed.tokensHeading')) + '</h2>' +
+            hbars([
+              { label: t('speed.tokensRowJev'), value: (jevTokens.inputTotal || 0) + (jevTokens.outputTotal || 0) },
+              { label: t('speed.tokensRowAnswer'), value: (bigTokens.inputTotal || 0) + (bigTokens.outputTotal || 0) },
+              { label: t('speed.tokensRowContext'), value: loadedContext }
+            ], 'v1') +
+            line(t('speed.tokensJev', { in: num(jevTokens.inputTotal || 0), out: num(jevTokens.outputTotal || 0) })) +
+            line(t('speed.tokensBig', {
+              model: modelName, in: num(bigTokens.inputTotal || 0),
+              out: num(bigTokens.outputTotal || 0), cache: num(loadedContext)
+            })) +
+            line(t('speed.tokensNote')) + '</div>')
         }
+        fill('speed-body', 'speed-empty', parts.join(''), '')
+      }
 
-        // ---- lo que respondio la persona cuando el gate la detuvo, y lo que
-        // esa respuesta dice sobre el techo -- ceilingEvidence() (approval_
-        // record.ts) nunca inventa un numero: si aprobaciones y rechazos se
-        // superponen, o falta evidencia de un lado, suggestedCeiling es null
-        // y esta seccion explica por que en vez de mostrar un guion. -------
-        var approvalsHaveData = (approvals.asked || 0) > 0
-        if (!approvalsHaveData) {
-          approvalsEmptyEl.style.display = ''
-          approvalsEmptyEl.textContent = t('approvals.empty')
-          approvalsGridEl.innerHTML = ''
-          approvalsNotRunHintEl.innerHTML = ''
-          approvalsCeilingEl.innerHTML = ''
+      function renderVerdicts (gate) {
+        var total = gate.totalDecisions || 0
+        if (total <= 0) { fill('verdict-body', 'verdict-empty', '', t('gate.empty')); return }
+        var verdict = gate.byVerdict || {}
+        var segments = [
+          { value: verdict.allow || 0, cls: 'v1', label: t('gate.verdict.allow') },
+          { value: verdict.ask || 0, cls: 'v3', label: t('gate.verdict.ask') },
+          { value: verdict.deny || 0, cls: 'vd', label: t('gate.verdict.deny') }
+        ]
+        var latency = gate.jevLatency || {}
+        var foot = latency.sampleCount > 0
+          ? t('gate.latency', { median: ms(latency.medianMs), max: ms(latency.maxMs), n: String(latency.sampleCount) })
+          : t('gate.latency.none')
+        fill('verdict-body', 'verdict-empty',
+          stackedBar(segments, total) + legendList(segments, total) + line(foot))
+      }
+
+      function renderApprovals (approvals) {
+        var asked = approvals.asked || 0
+        if (asked <= 0) { fill('approvals-body', 'approvals-empty', '', t('approvals.empty')); return }
+        var segments = [
+          { value: approvals.approved || 0, cls: 'v1', label: t('approvals.approved') },
+          { value: approvals.rejected || 0, cls: 'vd', label: t('approvals.rejected') },
+          { value: approvals.notRun || 0, cls: 'v3', label: t('approvals.notRun') }
+        ]
+        var parts = [stackedBar(segments, asked), legendList(segments, asked)]
+        // P7: the uncertainty stays in the copy, and only when the count is
+        // non-zero -- explaining zero of something is noise.
+        if ((approvals.notRun || 0) > 0) parts.push(line(t('approvals.notRunHint')))
+
+        var ceiling = approvals.ceiling || {}
+        if (ceiling.suggestedCeiling != null) {
+          parts.push(hbars([
+            { label: t('approvals.highestApproved'), value: ceiling.highestApproved },
+            { label: t('approvals.lowestRejected'), value: ceiling.lowestRejected },
+            { label: t('approvals.suggestedCeiling'), value: ceiling.suggestedCeiling }
+          ], 'v2'))
+          parts.push(line(t('approvals.evidenceCount', {
+            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+          })))
+        } else if ((ceiling.approvedCount || 0) === 0 || (ceiling.rejectedCount || 0) === 0) {
+          parts.push(line(t('approvals.noSuggestionInsufficient', {
+            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+          })))
         } else {
-          approvalsEmptyEl.style.display = 'none'
-          approvalsGridEl.innerHTML = [
-            statTile(approvals.asked || 0, t('approvals.asked')),
-            statTile(approvals.approved || 0, t('approvals.approved')),
-            statTile(approvals.rejected || 0, t('approvals.rejected')),
-            statTile(approvals.notRun || 0, t('approvals.notRun'))
-          ].join('')
-          // odd/tasks/production-honesty-pass.md P7: the uncertainty is
-          // written into the copy, not smoothed over -- shown only when the
-          // count is non-zero, since an explanation for zero of anything is
-          // just noise.
-          approvalsNotRunHintEl.innerHTML = (approvals.notRun || 0) > 0
-            ? '<p class="empty-line">' + esc(t('approvals.notRunHint')) + '</p>'
-            : ''
-
-          var ceiling = approvals.ceiling || { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 }
-          if (ceiling.suggestedCeiling != null) {
-            approvalsCeilingEl.innerHTML = '<div class="stat-grid">' + [
-              statTile(ceiling.highestApproved, t('approvals.highestApproved')),
-              statTile(ceiling.lowestRejected, t('approvals.lowestRejected')),
-              statTile(ceiling.band, t('approvals.band')),
-              statTile(ceiling.suggestedCeiling, t('approvals.suggestedCeiling'))
-            ].join('') + '</div><p class="empty-line" style="margin-top:8px">' +
-              esc(t('approvals.evidenceCount', { approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0) })) + '</p>'
-          } else if ((ceiling.approvedCount || 0) === 0 || (ceiling.rejectedCount || 0) === 0) {
-            approvalsCeilingEl.innerHTML = '<p class="empty-line">' + esc(t('approvals.noSuggestionInsufficient', {
-              approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
-            })) + '</p>'
-          } else {
-            approvalsCeilingEl.innerHTML = '<p class="empty-line">' + esc(t('approvals.noSuggestionOverlap', {
-              highest: String(ceiling.highestApproved), lowest: String(ceiling.lowestRejected),
-              approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
-            })) + '</p>'
-          }
+          parts.push(line(t('approvals.noSuggestionOverlap', {
+            highest: String(ceiling.highestApproved), lowest: String(ceiling.lowestRejected),
+            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+          })))
         }
+        fill('approvals-body', 'approvals-empty', parts.join(''), '')
+      }
 
-        // Por proyecto: combina gate y skills en una tabla simple.
-        var projects = {}
-        ;(gate.byProject || []).forEach(function (p) { var k = projectLabel(p.project); projects[k] = projects[k] || {}; projects[k].gate = p.total })
-        ;(mod.byProject || []).forEach(function (p) { var k = projectLabel(p.key); projects[k] = projects[k] || {}; projects[k].skills = p.count })
-        var projectKeys = Object.keys(projects).sort(function (a, b) {
-          var ta = (projects[a].gate || 0) + (projects[a].skills || 0)
-          var tb = (projects[b].gate || 0) + (projects[b].skills || 0)
-          return tb - ta
+      function renderFamilies (gate) {
+        var families = (gate.byCommandFamily || []).slice(0, 8)
+        fill('families-body', null, hbars(families.map(function (f) {
+          return { label: f.commandFamily, value: f.total }
+        }), 'v1'), t('gate.byFamilyEmpty'))
+      }
+
+      function renderProjects (gate, mod) {
+        var totals = {}
+        ;(gate.byProject || []).forEach(function (p) {
+          var key = projectLabel(p.project); totals[key] = (totals[key] || 0) + (p.total || 0)
         })
-        if (projectKeys.length === 0) {
-          byProjectEl.innerHTML = '<p class="empty-line">' + esc(t('stats.byProjectEmpty')) + '</p>'
-        } else {
-          var rows = projectKeys.map(function (key) {
-            return '<tr><td>' + esc(key) + '</td><td>' + esc(projects[key].gate || 0) + '</td><td>' + esc(projects[key].skills || 0) + '</td></tr>'
-          }).join('')
-          byProjectEl.innerHTML = '<table><thead><tr><th>' + esc(t('stats.tableProject')) + '</th><th>' + esc(t('stats.byProjectGate')) + '</th><th>' + esc(t('stats.byProjectSkills')) + '</th></tr></thead><tbody>' + rows + '</tbody></table>'
-        }
+        ;(mod.byProject || []).forEach(function (p) {
+          var key = projectLabel(p.key); totals[key] = (totals[key] || 0) + (p.count || 0)
+        })
+        var rows = Object.keys(totals)
+          .map(function (key) { return { label: key, value: totals[key] } })
+          .sort(function (a, b) { return b.value - a.value })
+          .slice(0, 8)
+        fill('projects-body', null, hbars(rows, 'v2'), t('stats.byProjectEmpty'))
+      }
 
-        // Ultimas decisiones del gate.
+      function renderSkills (mod) {
+        if (!((mod.totalDecisions || 0) > 0)) { fill('skills-body', null, '', t('stats.skillsEmpty')); return }
+        var rows = [{ label: t('stats.skillSuggestions'), value: mod.suggestedCount || 0 }]
+        if (mod.listingCharsTotal != null) {
+          rows.push({ label: t('stats.listingChars'), value: mod.listingCharsTotal })
+        }
+        var parts = [hbars(rows, 'v1')]
+        parts.push(line(t('stats.skillMatchRate') + ': ' +
+          (mod.matchRate == null ? t('stats.na') : pct(mod.matchRate) + '%')))
+        fill('skills-body', null, parts.join(''), '')
+      }
+
+      function renderUnmeasured () {
+        el('unmeasured-body').innerHTML = [
+          'unmeasured.money', 'unmeasured.extrapolation',
+          'unmeasured.quality', 'unmeasured.counterfactual'
+        ].map(function (key) { return '<li>' + esc(t(key)) + '</li>' }).join('')
+      }
+
+      function renderRecent (gate) {
         var recent = gate.recent || []
         if (recent.length === 0) {
-          recentEl.innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
-        } else {
-          var sourceLabel = { 'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'), jev: t('stats.recentJev') }
-          recentEl.innerHTML = recent.map(function (r) {
-            var latency = r.latencyMs != null ? ' · ' + r.latencyMs + 'ms' : ''
-            return '<div class="item" style="padding:6px 0"><div class="line1">' +
-              '<span class="worktree">' + esc(projectLabel(r.project)) + '</span>' +
-              '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
-              '<span class="tag">' + esc(sourceLabel[r.source] || esc(r.source)) + latency + '</span>' +
-              '<span class="' + tagClass(r.verdict === 'deny' ? 'blocked' : (r.verdict === 'ask' ? 'working' : 'done')) + '">' + esc(r.verdict || '') + '</span>' +
-              '<span class="when">' + when(r.at) + '</span></div></div>'
-          }).join('')
+          el('stats-recent').innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
+          return
         }
+        var sourceLabel = {
+          'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'), jev: t('stats.recentJev')
+        }
+        el('stats-recent').innerHTML = recent.map(function (r) {
+          var latency = r.latencyMs != null ? ' · ' + r.latencyMs + 'ms' : ''
+          return '<div class="item" style="padding:6px 0"><div class="line1">' +
+            '<span class="worktree">' + esc(projectLabel(r.project)) + '</span>' +
+            '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
+            '<span class="tag">' + esc(sourceLabel[r.source] || esc(r.source)) + latency + '</span>' +
+            '<span class="' + tagClass(r.verdict === 'deny' ? 'blocked' : (r.verdict === 'ask' ? 'working' : 'done')) + '">' +
+            esc(r.verdict || '') + '</span>' +
+            '<span class="when">' + when(r.at) + '</span></div></div>'
+        }).join('')
+      }
+
+      function renderStats (summary) {
+        lastStats = summary
+        renderUnmeasured()
+        var ok = !!(summary && summary.ok)
+        var gate = (ok && summary.gate) || {}
+        var mod = (ok && summary.modSkills) || {}
+        var approvals = (ok && summary.approvals) || {}
+        var ab = (ok && summary.abBenchmark) || {}
+        renderLoad(gate)
+        renderSpeed(ab)
+        renderVerdicts(gate)
+        renderApprovals(approvals)
+        renderFamilies(gate)
+        renderProjects(gate, mod)
+        renderSkills(mod)
+        renderRecent(gate)
       }
 
       // ---------- render: live board -----------------------------------------

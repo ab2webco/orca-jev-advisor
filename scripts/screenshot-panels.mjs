@@ -38,11 +38,6 @@ const THEMES = /** @type {const} */ (['light', 'dark'])
 const PANELS = ['config.html', 'board.html']
 
 const iso = new Date('2026-09-23T12:00:00.000Z').toISOString()
-// The heartbeat MUST be generated at run time. A fixed timestamp is stale by
-// definition the moment the clock moves past the staleness window, so pinning
-// it meant the `ready` scenario silently exercised the "worker is dead" path
-// and the live path was never photographed at all.
-const liveIso = () => new Date().toISOString()
 
 /**
  * A machine where the worker has never run: every key absent. This is what a
@@ -53,7 +48,13 @@ const FRESH = {}
 
 /** A machine where the worker has run and published everything it mirrors. */
 const READY = {
-  workerHeartbeat: { at: liveIso() },
+  // 'now' is resolved by hostBridge at the moment the page asks, not here.
+  // liveIso() at module load was the second version of this bug: one run
+  // renders 32 pages over about two minutes, the panel calls a heartbeat
+  // older than WORKER_HEARTBEAT_STALE_MS (40s) dead, and every screenshot
+  // after the first forty seconds photographed the "worker has not started"
+  // banner while the filename said `ready`.
+  workerHeartbeat: { at: 'now' },
   // Mirrors GATE_CONSEQUENCE_CEILING; the panel must render this rather than a
   // literal of its own, which is the drift T7 fixed.
   gateDefaults: { consequenceCeiling: 1.78, checkedAt: iso },
@@ -90,25 +91,86 @@ const READY = {
   // every board screenshot photographed the empty state while claiming to
   // show a populated one -- the same mistake as `isConfigured` vs
   // `configured` earlier in this file's history.
+  // The shape here is read-measurements.mjs's own output, field for field:
+  // `gate` is foldGateDecisions()'s GateStatsSummary (src/core/gate_stats.ts),
+  // `abBenchmark` is foldAbResults()'s summary, and the board reads
+  // `summary.gate.totalDecisions`, `summary.gate.byCommandFamily`,
+  // `summary.gate.jevLatency`, never a flattened alias.
+  //
+  // This fixture has now drifted from that shape three times -- `isConfigured`
+  // vs `configured`, a frozen heartbeat that photographed the dead-worker
+  // path, and a `gate.total`/`byFamily`/`latencyMs{median,p90}` invention that
+  // made every "ready" gate screenshot silently photograph the EMPTY state
+  // while the filename claimed otherwise. screenshot_fixture.test.mjs now
+  // asserts these keys against the real aggregator so a fourth time fails a
+  // test instead of a release.
+  //
+  // The numbers are the author's real logs on 2026-09-24, kept as literals so
+  // the harness stays deterministic and never reads a private log path.
   measurementsSummary: {
     ok: true,
     gate: {
-      total: 1609,
-      bySource: { jev: 1441, 'local-rule': 118, cache: 50 },
-      byVerdict: { allow: 1112, ask: 480, deny: 17 },
-      byFamily: [
-        { key: 'rm -rf', count: 51 },
-        { key: 'cd', count: 34 },
-        { key: 'gh cli', count: 29 },
-        { key: 'export', count: 22 },
+      totalDecisions: 2297,
+      byVerdict: { allow: 2013, ask: 279, deny: 5 },
+      bySource: { jev: 2029, cache: 149, 'local-rule': 119 },
+      jevLatency: { sampleCount: 2029, medianMs: 447, maxMs: 1742 },
+      byCommandFamily: [
+        { commandFamily: 'cd', total: 511, byVerdict: { allow: 498, ask: 13, deny: 0 } },
+        { commandFamily: 'git', total: 402, byVerdict: { allow: 371, ask: 30, deny: 1 } },
+        { commandFamily: 'gh cli', total: 188, byVerdict: { allow: 160, ask: 28, deny: 0 } },
+        { commandFamily: 'rm -rf', total: 51, byVerdict: { allow: 9, ask: 40, deny: 2 } },
       ],
       byProject: [
-        { key: 'app', count: 547 },
-        { key: 'tooling', count: 481 },
+        { project: 'orca-supervisor', total: 1204 },
+        { project: 'orca-oss', total: 618 },
+        { project: null, total: 91 },
       ],
-      latencyMs: { median: 404, p90: 595 },
+      corruptLines: 0,
+      cacheHitRate: 149 / 2297,
+      recent: [
+        { at: '2026-09-24T15:02:03.837Z', project: 'orca-supervisor', commandFamily: 'cd', source: 'jev', verdict: 'allow', latencyMs: 784 },
+        { at: '2026-09-24T15:01:44.102Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'local-rule', verdict: 'ask', latencyMs: null },
+        { at: '2026-09-24T15:00:58.640Z', project: 'orca-oss', commandFamily: 'git', source: 'cache', verdict: 'allow', latencyMs: null },
+      ],
     },
-    modSkills: { total: 0 },
+    modSkills: {
+      totalDecisions: 0,
+      totalObservations: 0,
+      firstAt: null,
+      lastAt: null,
+      corruptLines: 0,
+      suggestedCount: 0,
+      comparableCount: 0,
+      matchedCount: 0,
+      matchRate: null,
+      listingCharsTotal: null,
+      listingCharsAvgPerPrompt: null,
+      listingCharsSampleCount: 0,
+      wideLatencyMeanMs: null,
+      fitLatencyMeanMs: null,
+      byProject: [],
+    },
+    // Twenty real paired samples: Jev's median against the model's, and the
+    // model NAMED -- the user was explicit that "the big model" is not a name.
+    abBenchmark: {
+      sampleCount: 20,
+      jevLatency: { sampleCount: 20, medianMs: 236, minMs: 203, maxMs: 784 },
+      bigModelLatency: { sampleCount: 20, medianMs: 4126, minMs: 3155, maxMs: 7848 },
+      modelIds: ['claude-opus-5-5[1m]'],
+      agreementCount: 11,
+      disagreementCount: 9,
+      agreementRate: 11 / 20,
+      disagreements: [{ jevVerdict: 'allow', bigModelVerdict: 'ask', count: 9 }],
+      failureCount: 0,
+      jevTokens: { inputTotal: 9258, outputTotal: 1060 },
+      bigModelTokens: {
+        inputTotal: 40,
+        outputTotal: 1027,
+        cacheCreationInputTotal: 969363,
+        cacheReadInputTotal: 241960,
+      },
+      corruptLines: 0,
+    },
     approvals: {
       asked: 43,
       approved: 27,
@@ -139,6 +201,7 @@ function hostBridge(storage) {
     if (!msg || msg.type !== 'orca-panel-action') return
     let value = null
     if (msg.action === 'storage.get') value = storage[msg.params?.key] ?? null
+    if (value && value.at === 'now') value = { ...value, at: new Date().toISOString() }
     // storage.set and notifications.show simply succeed; nothing here persists.
     window.postMessage(
       { type: 'orca-panel-action-result', requestId: msg.requestId, ok: true, value: { value } },
