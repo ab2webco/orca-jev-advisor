@@ -24,7 +24,7 @@
 import { chromium } from 'playwright'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
@@ -342,4 +342,14 @@ async function main() {
   console.log('no horizontal overflow and no script errors at any width')
 }
 
-await main()
+// Exported so scripts/fixture_shape.test.mjs can assert these fixtures
+// against the shapes the worker really publishes -- a fixture has now
+// drifted from those shapes four times, and each time the harness kept
+// reporting success while photographing the wrong panel. main() stays
+// behind the direct-invocation check so importing this file renders
+// nothing.
+export { SCENARIOS }
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main()
+}
