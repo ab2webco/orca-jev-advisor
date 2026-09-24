@@ -31,6 +31,7 @@
  * panels/config.html).
  */
 
+import { DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -974,10 +975,13 @@ async function readDenyTierConfigMirror (options = {}) {
  *  publishes all three `true` (still denying), never `false`. */
 async function publishDenyTierStatus (orca, storageHost, options = {}) {
   const result = await readDenyTierConfigMirror(options)
-  const value = result.ok && isRecord(result.value) &&
-    typeof result.value.denyRmRf === 'boolean' && typeof result.value.denyDropTable === 'boolean' && typeof result.value.denyTerraformDestroy === 'boolean'
-    ? { denyRmRf: result.value.denyRmRf, denyDropTable: result.value.denyDropTable, denyTerraformDestroy: result.value.denyTerraformDestroy }
-    : { denyRmRf: true, denyDropTable: true, denyTerraformDestroy: true }
+  // Built from DENY_TOGGLE_KEYS so a rule added to the gate cannot be missing
+  // here, and so a field that is absent or the wrong type publishes `true`
+  // (still denying) for that field alone.
+  const source = result.ok && isRecord(result.value) ? result.value : {}
+  const value = Object.fromEntries(
+    DENY_TOGGLE_KEYS.map((key) => [key, typeof source[key] === 'boolean' ? source[key] : true]),
+  )
   await storageHost.set(DENY_TIER_STATUS_KEY, { ...value, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`deny-tier status publish failed: ${error.message}`))
 }
@@ -1001,11 +1005,10 @@ async function attendDenyTierConfigRequest (orca, storageHost, options = {}) {
     return
   }
 
-  const denyRmRf = request.denyRmRf !== false
-  const denyDropTable = request.denyDropTable !== false
-  const denyTerraformDestroy = request.denyTerraformDestroy !== false
+  // Anything that is not an explicit `false` stays denying.
+  const switches = Object.fromEntries(DENY_TOGGLE_KEYS.map((key) => [key, request[key] !== false]))
   const mirror = options.mirror ?? runSecretMirrorScript
-  const result = await mirror('deny-tier-config-save', JSON.stringify({ denyRmRf, denyDropTable, denyTerraformDestroy }))
+  const result = await mirror('deny-tier-config-save', JSON.stringify(switches))
   if (!result.ok) {
     orca.log(`deny-tier config mirror (save) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }

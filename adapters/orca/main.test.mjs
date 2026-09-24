@@ -6,6 +6,8 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+
+import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
 import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
 import {
   attendCatalogRefreshRequest,
@@ -326,11 +328,10 @@ test('attendDenyTierConfigRequest: a fresh request saves through the mirror and 
   const result = await storageHost.get(DENY_TIER_CONFIG_RESULT_KEY)
   assert.equal(result.id, 'dt-2')
   assert.equal(result.ok, true)
-  assert.deepEqual(saved.current, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })
+  assert.deepEqual(saved.current, { ...DEFAULT_DENY_TIER_SWITCHES, denyRmRf: false })
   const status = await storageHost.get(DENY_TIER_STATUS_KEY)
   assert.equal(status.denyRmRf, false)
-  assert.equal(status.denyDropTable, true)
-  assert.equal(status.denyTerraformDestroy, true)
+  for (const key of DENY_TOGGLE_KEYS.filter((k) => k !== 'denyRmRf')) assert.equal(status[key], true, key)
   assert.equal(typeof status.checkedAt, 'string')
 })
 
@@ -345,7 +346,7 @@ test('attendDenyTierConfigRequest: a non-boolean field in the request fails CLOS
     return { ok: true, value: saved.current }
   }
   await attendDenyTierConfigRequest(orca, storageHost, { mirror })
-  assert.deepEqual(saved.current, { denyRmRf: true, denyDropTable: true, denyTerraformDestroy: false })
+  assert.deepEqual(saved.current, { ...DEFAULT_DENY_TIER_SWITCHES, denyTerraformDestroy: false })
 })
 
 test('attendDenyTierConfigRequest: a mirror failure is reported, not silently swallowed as success', async () => {
@@ -370,20 +371,26 @@ test('publishDenyTierStatus: a failed mirror read fails CLOSED to all three true
   const mirror = async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' })
   await publishDenyTierStatus(orca, storageHost, { mirror })
   const status = await storageHost.get(DENY_TIER_STATUS_KEY)
-  assert.equal(status.denyRmRf, true)
-  assert.equal(status.denyDropTable, true)
-  assert.equal(status.denyTerraformDestroy, true)
+  for (const key of DENY_TOGGLE_KEYS) assert.equal(status[key], true, key)
 })
 
-test('publishDenyTierStatus: a malformed mirror value (wrong types) fails CLOSED to all three true', async () => {
+// Fails closed FIELD BY FIELD, which is what parseDenyTierConfig always
+// promised and what this publish path used to contradict: it threw away the
+// whole object if any one field was wrong-typed. A wrong-typed field must not
+// decide anything for its neighbours -- in either direction.
+test('publishDenyTierStatus: a wrong-typed field fails CLOSED for that field alone', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost()
   const mirror = async () => ({ ok: true, value: { denyRmRf: 'yes', denyDropTable: null, denyTerraformDestroy: false } })
   await publishDenyTierStatus(orca, storageHost, { mirror })
   const status = await storageHost.get(DENY_TIER_STATUS_KEY)
-  assert.equal(status.denyRmRf, true)
-  assert.equal(status.denyDropTable, true)
-  assert.equal(status.denyTerraformDestroy, true)
+  assert.equal(status.denyRmRf, true, 'a string is not a boolean, so it stays denying')
+  assert.equal(status.denyDropTable, true, 'null is not a boolean, so it stays denying')
+  assert.equal(status.denyTerraformDestroy, false, 'a real false is honoured, whatever its neighbours look like')
+  const named = ['denyRmRf', 'denyDropTable', 'denyTerraformDestroy']
+  for (const key of DENY_TOGGLE_KEYS.filter((k) => !named.includes(k))) {
+    assert.equal(status[key], true, `${key} was never mentioned, so it stays denying`)
+  }
 })
 
 test('publishDenyTierStatus: a well-formed mirror value with one switch off is published as-is', async () => {
@@ -393,8 +400,7 @@ test('publishDenyTierStatus: a well-formed mirror value with one switch off is p
   await publishDenyTierStatus(orca, storageHost, { mirror })
   const status = await storageHost.get(DENY_TIER_STATUS_KEY)
   assert.equal(status.denyRmRf, false)
-  assert.equal(status.denyDropTable, true)
-  assert.equal(status.denyTerraformDestroy, true)
+  for (const key of DENY_TOGGLE_KEYS.filter((k) => k !== 'denyRmRf')) assert.equal(status[key], true, key)
 })
 
 // ---------------------------------------------------------------------------

@@ -21,14 +21,20 @@
  * malformed mirror degrades to the pre-existing global-thresholds behavior,
  * never a crash and never an extra prompt.
  *
- * ONE DELIBERATE EXCEPTION: readDenyTierConfig (below) fails CLOSED. The
- * three NEVER_SILENTLY rules whose blast radius reaches beyond the
- * repository AND beyond recovery (rm -rf /, DROP/TRUNCATE TABLE, terraform
- * destroy) deny by default, and a missing, unreadable or malformed
- * deny-tier-config.json must never be read as quiet permission to downgrade
- * them to 'ask' -- see src/core/deny_tier_config.ts. Turning any of the
- * three off is still possible, but only through an explicit, well-formed
- * `false` in that file; it downgrades to 'ask', never to 'allow'.
+ * ONE DELIBERATE EXCEPTION: readDenyTierConfig (below) fails CLOSED. EVERY
+ * NEVER_SILENTLY rule denies by default, and a missing, unreadable or
+ * malformed deny-tier-config.json must never be read as quiet permission to
+ * downgrade one -- see src/core/deny_tier_config.ts. Turning a rule off is
+ * still possible, but only through an explicit, well-formed `false`; it
+ * downgrades to 'ask', never to 'allow'.
+ *
+ * Why deny rather than ask: an 'ask' stops the PERSON and waits, a 'deny'
+ * refuses the MODEL and hands it the reason, so it picks another approach and
+ * nobody waits. Measured on the real approvals log before the change -- 3103
+ * commands approved against 1 refused, and 5 of 16 questions never answered
+ * at all -- the question was not buying safety, it was buying attention, and
+ * the dialog opens on "Yes" anyway. Only the agent is refused; the person can
+ * always run the command themselves, which is what the message says.
  *
  * This is the Claude Code adapter: the three-tier design and the local
  * pattern lists below are this file's own (measured, and correct -- do not
@@ -75,6 +81,7 @@ import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
+import { withoutHeredocBodies } from '../../src/core/command_text.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
@@ -147,6 +154,11 @@ function resolveLocale(): Locale {
 
 const LOCALE = resolveLocale()
 const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, LOCALE, key, params)
+
+/** For text the MODEL reads rather than a person: always English, whatever
+ *  locale the developer picked. A refusal is an instruction to the model, and
+ *  its one reader understands English. */
+const tEnglish = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, 'en', key, params)
 
 /** True when `key` belongs to DESTINATION_CATALOG (a policy citation) rather than this file's own GATE_CATALOG (a risk reason) -- GateKey and DestinationKey are disjoint string unions by construction, so membership alone is enough to route it. */
 function isDestinationReasonKey(key: string): key is DestinationKey {
@@ -665,10 +677,16 @@ async function main(): Promise<void> {
   // would leave an agent unable to search the code it is working on. A
   // mention skips tier 1b and is judged by the ordinary path instead -- it
   // is not waved through.
-  const mentionOnly = mentionsRatherThanRuns(command)
+  // A heredoc body is data handed to a program on stdin, not a command line,
+  // so the rules look at what is left after removing it. Writing a file whose
+  // CONTENT describes one of these rules used to be refused as if the rule
+  // were being run -- which refused the author of this very comment. A body
+  // read by a shell keeps its text, because there it really is commands.
+  const inspected = withoutHeredocBodies(command)
+  const mentionOnly = mentionsRatherThanRuns(inspected)
   for (const { pattern, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
-    if (pattern.test(command)) {
+    if (pattern.test(inspected)) {
       // Every rule denies unless its switch was deliberately turned off, in
       // which case it drops to 'ask' -- never to 'allow'. readDenyTierConfig()
       // fails CLOSED, so an unreadable config denies exactly as a fresh
@@ -679,8 +697,16 @@ async function main(): Promise<void> {
       // model and no threshold, so there is nothing here to calibrate -- but
       // whether the person accepted the interruption is still worth knowing.
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
-      const reasonKey = decision === 'deny' ? 'localRuleDeny' : 'localRule'
-      emit(decision, t(reasonKey, { why: t(why) }))
+      // A refusal is read by the MODEL and an ask is read by a PERSON, so
+      // they resolve in different languages on purpose: the ask follows the
+      // developer's chosen locale, the refusal is always English, including
+      // the interpolated reason. Half-translating it -- an English sentence
+      // carrying a Spanish clause -- would be worse than either.
+      if (decision === 'deny') {
+        emit(decision, tEnglish('localRuleDeny', { why: tEnglish(why) }))
+      } else {
+        emit(decision, t('localRule', { why: t(why) }))
+      }
       return
     }
   }
