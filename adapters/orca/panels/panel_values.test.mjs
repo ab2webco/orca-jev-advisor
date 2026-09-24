@@ -69,15 +69,29 @@ test('stripUndefinedValues: a plain scalar passes through unchanged', () => {
 test('buildDestinationRow: a blank terminalTitleMatch produces an object with NO such key at all', () => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
-    terminalTitleMatch: '', actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2,
+    terminalTitleMatch: '',
   })
   assert.equal(Object.hasOwn(row, 'terminalTitleMatch'), false)
+})
+
+// AB-benchmark pass: actThreshold/confirmThreshold/maxAutoDelicateness used
+// to be seeded here as a bare literal (`0.9`/`0.6`/`2`) next to the widget.
+// Traced to zero decisions anywhere (see src/core/store.ts's own note on
+// AutonomyConfig) and removed -- autonomy is an empty object now, since
+// there is no panel control left for consequenceCeiling (AutonomyConfig's
+// one surviving field) either.
+test('buildDestinationRow: autonomy is an empty object -- no invented literal for a field no decision reads', () => {
+  const row = buildDestinationRow({
+    id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
+    terminalTitleMatch: '',
+  })
+  assert.deepEqual(row.autonomy, {})
 })
 
 test('buildDestinationRow: a non-blank terminalTitleMatch is kept', () => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
-    terminalTitleMatch: 'repo-a*', actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2,
+    terminalTitleMatch: 'repo-a*',
   })
   assert.equal(row.terminalTitleMatch, 'repo-a*')
 })
@@ -85,7 +99,7 @@ test('buildDestinationRow: a non-blank terminalTitleMatch is kept', () => {
 test('buildDestinationRow: the result never carries an explicit undefined value anywhere', () => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
-    terminalTitleMatch: '', actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2,
+    terminalTitleMatch: '',
   })
   assert.equal(JSON.stringify(row).includes('undefined'), false)
   for (const key of Object.keys(row)) assert.notEqual(row[key], undefined)

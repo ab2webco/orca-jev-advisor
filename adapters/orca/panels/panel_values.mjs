@@ -58,9 +58,17 @@ export function stripUndefinedValues(value) {
  * the source: `terminalTitleMatch` is omitted entirely when blank, never
  * set to `undefined`. Mirrors config.html's addCatalogRow's `entry._read`.
  *
+ * `autonomy` used to also carry `actThreshold`/`confirmThreshold`/
+ * `maxAutoDelicateness`, seeded by a bare literal next to the widget
+ * (`{ actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 }`)
+ * every new row got. Traced and removed: no decision anywhere reads them
+ * (see `src/core/store.ts`'s own note on `AutonomyConfig`), so `autonomy`
+ * is an empty object here -- there is no panel control left for
+ * `consequenceCeiling` (`AutonomyConfig`'s one surviving field) either; it
+ * can only be set today by editing the catalog file directly.
+ *
  * @param {{ id: string, label: string, kind: string, worktreePath: string,
- *   terminalTitleMatch: string, actThreshold: number,
- *   confirmThreshold: number, maxAutoDelicateness: number }} fields
+ *   terminalTitleMatch: string }} fields
  * @returns {Record<string, unknown>}
  */
 export function buildDestinationRow(fields) {
@@ -69,11 +77,7 @@ export function buildDestinationRow(fields) {
     label: fields.label,
     kind: fields.kind,
     worktreePath: fields.worktreePath,
-    autonomy: {
-      actThreshold: fields.actThreshold,
-      confirmThreshold: fields.confirmThreshold,
-      maxAutoDelicateness: fields.maxAutoDelicateness,
-    },
+    autonomy: {},
   };
   if (fields.terminalTitleMatch) row.terminalTitleMatch = fields.terminalTitleMatch;
   return row;
