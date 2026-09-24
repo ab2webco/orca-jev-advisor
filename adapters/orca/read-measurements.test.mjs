@@ -97,6 +97,58 @@ test('modSkills ignores observation rows and malformed timestamps when computing
 })
 
 // ---------------------------------------------------------------------------
+// mod_skills_sampling.md -- aggregateModSkills exposes a `readiness` field
+// built from src/core/mod_skills_readiness.ts's evaluateModSkillsReadiness,
+// so a panel can render "not ready yet, N more samples needed" without
+// duplicating the threshold logic. These tests only check the wiring (the
+// real function's own exhaustive matrix lives in
+// src/core/mod_skills_readiness.test.ts) -- reaching the default 1000-
+// comparable threshold for real would mean writing a fixture that large,
+// which the pure-function test already covers.
+// ---------------------------------------------------------------------------
+
+function decisionRowWithSkill (id, at, skillName) {
+  return { ...decisionRow(id, at), decision: { name: skillName, reason: 'cleared both gates' } }
+}
+
+function observationRow (id, at, skill) {
+  return { type: 'observation', id, at, skill }
+}
+
+test('modSkills.readiness: with no recorded prompts at all, reports not ready with the full default shortfall and the thresholds used', () => {
+  const home = makeHome()
+  const result = run(home)
+  assert.deepEqual(result.modSkills.readiness, {
+    ready: false,
+    comparableShortfall: 1000,
+    matchRateMet: null,
+    reason: 'not-enough-samples',
+    thresholds: { minComparable: 1000, minMatchRate: 0.7 }
+  })
+})
+
+test('modSkills.readiness: reflects real comparable/match data, still short of the count threshold', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [
+    decisionRowWithSkill('a', '2026-09-19T00:00:00.000Z', 'graft'),
+    observationRow('a', '2026-09-19T00:05:00.000Z', 'graft'),
+    decisionRowWithSkill('b', '2026-09-19T01:00:00.000Z', 'graft'),
+    observationRow('b', '2026-09-19T01:05:00.000Z', 'dataviz')
+  ])
+  const result = run(home)
+  assert.equal(result.modSkills.comparableCount, 2)
+  assert.equal(result.modSkills.matchedCount, 1)
+  assert.equal(result.modSkills.matchRate, 0.5)
+  assert.deepEqual(result.modSkills.readiness, {
+    ready: false,
+    comparableShortfall: 998,
+    matchRateMet: null,
+    reason: 'not-enough-samples',
+    thresholds: { minComparable: 1000, minMatchRate: 0.7 }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // odd/tasks/production-honesty-pass.md P7 -- src/core/approval_record.ts's
 // summarizeApprovals renamed `unresolved` to `notRun` (a pending past its
 // TTL with no outcome, classified rather than discarded -- see that

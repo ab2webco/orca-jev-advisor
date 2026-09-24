@@ -40,6 +40,7 @@ import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
+import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
@@ -217,6 +218,18 @@ async function aggregateModSkills () {
     }
   }
 
+  const matchRate = comparable > 0 ? matched / comparable : null
+  // The activation metric mod-skills' own module note promised but never
+  // stated as code ("active mode does not turn on until a week of
+  // measurement-mode data exists to set these thresholds from") -- see
+  // src/core/mod_skills_readiness.ts. Carries the thresholds it was judged
+  // against alongside the verdict, so a panel can render "N more samples
+  // needed" without duplicating the constants.
+  const readiness = {
+    ...evaluateModSkillsReadiness({ comparableCount: comparable, matchRate }, DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS),
+    thresholds: DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS,
+  }
+
   return {
     totalDecisions: decisions.length,
     totalObservations: observations.length,
@@ -226,13 +239,14 @@ async function aggregateModSkills () {
     suggestedCount: suggested,
     comparableCount: comparable,
     matchedCount: matched,
-    matchRate: comparable > 0 ? matched / comparable : null,
+    matchRate,
     listingCharsTotal: listingCharsCount > 0 ? listingCharsSum : null,
     listingCharsAvgPerPrompt: listingCharsCount > 0 ? listingCharsSum / listingCharsCount : null,
     listingCharsSampleCount: listingCharsCount,
     wideLatencyMeanMs: mean(wideLatencies),
     fitLatencyMeanMs: mean(fitLatencies),
     byProject: topByCount(byProject, 10),
+    readiness,
   }
 }
 
