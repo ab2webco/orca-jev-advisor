@@ -120,63 +120,25 @@ how you miss the tail.
 
 ---
 
-## Panel: cross the skills-mod switches against the copy on disk
+## Everything below was done on 2026-09-24 and is no longer backlog
 
-**What.** `modSkillsLine()` in `adapters/orca/panels/config.html:1759` returns
-"not installed" when `modCopy.exists` is false, and the switches elsewhere on
-the same panel read `active`/`activeTools` from
-`~/.config/orca-supervisor/mod-skills-config.json`. Nobody crosses the two, so
-the panel can show switches turned ON while the mod is not on disk at all —
-switches commanding nothing.
+The four findings from `MEJORAS-JEV-ADVISOR.md` were verified and then fixed
+on `feat/advisor-board-charts`, not deferred:
 
-**Why.** Observed after successive updates: `modCopy exists:false` across all
-four config roots while the config said `active:true, activeTools:true`, and
-`mod-skills-measurements.jsonl` had never been created, meaning the mod had
-never run on that machine. Neither the panel nor any log said a word.
+- **Silent fail-open** -- `GateSource` gains `'none'`, recorded on the
+  pass-through, with one notice after three consecutive failures
+  (`909536a`), and the board shows the unjudged slice (`8172970`).
+- **Panel not crossing the switches with the copy on disk** -- `20a9a2a`.
+- **Measurement mode with no sampling and no activation metric** --
+  `mod_skills_sampling.ts` (25% of prompts, 40/day, fail-open) and
+  `mod_skills_readiness.ts` (1000 comparable prompts at a 70% match rate),
+  with the panel rendering how far off the threshold is.
+- **Windows symlink** -- already resolved in 0.3.1, which replaced the
+  symlink with a copy. Only the README still described the deleted code
+  (`9484732`).
 
-**First thing to verify.** Whether the update path reinstalls the copy at all,
-or only the first install does — `adapters/orca/install-claude-integration.mjs`.
-The panel warning is the symptom; a copy that survives an update is the fix.
-Both are wanted: make the copy synchronous on activation, and have the panel
-say so when the two disagree.
-
----
-
-## Skills mod: sample instead of measuring every prompt
-
-**What.** Measurement mode makes two Jev calls per prompt (rank every skill,
-then re-read the top three) on every prompt of every session, indefinitely.
-
-**Why.** It is a permanent cost for data nobody has put a finish line on.
-"Not ready yet" has no metric and no date.
-
-**First thing to verify.** `src/core/ab_benchmark_config.ts` already has the
-mould — `shouldSample` plus a daily cap, config-gated and fail-open. Check it
-applies cleanly to `adapters/claude/mod-skills/hooks/index.ts` before writing
-anything new. The activation metric has to be stated too (for example N >= 1000
-records and precision@1 above a named threshold against what the model actually
-loaded), otherwise active mode stays a promise with no path.
-
----
-
-## Windows: test the symlink path once, or declare it unsupported
-
-**What.** `modLinkWarning` has never been observed rejecting anything. The
-README already admits it.
-
-**Why.** Either it works and nobody has seen it, or it is dead code pretending
-to be support. Both are cheap to resolve and only one is honest.
-
----
-
-## Upstream: Claude Code has no event for a refused hook ask
-
-**What.** Under `bypassPermissions`, neither Esc nor answering "No" to the
-hook's own dialog fires `PermissionDenied` — that event belongs to the
-permission system, which bypass mode never invokes.
-
-**Why.** The whole history of `gate-approvals.jsonl` reads 51 approved and 0
-rejected: the `rejected` branch of `gate-outcome.ts` is dead code in that mode,
-and calibration only ever learns from approvals. The local mitigation
-(`notRun`, v0.3.1) is correct and its semantics must not be changed — but the
-missing event is upstream and should be reported as such.
+The upstream issue (no event fires when a hook-originated `ask` is refused
+under `bypassPermissions`) is drafted with counts verified against the real
+log -- 61 pendings, 50 joined, 49 approved, 0 refused by a human -- and is
+waiting on the repository owner to post it, since it publishes under their
+account.
