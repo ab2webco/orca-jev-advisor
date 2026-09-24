@@ -21,23 +21,61 @@ owner: speed with fewer tokens. A large model is slow at deciding and expensive
 in context; sending a mechanical task to it wastes both. Picking the model is
 itself a decision, and decisions are what Jev is for.
 
-**Verify first, before designing anything.** Whether an Orca plugin can
-influence which model or agent a pane launches with. A first look at
-`orca-oss/src/shared/plugins/plugin-manifest.ts` found no `agentProfiles`
-contribution and no `model` field in the plugin manifest surface, though the
-plugin list projection does mention agent profiles and
-`PLUGIN_AGENT_PROFILE_MAX_BYTES` exists in
-`src/main/plugins/plugin-artifact-validation.ts` — so the capability may exist
-somewhere else, or may not exist for plugins at all. **If Orca does not expose
-it, this cannot be a plugin feature and the honest answer is to say so rather
-than build a scoring layer whose verdict nothing can act on.** That failure
-mode already happened here twice: switches nobody could set, and a panel
-control no decision read.
+**Feasibility: answered, and it is no — today.** Traced through Orca's source
+with citations:
+
+- `contributes.agents` exists (`plugin-manifest.ts:142`) but is **inert**. Its
+  schema is a bare `{ path }` (`plugin-content-pack-contributions.ts:55`), and
+  no parser for that file exists anywhere — compare
+  `parsePluginVmRecipeArtifact` (`plugin-vm-recipe-artifact.ts:40`), which is
+  what a real one looks like. Its only consumer is a byte-size check
+  (`plugin-artifact-validation.ts:82`). A plugin can declare an agent profile
+  and nothing will ever read it.
+- A plugin **automation** can choose the agent BINARY but never a model:
+  `pluginAgentAutomationSchema` carries `provider` and no model field
+  (`plugin-automation-contribution.ts:65`).
+- The model is decided from **global settings**, per agent type, not per task:
+  `resolveTuiAgentLaunchArgs` reads `settings.agentDefaultArgs`
+  (`tui-agent-launch-defaults.ts:82`), and chat-mode options come from
+  `settings.nativeChatSessionOptions`.
+- No plugin surface reaches that decision. The host API's whole method table
+  (`plugin-host-method-bindings.ts:71-166`) has nothing for it, and
+  `settings.set` is scoped to the plugin's own namespace.
+
+The one adjacent capability: `terminal.sendText` could type a CLI's own
+`/model` command into an ALREADY-RUNNING pane. That is reconfiguring a session
+that already started on whatever Settings chose — not choosing at launch — and
+building on it would be a workaround, not a feature.
+
+**So the question stops being "can a plugin do this" and becomes "what do we
+add to Orca", because Orca is ours.** Three candidates, smallest first:
+
+1. Give `pluginAgentAutomationSchema` a model/session-options field and thread
+   it through `plugin-automation-managed-fields.ts:66` into
+   `headless-workspace-create.ts:43`, beside `startupAgent`.
+2. Make the per-launch override reachable from a plugin. `agentArgs` already
+   exists as a parameter on `LaunchAgentInNewTabArgs`
+   (`launch-agent-in-new-tab.ts:37`) — it simply has no plugin-facing entry
+   point. A capability-gated host method, gated as `terminal.sendText` is,
+   would close it.
+3. Actually implement the agent-profile artifact: a
+   `parsePluginAgentProfileArtifact` mirroring the VM recipe one, with a schema
+   carrying a model id and an account hint, and a registry the launch UI reads.
+
+Option 2 is the smallest and the most general. Option 3 is the one that makes
+`contributes.agents` mean something instead of being a declared-but-dead
+contribution point.
+
+**Accounts.** Orca already models the other providers as distinct agent
+binaries — `claude`, `codex`, and `claude-zai`, the z.ai/GLM wrapper with its
+own isolated config directory (`tui-agent-config.ts:12-70`). So "route to the Z
+account" is expressible as an agent identity today; what is missing is only the
+model choice within one, and any automatic routing at all.
 
 **Then, and only then:** what the effort signal is measured against. A model
-choice that is never checked against how the task actually went is a preference
-dressed as a decision — the same trap as an unmeasured threshold. Measurement
-mode first, active mode only once there is data, exactly as the skills mod is
+choice never checked against how the task actually went is a preference dressed
+as a decision -- the same trap as an unmeasured threshold. Measurement mode
+first, active mode only once there is data, exactly as the skills mod is
 sequenced.
 
 ---
