@@ -10,8 +10,9 @@
   "scripts": {
     "test": "node --test --experimental-strip-types",
     "shots": "node scripts/screenshot-panels.mjs",
-    "check": "npm run test && npm run shots",
-    "self-check": "node src/supervisor.ts --self-check"
+    "check": "npm run test && npm run test:panels && npm run shots",
+    "self-check": "node src/supervisor.ts --self-check",
+    "test:panels": "node --test scripts/panels.spec.mjs"
   },
   "devDependencies": {
     "playwright": "^1.49.0"
