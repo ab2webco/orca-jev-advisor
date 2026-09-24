@@ -8,7 +8,16 @@
 // which specific file or branch, only a coarse command *family* (`git
 // push`, `rm -rf`, `terraform`, ...) and which project it happened in.
 
-export type GateSource = "local-rule" | "cache" | "jev";
+/**
+ * `"none"` means the gate reached the point of asking Jev and got no answer
+ * back at all -- network error, timeout, or budget exceeded (see askJev in
+ * adapters/claude/gate-bash.ts) -- so the command passed through unjudged.
+ * That is different from the DECISION, which is always `"allow"` for a
+ * `"none"` record: failing open on the decision is correct and must stay,
+ * this bucket exists only so failing open on the VISIBILITY of that fact
+ * stops being silent.
+ */
+export type GateSource = "local-rule" | "cache" | "jev" | "none";
 export type GateVerdict = "allow" | "ask" | "deny";
 
 export interface GateDecisionRecord {
@@ -128,7 +137,7 @@ export function serializeGateRecord(record: GateDecisionRecord): string {
 }
 
 function isGateSource(value: unknown): value is GateSource {
-  return value === "local-rule" || value === "cache" || value === "jev";
+  return value === "local-rule" || value === "cache" || value === "jev" || value === "none";
 }
 
 function isGateVerdict(value: unknown): value is GateVerdict {
