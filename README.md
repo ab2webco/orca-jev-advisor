@@ -182,12 +182,14 @@ check, same as before this list existed.
 **Unverifiable without the real machine**, and expected to need attention
 if something breaks:
 
-- Directory symlink creation for the mod-skills integration
-  (`install-claude-integration.mjs`). Windows commonly refuses a directory
-  symlink without Developer Mode or an elevated process; the installer
-  already catches that failure and reports it per-target instead of
-  crashing (`modLinkWarning`), but nobody has watched it actually refuse or
-  succeed on a real Windows box.
+- ~~Directory symlink creation for the mod-skills integration.~~ **Resolved
+  in 0.3.1**: the installer no longer creates a symlink at all. It copies the
+  mod's directory (`installModCopy`, marked with
+  `.orca-jev-mod-skills.source.json`) because the plugin worker runs under
+  Node's permission model without `--allow-fs-write`, where `fs.symlink`
+  fails with `ERR_ACCESS_DENIED` regardless of the platform. A copy needs no
+  Developer Mode and no elevated process, so the Windows question this entry
+  described no longer exists; `modLinkWarning` is gone from the code.
 - Whether Claude Code itself resolves `%APPDATA%`/`%USERPROFILE%` and
   spawns the gate hook (`node <path>`) the way its own settings.json schema
   documents on Windows, and whether Orca launches the plugin worker and its
