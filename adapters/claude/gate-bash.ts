@@ -68,6 +68,8 @@ import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
+import { pruneGateCache } from '../../src/core/gate_cache.ts'
+import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
@@ -230,7 +232,7 @@ function passThroughWithNotice(message: string): void {
   process.exit(0)
 }
 
-type CacheEntry = { readonly decision: Decision; readonly reason: string; readonly at: number }
+type CacheEntry = GateCacheEntry
 
 /**
  * The cache key for a command, or null when it must not be cached.
@@ -250,13 +252,24 @@ function cacheKey(command: string, context: string, cwd: string, destinationId: 
   return shape === null ? null : createHash('sha256').update(shape).digest('hex').slice(0, 24)
 }
 
+/**
+ * Reads the cache, dropping expired and malformed entries (see
+ * pruneGateCache, src/core/gate_cache.ts, for the TTL and its rationale).
+ * When anything was dropped, the pruned set is persisted immediately so
+ * this file doesn't quietly keep growing with verdicts nobody can use
+ * anymore -- best-effort, same fail-open discipline as writeCache itself.
+ */
 function readCache(): Record<string, CacheEntry> {
+  let parsed: unknown
   try {
-    const parsed: unknown = JSON.parse(readFileSync(CACHE_PATH, 'utf8'))
-    return typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, CacheEntry>) : {}
+    parsed = JSON.parse(readFileSync(CACHE_PATH, 'utf8'))
   } catch {
     return {}
   }
+  if (typeof parsed !== 'object' || parsed === null) return {}
+  const { fresh, changed } = pruneGateCache(parsed as Record<string, unknown>)
+  if (changed) writeCache(fresh)
+  return fresh
 }
 
 function writeCache(cache: Record<string, CacheEntry>): void {
