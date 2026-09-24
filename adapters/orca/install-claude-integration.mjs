@@ -28,29 +28,33 @@
  *             existed and what it held, so uninstall can put it back
  *             exactly -- the same "captured once, never recomputed" rule
  *             applies per event to whether its array and its `Bash` group
- *             already existed. Symlinks <pluginRoot>/adapters/claude/
- *             mod-skills to ~/.claude/skills/orca-jev-mod-skills, which
- *             Claude Code auto-loads from (the "skills-dir" mechanism).
- *             Every settings.json write is atomic (temp file + rename)
- *             and preceded, on the very first install, by a full backup.
+ *             already existed. Copies <pluginRoot>/adapters/claude/
+ *             mod-skills into ~/.claude/skills/orca-jev-mod-skills, which
+ *             Claude Code auto-loads from (the "skills-dir" mechanism) --
+ *             see the module note above `installModCopy` for why this is a
+ *             copy and not a symlink. Every settings.json write is atomic
+ *             (temp file + rename) and preceded, on the very first
+ *             install, by a full backup.
  * uninstall   Surgical: removes only the hook entry each event's own
  *             `statusMessage` marks (dropping that event's `Bash` group
  *             entirely if that was its only entry, and the event's own
  *             array if that was its only group), restores the env var to
  *             whatever it held before we ever touched it (or removes it,
- *             if it was never there), and removes the mod-skills symlink
- *             -- but only if it still points at OUR pluginRoot. Every
- *             other hook, and anything the user changed in between, is
- *             left exactly as found.
+ *             if it was never there), and removes the mod-skills copy --
+ *             but only if its marker still names OUR pluginRoot (a
+ *             pre-fix symlink install, which never wrote a marker, is
+ *             recognized by its target instead). Every other hook, and
+ *             anything the user changed in between, is left exactly as
+ *             found.
  * status      Read-only: reports whether each of the four is in place
  *             right now, for the config panel and advisor.doctor.
  *
  * Always prints exactly one JSON line to stdout, nothing else. Never
  * touches anything but ~/.claude/settings.json, ~/.claude/skills/
- * orca-jev-mod-skills, and our own bookkeeping under
- * ~/.config/orca-supervisor/.
+ * orca-jev-mod-skills (plus its own marker file), and our own bookkeeping
+ * under ~/.config/orca-supervisor/.
  */
-import { lstat, mkdir, readdir, readFile, readlink, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -431,49 +435,133 @@ function uninstallEnvVar (settings, state) {
 }
 
 // ---------------------------------------------------------------------------
-// mod-skills symlink
+// mod-skills copy
+//
+// This used to be a symlink (<pluginRoot>/adapters/claude/mod-skills ->
+// ~/.claude/skills/orca-jev-mod-skills). Measured on two machines: Node's
+// permission model refuses fs.symlink unless the caller holds BOTH fs.read
+// AND fs.write UNSCOPED --
+//
+//   ERR_ACCESS_DENIED: fs.symlink API requires full fs.read and fs.write permissions.
+//
+// -- and the only way this sidecar is ever actually launched in production
+// (main.mjs's `runClaudeIntegrationScript`, above) passes SCOPED
+// `--allow-fs-write` grants, on purpose, for the same sandboxing reason
+// every other cross-boundary write in this plugin goes through a clean
+// child. So the symlink failed for everyone, always, and only ever worked
+// when someone ran this script by hand outside the sandbox (no
+// `--permission` flag at all -- `process.permission` would be undefined,
+// and fs.symlink is unrestricted there). That branch is real but this file
+// has no way to exercise it under test (it would require asserting on an
+// unsandboxed subprocess this suite never launches), and keeping two
+// installation mechanisms -- one tested, one that only a hand run can ever
+// reach -- is exactly the kind of condition nobody can reach that this
+// plugin's own rules forbid. So: always copy. A copy needs no special
+// permission beyond the write grant this sidecar already has, and it is
+// simple enough that "one mechanism, well tested" beats "two, one of them
+// dark."
+//
+// A copy cannot tell "still current" from "stale" by reading its own
+// target the way a symlink could, so a marker file next to it records
+// which plugin tree it came from. Orca installs each version of this
+// plugin under its own content-hashed directory, so the marker's `source`
+// path changing IS the update signal -- no content hash of the copy itself
+// is needed.
 // ---------------------------------------------------------------------------
 
-async function currentModLinkTarget (modLinkPath) {
+function modCopyMarkerPathFor (modCopyPath) {
+  return join(dirname(modCopyPath), '.orca-jev-mod-skills.source.json')
+}
+
+async function readModCopyMarker (markerPath) {
   try {
-    const stat = await lstat(modLinkPath)
-    if (!stat.isSymbolicLink()) return { exists: true, isSymlink: false, target: null }
-    return { exists: true, isSymlink: true, target: await readlink(modLinkPath) }
-  } catch (error) {
-    if (error?.code === 'ENOENT') return { exists: false, isSymlink: false, target: null }
-    throw error
+    const parsed = JSON.parse(await readFile(markerPath, 'utf8'))
+    return isRecord(parsed) && typeof parsed.source === 'string' ? parsed : null
+  } catch {
+    return null
   }
 }
 
-async function installModLink (pluginRoot, modLinkPath) {
+async function writeModCopyMarker (markerPath, source) {
+  await mkdir(dirname(markerPath), { recursive: true })
+  const tempPath = `${markerPath}.${randomUUID()}.tmp`
+  await writeFile(tempPath, `${JSON.stringify({ source, copiedAt: new Date().toISOString() }, null, 2)}\n`, 'utf8')
+  await rename(tempPath, markerPath)
+}
+
+/**
+ * Whether the copy at `modCopyPath` is ours and current for `source`.
+ *
+ * A marker naming `source` is the ordinary case. Absent a marker, a
+ * symlink whose own target already names `source` is a pre-fix install
+ * this code has not touched yet -- still ours, still current, just not
+ * migrated to a copy on disk yet (that happens the next time `install`
+ * runs). Anything else (a foreign directory, a symlink to somewhere else,
+ * a marker for a different plugin root) is not current, whether or not it
+ * exists.
+ */
+async function modCopyState (modCopyPath, markerPath, source) {
+  const stat = await lstat(modCopyPath).catch((error) => {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  })
+  if (!stat) return { exists: false, current: false }
+  const marker = await readModCopyMarker(markerPath)
+  if (marker !== null) return { exists: true, current: marker.source === source }
+  if (stat.isSymbolicLink()) {
+    const target = await readlink(modCopyPath).catch(() => null)
+    return { exists: true, current: target === source }
+  }
+  return { exists: true, current: false }
+}
+
+async function installModCopy (pluginRoot, modCopyPath, markerPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  const current = await currentModLinkTarget(modLinkPath)
-  if (current.isSymlink && current.target === source) return { changed: false }
-  if (current.exists) {
-    // Ours by convention (the distinctive name), but not pointing where we
-    // expect (a stale link from a moved plugin root, or a leftover
-    // non-symlink): replace it rather than leaving two conflicting copies.
-    await rm(modLinkPath, { recursive: true, force: true })
+  const stat = await lstat(modCopyPath).catch((error) => {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  })
+  const marker = stat ? await readModCopyMarker(markerPath) : null
+  // Deliberately stricter than modCopyState's "current" (which treats a
+  // matching symlink as ours, for uninstall/status backward compatibility):
+  // install must never treat a symlink as "nothing to do" here, or a
+  // pre-fix install would never get migrated to a real copy. Only an
+  // actual directory with a marker naming this exact source counts as
+  // already installed.
+  const alreadyCurrentCopy = stat !== null && !stat.isSymbolicLink() && marker !== null && marker.source === source
+  if (alreadyCurrentCopy) return { changed: false }
+  if (stat !== null) {
+    // Stale (different plugin root), an unrecognized leftover, or -- always
+    // -- a pre-fix symlink: replace wholesale rather than merging into it
+    // or trusting a symlink's target as good enough, the same way a stale
+    // settings.json container is never partially reused.
+    await rm(modCopyPath, { recursive: true, force: true })
   }
-  await mkdir(dirname(modLinkPath), { recursive: true })
   try {
-    await symlink(source, modLinkPath, 'dir')
+    await mkdir(dirname(modCopyPath), { recursive: true })
+    await cp(source, modCopyPath, { recursive: true })
   } catch (error) {
-    return { changed: false, error: `could not symlink the mod (${String(error?.message ?? error)}); Windows or a restricted filesystem may not allow it here` }
+    return { changed: false, reason: 'copy-failed', detail: `could not copy the skills mod (${String(error?.message ?? error)})` }
   }
+  await writeModCopyMarker(markerPath, source)
   return { changed: true }
 }
 
-async function uninstallModLink (pluginRoot, modLinkPath) {
+async function uninstallModCopy (pluginRoot, modCopyPath, markerPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  const current = await currentModLinkTarget(modLinkPath)
-  if (!current.exists) return { changed: false }
-  if (!current.isSymlink || current.target !== source) {
+  const state = await modCopyState(modCopyPath, markerPath, source)
+  if (!state.exists) {
+    await rm(markerPath, { force: true })
+    return { changed: false }
+  }
+  if (!state.current) {
     // Not ours (or not pointing at this plugin root): leave it alone rather
-    // than guessing whose it is.
+    // than guessing whose it is -- the same care uninstallHookEntry takes
+    // with a container it did not create.
     return { changed: false, skipped: true }
   }
-  await unlink(modLinkPath)
+  await rm(modCopyPath, { recursive: true, force: true })
+  await rm(markerPath, { force: true })
   return { changed: true }
 }
 
@@ -492,7 +580,7 @@ function targetStates (state) {
   return Object.keys(legacy).length > 0 ? { home: legacy } : {}
 }
 
-function modLinkPathFor (target) {
+function modCopyPathFor (target) {
   return join(skillsDirFor(PLATFORM, target), 'orca-jev-mod-skills')
 }
 
@@ -524,14 +612,15 @@ async function install (pluginRoot) {
       await writeSettingsAtomic(settingsPath, settings)
       states[target.id] = state
 
-      const modResult = await installModLink(pluginRoot, modLinkPathFor(target))
+      const modCopyPath = modCopyPathFor(target)
+      const modResult = await installModCopy(pluginRoot, modCopyPath, modCopyMarkerPathFor(modCopyPath))
       perTarget.push({
         id: target.id,
         label: target.label,
         orcaManaged: target.orcaManaged,
         ok: true,
-        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modLink: modResult.changed },
-        modLinkWarning: modResult.error ?? null
+        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modCopy: modResult.changed },
+        modCopyWarning: modResult.reason ?? null
       })
     } catch (error) {
       // One unwritable target (a permission problem, a settings.json
@@ -555,9 +644,9 @@ async function install (pluginRoot) {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
       outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
-      modLink: perTarget.some((t) => t.ok && t.changes.modLink)
+      modCopy: perTarget.some((t) => t.ok && t.changes.modCopy)
     },
-    modLinkWarning: perTarget.find((t) => t.ok && t.modLinkWarning)?.modLinkWarning ?? null,
+    modCopyWarning: perTarget.find((t) => t.ok && t.modCopyWarning)?.modCopyWarning ?? null,
     failures: failed,
     nodeCommandVerified: nodeVerified
   }
@@ -606,12 +695,13 @@ async function uninstall (pluginRoot) {
       const postFailureChanged = uninstallHookEntry(settings, specs[3].event, specs[3].marker, state)
       const envChanged = uninstallEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
-      const modResult = await uninstallModLink(pluginRoot, modLinkPathFor(target))
+      const modCopyPath = modCopyPathFor(target)
+      const modResult = await uninstallModCopy(pluginRoot, modCopyPath, modCopyMarkerPathFor(modCopyPath))
       await rm(backupPathFor(target), { force: true })
       perTarget.push({
         id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: true,
-        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modLink: modResult.changed },
-        modLinkWarning: modResult.skipped ? 'mod-skills link did not point at this plugin; left untouched' : null
+        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modCopy: modResult.changed },
+        modCopyWarning: modResult.skipped ? 'foreign-mod-copy' : null
       })
     } catch (error) {
       perTarget.push({ id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: false, detail: String(error?.message ?? error).slice(0, 300) })
@@ -626,9 +716,9 @@ async function uninstall (pluginRoot) {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
       outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
-      modLink: perTarget.some((t) => t.ok && t.changes.modLink)
+      modCopy: perTarget.some((t) => t.ok && t.changes.modCopy)
     },
-    modLinkWarning: perTarget.find((t) => t.ok && t.modLinkWarning)?.modLinkWarning ?? null,
+    modCopyWarning: perTarget.find((t) => t.ok && t.modCopyWarning)?.modCopyWarning ?? null,
     failures: perTarget.filter((t) => !t.ok)
   }
 }
@@ -665,7 +755,8 @@ async function status (pluginRoot) {
     const ownPostHook = findMarkedHook(findBashGroup(settings, postSpec.event), postSpec.marker)
     const ownDeniedHook = findMarkedHook(findBashGroup(settings, deniedSpec.event), deniedSpec.marker)
     const ownPostFailureHook = findMarkedHook(findBashGroup(settings, postFailureSpec.event), postFailureSpec.marker)
-    const modLink = await currentModLinkTarget(modLinkPathFor(target)).catch(() => ({ isSymlink: false, target: null }))
+    const modCopyPath = modCopyPathFor(target)
+    const modCopy = await modCopyState(modCopyPath, modCopyMarkerPathFor(modCopyPath), modSource).catch(() => ({ exists: false, current: false }))
     perTarget.push({
       id: target.id,
       label: target.label,
@@ -680,7 +771,14 @@ async function status (pluginRoot) {
           ownPostFailureHook !== undefined && Array.isArray(ownPostFailureHook.args) && ownPostFailureHook.args.includes(postFailureSpec.path)
       },
       env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
-      modLink: { installed: modLink.isSymlink && modLink.target === modSource }
+      // `installed` keeps its old meaning (this exact plugin root's copy is
+      // in place); `exists` is finer-grained -- a stale copy from an older
+      // plugin root still exists (and still loads for Claude Code) even
+      // though it is not "installed" in the sense above. The config panel's
+      // skills-mod line (see odd/tasks/production-honesty-pass.md P6) reads
+      // `exists`, not `installed`, because a stale-but-present copy can
+      // still have produced real measurements worth reporting.
+      modCopy: { installed: modCopy.current, exists: modCopy.exists }
     })
   }
 
@@ -706,7 +804,10 @@ async function status (pluginRoot) {
       orcaPaneCount: orcaTargets.length
     },
     env: { installed: perTarget.every((t) => t.env.installed), name: ENV_VAR_NAME },
-    modLink: { installed: perTarget.every((t) => t.modLink.installed) },
+    modCopy: {
+      installed: perTarget.every((t) => t.modCopy.installed),
+      exists: perTarget.some((t) => t.modCopy.exists)
+    },
     orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
     statePath: STATE_PATH
   }

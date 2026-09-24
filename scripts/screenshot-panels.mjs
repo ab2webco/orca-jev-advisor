@@ -84,7 +84,47 @@ const READY = {
   },
   policies: { rules: [] },
   board: { entries: [] },
-  measurementsSummary: { asked: 12, approved: 9, rejected: 3, unresolved: 0 }
+  // The shape is read-measurements.mjs's own output, not a flat invention:
+  // `{ ok, gate, modSkills, approvals }`, with the board reading
+  // `summary.approvals.*`. The first version of this fixture was flat, so
+  // every board screenshot photographed the empty state while claiming to
+  // show a populated one -- the same mistake as `isConfigured` vs
+  // `configured` earlier in this file's history.
+  measurementsSummary: {
+    ok: true,
+    gate: {
+      total: 1609,
+      bySource: { jev: 1441, 'local-rule': 118, cache: 50 },
+      byVerdict: { allow: 1112, ask: 480, deny: 17 },
+      byFamily: [
+        { key: 'rm -rf', count: 51 },
+        { key: 'cd', count: 34 },
+        { key: 'gh cli', count: 29 },
+        { key: 'export', count: 22 },
+      ],
+      byProject: [
+        { key: 'app', count: 547 },
+        { key: 'tooling', count: 481 },
+      ],
+      latencyMs: { median: 404, p90: 595 },
+    },
+    modSkills: { total: 0 },
+    approvals: {
+      asked: 43,
+      approved: 27,
+      rejected: 1,
+      notRun: 15,
+      corruptLines: 0,
+      ceiling: {
+        highestApproved: null,
+        lowestRejected: null,
+        band: null,
+        suggestedCeiling: null,
+        approvedCount: 9,
+        rejectedCount: 0,
+      },
+    },
+  },
 }
 
 const SCENARIOS = { fresh: FRESH, ready: READY }

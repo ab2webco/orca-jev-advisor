@@ -42,24 +42,48 @@ test("joins the two halves by tool_use_id, exactly", () => {
   assert.equal(s.asked, 2);
   assert.equal(s.approved, 1);
   assert.equal(s.rejected, 1);
-  assert.equal(s.unresolved, 0);
+  assert.equal(s.notRun, 0);
   assert.equal(s.labelled.length, 2);
 });
 
-test("silence is never counted as an answer", () => {
-  // Someone closed the prompt or walked away. Counting that as approval would
-  // teach the gate to relax every time a desk is empty.
+// odd/tasks/production-honesty-pass.md P7: every `deny` verdict writes a
+// gate-pending too (gate-bash.ts's appendPendingApproval runs whenever the
+// decision isn't 'allow', ask OR deny), and a denied command never runs --
+// no PostToolUse, no PostToolUseFailure, no PermissionDenied, ever, by
+// construction. With nine rules denying outright, this is now the main
+// shape a pending-with-no-outcome takes, not "someone walked away". `asked`
+// still counts it (the gate did stop something), and it belongs in the
+// summary as its own category, counted alongside approved and rejected --
+// not silently dropped the way a bare `unresolved` figure invites.
+test("a pending with no outcome past the TTL is classified notRun, counted alongside approved and rejected", () => {
+  // Someone closed the prompt or walked away -- OR the gate denied it
+  // outright and the command never ran at all. Counting it as approval
+  // would teach the gate to relax every time a desk is empty; the honest
+  // move is its own category, not a guess at either answer.
   const old = new Date(NOW - UNRESOLVED_AFTER_MS - 1000).toISOString();
   const s = summarizeApprovals([pending("a", 1.9, old)], [], NOW);
   assert.equal(s.approved, 0);
   assert.equal(s.rejected, 0);
-  assert.equal(s.unresolved, 1);
+  assert.equal(s.notRun, 1);
+  assert.equal(s.asked, 1, "asked still counts every gate-pending, notRun included");
 });
 
 test("a prompt still on screen is neither answered nor written off", () => {
   const s = summarizeApprovals([pending("a", 1.9)], [], NOW);
-  assert.equal(s.unresolved, 0, "still within the window");
+  assert.equal(s.notRun, 0, "still within the window");
   assert.equal(s.approved + s.rejected, 0);
+});
+
+test("notRun is a classification, not a fact -- a labelled outcome always wins even after the TTL has passed", () => {
+  // The exact ambiguity this category cannot resolve: a session that
+  // crashed after the command ran and before gate-outcome.ts recorded the
+  // result leaves the identical trace as a genuine non-run. But an outcome
+  // that DID arrive, however late, is real evidence and must never be
+  // downgraded to notRun just because it crossed the TTL first.
+  const late = new Date(NOW - UNRESOLVED_AFTER_MS - 1000).toISOString();
+  const s = summarizeApprovals([pending("a", 1.9, late)], [outcome("a", "approved", late)], NOW);
+  assert.equal(s.approved, 1);
+  assert.equal(s.notRun, 0);
 });
 
 test("the first answer wins, so a retried tool call cannot overwrite a decision", () => {

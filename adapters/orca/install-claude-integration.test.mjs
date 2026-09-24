@@ -15,7 +15,7 @@
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +24,7 @@ import { after, test } from 'node:test'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ROOT = join(__dirname, '..', '..')
 const SCRIPT_PATH = join(__dirname, 'install-claude-integration.mjs')
+const MOD_SOURCE = join(PLUGIN_ROOT, 'adapters', 'claude', 'mod-skills')
 
 const tempDirs = []
 function makeHome () {
@@ -39,15 +40,27 @@ function settingsPathFor (home) {
   return join(home, '.claude', 'settings.json')
 }
 
+function modCopyPathFor (home) {
+  return join(home, '.claude', 'skills', 'orca-jev-mod-skills')
+}
+
+function modCopyMarkerPathFor (home) {
+  return join(home, '.claude', 'skills', '.orca-jev-mod-skills.source.json')
+}
+
 /** Runs the installer against a throwaway HOME, with no ORCA_USER_DATA_PATH
  *  -- so `discoverTargets()` finds no Orca accounts and the only target is
- *  `home`, which is all these tests need to exercise the bookkeeping. */
-function run (mode, home) {
+ *  `home`, which is all these tests need to exercise the bookkeeping.
+ *  `pluginRoot` defaults to the real plugin root; a test that needs the
+ *  skills-mod copy to fail (P5) passes a directory with no `adapters/claude/
+ *  mod-skills` under it instead, which fails `cp()` the same way a real
+ *  permission problem would -- no chmod gymnastics needed. */
+function run (mode, home, pluginRoot = PLUGIN_ROOT) {
   const env = { ...process.env, HOME: home }
   delete env.ORCA_USER_DATA_PATH
   delete env.XDG_CONFIG_HOME
   delete env.XDG_CACHE_HOME
-  const stdout = execFileSync(process.execPath, [SCRIPT_PATH, mode, PLUGIN_ROOT], { env, encoding: 'utf8' })
+  const stdout = execFileSync(process.execPath, [SCRIPT_PATH, mode, pluginRoot], { env, encoding: 'utf8' })
   return JSON.parse(stdout)
 }
 
@@ -289,4 +302,124 @@ test('an existing install made before PostToolUseFailure existed gains it on the
   run('uninstall', home)
   const afterUninstall = readSettings(home)
   assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks ?? {}, 'PostToolUseFailure'), false)
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/production-honesty-pass.md P4/P5 -- the skills mod is copied,
+// never symlinked (Node's permission model refuses fs.symlink under a
+// scoped grant on every machine this was measured on: ERR_ACCESS_DENIED,
+// always, for everyone -- see this file's own module note), and a failed
+// copy reaches the caller instead of being silently dropped.
+// ---------------------------------------------------------------------------
+
+test('install copies the skills mod into place -- a real directory, never a symlink', () => {
+  const home = makeHome()
+  const result = run('install', home)
+  assert.equal(result.ok, true)
+  assert.equal(result.changes.modCopy, true)
+
+  const copyPath = modCopyPathFor(home)
+  const st = lstatSync(copyPath)
+  assert.equal(st.isSymbolicLink(), false, 'the mod must be a real copy, not a symlink -- symlink() is refused under a scoped grant')
+  assert.equal(st.isDirectory(), true)
+  // A real file from the source tree made it into the copy, byte for byte.
+  const copiedContent = readFileSync(join(copyPath, 'hooks', 'hooks.json'), 'utf8')
+  const sourceContent = readFileSync(join(MOD_SOURCE, 'hooks', 'hooks.json'), 'utf8')
+  assert.equal(copiedContent, sourceContent)
+})
+
+test('install writes a marker recording which plugin tree the copy came from', () => {
+  const home = makeHome()
+  run('install', home)
+  const marker = JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8'))
+  assert.equal(marker.source, MOD_SOURCE)
+})
+
+test('re-running install with the same source is a no-op on the copy -- idempotent, no rewrite', () => {
+  const home = makeHome()
+  run('install', home)
+  const before = statSync(join(modCopyPathFor(home), 'hooks', 'hooks.json')).mtimeMs
+  const beforeChangeResult = run('install', home)
+  assert.equal(beforeChangeResult.changes.modCopy, false, 'nothing changed, so this must not be reported as a change')
+  const after = statSync(join(modCopyPathFor(home), 'hooks', 'hooks.json')).mtimeMs
+  assert.equal(after, before, 'the file must not have been rewritten')
+})
+
+test('install replaces a stale copy left by a different plugin root -- the marker changing is the update signal', () => {
+  const home = makeHome()
+  // Simulate a previous install from a different (older) plugin root: a
+  // copy directory with a marker that does not match this plugin root, and
+  // a canary file that must not survive the refresh.
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(copyPath, { recursive: true })
+  writeFileSync(join(copyPath, 'stale-canary.txt'), 'from an old install', 'utf8')
+  mkdirSync(dirname(modCopyMarkerPathFor(home)), { recursive: true })
+  writeFileSync(modCopyMarkerPathFor(home), JSON.stringify({ source: '/old/plugin/root/adapters/claude/mod-skills' }), 'utf8')
+
+  const result = run('install', home)
+  assert.equal(result.changes.modCopy, true, 'a stale copy must be reported as a real change')
+  assert.throws(() => statSync(join(copyPath, 'stale-canary.txt')), 'the stale copy must be replaced wholesale, not merged into')
+  const marker = JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8'))
+  assert.equal(marker.source, MOD_SOURCE)
+})
+
+test('install migrates a pre-fix symlink install to a real copy', () => {
+  const home = makeHome()
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(dirname(copyPath), { recursive: true })
+  symlinkSync(MOD_SOURCE, copyPath, 'dir')
+  assert.equal(lstatSync(copyPath).isSymbolicLink(), true, 'test setup: must start as a symlink')
+
+  run('install', home)
+  const st = lstatSync(copyPath)
+  assert.equal(st.isSymbolicLink(), false, 'the old symlink must be replaced by a real copy')
+  assert.equal(st.isDirectory(), true)
+})
+
+test('uninstall removes the copy it owns, and its marker', () => {
+  const home = makeHome()
+  run('install', home)
+  const result = run('uninstall', home)
+  assert.equal(result.changes.modCopy, true)
+  assert.throws(() => lstatSync(modCopyPathFor(home)))
+  assert.throws(() => lstatSync(modCopyMarkerPathFor(home)))
+})
+
+test('uninstall does not remove a directory it did not create -- checks the marker first', () => {
+  const home = makeHome()
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(copyPath, { recursive: true })
+  writeFileSync(join(copyPath, 'not-ours.txt'), 'a real skill someone else installed', 'utf8')
+  // No marker at all, and not a symlink pointing at our source either.
+
+  const result = run('uninstall', home)
+  assert.equal(result.changes.modCopy, false)
+  assert.equal(readFileSync(join(copyPath, 'not-ours.txt'), 'utf8'), 'a real skill someone else installed', 'a foreign directory must survive untouched')
+})
+
+test('uninstall still removes a pre-fix symlink install that has no marker, by its target', () => {
+  const home = makeHome()
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(dirname(copyPath), { recursive: true })
+  symlinkSync(MOD_SOURCE, copyPath, 'dir')
+
+  const result = run('uninstall', home)
+  assert.equal(result.changes.modCopy, true)
+  assert.throws(() => lstatSync(copyPath))
+})
+
+test('a copy failure is reported through modCopyWarning, not swallowed -- the rest of the install still succeeds', () => {
+  const home = makeHome()
+  // A pluginRoot with no adapters/claude/mod-skills under it: cp() fails
+  // with ENOENT, exactly the shape of a real permission failure -- the hook
+  // and env-var install do not depend on the source existing, so they still
+  // succeed while only the mod copy fails.
+  const brokenRoot = mkdtempSync(join(tmpdir(), 'orca-jev-broken-root-'))
+  tempDirs.push(brokenRoot)
+
+  const result = run('install', home, brokenRoot)
+  assert.equal(result.ok, true, 'the hook/env install must still succeed even though the mod copy failed')
+  assert.equal(result.changes.modCopy, false)
+  assert.ok(result.modCopyWarning, 'the top-level result must carry a warning, not drop it')
+  assert.ok(result.targets[0].modCopyWarning, 'the per-target result must carry it too')
 })

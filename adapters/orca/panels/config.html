@@ -326,7 +326,7 @@
           'secret.configured': 'Clave configurada (termina en …{{tail}}).',
           'secret.notConfigured': 'Sin clave configurada.',
           'integration.heading': 'Integración con Claude Code',
-          'integration.hint': 'Este plugin escribe seis cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, un enlace al mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), y un espejo de las políticas del equipo en JSON legible (no es secreto). Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
+          'integration.hint': 'Este plugin escribe seis cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, una copia del mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), y un espejo de las políticas del equipo en JSON legible (no es secreto). Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
           'integration.checking': 'Comprobando…',
           'integration.statusUnavailable': 'No se pudo leer el estado.',
           'integration.hookInstalled': 'Hook de Bash: puesto, en {{path}}',
@@ -338,18 +338,26 @@
           'integration.mirrorPresentWindows': 'Archivo de la clave: presente, en {{path}} (Windows no tiene permisos POSIX; protégelo con los permisos NTFS de tu cuenta).',
           'integration.mirrorMissing': 'Archivo de la clave: no existe todavía ({{path}}).',
           'integration.mirrorUnknown': 'Archivo de la clave: no se pudo comprobar.',
-          'integration.modLinked': 'Mod de skills: enlazado en {{path}}',
           'entry.untitled': '(sin nombre)',
           'integration.hookCount': 'Hook de Bash: puesto en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
           'integration.hookPanesCovered': 'Paneles de Orca: los {{panes}} cubiertos.',
           'integration.hookPanesMissing': 'Paneles de Orca: NO cubiertos. El hook no corre dentro de Orca.',
           'integration.hookPanesNone': 'Paneles de Orca: no se encontró ninguna cuenta ({{reason}}).',
-          'integration.modLinkedCount': 'Mod de skills: enlazado en {{installed}} de {{total}} sitios.',
-          'integration.modNotLinked': 'Mod de skills: no enlazado.',
+          // El mod escribe una línea JSONL por prompt; estos tres estados
+          // se leen de ese archivo (mod-skills-measurements.jsonl), nunca
+          // de si la copia existe -- "enlazado"/"instalado" respondía una
+          // pregunta que nadie hace, y en esta máquina llegó a mostrarse
+          // sobre un mod que nunca corrió ni una sola vez (P6,
+          // odd/tasks/production-honesty-pass.md).
+          'integration.modNotInstalled': 'Mod de skills: no instalado. Usa «Configurar», abajo, para instalarlo.',
+          'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code -- una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
+          'integration.modRecording': 'Mod de skills: registrando. {{count}} prompts desde {{since}}, el más reciente {{last}}. Esto es modo medición: todavía nada de lo que ve el modelo cambia.',
           'integration.setup': 'Configurar',
           'integration.revert': 'Revertir todo',
           'integration.configuring': 'Configurando…',
           'integration.done': 'Listo.',
+          'integration.doneWithWarning': 'Listo, con un aviso: {{warning}}',
+          'integration.modCopyFailed': 'no se pudo copiar el mod de skills a su lugar; el hook de Bash y el resto de la integración sí quedaron instalados.',
           'integration.reverting': 'Revirtiendo…',
           'integration.reverted': 'Revertido.',
           'thresholds.heading': 'Techo del gate y tamaño del log',
@@ -471,7 +479,7 @@
           'secret.configured': 'Key configured (ends in …{{tail}}).',
           'secret.notConfigured': 'No key configured.',
           'integration.heading': 'Claude Code integration',
-          'integration.hint': "This plugin writes six things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a link to the skills mod, a human-readable JSON mirror of the destination catalog (not secret), and a human-readable JSON mirror of the team policies (not secret). None of this happens without showing it here, and \"Revert everything\" puts it all back.",
+          'integration.hint': "This plugin writes six things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a copy of the skills mod, a human-readable JSON mirror of the destination catalog (not secret), and a human-readable JSON mirror of the team policies (not secret). None of this happens without showing it here, and \"Revert everything\" puts it all back.",
           'integration.checking': 'Checking…',
           'integration.statusUnavailable': 'Could not read the status.',
           'integration.hookInstalled': 'Bash hook: installed, at {{path}}',
@@ -483,18 +491,26 @@
           'integration.mirrorPresentWindows': 'Key file: present, at {{path}} (Windows has no POSIX permissions; protect it with your account NTFS permissions).',
           'integration.mirrorMissing': "Key file: doesn't exist yet ({{path}}).",
           'integration.mirrorUnknown': 'Key file: could not check.',
-          'integration.modLinked': 'Skills mod: linked at {{path}}',
           'entry.untitled': '(unnamed)',
           'integration.hookCount': 'Bash hook: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
           'integration.hookPanesCovered': 'Orca panes: all {{panes}} covered.',
           'integration.hookPanesMissing': 'Orca panes: NOT covered. The hook does not run inside Orca.',
           'integration.hookPanesNone': 'Orca panes: no account found ({{reason}}).',
-          'integration.modLinkedCount': 'Skills mod: linked in {{installed}} of {{total}} places.',
-          'integration.modNotLinked': 'Skills mod: not linked.',
+          // The mod writes one JSONL line per prompt; these three states are
+          // read from that file (mod-skills-measurements.jsonl), never from
+          // whether the copy exists -- "linked"/"installed" answered a
+          // question nobody asks, and on this machine it once showed over a
+          // mod that had never run a single time (P6,
+          // odd/tasks/production-honesty-pass.md).
+          'integration.modNotInstalled': 'Skills mod: not installed. Use "Set up", below, to install it.',
+          'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS -- an already-open session will not pick it up. Start a new one to begin recording.',
+          'integration.modRecording': 'Skills mod: recording. {{count}} prompts since {{since}}, most recently {{last}}. This is measurement mode: nothing the model sees changes yet.',
           'integration.setup': 'Set up',
           'integration.revert': 'Revert everything',
           'integration.configuring': 'Setting up…',
           'integration.done': 'Done.',
+          'integration.doneWithWarning': 'Done, with a warning: {{warning}}',
+          'integration.modCopyFailed': 'could not copy the skills mod into place; the Bash hook and the rest of the integration are still installed.',
           'integration.reverting': 'Reverting…',
           'integration.reverted': 'Reverted.',
           'thresholds.heading': 'Gate ceiling & log size',
@@ -644,6 +660,17 @@
       function errorMessageFor (result) {
         var key = result && typeof result.reason === 'string' ? ERROR_REASON_KEYS[result.reason] : undefined
         return t(key || 'common.hostRejectedRequest')
+      }
+
+      // Same convention as ERROR_REASON_KEYS above: install-claude-
+      // integration.mjs's modCopyWarning is a stable reason code, never
+      // already-localized prose, so it is mapped through the catalog here
+      // rather than shown as-is (odd/tasks/production-honesty-pass.md P5).
+      var MOD_COPY_WARNING_KEYS = {
+        'copy-failed': 'integration.modCopyFailed'
+      }
+      function modCopyWarningMessage (code) {
+        return t(MOD_COPY_WARNING_KEYS[code] || 'integration.modCopyFailed')
       }
 
       /**
@@ -1703,6 +1730,45 @@
         return item
       }
 
+      /** Renders an ISO timestamp the way board.html's own `when()` does --
+       *  the person's own locale, through the browser's own formatter,
+       *  never a hand-built date string. Falls back to the raw ISO text on
+       *  anything unparsable rather than showing nothing. */
+      function formatSince (iso) {
+        var ms = Date.parse(String(iso || ''))
+        if (!ms) return String(iso || '')
+        try { return new Date(ms).toLocaleString() } catch (error) { return String(iso) }
+      }
+
+      /**
+       * What the skills mod line says, per odd/tasks/production-honesty-
+       * pass.md's P6: derived from mod-skills-measurements.jsonl (via
+       * MEASUREMENTS_STATUS_KEY, read-measurements.mjs's aggregateModSkills),
+       * never from whether the copy exists. Three honest states:
+       *
+       *   not installed          -- the copy isn't there yet.
+       *   installed, never run   -- the copy is in place but the mod has
+       *                             produced zero recorded prompts. This is
+       *                             the actionable one: the mod loads only
+       *                             when a Claude Code session STARTS, so an
+       *                             already-open session will never pick it
+       *                             up, and nobody can guess that from "not
+       *                             installed" or a green checkmark.
+       *                             installed but never run.
+       *   recording               -- N prompts, since when, most recent.
+       */
+      function modSkillsLine (modCopy, measurements) {
+        if (!modCopy || !modCopy.exists) return t('integration.modNotInstalled')
+        var mod = measurements && measurements.ok ? measurements.modSkills : null
+        var count = mod ? mod.totalDecisions || 0 : 0
+        if (!mod || count === 0) return t('integration.modNeverRun')
+        return t('integration.modRecording', {
+          count: String(count),
+          since: formatSince(mod.firstAt),
+          last: formatSince(mod.lastAt)
+        })
+      }
+
       // Paints exactly what the worker published in
       // CLAUDE_INTEGRATION_STATUS_KEY -- never the key, and never more detail
       // than the panel needs for the user to know what's set up and where.
@@ -1715,7 +1781,7 @@
       // is running -- a fixed 20s guess used to stand in for this and could
       // say "not running" about a worker that was, in fact, running (see T4
       // in odd/tasks/panel-worker-wakeup.md).
-      function renderClaudeIntegrationStatus (status, heartbeat) {
+      function renderClaudeIntegrationStatus (status, heartbeat, measurements) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
         if (status === null) {
@@ -1755,22 +1821,32 @@
           : t('integration.mirrorUnknown')
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
-        var modLine = status.modLink && status.modLink.installed
-          ? t('integration.modLinkedCount', { installed: String(status.hook.totalCount), total: String(status.hook.totalCount) })
-          : t('integration.modNotLinked')
-        claudeIntegrationStatusEl.appendChild(li(modLine))
+        claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements)))
       }
 
+      var MEASUREMENTS_STATUS_KEY = 'measurementsSummary'
+
       function loadClaudeIntegrationStatus () {
-        return Promise.all([read(CLAUDE_INTEGRATION_STATUS_KEY, false), read(WORKER_HEARTBEAT_KEY, false)]).then(function (results) {
-          renderClaudeIntegrationStatus(results[0], results[1])
+        return Promise.all([
+          read(CLAUDE_INTEGRATION_STATUS_KEY, false),
+          read(WORKER_HEARTBEAT_KEY, false),
+          read(MEASUREMENTS_STATUS_KEY, false)
+        ]).then(function (results) {
+          renderClaudeIntegrationStatus(results[0], results[1], results[2])
         })
       }
 
       el('claude-integration-setup').addEventListener('click', function () {
         said(claudeIntegrationSaidEl, t('integration.configuring'))
-        sendClaudeIntegrationRequest('install').then(function () {
-          said(claudeIntegrationSaidEl, t('integration.done'))
+        sendClaudeIntegrationRequest('install').then(function (result) {
+          // odd/tasks/production-honesty-pass.md P5: install() can succeed
+          // overall (the hook and env var went in) while the skills-mod copy
+          // specifically failed -- that must not be reported as plain
+          // "Done.", or the person has no way to know the copy needs
+          // attention.
+          said(claudeIntegrationSaidEl, result && result.modCopyWarning
+            ? t('integration.doneWithWarning', { warning: modCopyWarningMessage(result.modCopyWarning) })
+            : t('integration.done'))
           return loadClaudeIntegrationStatus()
         }).catch(function (error) {
           said(claudeIntegrationSaidEl, errorText(error), true)

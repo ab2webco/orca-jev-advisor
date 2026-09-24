@@ -169,12 +169,24 @@ async function aggregateModSkills () {
   let listingCharsCount = 0
   const wideLatencies = []
   const fitLatencies = []
+  // odd/tasks/production-honesty-pass.md P6: the config panel's skills-mod
+  // line needs to say "recording N prompts since <date>, most recently
+  // <date>" -- read straight from the decisions actually recorded, never
+  // from file order (a malformed line elsewhere in the file must not shift
+  // which decision counts as first or last).
+  let firstAt = null
+  let lastAt = null
 
   for (const d of decisions) {
     const project = isRecord(d.orcaContext) && typeof d.orcaContext.proyecto === 'string' && d.orcaContext.proyecto.length > 0
       ? d.orcaContext.proyecto
       : '(unknown)'
     byProject[project] = (byProject[project] || 0) + 1
+
+    if (typeof d.at === 'string' && !Number.isNaN(Date.parse(d.at))) {
+      if (firstAt === null || d.at < firstAt) firstAt = d.at
+      if (lastAt === null || d.at > lastAt) lastAt = d.at
+    }
 
     if (isRecord(d.decision) && typeof d.decision.name === 'string') suggested += 1
 
@@ -204,6 +216,8 @@ async function aggregateModSkills () {
   return {
     totalDecisions: decisions.length,
     totalObservations: observations.length,
+    firstAt,
+    lastAt,
     corruptLines: corrupt,
     suggestedCount: suggested,
     comparableCount: comparable,
@@ -299,7 +313,13 @@ async function aggregateApprovals () {
     asked: summary.asked,
     approved: summary.approved,
     rejected: summary.rejected,
-    unresolved: summary.unresolved,
+    // odd/tasks/production-honesty-pass.md P7: renamed from `unresolved`.
+    // See src/core/approval_record.ts's own doc comment on
+    // ApprovalSummary.notRun -- classified, not known: most of these are a
+    // command the gate denied outright (which can never receive an
+    // outcome), but a crashed session after a real run leaves the same
+    // trace, so this is never folded into `ceiling`'s evidence either way.
+    notRun: summary.notRun,
     corruptLines: corrupt + malformed,
     ceiling: ceilingEvidence(summary.labelled),
   }

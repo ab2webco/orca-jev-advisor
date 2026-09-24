@@ -115,8 +115,34 @@ export interface ApprovalSummary {
   readonly asked: number;
   readonly approved: number;
   readonly rejected: number;
-  /** Asked, and never answered either way -- the person closed the prompt or left. */
-  readonly unresolved: number;
+  /**
+   * Asked, and still without an outcome {@link UNRESOLVED_AFTER_MS} after
+   * the gate stopped it.
+   *
+   * This is a CLASSIFICATION, not a fact -- write that down here because it
+   * is easy to forget once the number is on a dashboard next to "approved"
+   * and "rejected", which are both facts. Two very different histories
+   * produce the exact same trace:
+   *
+   *   1. The gate denied the command outright (a NEVER_SILENTLY rule, or a
+   *      deny-tier toggle set to deny). The command never ran, no
+   *      PostToolUse/PostToolUseFailure/PermissionDenied hook can ever
+   *      fire for it, and no outcome will EVER arrive, no matter how long
+   *      this waits. "The stop worked" -- this is what most of these are,
+   *      now that nine rules deny outright (see this module's own header).
+   *   2. The session crashed, was killed, or the machine slept between the
+   *      command actually running and gate-outcome.ts's append -- which
+   *      swallows its own errors by design (best-effort, same as the
+   *      measurement log). This leaves the identical trace as case 1.
+   *
+   * Nothing recorded here can tell these apart. That is exactly why
+   * `notRun` is never folded into `labelled` (ceilingEvidence's callers get
+   * no evidence from it either way) -- the same discipline
+   * {@link ceilingEvidence} already applies by returning null rather than a
+   * number when approvals and rejections overlap: an honest "we don't know
+   * which" beats a confident-looking guess.
+   */
+  readonly notRun: number;
   readonly labelled: readonly LabelledDecision[];
 }
 
@@ -126,10 +152,12 @@ export interface ApprovalSummary {
  * An approval says "this stop was not worth making", which is the label the
  * thresholds need. A rejection says the opposite and is the more valuable of
  * the two, because it is rarer and it confirms the gate earned its
- * interruption. Anything still unanswered after {@link UNRESOLVED_AFTER_MS}
- * is counted apart and never guessed into an answer: silence is not consent
- * here, and treating it as approval would teach the gate to relax every time
- * someone walked away from their desk.
+ * interruption. Anything still without an outcome after
+ * {@link UNRESOLVED_AFTER_MS} is classified `notRun` and never guessed into
+ * an approval or a rejection -- silence is not consent here, and treating it
+ * as approval would teach the gate to relax every time someone walked away
+ * from their desk (see {@link ApprovalSummary.notRun} for why "classified",
+ * not "known").
  */
 export function summarizeApprovals(
   pending: readonly PendingApprovalRecord[],
@@ -146,12 +174,12 @@ export function summarizeApprovals(
   const labelled: LabelledDecision[] = [];
   let approved = 0;
   let rejected = 0;
-  let unresolved = 0;
+  let notRun = 0;
 
   for (const p of pending) {
     const outcome = byId.get(p.toolUseId);
     if (outcome === undefined) {
-      if (now - Date.parse(p.at) > UNRESOLVED_AFTER_MS) unresolved += 1;
+      if (now - Date.parse(p.at) > UNRESOLVED_AFTER_MS) notRun += 1;
       continue;
     }
     if (outcome.outcome === "approved") approved += 1;
@@ -169,7 +197,7 @@ export function summarizeApprovals(
     }
   }
 
-  return { asked: pending.length, approved, rejected, unresolved, labelled };
+  return { asked: pending.length, approved, rejected, notRun, labelled };
 }
 
 export interface CeilingEvidence {

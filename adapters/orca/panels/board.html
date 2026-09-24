@@ -161,6 +161,7 @@
         <h2 data-i18n="approvals.heading"></h2>
         <div id="approvals-empty" class="empty-line" style="display:none"></div>
         <div id="approvals-grid" class="stat-grid"></div>
+        <div id="approvals-notrun-hint" class="empty-line" style="margin-top:6px"></div>
         <div id="approvals-ceiling" style="margin-top:8px"></div>
       </div>
 
@@ -233,7 +234,15 @@
           'approvals.asked': 'Preguntas hechas',
           'approvals.approved': 'Aprobadas',
           'approvals.rejected': 'Rechazadas',
-          'approvals.unresolved': 'Sin responder',
+          // odd/tasks/production-honesty-pass.md P7: renombrado desde
+          // "Sin responder" -- la mayoría de estas, ahora que nueve reglas
+          // rechazan directo, son comandos que el gate bloqueó y que nunca
+          // llegaron a correr (el freno funcionó), no personas que
+          // ignoraron una pregunta. Ver approvals.notRunHint: es una
+          // clasificación, no un hecho -- una sesión que se cerró después
+          // de correr el comando deja el mismo rastro.
+          'approvals.notRun': 'No corrió',
+          'approvals.notRunHint': 'No corrió: sin respuesta cuando venció la espera. La mayoría son comandos que el gate rechazó directo y que nunca llegaron a ejecutarse -- el freno funcionó -- pero una sesión que se cerró justo después de correr el comando deja el mismo rastro. Es una clasificación, no un hecho confirmado.',
           'approvals.highestApproved': 'Más alto aprobado',
           'approvals.lowestRejected': 'Más bajo rechazado',
           'approvals.band': 'Banda entre ambos',
@@ -293,7 +302,15 @@
           'approvals.asked': 'Questions asked',
           'approvals.approved': 'Approved',
           'approvals.rejected': 'Rejected',
-          'approvals.unresolved': 'Unanswered',
+          // odd/tasks/production-honesty-pass.md P7: renamed from
+          // "Unanswered" -- most of these, now that nine rules deny
+          // outright, are commands the gate blocked outright and that never
+          // ran at all (the stop worked), not a person ignoring a question.
+          // See approvals.notRunHint: a classification, not a fact -- a
+          // session that closed right after the command ran leaves the
+          // same trace.
+          'approvals.notRun': 'Did not run',
+          'approvals.notRunHint': "Did not run: no answer by the time the wait expired. Most of these are commands the gate denied outright and that never ran at all -- the stop worked -- but a session that closed right after the command ran leaves the same trace. This is a classification, not a confirmed fact.",
           'approvals.highestApproved': 'Highest approved',
           'approvals.lowestRejected': 'Lowest rejected',
           'approvals.band': 'Band between them',
@@ -480,6 +497,7 @@
         var gateByFamilyEl = el('gate-by-family')
         var approvalsEmptyEl = el('approvals-empty')
         var approvalsGridEl = el('approvals-grid')
+        var approvalsNotRunHintEl = el('approvals-notrun-hint')
         var approvalsCeilingEl = el('approvals-ceiling')
 
         if (!summary || !summary.ok) {
@@ -495,6 +513,7 @@
           approvalsEmptyEl.style.display = ''
           approvalsEmptyEl.textContent = t('approvals.empty')
           approvalsGridEl.innerHTML = ''
+          approvalsNotRunHintEl.innerHTML = ''
           approvalsCeilingEl.innerHTML = ''
           byProjectEl.innerHTML = '<p class="empty-line">' + esc(t('stats.byProjectEmpty')) + '</p>'
           recentEl.innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
@@ -574,6 +593,7 @@
           approvalsEmptyEl.style.display = ''
           approvalsEmptyEl.textContent = t('approvals.empty')
           approvalsGridEl.innerHTML = ''
+          approvalsNotRunHintEl.innerHTML = ''
           approvalsCeilingEl.innerHTML = ''
         } else {
           approvalsEmptyEl.style.display = 'none'
@@ -581,8 +601,15 @@
             statTile(approvals.asked || 0, t('approvals.asked')),
             statTile(approvals.approved || 0, t('approvals.approved')),
             statTile(approvals.rejected || 0, t('approvals.rejected')),
-            statTile(approvals.unresolved || 0, t('approvals.unresolved'))
+            statTile(approvals.notRun || 0, t('approvals.notRun'))
           ].join('')
+          // odd/tasks/production-honesty-pass.md P7: the uncertainty is
+          // written into the copy, not smoothed over -- shown only when the
+          // count is non-zero, since an explanation for zero of anything is
+          // just noise.
+          approvalsNotRunHintEl.innerHTML = (approvals.notRun || 0) > 0
+            ? '<p class="empty-line">' + esc(t('approvals.notRunHint')) + '</p>'
+            : ''
 
           var ceiling = approvals.ceiling || { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 }
           if (ceiling.suggestedCeiling != null) {
