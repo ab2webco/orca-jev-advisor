@@ -413,10 +413,35 @@ async function installClaudeIntegration (orca) {
   const result = await runClaudeIntegrationScript('install')
   if (!result.ok) {
     orca.log(`claude integration install failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 200)}`)
-  } else if (result.modLinkWarning) {
-    orca.log(`claude integration install: ${result.modLinkWarning}`)
+  } else if (result.modCopyWarning) {
+    orca.log(`claude integration install: skills mod copy warning -- ${result.modCopyWarning}`)
   }
   return result
+}
+
+/**
+ * The exact shape attendClaudeIntegrationRequest publishes to
+ * CLAUDE_INTEGRATION_RESULT_KEY, pulled out so it is unit-testable without
+ * spawning the real install-claude-integration.mjs subprocess (which would
+ * touch this developer's actual ~/.claude -- see this file's own test
+ * suite's warning on that).
+ *
+ * odd/tasks/production-honesty-pass.md P5: `modCopyWarning` used to be
+ * dropped here -- install-claude-integration.mjs's install() already
+ * returned it (a stable reason code, e.g. 'copy-failed'; never the raw
+ * English detail string, same rule as `reason` below), but only
+ * `{id, at, ok, reason, detail}` reached storage, so an install whose mod
+ * copy silently failed still told the panel "Done."
+ */
+function claudeIntegrationResultPayload (id, result) {
+  return {
+    id,
+    at: new Date().toISOString(),
+    ok: result.ok,
+    reason: result.reason ?? null,
+    detail: result.detail ?? null,
+    modCopyWarning: result.modCopyWarning ?? null
+  }
 }
 
 async function uninstallClaudeIntegration (orca) {
@@ -819,9 +844,8 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
     result = { ok: false, reason: 'unknown-intent', detail: `unrecognized claude integration request intent: ${String(request.intent).slice(0, 60)}` }
   }
 
-  await storageHost.set(CLAUDE_INTEGRATION_RESULT_KEY, {
-    id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
-  }).catch((err) => orca.log(`claude integration result publish failed: ${err.message}`))
+  await storageHost.set(CLAUDE_INTEGRATION_RESULT_KEY, claudeIntegrationResultPayload(request.id, result))
+    .catch((err) => orca.log(`claude integration result publish failed: ${err.message}`))
 
   await publishClaudeIntegrationStatus(orca, storageHost)
 }
@@ -1350,7 +1374,7 @@ async function checkClaudeIntegration () {
   if (!status.hook.installed) parts.push('missing the PreToolUse hook')
   else if (!status.hook.pathMatches) parts.push('the hook points at a different gate-bash.ts path')
   if (!status.env.installed) parts.push(`missing ${status.env.name}=1`)
-  if (!status.modLink.installed) parts.push('the skills mod is not linked')
+  if (!status.modCopy.installed) parts.push('the skills mod copy is missing or stale')
   if (parts.length === 0) return { id: 'claude-integration', ok: true, detail: 'Hook, environment variable and skills mod all installed.' }
   return { id: 'claude-integration', ok: false, detail: `Not fully installed: ${parts.join('; ')}.` }
 }
@@ -1559,6 +1583,7 @@ export {
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
   DENY_TIER_CONFIG_RESULT_KEY,
