@@ -83,10 +83,33 @@ run `gentle-ai review assess --committed-only`.
   alias test failed, and `git_discard.test.ts` / `gate_measurement.test.ts` failed
   because the module was missing.
 - GREEN: `npm test` -> 708/708 pass.
-- Gate false positive seen live: the installed gate refused a
-  `python3 - <<'EOF'` edit whose body mentioned `git reset --hard` (a python
-  heredoc is not stripped as data). Edits were redone with the editor tool.
-  Not fixed here.
+- Gate false positive seen live, twice: the installed gate (the old build,
+  plugin dir under Orca's userData, not this branch) refused Bash commands
+  whose text quoted the reset/clean phrase, once inside a `python3 - <<'EOF'`
+  body, once inside an edit script. Nothing was being discarded. Edits were
+  redone with the editor tool. Not fixed here (see T1 follow-up for why the
+  new matcher does not repeat this for checkout/restore).
+- Commit `fd0380f`. RDD: assessed `high` (process_boundary, gate-bash.ts),
+  consent `granted` by the coordinator, 4-lens review `approved`, lineage
+  `review-e7b4978dafc3742f` acknowledged (authority burned). The findings were
+  advisory only.
+
+### T1 follow-up (advisory review findings acted on)
+- R4/R3 (WARNING): the first matcher tried every token after stripping quotes,
+  so `git commit -m "use git restore x"` would have been hard-DENIED. Rewritten
+  to read the line like a shell: quote-aware splitting and tokenizing, and `git`
+  counted only in command position (segment start, after `sudo`/`env`/`xargs`
+  and similar wrappers, inside `sh -c`/`eval`, inside `$(...)`/backticks).
+- R3 (WARNING): `/usr/bin/git` is now recognised. R1: `git checkout <ref> <path>`
+  (two positionals, no `-b`/`-B`/`--orphan`) is now caught. A single-positional
+  directory (`git checkout src/`) stays uncaught with the bare-name case.
+- R2 (WARNING): one tokenizer for the deny matcher and the family. The docs
+  now say "nine switches" and note that `denyResetClean` guards two entries.
+  The shared reason key is explained in a comment.
+- RED (observed): 9 failures in `git_discard.test.ts`, covering 4 new discard
+  forms, 4 mentions and the tokenizer case. GREEN: `npm test` -> 722/722. The
+  gate-level commit-message case was added after the fix, as a regression pin;
+  no RED was observed for it.
 
 ## Next step
-T1.
+T2.

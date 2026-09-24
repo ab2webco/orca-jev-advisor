@@ -1,8 +1,8 @@
-// gate-bash.ts's deny-tier switches: one per NEVER_SILENTLY rule in
-// adapters/claude/gate-bash.ts, nine in all (DENY_TOGGLE_KEYS below), and
+// gate-bash.ts's deny-tier switches: nine in all (DENY_TOGGLE_KEYS below),
+// one per kind of NEVER_SILENTLY rule in adapters/claude/gate-bash.ts, and
 // every one denies by default (DEFAULT_DENY_TIER_SWITCHES is all `true`).
-// `denyResetClean` covers every way of discarding uncommitted work the gate
-// recognises: `git reset --hard`, `git clean -f`, and the working-tree
+// A switch can guard more than one entry: `denyResetClean` guards two, and
+// covers every way of discarding uncommitted work the gate recognises: `git reset --hard`, `git clean -f`, and the working-tree
 // forms of `git checkout` and `git restore` (src/core/git_discard.ts). See
 // NEVER_SILENTLY for why deny, not ask, is the default.
 //

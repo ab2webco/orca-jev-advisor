@@ -34,6 +34,15 @@ const DISCARDS: readonly string[] = [
   "npm test; git restore .",
   "bash -c \"git checkout -- src/app.ts\"",
   "(git restore .)",
+  // Two positionals with no -b/-B/--orphan is git's <tree-ish> <pathspec> form.
+  "git checkout HEAD src/app.ts",
+  "git checkout main src/app.ts README.md",
+  "/usr/bin/git checkout -- src/app.ts",
+  "sudo git restore .",
+  "env GIT_DIR=.git git restore .",
+  "echo $(git restore .)",
+  "eval \"git checkout -- src/app.ts\"",
+  "git ls-files -m | xargs git restore",
 ];
 
 // None of these touches uncommitted work in the working tree.
@@ -62,6 +71,13 @@ const KEEPS: readonly string[] = [
   "grep -rn restore src",
   "echo git",
   "",
+  // A mention inside an argument is not a run: commit messages, PR bodies
+  // and search patterns name these commands all the time.
+  "git commit -m \"note: use git restore src/app.ts to undo\"",
+  "git commit -m 'git checkout -- . discarded work'",
+  "gh pr create --body \"never run git restore .\"",
+  "node scripts/x.mjs \"git checkout -f\"",
+  "git checkout -b feature origin/main",
 ];
 
 for (const command of DISCARDS) {
@@ -82,4 +98,6 @@ test("startsWithGitDiscard only looks at the start of one segment", () => {
   assert.equal(startsWithGitDiscard("git checkout main"), false);
   // A mention inside another program's arguments is not a family match.
   assert.equal(startsWithGitDiscard("bash -c \"git restore .\""), false);
+  // Same tokenizer as the deny tier: a quoted whole-tree pathspec is still one.
+  assert.equal(startsWithGitDiscard("git checkout \".\""), true);
 });

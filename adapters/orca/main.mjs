@@ -979,8 +979,8 @@ async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
 
 // ---------------------------------------------------------------------------
 // Deny-tier switches -- same request/result/status shape as the skill/tool
-// selection switches above, for the nine NEVER_SILENTLY rules
-// adapters/claude/gate-bash.ts denies by default (DENY_TOGGLE_KEYS in
+// selection switches above, for the nine switches that guard the
+// NEVER_SILENTLY rules adapters/claude/gate-bash.ts denies by default (DENY_TOGGLE_KEYS in
 // src/core/deny_tier_config.ts). See that file's module note for why this
 // one is different: it fails CLOSED (every switch defaults to `true`, still
 // denying) rather than open, so a missing or malformed mirror file must

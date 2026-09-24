@@ -345,6 +345,9 @@ const NON_DISCARDING_COMMANDS = [
   'git switch -c new-branch',
   'git restore --staged src/app.ts',
   'git restore -S src/app.ts',
+  // Naming the command in a message is not running it; this rule denies,
+  // so a false match would refuse the agent's commit outright.
+  'git commit -m "note: use git restore src/app.ts to undo"',
 ]
 
 for (const command of DISCARDING_COMMANDS) {

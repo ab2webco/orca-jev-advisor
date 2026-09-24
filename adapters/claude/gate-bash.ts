@@ -197,8 +197,9 @@ type Decision = 'allow' | 'deny' | 'ask'
 /**
  * Every NEVER_SILENTLY rule below denies by default: all nine switches in
  * DEFAULT_DENY_TIER_SWITCHES (src/core/deny_tier_config.ts) are `true`. A
- * rule's `denyToggle` names its switch; turning one off downgrades that
- * rule to 'ask', never to 'allow'.
+ * rule's `denyToggle` names its switch -- `denyResetClean` guards two
+ * entries -- and turning one off downgrades its rules to 'ask', never to
+ * 'allow'.
  *
  * This used to be three rules (`rm -rf /`, DROP/TRUNCATE, terraform
  * destroy), with force push, pushes to protected branches, reset/clean,
@@ -238,7 +239,9 @@ const NEVER_SILENTLY: readonly { readonly pattern: { test(command: string): bool
   // overwritten and uncommitted changes are gone. This form discarded an
   // agent's work in a real session while the rule above did not know it.
   // A branch switch, `-b`/`-B`, `git switch` and `git restore --staged` are
-  // not matched -- see src/core/git_discard.ts for each reason.
+  // not matched -- see src/core/git_discard.ts for each reason. It shares
+  // `rule.resetClean` on purpose: that text ("discards uncommitted work --
+  // nothing to recover it from") names the effect, not the command.
   { pattern: { test: discardsUncommittedWork }, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
   // Irrecoverable without a backup nobody can assume exists.
   { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable' },
