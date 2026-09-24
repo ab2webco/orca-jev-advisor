@@ -282,6 +282,36 @@
         </div>
       </section>
 
+      <section id="deny-tier-section">
+        <h2 data-i18n="denyTier.heading"></h2>
+        <p class="hint" data-i18n="denyTier.hint"></p>
+        <div class="checkbox-row">
+          <input id="deny-tier-rm-rf" type="checkbox" />
+          <div class="checkbox-text">
+            <span class="checkbox-label" data-i18n="denyTier.rmRfLabel"></span>
+            <span class="hint" data-i18n="denyTier.rmRfHint"></span>
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input id="deny-tier-drop-table" type="checkbox" />
+          <div class="checkbox-text">
+            <span class="checkbox-label" data-i18n="denyTier.dropTableLabel"></span>
+            <span class="hint" data-i18n="denyTier.dropTableHint"></span>
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input id="deny-tier-terraform-destroy" type="checkbox" />
+          <div class="checkbox-text">
+            <span class="checkbox-label" data-i18n="denyTier.terraformDestroyLabel"></span>
+            <span class="hint" data-i18n="denyTier.terraformDestroyHint"></span>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="save-deny-tier" type="button" data-i18n="denyTier.save"></button>
+          <span class="said" id="deny-tier-said"></span>
+        </div>
+      </section>
+
       <section id="save-section">
         <div class="actions">
           <button id="save-all" class="primary" type="button" data-i18n="save.button"></button>
@@ -398,6 +428,17 @@
           'modSkills.save': 'Guardar selección',
           'modSkills.saving': 'Guardando…',
           'modSkills.saved': 'Guardado.',
+          'denyTier.heading': 'Nivel de bloqueo (deny)',
+          'denyTier.hint': 'La mayoría de las reglas de este gate preguntan: se abre el diálogo de confirmación de Claude Code y una persona decide. Estas tres reglas, en cambio, van más allá de este repositorio Y son imposibles de deshacer, así que se bloquean directo para el agente en vez de preguntar. Vos nunca quedás bloqueado: siempre podés correr el comando vos mismo en una terminal. Apagar un interruptor no vuelve la regla silenciosa — la baja a "preguntar", nunca a "permitir".',
+          'denyTier.rmRfLabel': 'Bloquear "rm -rf /", "~" o "$HOME"',
+          'denyTier.rmRfHint': 'Borrado recursivo del directorio raíz o de tu carpeta personal. Sin deshacer y sin límite de repositorio.',
+          'denyTier.dropTableLabel': 'Bloquear DROP/TRUNCATE de una tabla, base o esquema',
+          'denyTier.dropTableHint': 'Elimina datos sin que exista necesariamente un respaldo. Sin deshacer.',
+          'denyTier.terraformDestroyLabel': 'Bloquear "terraform destroy" / "tofu destroy"',
+          'denyTier.terraformDestroyHint': '"terraform apply" sigue preguntando, como siempre — solo "destroy" se bloquea, porque elimina infraestructura real sin deshacer.',
+          'denyTier.save': 'Guardar nivel de bloqueo',
+          'denyTier.saving': 'Guardando…',
+          'denyTier.saved': 'Guardado.',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
@@ -516,6 +557,17 @@
           'modSkills.save': 'Save selection settings',
           'modSkills.saving': 'Saving…',
           'modSkills.saved': 'Saved.',
+          'denyTier.heading': 'Deny tier',
+          'denyTier.hint': "Most rules in this gate ask: Claude Code's confirmation dialog opens and a person decides. These three rules instead go beyond this repository AND cannot be undone, so they block the agent outright instead of asking. You are never blocked: you can always run the command yourself in a terminal. Turning a switch off never makes the rule silent — it downgrades it to \"ask\", never to \"allow\".",
+          'denyTier.rmRfLabel': 'Block "rm -rf /", "~" or "$HOME"',
+          'denyTier.rmRfHint': 'Recursive delete of the filesystem root or your home directory. No undo, and no repository boundary.',
+          'denyTier.dropTableLabel': 'Block DROP/TRUNCATE of a table, database or schema',
+          'denyTier.dropTableHint': "Removes data with no guarantee a backup exists. No undo.",
+          'denyTier.terraformDestroyLabel': 'Block "terraform destroy" / "tofu destroy"',
+          'denyTier.terraformDestroyHint': '"terraform apply" still asks, as always -- only "destroy" is blocked, since it removes real infrastructure with no undo.',
+          'denyTier.save': 'Save deny tier',
+          'denyTier.saving': 'Saving…',
+          'denyTier.saved': 'Saved.',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
@@ -953,6 +1005,41 @@
         })
       }
 
+      // ---------- deny tier: request/result -----------------------------------
+      // Same request/result pattern as the skill/tool selection switches
+      // above: this must reach a real file outside `storage`
+      // (adapters/claude/gate-bash.ts reads it directly, no channel into
+      // `storage` from a plain Node process), so the panel cannot just write
+      // to `storage` the way the Thresholds/catalog/policies "Save
+      // configuration" button does. Unlike that channel, this one fails
+      // CLOSED: a request or a mirror read that comes back malformed is
+      // never read as "off" here -- see fillDenyTierStatus below.
+      var DENY_TIER_CONFIG_REQUEST_KEY = 'denyTierConfigRequest'
+      var DENY_TIER_CONFIG_RESULT_KEY = 'denyTierConfigResult'
+      var DENY_TIER_STATUS_KEY = 'denyTierStatus'
+
+      function waitForDenyTierConfigResult (requestId, deadline) {
+        return read(DENY_TIER_CONFIG_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForDenyTierConfigResult(requestId, deadline) })
+        })
+      }
+
+      function sendDenyTierConfigRequest (denyRmRf, denyDropTable, denyTerraformDestroy) {
+        var requestId = 'deny-tier-config-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), denyRmRf: denyRmRf, denyDropTable: denyDropTable, denyTerraformDestroy: denyTerraformDestroy }
+        signalPanelOpen()
+        return write(DENY_TIER_CONFIG_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForDenyTierConfigResult(requestId, Date.now() + 20000)
+        })
+      }
+
       // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
@@ -1338,6 +1425,34 @@
         })
       })
 
+      // ---------- deny tier ---------------------------------------------------
+
+      /** Paints the three checkboxes from the worker's DENY_TIER_STATUS_KEY
+       *  mirror. `status` is `null`/`undefined` before the first real read --
+       *  unlike fillModSkillsStatus, that must NOT leave the checkboxes
+       *  unchecked: the fail-CLOSED default is all three CHECKED (still
+       *  denying), the same default a brand-new install reads from an
+       *  unwritten file (src/core/deny_tier_config.ts). A checkbox reads
+       *  unchecked here only when the mirror explicitly says `false`. */
+      function fillDenyTierStatus (status) {
+        el('deny-tier-rm-rf').checked = !(status && status.denyRmRf === false)
+        el('deny-tier-drop-table').checked = !(status && status.denyDropTable === false)
+        el('deny-tier-terraform-destroy').checked = !(status && status.denyTerraformDestroy === false)
+      }
+
+      var denyTierSaidEl = el('deny-tier-said')
+      el('save-deny-tier').addEventListener('click', function () {
+        said(denyTierSaidEl, t('denyTier.saving'))
+        var denyRmRf = el('deny-tier-rm-rf').checked
+        var denyDropTable = el('deny-tier-drop-table').checked
+        var denyTerraformDestroy = el('deny-tier-terraform-destroy').checked
+        sendDenyTierConfigRequest(denyRmRf, denyDropTable, denyTerraformDestroy).then(function () {
+          said(denyTierSaidEl, t('denyTier.saved'))
+        }).catch(function (error) {
+          said(denyTierSaidEl, errorText(error), true)
+        })
+      })
+
       // ---------- umbrales --------------------------------------------------
 
       // Mirrors main.mjs's GATE_DEFAULTS_KEY (see that file's own module
@@ -1615,6 +1730,7 @@
       function load () {
         fillThresholds({})
         fillModSkillsStatus(null)
+        fillDenyTierStatus(null)
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
@@ -1629,6 +1745,7 @@
             read('policies', false),
             read(GATE_DEFAULTS_KEY, false),
             read(MOD_SKILLS_STATUS_KEY, false),
+            read(DENY_TIER_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus()
           ])
@@ -1640,6 +1757,7 @@
           policiesListEl.innerHTML = ''
           ;(results[2] || []).forEach(addPolicyRow)
           fillModSkillsStatus(results[4])
+          fillDenyTierStatus(results[5])
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
         })

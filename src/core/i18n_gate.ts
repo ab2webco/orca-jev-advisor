@@ -10,11 +10,13 @@ export type GateKey =
   | "rule.resetClean"
   | "rule.dropTable"
   | "rule.kubectlDelete"
-  | "rule.terraform"
+  | "rule.terraformApply"
+  | "rule.terraformDestroy"
   | "rule.curlPipeShell"
   | "verb.blocks"
   | "verb.asks"
   | "localRule"
+  | "localRuleDeny"
   | "cached"
   | "statusLine"
   | "authRejected"
@@ -37,11 +39,13 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "rule.resetClean": "descarta trabajo sin confirmar — no hay de dónde recuperarlo",
     "rule.dropTable": "elimina una tabla o una base entera",
     "rule.kubectlDelete": "borra algo que está corriendo y sirviendo ahora mismo",
-    "rule.terraform": "crea, cambia o destruye infraestructura real",
+    "rule.terraformApply": "crea o cambia infraestructura real",
+    "rule.terraformDestroy": "destruye infraestructura real",
     "rule.curlPipeShell": "ejecuta un script descargado en tu máquina, sin revisarlo",
     "verb.blocks": "bloquea",
     "verb.asks": "pregunta",
     localRule: "regla local — {{why}}",
+    localRuleDeny: "el agente tiene esto bloqueado — {{why}}. Vos no: podés correr el comando vos mismo en una terminal si de verdad querés hacerlo. Este interruptor se puede apagar (baja a preguntar, nunca a permitir) en el panel de ajustes del plugin en Orca.",
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
@@ -63,11 +67,13 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "rule.resetClean": "discards uncommitted work — nothing to recover it from",
     "rule.dropTable": "drops a table or a whole database",
     "rule.kubectlDelete": "deletes something that is running and serving right now",
-    "rule.terraform": "creates, changes or destroys real infrastructure",
+    "rule.terraformApply": "creates or changes real infrastructure",
+    "rule.terraformDestroy": "destroys real infrastructure",
     "rule.curlPipeShell": "runs a downloaded script on your machine, unreviewed",
     "verb.blocks": "blocks",
     "verb.asks": "asks",
     localRule: "local rule — {{why}}",
+    localRuleDeny: "the agent has this blocked — {{why}}. You don't: you can still run the command yourself in a terminal if you really mean to. This switch can be turned off (it downgrades to asking, never to allowing) in the plugin's settings panel in Orca.",
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "not judging: the key was rejected ({{status}})",

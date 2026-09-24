@@ -153,3 +153,100 @@ test('an expired cached verdict is dropped from disk instead of being reused for
   assert.ok(Object.hasOwn(persisted, freshKey), 'a verdict cached seconds ago must survive a read')
   assert.equal(Object.hasOwn(persisted, 'unrelated-expired-key'), false, 'a verdict cached over 30 days ago must be dropped on read, not reused forever')
 })
+
+// ---------------------------------------------------------------------------
+// Deny tier -- NEVER_SILENTLY used to only ever emit 'ask', even for the
+// three rules whose blast radius is beyond the repository AND beyond
+// recovery (rm -rf /, DROP/TRUNCATE TABLE, terraform/tofu destroy). These
+// all fire in the tier-1b loop, BEFORE the API key check, so none of these
+// tests need TYPESAFE_API_KEY or reach Jev.
+// ---------------------------------------------------------------------------
+
+/** `<home>/.config/orca-supervisor/deny-tier-config.json` -- the fail-CLOSED
+ *  mirror gate-bash.ts reads for the three deny-tier switches (see
+ *  src/core/deny_tier_config.ts). */
+function denyTierConfigPath (home) {
+  return join(home, '.config', 'orca-supervisor', 'deny-tier-config.json')
+}
+
+function writeDenyTierConfig (home, value) {
+  const path = denyTierConfigPath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(value))
+}
+
+test('deny tier: rm -rf / is denied, not just asked, with no config file present', () => {
+  const home = makeHome()
+  const stdout = run(home, 'rm -rf /')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /terminal/i, 'a deny must say the human can still run it themselves')
+})
+
+test('deny tier: DROP TABLE is denied, not just asked', () => {
+  const home = makeHome()
+  const stdout = run(home, 'psql -c "DROP TABLE users"')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('deny tier: terraform destroy is denied, not just asked', () => {
+  const home = makeHome()
+  const stdout = run(home, 'terraform destroy -auto-approve')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('deny tier: terraform apply stays ask -- only destroy was split out into deny', () => {
+  const home = makeHome()
+  const stdout = run(home, 'terraform apply -auto-approve')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+test('an ask-tier rule (force push) still emits ask, never deny', () => {
+  const home = makeHome()
+  const stdout = run(home, 'git push --force origin main')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+test('deny tier: a rule switched off downgrades to ask, never to allow', () => {
+  const home = makeHome()
+  writeDenyTierConfig(home, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })
+  const stdout = run(home, 'rm -rf /')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask', 'turning the switch off must downgrade to ask, never disappear into allow')
+})
+
+test('deny tier: the other two switches are unaffected by turning one off', () => {
+  const home = makeHome()
+  writeDenyTierConfig(home, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })
+  const dropTable = JSON.parse(run(home, 'DROP TABLE users'))
+  const destroy = JSON.parse(run(home, 'terraform destroy'))
+  assert.equal(dropTable.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(destroy.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('deny tier: a malformed config file keeps all three rules denying (fail closed)', () => {
+  const home = makeHome()
+  const path = denyTierConfigPath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, '{not valid json')
+  const rmRf = JSON.parse(run(home, 'rm -rf /'))
+  const dropTable = JSON.parse(run(home, 'DROP TABLE users'))
+  const destroy = JSON.parse(run(home, 'terraform destroy'))
+  assert.equal(rmRf.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(dropTable.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(destroy.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('deny tier: an unreadable config file (a directory instead of a file) keeps all three rules denying (fail closed)', () => {
+  const home = makeHome()
+  const path = denyTierConfigPath(home)
+  // Making the "file" a directory forces readFileSync to throw EISDIR,
+  // exercising the failure path distinctly from a JSON.parse failure.
+  mkdirSync(path, { recursive: true })
+  const rmRf = JSON.parse(run(home, 'rm -rf /'))
+  assert.equal(rmRf.hookSpecificOutput.permissionDecision, 'deny')
+})

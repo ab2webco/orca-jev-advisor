@@ -21,6 +21,15 @@
  * malformed mirror degrades to the pre-existing global-thresholds behavior,
  * never a crash and never an extra prompt.
  *
+ * ONE DELIBERATE EXCEPTION: readDenyTierConfig (below) fails CLOSED. The
+ * three NEVER_SILENTLY rules whose blast radius reaches beyond the
+ * repository AND beyond recovery (rm -rf /, DROP/TRUNCATE TABLE, terraform
+ * destroy) deny by default, and a missing, unreadable or malformed
+ * deny-tier-config.json must never be read as quiet permission to downgrade
+ * them to 'ask' -- see src/core/deny_tier_config.ts. Turning any of the
+ * three off is still possible, but only through an explicit, well-formed
+ * `false` in that file; it downgrades to 'ask', never to 'allow'.
+ *
  * This is the Claude Code adapter: the three-tier design and the local
  * pattern lists below are this file's own (measured, and correct -- do not
  * fold them into src/core, they are not Jev questions). The Jev call
@@ -72,6 +81,8 @@ import { pruneGateCache } from '../../src/core/gate_cache.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
+import { DEFAULT_DENY_TIER_SWITCHES, parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
+import type { DenyTierSwitches } from '../../src/core/deny_tier_config.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
@@ -103,6 +114,13 @@ const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // the validation that stands between this file and the gate's decision.
 const CATALOG_MIRROR_PATH = join(CONFIG_DIR, 'catalog.json')
 const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
+// Written by adapters/orca/write-secret-mirror.mjs's deny-tier-config-save,
+// refreshed on plugin activation and on every config-panel save, same
+// channel as the catalog/policies mirrors above. Unlike those two -- and
+// unlike every other best-effort read in this file -- a missing, malformed
+// or unreadable read of THIS file must never lower protection: see
+// readDenyTierConfig below and src/core/deny_tier_config.ts's module note.
+const DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
 const BUDGET_MS = 1800
 
 /** Since the hook started, so it can say how long deciding cost. */
@@ -145,15 +163,40 @@ function resolveGateActionReason(reason: GateActionReason): string {
 
 type Decision = 'allow' | 'deny' | 'ask'
 
-/** Tier 1b: never runs without explicit human intervention. `why` is a catalog key, resolved at emit time in the panel's chosen language. */
-const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey }[] = [
+/**
+ * The three NEVER_SILENTLY rules whose blast radius reaches beyond the
+ * repository AND beyond recovery -- the only ones this gate ever denies
+ * outright instead of asking. Each key matches a boolean field on
+ * DenyTierSwitches (src/core/deny_tier_config.ts); turning that field off
+ * downgrades the rule to 'ask', never to 'allow'.
+ *
+ * Deliberately NOT on this list, however broad or damaging: force push
+ * (most are a developer's own feature branch -- too broad to deny), a push
+ * to main/master/production (damaging but revertible), `git reset --hard`
+ * / `git clean -f` (the blast radius is one working tree and the person is
+ * right there -- `clean -f` genuinely destroys untracked work, so this one
+ * is a close call, not an obvious one), `kubectl delete|drain` (entirely
+ * namespace-dependent; a dev namespace makes this routine), and
+ * `curl | bash` (arbitrary remote code, but the person may have context
+ * this gate does not). All five stay `ask`, on purpose -- do not "tidy"
+ * this into denying more without re-reading the reasoning above.
+ */
+type DenyToggleKey = keyof DenyTierSwitches
+
+/** Tier 1b: never runs without explicit human intervention. `why` is a catalog key, resolved at emit time in the panel's chosen language. `denyToggle` is set only for the three rules above, and only when its switch is on does the match become 'deny' instead of 'ask'. */
+const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey; readonly denyToggle?: DenyToggleKey }[] = [
   { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush' },
   { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected' },
-  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf' },
+  // Irrecoverable, and beyond any repo: the whole home directory or the
+  // filesystem root.
+  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf' },
   { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean' },
-  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable' },
+  // Irrecoverable without a backup nobody can assume exists.
+  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable' },
   { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete' },
-  { pattern: /\b(terraform|tofu)\s+(apply|destroy)\b/, why: 'rule.terraform' },
+  // `apply` is routine and stays ask; only `destroy` is split out into deny.
+  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply' },
+  { pattern: /\b(terraform|tofu)\s+destroy\b/, why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
   { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell' },
 ]
 
@@ -354,6 +397,23 @@ function readPoliciesMirror(): readonly Policy[] {
     return parseMirroredPolicies(JSON.parse(readFileSync(POLICIES_MIRROR_PATH, 'utf8'))) ?? []
   } catch {
     return []
+  }
+}
+
+/**
+ * Fails CLOSED, not open -- the one deliberate exception to every other
+ * best-effort read in this file. A missing DENY_TIER_CONFIG_PATH (nobody
+ * has touched the panel's switches yet), an unreadable one, or one that
+ * fails parseDenyTierConfig's own shape validation all read the exact same
+ * way a brand-new install does: every switch stays at its default of
+ * `true`, still denying. See src/core/deny_tier_config.ts's module note --
+ * a config that cannot be read is not permission to stop protecting.
+ */
+function readDenyTierConfig(): DenyTierSwitches {
+  try {
+    return parseDenyTierConfig(readFileSync(DENY_TIER_CONFIG_PATH, 'utf8'))
+  } catch {
+    return DEFAULT_DENY_TIER_SWITCHES
   }
 }
 
@@ -584,14 +644,20 @@ async function main(): Promise<void> {
   if (pluginDisabledInOrca()) passThrough()
 
   if (isObviouslySafeCommand(command)) passThrough()
-  for (const { pattern, why } of NEVER_SILENTLY) {
+  for (const { pattern, why, denyToggle } of NEVER_SILENTLY) {
     if (pattern.test(command)) {
-      appendGateRecord(cwd, command, 'local-rule', 'ask', null)
+      // Only the three deny-tier rules ever carry a denyToggle, and only
+      // when its switch is (still) on does the match become 'deny' instead
+      // of 'ask' -- readDenyTierConfig() fails CLOSED, so an unreadable
+      // config denies exactly as a fresh install would.
+      const decision: Decision = denyToggle !== undefined && readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
+      appendGateRecord(cwd, command, 'local-rule', decision, null)
       // Recorded like any other stop, with no scores: a local rule needs no
       // model and no threshold, so there is nothing here to calibrate -- but
       // whether the person accepted the interruption is still worth knowing.
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
-      emit('ask', t('localRule', { why: t(why) }))
+      const reasonKey = decision === 'deny' ? 'localRuleDeny' : 'localRule'
+      emit(decision, t(reasonKey, { why: t(why) }))
       return
     }
   }

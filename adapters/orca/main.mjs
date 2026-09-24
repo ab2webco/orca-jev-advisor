@@ -123,7 +123,7 @@ function sidecarEnv (extra = {}) {
   return env
 }
 
-const SECRET_MIRROR_READ_ONLY_MODES = new Set(['read', 'locale-read', 'stat', 'mod-skills-config-read'])
+const SECRET_MIRROR_READ_ONLY_MODES = new Set(['read', 'locale-read', 'stat', 'mod-skills-config-read', 'deny-tier-config-read'])
 
 function runSecretMirrorScript (mode, stdin, extraArgs = []) {
   return new Promise((resolve) => {
@@ -944,6 +944,80 @@ async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
 }
 
 // ---------------------------------------------------------------------------
+// Deny-tier switches -- same request/result/status shape as the skill/tool
+// selection switches above, for the three NEVER_SILENTLY rules
+// adapters/claude/gate-bash.ts denies outright (rm -rf /, DROP/TRUNCATE
+// TABLE, terraform destroy). See src/core/deny_tier_config.ts's module
+// note for why this one is different: it fails CLOSED (all three default
+// to `true`, still denying) rather than open, so a missing or malformed
+// mirror file must never quietly disable protection.
+// ---------------------------------------------------------------------------
+
+const DENY_TIER_CONFIG_REQUEST_KEY = 'denyTierConfigRequest'
+const DENY_TIER_CONFIG_RESULT_KEY = 'denyTierConfigResult'
+const DENY_TIER_STATUS_KEY = 'denyTierStatus'
+
+/** Reads the mirror file's current switches, defaulting to all three on
+ *  (still denying) on any failure or malformed value -- never thrown,
+ *  matching the file's own fail-CLOSED contract (src/core/deny_tier_config.ts).
+ *  `options.mirror` lets tests substitute a fake in place of the real
+ *  sidecar; production passes none and gets the real runSecretMirrorScript. */
+async function readDenyTierConfigMirror (options = {}) {
+  const mirror = options.mirror ?? runSecretMirrorScript
+  return mirror('deny-tier-config-read')
+}
+
+/** Publishes the mirror's current switches for the panel to render on load
+ *  -- the panel has no way to read the file itself. Called at activation and
+ *  again after every successful save, same one-shot-plus-refresh shape as
+ *  publishModSkillsStatus. Fails CLOSED: any read failure or malformed value
+ *  publishes all three `true` (still denying), never `false`. */
+async function publishDenyTierStatus (orca, storageHost, options = {}) {
+  const result = await readDenyTierConfigMirror(options)
+  const value = result.ok && isRecord(result.value) &&
+    typeof result.value.denyRmRf === 'boolean' && typeof result.value.denyDropTable === 'boolean' && typeof result.value.denyTerraformDestroy === 'boolean'
+    ? { denyRmRf: result.value.denyRmRf, denyDropTable: result.value.denyDropTable, denyTerraformDestroy: result.value.denyTerraformDestroy }
+    : { denyRmRf: true, denyDropTable: true, denyTerraformDestroy: true }
+  await storageHost.set(DENY_TIER_STATUS_KEY, { ...value, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`deny-tier status publish failed: ${error.message}`))
+}
+
+/** Attends one pending switch-change request from the panel, if any. A
+ *  missing/non-boolean field in the request itself is treated as `true`
+ *  (still denying) -- the same fail-CLOSED default as an unreadable file --
+ *  never as `false`. */
+async function attendDenyTierConfigRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(DENY_TIER_CONFIG_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(DENY_TIER_CONFIG_REQUEST_KEY).catch((error) =>
+    orca.log(`deny-tier config request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(DENY_TIER_CONFIG_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`deny-tier config result publish failed: ${err.message}`))
+    return
+  }
+
+  const denyRmRf = request.denyRmRf !== false
+  const denyDropTable = request.denyDropTable !== false
+  const denyTerraformDestroy = request.denyTerraformDestroy !== false
+  const mirror = options.mirror ?? runSecretMirrorScript
+  const result = await mirror('deny-tier-config-save', JSON.stringify({ denyRmRf, denyDropTable, denyTerraformDestroy }))
+  if (!result.ok) {
+    orca.log(`deny-tier config mirror (save) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+  }
+
+  await storageHost.set(DENY_TIER_CONFIG_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`deny-tier config result publish failed: ${err.message}`))
+
+  await publishDenyTierStatus(orca, storageHost, options)
+}
+
+// ---------------------------------------------------------------------------
 // Catalog/policies mirror trigger -- unlike the secret/Claude-integration/
 // locale channels above, nothing in the UI waits on this: the panel already
 // writes the catalog and policies straight to storage on save, so this is
@@ -1365,6 +1439,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
       .then(() => attendModSkillsConfigRequest(orca, storageHost))
       .catch((error) => orca.log(`mod-skills config request handling failed: ${error.message}`))
+      .then(() => attendDenyTierConfigRequest(orca, storageHost))
+      .catch((error) => orca.log(`deny-tier config request handling failed: ${error.message}`))
       .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => attendCatalogRefreshRequest(orca, storageHost))
@@ -1425,6 +1501,8 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
   publishModSkillsStatus(orca, storageHost)
     .catch((error) => orca.log(`initial mod-skills status failed: ${error.message}`))
+  publishDenyTierStatus(orca, storageHost)
+    .catch((error) => orca.log(`initial deny-tier status failed: ${error.message}`))
   publishWorkerHeartbeat(orca, storageHost)
   publishGateDefaults(orca, storageHost)
   runSecretPoll()
@@ -1471,6 +1549,7 @@ export default function activate (orca) {
 export {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
+  attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModSkillsConfigRequest,
   attendPolicySeedImportRequest,
@@ -1479,6 +1558,8 @@ export {
   CLAUDE_INTEGRATION_RESULT_KEY,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
+  DENY_TIER_CONFIG_RESULT_KEY,
+  DENY_TIER_STATUS_KEY,
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
@@ -1486,6 +1567,7 @@ export {
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
+  publishDenyTierStatus,
   publishGateDefaults,
   publishModSkillsStatus,
   publishWorkerHeartbeat,
