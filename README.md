@@ -167,6 +167,20 @@ a Windows home directory containing a space and both states of
   claims the mode holds, and `statMirror()`'s disclosure names the platform
   so the config panel does not imply a POSIX guarantee NTFS cannot give).
 
+**Executed on real Linux** (2026-09-24, not simulated and not reasoned
+about): the full suite in a `node:24-slim` container on Node 24.21.0, on
+both architectures — **541 tests, 541 passing, 0 failing on `aarch64` and
+the same on `x86_64`.** Reproduce it with:
+
+```sh
+git archive HEAD | tar -x -C /tmp/orca-linux-run
+docker run --rm -v /tmp/orca-linux-run:/app -w /app node:24-slim \
+  node --test --experimental-strip-types
+```
+
+Windows remains unexecuted. A container cannot stand in for it, and saying
+so is more useful than a green tick from a machine that is not Windows.
+
 **Proven by inspection, not simulation** (reasoned from documented Node.js
 behavior, not exercised by a test): sidecar processes are spawned via
 `execFile` with an argument array and no shell, so a Windows path
