@@ -9,6 +9,8 @@ import type { EngineInterface, PluginOptions } from 'claude-code'
 import type { JevFetch, JevFetchResponse, JevSleep } from '../../../../src/core/jev.ts'
 import { DEFAULT_LOCALE, parseLocaleFile } from '../../../../src/core/i18n.ts'
 import type { Locale } from '../../../../src/core/i18n.ts'
+import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig } from '../../../../src/core/mod_skills_config.ts'
+import type { ModSkillsSwitches } from '../../../../src/core/mod_skills_config.ts'
 import type { ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory.ts'
 import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
@@ -121,6 +123,31 @@ export async function resolveLocale($: EngineInterface): Promise<Locale> {
     return parseLocaleFile(await $.fs.read(path))
   } catch {
     return DEFAULT_LOCALE
+  }
+}
+
+// ---------------------------------------------------------------------------
+// mod-skills' own `active`/`activeTools` switches -- see
+// src/core/mod_skills_config.ts's module note (T10,
+// odd/tasks/panel-worker-wakeup.md). Read from
+// `<configDir>/mod-skills-config.json`, the same self-contained way
+// resolveLocale reads the locale file above: no node:fs/node:path, best-
+// effort, and off on any missing file, unreachable home, malformed JSON, or
+// unexpected failure. `index.ts` only falls back to this when `options`
+// (Claude Code's own `userConfig` channel) does not actually carry a
+// boolean for the field in question -- see its
+// resolveActiveMode/resolveActiveToolMode.
+// ---------------------------------------------------------------------------
+
+export async function resolveModSkillsSwitches($: EngineInterface): Promise<ModSkillsSwitches> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return DEFAULT_MOD_SKILLS_SWITCHES
+    const path = `${paths.configDir}/mod-skills-config.json`
+    if (!(await $.fs.exists(path))) return DEFAULT_MOD_SKILLS_SWITCHES
+    return parseModSkillsConfig(await $.fs.read(path))
+  } catch {
+    return DEFAULT_MOD_SKILLS_SWITCHES
   }
 }
 
