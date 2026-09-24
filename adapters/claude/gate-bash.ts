@@ -67,6 +67,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
+import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
@@ -88,6 +89,7 @@ const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 
 const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
+const NO_KEY_WARNED_PATH = join(CACHE_DIR, 'gate-bash.no-key-warned.json')
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
@@ -285,6 +287,34 @@ function writeAuthWarned(warned: boolean): void {
   try {
     mkdirSync(dirname(AUTH_WARNED_PATH), { recursive: true })
     writeFileSync(AUTH_WARNED_PATH, JSON.stringify({ warned, at: Date.now() }), 'utf8')
+  } catch {
+    // A mark that can't be written is never a reason to block anything;
+    // worst case, the notice repeats next time.
+  }
+}
+
+/**
+ * Same marker shape as readAuthWarned/writeAuthWarned, for the OTHER way
+ * Jev goes quiet: no key configured at all (see decideNoKeyNotice,
+ * src/core/gate_key_notice.ts, for the warn-once/reset rule itself). A
+ * missing key must never block a command, but a plugin whose whole purpose
+ * is judging commands, quietly judging nothing forever, is the worst
+ * failure this thing can have -- especially since the local, no-key-needed
+ * rules keep running and mask that the rest is gone.
+ */
+function readNoKeyWarned(): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(NO_KEY_WARNED_PATH, 'utf8'))
+    return typeof parsed === 'object' && parsed !== null && (parsed as { warned?: unknown }).warned === true
+  } catch {
+    return false
+  }
+}
+
+function writeNoKeyWarned(warned: boolean): void {
+  try {
+    mkdirSync(dirname(NO_KEY_WARNED_PATH), { recursive: true })
+    writeFileSync(NO_KEY_WARNED_PATH, JSON.stringify({ warned, at: Date.now() }), 'utf8')
   } catch {
     // A mark that can't be written is never a reason to block anything;
     // worst case, the notice repeats next time.
@@ -554,7 +584,13 @@ async function main(): Promise<void> {
   }
 
   const apiKey = await resolveApiKey()
-  if (apiKey === null) passThrough()
+  const previouslyWarnedNoKey = readNoKeyWarned()
+  const noKeyNotice = decideNoKeyNotice(apiKey !== null, previouslyWarnedNoKey)
+  if (noKeyNotice.nextWarned !== previouslyWarnedNoKey) writeNoKeyWarned(noKeyNotice.nextWarned)
+  if (apiKey === null) {
+    if (noKeyNotice.shouldWarn) passThroughWithNotice(t('noApiKey'))
+    passThrough()
+  }
 
   const context = repoContext(cwd)
   // The destination is resolved here as well as inside askJev: it is part of
