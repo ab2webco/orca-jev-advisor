@@ -5,7 +5,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { commandShape } from "./command_shape.ts";
+import { commandShape, hasCommandSubstitution } from "./command_shape.ts";
 import type { ShapeContext } from "./command_shape.ts";
 
 const CTX: ShapeContext = {
@@ -100,6 +100,21 @@ test("anything that cannot be known without running it is NOT cached", () => {
   assert.equal(shape('echo "unterminated'), null);
   assert.equal(shape(""), null);
   assert.equal(shape("   "), null);
+});
+
+test("output process substitution >(...) is NOT cached either -- the same 'cannot be known without running it' rule as <(...)", () => {
+  assert.equal(shape("tee >(cat)"), null);
+  assert.equal(shape("echo x > >(cat)"), null);
+});
+
+test("hasCommandSubstitution is exported so gate_safe_command.ts's tier-1a fast path can reuse this exact detection instead of a second, drifting copy", () => {
+  assert.equal(hasCommandSubstitution("$(cat x)"), true);
+  assert.equal(hasCommandSubstitution("`cat x`"), true);
+  assert.equal(hasCommandSubstitution("${TARGET}"), true);
+  assert.equal(hasCommandSubstitution("<(ls)"), true);
+  assert.equal(hasCommandSubstitution(">(cat)"), true);
+  assert.equal(hasCommandSubstitution("echo $HOME"), false, "a bare variable expansion is not a substitution");
+  assert.equal(hasCommandSubstitution("ls /tmp"), false);
 });
 
 test("the same command in a different working directory is judged apart", () => {

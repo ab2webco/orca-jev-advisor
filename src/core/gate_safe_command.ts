@@ -9,13 +9,20 @@
 //
 // The rule this implements: a command is obviously safe only when EVERY
 // one of its segments -- after splitting on `&&`, `||`, `;`, `|` and
-// stripping leading `VAR=value` assignments -- is itself obviously safe.
+// stripping leading `VAR=value` assignments -- is itself obviously safe,
+// AND carries no command/process substitution (`$(...)`, backticks,
+// `${...}`, `<(...)`, `>(...)` -- see isSafeSegment/hasCommandSubstitution
+// below): a segment starting with a safe verb but embedding one of these
+// can do anything the embedded command can do, which a leading-verb check
+// alone cannot see (measured: `grep foo $(rm -rf ~)`, `ls $(cat /tmp/x)`,
+// `echo ${IFS}test` and others all passed tier 1a silently before this).
 // Splitting and assignment-stripping reuse gate_measurement.ts's own
 // `splitSegments`/`stripAssignments`, not a second implementation of the
 // same thing. Anything that can't be confidently classified is NOT safe:
 // an unclassifiable command only costs latency (it falls through to the
 // existing NEVER_SILENTLY/Jev path), it never causes a wrong "safe".
 import { commandFamily, splitSegments } from './gate_measurement.ts'
+import { hasCommandSubstitution } from './command_shape.ts'
 
 /**
  * The one command family gate_measurement.ts already judges by looking at
@@ -109,7 +116,32 @@ function hasRedirection(segment: string): boolean {
   return /[<>]/.test(stripSafeRedirections(segment))
 }
 
+/**
+ * Checked FIRST, before hasRedirection or any safe-verb pattern -- exactly
+ * the same placement hasRedirection itself uses, so no safe verb can ever
+ * carry a substitution through on a technicality. `hasCommandSubstitution`
+ * is imported from src/core/command_shape.ts rather than reimplemented
+ * here: that module already refuses to CACHE a command for the identical
+ * reason ("cannot be known without running it"), and tier 1a needs that
+ * same fact at least as much, since it skips judgment entirely rather than
+ * merely skipping a cache.
+ *
+ * Running this ahead of hasRedirection also sidesteps the question of
+ * whether stripSafeRedirections' `/dev/null`/`2>&1` patterns could ever
+ * accidentally clear the `<`/`>` that opens `<(...)`/`>(...)`: it can't (the
+ * `(?=\s|$)` boundary in every SAFE_REDIRECTIONS pattern refuses to match
+ * unless a clean token follows, and `<(`/`>(` never leaves one), but this
+ * ordering means that question never even has to be asked at call time.
+ *
+ * Safe against splitSegments' own naive split, too: `String.split` only
+ * ever removes the separator text it matches (`&&`, `||`, `;`, `|`), never
+ * any other character, so a substitution's opening token can never be torn
+ * apart by a split -- it always survives intact inside whichever resulting
+ * segment it started in, even when the substitution's own argument (e.g.
+ * `$(a; b)`) contains one of those same separator characters.
+ */
 function isSafeSegment(segment: string): boolean {
+  if (hasCommandSubstitution(segment)) return false
   if (hasRedirection(segment)) return false
   if (isSafeFindSegment(segment)) return true
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
