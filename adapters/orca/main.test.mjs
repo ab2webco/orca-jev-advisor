@@ -880,3 +880,57 @@ test('attendPolicySeedNoticeRefresh: recomputes but only republishes when the de
   assert.notEqual(third.at, 'sentinel', 'a genuinely changed decision was not republished')
   assert.equal(third.added, 0)
 })
+
+/** A storage host whose writes to one key reject, as a full or locked store would. */
+function storageFailingOn (failingKey, initial) {
+  const host = fakeStorageHost(initial)
+  const set = host.set
+  host.set = async (key, value) => {
+    if (key === failingKey) throw new Error(`simulated write failure on ${key}`)
+    return set(key, value)
+  }
+  return host
+}
+
+test('attendPolicySeedDismissRequest: a marker write that fails is reported as not ok, never as dismissed', async () => {
+  const orca = fakeOrca()
+  const storageHost = storageFailingOn(POLICY_SEED_OFFERED_VERSION_KEY, {
+    policySeedDismissRequest: { id: 'psd-3', at: new Date().toISOString() }
+  })
+  await attendPolicySeedDismissRequest(orca, storageHost)
+  const result = await storageHost.get(POLICY_SEED_DISMISS_RESULT_KEY)
+  assert.equal(result.id, 'psd-3')
+  assert.equal(result.ok, false, 'the panel was told the dismiss worked although nothing was recorded')
+  assert.equal(result.reason, 'marker-write-failed')
+})
+
+test('attendPolicySeedNoticeRefresh: a status write that fails is retried on the next tick, not deduped away', async () => {
+  const orca = fakeOrca()
+  const failing = storageFailingOn(POLICY_SEED_NOTICE_STATUS_KEY, {})
+  const lastPublished = { value: null }
+  await attendPolicySeedNoticeRefresh(orca, failing, lastPublished)
+  assert.equal(await failing.get(POLICY_SEED_NOTICE_STATUS_KEY), null)
+  // Same decision, storage healthy again: the tick must write it now.
+  const healthy = fakeStorageHost({})
+  await attendPolicySeedNoticeRefresh(orca, healthy, lastPublished)
+  assert.ok(await healthy.get(POLICY_SEED_NOTICE_STATUS_KEY), 'a failed write was remembered as published')
+})
+
+test('publishPolicySeedNoticeStatus: an offered marker ahead of the shipped version is never lowered', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: REAL_SEED_ROWS,
+    [POLICY_SEED_OFFERED_VERSION_KEY]: { version: REAL_SEED_VERSION + 5, at: 'later release' }
+  })
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION + 5, 'a downgrade lowered the offered marker')
+})
+
+test('policySeedNoticeStatus carries only what the panel renders', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.deepEqual(Object.keys(status).sort(), ['added', 'at', 'differing', 'due', 'shippedVersion'])
+})

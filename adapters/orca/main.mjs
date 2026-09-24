@@ -571,10 +571,10 @@ async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
  *  by publishPolicySeedNoticeStatus itself when the computed gap is empty. */
 const POLICY_SEED_OFFERED_VERSION_KEY = 'policySeedOfferedVersion'
 
-/** What the panel's Team Policies notice reads -- only computed numbers, and
- *  never the shipped version by itself: the panel is told whether it should
- *  say something and, if so, how much, not asked to compare versions of its
- *  own. See config.html's renderPolicySeedNotice. */
+/** What the panel's Team Policies notice reads -- `{due, added, differing,
+ *  shippedVersion, at}`, only computed numbers. The panel is told whether to
+ *  say something and how much; it carries `shippedVersion` but never compares
+ *  versions itself. See config.html's renderPolicySeedNotice. */
 const POLICY_SEED_NOTICE_STATUS_KEY = 'policySeedNoticeStatus'
 
 const POLICY_SEED_DISMISS_REQUEST_KEY = 'policySeedDismissRequest'
@@ -607,20 +607,25 @@ async function computePolicySeedNoticeDecision (orca, storageHost, options = {})
   }
 }
 
-/** Writes a computed decision to storage: the status the panel reads, and --
- *  only when the gap this decision found is genuinely empty (added and
- *  differing both 0) -- the offered-version marker, so a version bump with
- *  nothing to say to THIS particular install does not keep recomputing the
- *  same no-op merge on every later tick. Harmless to also run when the
- *  shipped version is not actually ahead: it only ever rewrites the same
- *  marker to the same value. */
+/** Writes a computed decision to storage: the status the panel reads (only
+ *  the fields it renders), and -- when `decision.markOffered`, i.e. a newer
+ *  baseline with nothing to say to THIS install -- the offered-version
+ *  marker, so the same no-op merge is not recomputed on every later tick.
+ *  `markOffered` is false when the marker is already equal or ahead (a
+ *  downgrade), so this never lowers it. Resolves true only when the status
+ *  write itself landed, so a caller that dedupes can retry a failed one. */
 async function writePolicySeedNoticeDecision (orca, storageHost, decision) {
-  await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, { ...decision, at: new Date().toISOString() })
-    .catch((error) => orca.log(`policy seed notice status publish failed: ${error.message}`))
-  if (!decision.due && decision.added === 0 && decision.differing === 0) {
-    await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: decision.shippedVersion, at: new Date().toISOString() })
+  const { due, added, differing, shippedVersion } = decision
+  const written = await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, { due, added, differing, shippedVersion, at: new Date().toISOString() })
+    .then(() => true, (error) => {
+      orca.log(`policy seed notice status publish failed: ${error.message}`)
+      return false
+    })
+  if (decision.markOffered) {
+    await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: shippedVersion, at: new Date().toISOString() })
       .catch((error) => orca.log(`policy seed offered-version marker publish failed: ${error.message}`))
   }
+  return written
 }
 
 /** Publishes the baseline-notice status for the panel to render on load --
@@ -650,8 +655,9 @@ async function attendPolicySeedNoticeRefresh (orca, storageHost, lastPublished, 
   if (decision === null) return
   const fingerprint = JSON.stringify([decision.due, decision.added, decision.differing, decision.shippedVersion])
   if (fingerprint === lastPublished.value) return
-  lastPublished.value = fingerprint
-  await writePolicySeedNoticeDecision(orca, storageHost, decision)
+  // Remembered only once it is really on disk: a failed write must be
+  // retried next tick, not deduped away while the panel reads a stale status.
+  if (await writePolicySeedNoticeDecision(orca, storageHost, decision)) lastPublished.value = fingerprint
 }
 
 /** Attends one pending "dismiss the baseline notice" request from the panel.
@@ -683,10 +689,17 @@ async function attendPolicySeedDismissRequest (orca, storageHost, options = {}) 
   if (decision === null) {
     result = { ok: false, reason: 'seed-unavailable', detail: 'the shipped seed could not be read to record the dismissed version.' }
   } else {
-    await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: decision.shippedVersion, at: new Date().toISOString() })
-      .catch((error) => orca.log(`policy seed offered-version marker publish failed: ${error.message}`))
+    const marked = await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: decision.shippedVersion, at: new Date().toISOString() })
+      .then(() => true, (error) => {
+        orca.log(`policy seed offered-version marker publish failed: ${error.message}`)
+        return false
+      })
     await publishPolicySeedNoticeStatus(orca, storageHost, options)
-    result = { ok: true }
+    // Telling the person it was dismissed when nothing was recorded would
+    // bring the notice back on the next load with no explanation.
+    result = marked
+      ? { ok: true }
+      : { ok: false, reason: 'marker-write-failed', detail: 'the dismissed version could not be recorded; the notice will show again.' }
   }
 
   await storageHost.set(POLICY_SEED_DISMISS_RESULT_KEY, {

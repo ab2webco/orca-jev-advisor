@@ -223,5 +223,40 @@ match.
   in the seed text of the first rows and in `resetCleanHint`. That hint was
   read in the baseline 1440 full page.
 
+### Combined review and follow-up
+- RDD for fd0380f..9e03a3b: assessed high, consent `granted` by the
+  coordinator, 4 lenses `approved`, lineage `review-e0bcc00975402a9c`
+  acknowledged (authority burned). The earlier consent for 0e23b73 alone
+  (thread msg_60dfe57bfdc1) got no answer and was replaced by this one.
+  Its unstarted START, lineage `review-015440cb7b0ea2a3`, was never granted.
+- Advisory findings acted on (follow-up commit):
+  - R1/R3 (WARNING, two lenses): the quote-aware rewrite had
+    narrowed the deny. Wrapper options with a separate value (`sudo -u root`,
+    `nice -n 10`, `env -u VAR`, `xargs -n 1`) and unlisted wrappers
+    (`timeout`, `doas`) hid the git that follows. After a wrapper, the
+    matcher now jumps to the first word that is git, a shell or eval. RED: 7
+    failures observed.
+  - R4 (WARNING): dismiss reported `ok` even when the offered marker write
+    failed. It now reports `marker-write-failed`, and the panel shows the error.
+  - R4 (WARNING): the poll dedupe remembered a fingerprint before the status
+    write succeeded. It now records it only after a successful write.
+  - R3: the "nothing to tell" branch could LOWER the offered marker on a
+    downgrade. Core now returns `markOffered`, which requires a strictly newer
+    shipped version.
+  - R2: fixed the comments that claimed the panel never sees
+    `shippedVersion`. The status now carries exactly the rendered fields,
+    pinned by a test.
+  - RED observed: 4 failures (markOffered, dismiss, dedupe, downgrade).
+    GREEN: `npm test` 762/762, `npm run test:panels` 11/11.
+- Advisory findings left as follow-ups (not blocking):
+  - The baseline fixture is duplicated in panels.spec.mjs and
+    screenshot-panels.mjs.
+  - Each poll tick re-reads and re-parses the seed file. The dedupe only
+    suppresses the write.
+  - `parseOfferedVersion` duplicates `parseSeedVersion`'s integer check.
+  - "Review the changes" marks the version offered on click, before any row is
+    ticked. This is intended: the choose list stays reachable via "Import
+    baseline policies". Pinned by no test.
+
 ## Next step
-Combined RDD review of fd0380f..HEAD, then push and PR.
+Push and open the PR.

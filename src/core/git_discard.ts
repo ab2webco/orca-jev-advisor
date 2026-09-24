@@ -41,8 +41,11 @@ const WHOLE_TREE_PATHSPECS = new Set([".", "./", ":/", "*"]);
 /** Checkout options that create or reset a branch and take its name as a separate value. */
 const BRANCH_CREATING_OPTIONS = new Set(["-b", "-B", "--orphan"]);
 
-/** Words that run the command after them (plus their own dash options). */
-const WRAPPERS = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "xargs", "then", "do", "else", "if", "while", "until", "!", "{"]);
+/** Words that run the command after them (plus their own options). */
+const WRAPPERS = new Set([
+  "sudo", "doas", "env", "command", "exec", "nohup", "time", "timeout", "nice", "ionice", "stdbuf", "xargs",
+  "then", "do", "else", "if", "while", "until", "!", "{",
+]);
 
 /** Shells whose `-c` argument is itself a command line. */
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
@@ -210,16 +213,32 @@ function gitDiscardsFrom(tokens: readonly string[], start: number): boolean {
 function segmentDiscards(segment: string): boolean {
   const tokens = tokenize(segment);
   let index = 0;
+  let wrapped = false;
   while (index < tokens.length) {
     const token = tokens[index] ?? "";
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
       index += 1;
     } else if (WRAPPERS.has(programName(token))) {
+      wrapped = true;
       index += 1;
       while (index < tokens.length && (tokens[index] ?? "").startsWith("-")) index += 1;
     } else {
       break;
     }
+  }
+  // A wrapper's options can take a separate value (`sudo -u root`,
+  // `nice -n 10`, `timeout 60`), and that value is not the program. Rather
+  // than learn every wrapper's option grammar, jump to the first word after
+  // the wrapper that IS one of the programs this rule reads. The walk stays
+  // limited to wrapped segments, so an argument of an ordinary program (a
+  // commit message, a search pattern) is still never read as a run.
+  if (wrapped) {
+    const runs = tokens.findIndex((token, at) => {
+      if (at < index) return false;
+      const name = programName(token);
+      return name === "git" || name === "eval" || SHELLS.has(name);
+    });
+    if (runs !== -1) index = runs;
   }
   const program = programName(tokens[index] ?? "");
   if (SHELLS.has(program)) {

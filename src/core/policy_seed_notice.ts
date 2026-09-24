@@ -63,10 +63,14 @@ export interface PolicySeedNoticeDecision {
   /** How many ids this install already has whose content the shipped
    *  version now disagrees with. */
   readonly differing: number;
-  /** Carried straight through so the panel never has to ask storage for it
-   *  separately, and never sees the number itself either -- see main.mjs's
-   *  module note on why the panel never learns the shipped version. */
+  /** The seed's version, carried through into the status the panel reads.
+   *  The panel only displays counts; it never compares versions itself. */
   readonly shippedVersion: number;
+  /** Whether the worker should record `shippedVersion` as offered without
+   *  showing anything: the shipped version is newer, and this install has
+   *  nothing new or different to see. False when the offered version is
+   *  already equal or AHEAD (a downgrade), so the marker is never lowered. */
+  readonly markOffered: boolean;
 }
 
 /**
@@ -85,6 +89,13 @@ export interface PolicySeedNoticeDecision {
 export function decidePolicySeedNotice(input: PolicySeedNoticeInput): PolicySeedNoticeDecision {
   const { added, differing } = mergePolicySeeds(input.existing, input.shipped);
   const differingCount = differing.length;
-  const due = input.shippedVersion > input.offeredVersion && added + differingCount > 0;
-  return { due, added, differing: differingCount, shippedVersion: input.shippedVersion };
+  const newer = input.shippedVersion > input.offeredVersion;
+  const nothingToTell = added + differingCount === 0;
+  return {
+    due: newer && !nothingToTell,
+    added,
+    differing: differingCount,
+    shippedVersion: input.shippedVersion,
+    markOffered: newer && nothingToTell,
+  };
 }

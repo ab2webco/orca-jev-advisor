@@ -43,6 +43,15 @@ const DISCARDS: readonly string[] = [
   "echo $(git restore .)",
   "eval \"git checkout -- src/app.ts\"",
   "git ls-files -m | xargs git restore",
+  // Wrapper options that take a separate value, and wrappers that are not a
+  // shell keyword: the value must never be read as the program.
+  "sudo -u root git restore .",
+  "nice -n 10 git checkout -- src/app.ts",
+  "env -u VAR git restore .",
+  "xargs -n 1 git restore",
+  "timeout 60 git checkout -- .",
+  "doas git restore .",
+  "sudo -u root bash -c \"git restore .\"",
 ];
 
 // None of these touches uncommitted work in the working tree.
@@ -78,6 +87,8 @@ const KEEPS: readonly string[] = [
   "gh pr create --body \"never run git restore .\"",
   "node scripts/x.mjs \"git checkout -f\"",
   "git checkout -b feature origin/main",
+  "sudo -u root git commit -m \"git restore src/app.ts\"",
+  "timeout 60 npm test",
 ];
 
 for (const command of DISCARDS) {

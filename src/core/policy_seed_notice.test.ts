@@ -100,3 +100,17 @@ test("never invents a reason: an install with nothing stored and a shipped basel
   assert.equal(decision.added, shipped.length);
   assert.equal(decision.differing, 0);
 });
+
+test("markOffered only when the shipped version is newer and there is nothing to tell", () => {
+  const same = [row("own_branch", "same wording")];
+  assert.equal(decidePolicySeedNotice({ shippedVersion: 2, offeredVersion: 1, existing: same, shipped: same }).markOffered, true);
+  // Already offered this version: nothing to record.
+  assert.equal(decidePolicySeedNotice({ shippedVersion: 2, offeredVersion: 2, existing: same, shipped: same }).markOffered, false);
+  // Offered ahead (a downgrade): recording the shipped version would LOWER
+  // the marker and re-notify on the next upgrade.
+  assert.equal(decidePolicySeedNotice({ shippedVersion: 1, offeredVersion: 2, existing: same, shipped: same }).markOffered, false);
+  // Something to tell: the notice speaks instead.
+  const due = decidePolicySeedNotice({ shippedVersion: 2, offeredVersion: 1, existing: [], shipped: same });
+  assert.equal(due.due, true);
+  assert.equal(due.markOffered, false);
+});
