@@ -12,7 +12,8 @@
     "shots": "node scripts/screenshot-panels.mjs",
     "check": "npm run test && npm run test:panels && npm run shots",
     "self-check": "node src/supervisor.ts --self-check",
-    "test:panels": "node --test scripts/panels.spec.mjs"
+    "test:panels": "node --test scripts/panels.spec.mjs",
+    "ab-benchmark": "node --experimental-strip-types adapters/cli/ab_benchmark_cli.ts"
   },
   "devDependencies": {
     "playwright": "^1.49.0"

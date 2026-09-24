@@ -856,16 +856,16 @@
         return value
       }
       function buildDestinationRow (fields) {
+        // autonomy used to carry actThreshold/confirmThreshold/
+        // maxAutoDelicateness here too -- removed, see panel_values.mjs's
+        // buildDestinationRow (the tested original this is hand-copied
+        // from) for the full trace.
         var row = {
           id: fields.id,
           label: fields.label,
           kind: fields.kind,
           worktreePath: fields.worktreePath,
-          autonomy: {
-            actThreshold: fields.actThreshold,
-            confirmThreshold: fields.confirmThreshold,
-            maxAutoDelicateness: fields.maxAutoDelicateness
-          }
+          autonomy: {}
         }
         if (fields.terminalTitleMatch) row.terminalTitleMatch = fields.terminalTitleMatch
         return row
@@ -1198,9 +1198,14 @@
       }
 
       function addCatalogRow (row) {
+        // autonomy used to seed a new row with { actThreshold: 0.9,
+        // confirmThreshold: 0.6, maxAutoDelicateness: 2 } -- a literal next
+        // to the widget for three fields no decision anywhere reads (see
+        // src/core/store.ts's own note on AutonomyConfig). Removed rather
+        // than defaulted: there is nothing left to seed.
         row = row || {
           id: '', label: '', kind: 'project', worktreePath: '', terminalTitleMatch: '',
-          autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 }
+          autonomy: {}
         }
         var idField = fieldInput(t('catalog.fieldId'), row.id, t('catalog.fieldIdPlaceholder'))
         var labelField = fieldInput(t('catalog.fieldLabel'), row.label, t('catalog.fieldLabelPlaceholder'))
@@ -1217,7 +1222,13 @@
         row1.appendChild(labelField.wrap)
         entry.appendChild(row1)
 
-        var row2 = elMake('div', 'row two')
+        // Base .row is a 3-column grid (see the .row/.row.two/.row.four
+        // rules above): kind, path and the title-match field all fit here
+        // now that actThreshold/confirmThreshold/maxAutoDelicateness (the
+        // fourth field's row) are gone -- traced to zero decisions anywhere
+        // (see src/core/store.ts's own note on AutonomyConfig) and removed,
+        // not defaulted.
+        var row2 = elMake('div', 'row')
         var kindWrap = elMake('div')
         var kindLabel = elMake('label')
         kindLabel.textContent = t('catalog.fieldKind')
@@ -1233,20 +1244,11 @@
         kindWrap.appendChild(kindLabel)
         kindWrap.appendChild(kindSelect)
         var pathField = fieldInput(t('catalog.fieldPath'), row.worktreePath, t('catalog.fieldPathPlaceholder'))
+        var titleField = fieldInput(t('catalog.fieldTitleMatch'), row.terminalTitleMatch || '', t('catalog.fieldTitleMatchPlaceholder'))
         row2.appendChild(kindWrap)
         row2.appendChild(pathField.wrap)
+        row2.appendChild(titleField.wrap)
         entry.appendChild(row2)
-
-        var row3 = elMake('div', 'row four')
-        var titleField = fieldInput(t('catalog.fieldTitleMatch'), row.terminalTitleMatch || '', t('catalog.fieldTitleMatchPlaceholder'))
-        var actField = fieldInput('actThreshold', String(row.autonomy.actThreshold), '0.9', 'number')
-        var confirmField = fieldInput('confirmThreshold', String(row.autonomy.confirmThreshold), '0.6', 'number')
-        var delicatenessField = fieldInput('maxAutoDelicateness', String(row.autonomy.maxAutoDelicateness), '2', 'number')
-        row3.appendChild(titleField.wrap)
-        row3.appendChild(actField.wrap)
-        row3.appendChild(confirmField.wrap)
-        row3.appendChild(delicatenessField.wrap)
-        entry.appendChild(row3)
 
         entry._sync()
 
@@ -1267,10 +1269,7 @@
             label: labelField.input.value.trim(),
             kind: kindSelect.value,
             worktreePath: pathField.input.value.trim(),
-            terminalTitleMatch: titleField.input.value.trim(),
-            actThreshold: Number(actField.input.value),
-            confirmThreshold: Number(confirmField.input.value),
-            maxAutoDelicateness: Number(delicatenessField.input.value)
+            terminalTitleMatch: titleField.input.value.trim()
           })
         }
 

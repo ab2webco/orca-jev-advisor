@@ -93,11 +93,12 @@ export interface DeriveOptions {
   readonly autonomy: AutonomyConfig;
 }
 
-export const DEFAULT_DERIVED_AUTONOMY: AutonomyConfig = {
-  actThreshold: 0.85,
-  confirmThreshold: 0.65,
-  maxAutoDelicateness: 1,
-};
+// actThreshold/confirmThreshold/maxAutoDelicateness used to be set here too
+// (0.85/0.65/1) -- removed along with the rest of AutonomyConfig's dead
+// fields (see store.ts's own note on AutonomyConfig): a derived destination
+// carries no autonomy override at all today, since consequenceCeiling is
+// the only field left and nothing here has a measured value for it either.
+export const DEFAULT_DERIVED_AUTONOMY: AutonomyConfig = {};
 
 /**
  * Turns Orca's worktree list into destinations.

@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from "./gate_measurement.ts";
+import { buildGateDecisionRecord, commandFamily, parseGateDecisionRecords, serializeGateRecord } from "./gate_measurement.ts";
 
 test("an env assignment never reaches the family name", () => {
   assert.equal(commandFamily("TOKEN=ghp_secret123 gh pr merge 812"), "gh cli");
@@ -74,4 +74,37 @@ test("a record serializes as one JSON line and carries no command text", () => {
   assert.ok(!line.includes("ghp_secret"), "the record leaked the secret");
   assert.ok(!line.includes("812"), "the record leaked an argument");
   assert.equal(record.commandFamily, "gh cli");
+});
+
+// ---------------------------------------------------------------------------
+// parseGateDecisionRecords -- reads the log back, tolerantly. Added for the
+// AB benchmark's own report (adapters/cli/ab_benchmark_cli.ts counts real
+// "source":"jev" entries here to report how many of Jev's real decisions
+// the large model never had to see).
+// ---------------------------------------------------------------------------
+
+test("parseGateDecisionRecords: reads every well-formed line back", () => {
+  const a = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
+  const b = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "rm -rf dist", source: "cache", verdict: "allow", latencyMs: null });
+  const raw = serializeGateRecord(a) + serializeGateRecord(b);
+  assert.deepEqual(parseGateDecisionRecords(raw), [a, b]);
+});
+
+test("parseGateDecisionRecords: a malformed or incomplete line is skipped, siblings survive, never throws", () => {
+  const a = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
+  const raw = `${serializeGateRecord(a)}not json\n${JSON.stringify({ type: "gate-decision", id: "incomplete" })}\n`;
+  assert.deepEqual(parseGateDecisionRecords(raw), [a]);
+});
+
+test("parseGateDecisionRecords: an empty string yields an empty list", () => {
+  assert.deepEqual(parseGateDecisionRecords(""), []);
+});
+
+test("parseGateDecisionRecords: counting source:'jev' entries gives the real-decision total the AB benchmark reports against", () => {
+  const jev1 = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
+  const jev2 = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "git push", source: "jev", verdict: "ask", latencyMs: 410 });
+  const cached = buildGateDecisionRecord({ id: "c", at: "2026-01-01T00:00:02.000Z", project: null, command: "npm test", source: "cache", verdict: "allow", latencyMs: null });
+  const raw = serializeGateRecord(jev1) + serializeGateRecord(jev2) + serializeGateRecord(cached);
+  const records = parseGateDecisionRecords(raw);
+  assert.equal(records.filter((r) => r.source === "jev").length, 2);
 });
