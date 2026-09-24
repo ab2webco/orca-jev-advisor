@@ -14,7 +14,7 @@
 // `host.storage`) and from a CLI/test harness with a fake in-memory host.
 
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
-import { migratePolicyKind } from "./decisions.ts";
+import { GATE_CONSEQUENCE_CEILING, migratePolicyKind } from "./decisions.ts";
 import type { PolicyKind } from "./decisions.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
@@ -297,23 +297,23 @@ export async function setLog(host: StorageHost, entries: readonly LogEntryRaw[])
 // config: plugin-wide settings edited from the config panel.
 // ---------------------------------------------------------------------------
 
+// actThreshold, confirmThreshold, reversibleGate and externalGate used to
+// live here too -- declared, validated, defaulted and editable from the
+// config panel, and read by no decision anywhere (grepped the whole of
+// src/ and adapters/, excluding tests/panels/i18n; see
+// odd/tasks/production-honesty-pass.md). Removed rather than wired: nobody
+// could say what they were supposed to do, and inventing a meaning for a
+// number is how this project got a wrong `consequenceCeiling` twice
+// already. A config saved before this removal still carries those four
+// keys in storage -- isPluginThresholds below only requires
+// `consequenceCeiling`, so the extra keys are ignored rather than failing
+// validation; an old config is not a corrupt one.
 export interface PluginThresholds {
-  readonly actThreshold: number;
-  readonly confirmThreshold: number;
-  readonly reversibleGate: number;
-  readonly externalGate: number;
   readonly consequenceCeiling: number;
 }
 
 function isPluginThresholds(value: unknown): value is PluginThresholds {
-  return (
-    isRecord(value) &&
-    isNumber(value.actThreshold) &&
-    isNumber(value.confirmThreshold) &&
-    isNumber(value.reversibleGate) &&
-    isNumber(value.externalGate) &&
-    isNumber(value.consequenceCeiling)
-  );
+  return isRecord(value) && isNumber(value.consequenceCeiling);
 }
 
 export interface PluginConfig {
@@ -326,13 +326,17 @@ function isPluginConfig(value: unknown): value is PluginConfig {
   return isRecord(value) && isPluginThresholds(value.thresholds) && isNumber(value.logMaxEntries) && isNumber(value.jevBudgetMs);
 }
 
-// Same threshold values already validated against the live API in
-// tools/decide.ts and adapters/claude/gate-bash.ts -- see decisions.ts's gate
-// constants. Kept here as the *editable* defaults; decisions.ts's own
-// constants remain the source of truth for the CLI/hook entry points that
-// do not read plugin config.
+// consequenceCeiling's default comes from GATE_CONSEQUENCE_CEILING, the same
+// constant decisions.ts's gate uses -- never a repeated literal. It was
+// hardcoded to 1.5 here once, the value measured wrong and replaced by
+// GATE_CONSEQUENCE_CEILING (1.78); that was the third place this number went
+// stale (main.mjs's GATE_DEFAULTS_KEY mirror and the panel's own fallback
+// were the other two, both already fixed to read the constant/mirror
+// instead of a literal). Kept here as the *editable* default; decisions.ts's
+// own constant remains the source of truth for the CLI/hook entry points
+// that do not read plugin config.
 const DEFAULT_CONFIG: PluginConfig = {
-  thresholds: { actThreshold: 0.9, confirmThreshold: 0.6, reversibleGate: 0.7, externalGate: 0.35, consequenceCeiling: 1.5 },
+  thresholds: { consequenceCeiling: GATE_CONSEQUENCE_CEILING },
   logMaxEntries: 500,
   jevBudgetMs: 4_000,
 };

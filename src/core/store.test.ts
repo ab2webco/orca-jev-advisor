@@ -12,7 +12,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getCatalog, getPolicies, setPolicies, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { GATE_CONSEQUENCE_CEILING } from "./decisions.ts";
+import { getCatalog, getConfig, getPolicies, setPolicies, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -169,4 +170,71 @@ test("getCatalog: a destination with a malformed (non-numeric) consequenceCeilin
   const host = fakeHost({ catalog: { destinations: [destination({ consequenceCeiling: "not-a-number" })] } });
   const catalog: CatalogData = await getCatalog(host);
   assert.deepEqual(catalog, { destinations: [] });
+});
+
+// ---------------------------------------------------------------------------
+// config.thresholds -- odd/tasks/production-honesty-pass.md P2/P3.
+//
+// P2: actThreshold, confirmThreshold, reversibleGate and externalGate were
+// declared here, validated, defaulted and editable from the config panel --
+// and read by no decision anywhere in src/ or adapters/ (grepped whole tree,
+// excluding tests/panels/i18n). Removed rather than wired: nobody could say
+// what they were supposed to do, and inventing a meaning for a number is how
+// this project got a wrong ceiling twice already.
+//
+// Only `consequenceCeiling` remains on PluginThresholds, kept per this
+// task's explicit scope -- but the same grep found no decision reads this
+// STORED value out either. gate-bash.ts's decideGateAction call takes its
+// consequenceCeiling from the per-destination catalog.ts override
+// (matched?.autonomy?.consequenceCeiling, a different object with the same
+// field name) or straight from decisions.ts's own GATE_CONSEQUENCE_CEILING
+// constant, never from getConfig()'s PluginConfig.thresholds. Only
+// `jevBudgetMs` (this file's sibling field) is actually consumed, in
+// main.mjs's cmdDecide. See this task's own report for this caveat.
+//
+// A config saved before this removal still has the four dead keys sitting in
+// storage. That is not corruption -- isPluginThresholds only requires
+// `consequenceCeiling` to be a number now, so the extra keys are ignored,
+// never rejected.
+//
+// P3: the default `consequenceCeiling` used to repeat the literal 1.5 --
+// the value measured wrong and replaced by GATE_CONSEQUENCE_CEILING (1.78)
+// in decisions.ts. Third place that number went stale; it must come from
+// the constant.
+// ---------------------------------------------------------------------------
+
+test("getConfig: default thresholds.consequenceCeiling comes from GATE_CONSEQUENCE_CEILING, not a repeated literal", async () => {
+  const host = fakeHost();
+  const config = await getConfig(host);
+  assert.equal(config.thresholds.consequenceCeiling, GATE_CONSEQUENCE_CEILING);
+});
+
+test("getConfig: a config carrying ONLY consequenceCeiling (no dead threshold fields) loads through rather than falling back to the default", async () => {
+  const host = fakeHost({
+    config: { thresholds: { consequenceCeiling: 2.5 }, logMaxEntries: 250, jevBudgetMs: 9000 },
+  });
+  const config = await getConfig(host);
+  assert.equal(config.thresholds.consequenceCeiling, 2.5);
+  assert.equal(config.logMaxEntries, 250);
+  assert.equal(config.jevBudgetMs, 9000);
+});
+
+test("getConfig: a config saved before the four dead threshold fields were removed still loads -- an old config is not a corrupt one", async () => {
+  const host = fakeHost({
+    config: {
+      thresholds: { actThreshold: 0.9, confirmThreshold: 0.6, reversibleGate: 0.7, externalGate: 0.35, consequenceCeiling: 2.1 },
+      logMaxEntries: 250,
+      jevBudgetMs: 9000,
+    },
+  });
+  const config = await getConfig(host);
+  assert.equal(config.thresholds.consequenceCeiling, 2.1);
+  assert.equal(config.logMaxEntries, 250);
+});
+
+test("getConfig: a config with a malformed (non-numeric) consequenceCeiling fails validation and falls back to the default config", async () => {
+  const host = fakeHost({ config: { thresholds: { consequenceCeiling: "not-a-number" }, logMaxEntries: 250, jevBudgetMs: 9000 } });
+  const config = await getConfig(host);
+  assert.equal(config.thresholds.consequenceCeiling, GATE_CONSEQUENCE_CEILING);
+  assert.equal(config.logMaxEntries, 500);
 });
