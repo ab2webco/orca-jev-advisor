@@ -43,6 +43,17 @@
  *   mod-skills-config-read  reports the mirror's current `{active,
  *          activeTools}` (both `false` when the file has never been
  *          written), for main.mjs's publishModSkillsStatus.
+ *   deny-tier-config-save  reads `{denyRmRf, denyDropTable,
+ *          denyTerraformDestroy}` as JSON from stdin and atomically writes
+ *          it, normalized through the same pure parser adapters/claude/
+ *          gate-bash.ts reads back with (src/core/deny_tier_config.ts's
+ *          parseDenyTierConfig -- a wrong-typed or missing field is written
+ *          as `true`, the fail-CLOSED opposite of mod-skills-config-save's
+ *          `false`), to deny-tier-config.json. Not secret.
+ *   deny-tier-config-read  reports the mirror's current `{denyRmRf,
+ *          denyDropTable, denyTerraformDestroy}` (all `true` when the file
+ *          has never been written or fails to parse), for main.mjs's
+ *          publishDenyTierStatus.
  *
  * Always prints exactly one JSON line to stdout and nothing else -- no
  * console.error, no stray output that would corrupt the parent's parse.
@@ -58,6 +69,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
+import { parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
 
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
 // platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
@@ -84,6 +96,11 @@ const POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
 // ordinary file permissions like the catalog/policies files above, not the
 // key's forced 0600.
 const MOD_SKILLS_CONFIG_PATH = join(CONFIG_DIR, 'mod-skills-config.json')
+// The three deny-tier switches -- see src/core/deny_tier_config.ts's module
+// note. Not sensitive, same ordinary file permissions as the switches
+// above; the fail-CLOSED default lives in the parser, not in this file's
+// permission mode.
+const DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
 
 async function readStdin () {
   const chunks = []
@@ -276,6 +293,31 @@ async function modSkillsConfigRead () {
   return { ok: true, value: parseModSkillsConfig(content) }
 }
 
+/** Normalizes the payload through the same pure parser gate-bash.ts reads
+ *  back with, so what lands on disk is never a raw, unvalidated echo of
+ *  whatever the panel sent -- a wrong-typed or missing field is written as
+ *  `true` (still denying), the fail-CLOSED opposite of modSkillsConfigSave's
+ *  `false`. */
+async function denyTierConfigSave (raw) {
+  const normalized = parseDenyTierConfig(raw)
+  await writeAtomic(`${JSON.stringify(normalized, null, 2)}\n`, DENY_TIER_CONFIG_PATH, null)
+  return { ok: true }
+}
+
+/** Reports the mirror's current switches, all three `true` when the file
+ *  has never been written or is unreadable as JSON -- same fail-CLOSED
+ *  contract as parseDenyTierConfig itself, never thrown. */
+async function denyTierConfigRead () {
+  let content
+  try {
+    content = await readFile(DENY_TIER_CONFIG_PATH, 'utf8')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    content = ''
+  }
+  return { ok: true, value: parseDenyTierConfig(content) }
+}
+
 async function main () {
   const mode = process.argv[2]
   let result
@@ -300,6 +342,10 @@ async function main () {
       result = await modSkillsConfigSave((await readStdin()).trim())
     } else if (mode === 'mod-skills-config-read') {
       result = await modSkillsConfigRead()
+    } else if (mode === 'deny-tier-config-save') {
+      result = await denyTierConfigSave((await readStdin()).trim())
+    } else if (mode === 'deny-tier-config-read') {
+      result = await denyTierConfigRead()
     } else {
       result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
     }

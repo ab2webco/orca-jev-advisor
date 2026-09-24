@@ -21,6 +21,21 @@
  * malformed mirror degrades to the pre-existing global-thresholds behavior,
  * never a crash and never an extra prompt.
  *
+ * ONE DELIBERATE EXCEPTION: readDenyTierConfig (below) fails CLOSED. EVERY
+ * NEVER_SILENTLY rule denies by default, and a missing, unreadable or
+ * malformed deny-tier-config.json must never be read as quiet permission to
+ * downgrade one -- see src/core/deny_tier_config.ts. Turning a rule off is
+ * still possible, but only through an explicit, well-formed `false`; it
+ * downgrades to 'ask', never to 'allow'.
+ *
+ * Why deny rather than ask: an 'ask' stops the PERSON and waits, a 'deny'
+ * refuses the MODEL and hands it the reason, so it picks another approach and
+ * nobody waits. Measured on the real approvals log before the change -- 3103
+ * commands approved against 1 refused, and 5 of 16 questions never answered
+ * at all -- the question was not buying safety, it was buying attention, and
+ * the dialog opens on "Yes" anyway. Only the agent is refused; the person can
+ * always run the command themselves, which is what the message says.
+ *
  * This is the Claude Code adapter: the three-tier design and the local
  * pattern lists below are this file's own (measured, and correct -- do not
  * fold them into src/core, they are not Jev questions). The Jev call
@@ -66,12 +81,15 @@ import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
-import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
+import { withoutHeredocBodies } from '../../src/core/command_text.ts'
+import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
+import { DEFAULT_DENY_TIER_SWITCHES, parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
+import type { DenyTierSwitches, DenyToggleKey } from '../../src/core/deny_tier_config.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
@@ -103,6 +121,13 @@ const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // the validation that stands between this file and the gate's decision.
 const CATALOG_MIRROR_PATH = join(CONFIG_DIR, 'catalog.json')
 const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
+// Written by adapters/orca/write-secret-mirror.mjs's deny-tier-config-save,
+// refreshed on plugin activation and on every config-panel save, same
+// channel as the catalog/policies mirrors above. Unlike those two -- and
+// unlike every other best-effort read in this file -- a missing, malformed
+// or unreadable read of THIS file must never lower protection: see
+// readDenyTierConfig below and src/core/deny_tier_config.ts's module note.
+const DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
 const BUDGET_MS = 1800
 
 /** Since the hook started, so it can say how long deciding cost. */
@@ -130,6 +155,11 @@ function resolveLocale(): Locale {
 const LOCALE = resolveLocale()
 const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, LOCALE, key, params)
 
+/** For text the MODEL reads rather than a person: always English, whatever
+ *  locale the developer picked. A refusal is an instruction to the model, and
+ *  its one reader understands English. */
+const tEnglish = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, 'en', key, params)
+
 /** True when `key` belongs to DESTINATION_CATALOG (a policy citation) rather than this file's own GATE_CATALOG (a risk reason) -- GateKey and DestinationKey are disjoint string unions by construction, so membership alone is enough to route it. */
 function isDestinationReasonKey(key: string): key is DestinationKey {
   return Object.prototype.hasOwnProperty.call(DESTINATION_CATALOG.en, key)
@@ -145,16 +175,56 @@ function resolveGateActionReason(reason: GateActionReason): string {
 
 type Decision = 'allow' | 'deny' | 'ask'
 
-/** Tier 1b: never runs without explicit human intervention. `why` is a catalog key, resolved at emit time in the panel's chosen language. */
-const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey }[] = [
-  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush' },
-  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected' },
-  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf' },
-  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean' },
-  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable' },
-  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete' },
-  { pattern: /\b(terraform|tofu)\s+(apply|destroy)\b/, why: 'rule.terraform' },
-  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell' },
+/**
+ * The three NEVER_SILENTLY rules whose blast radius reaches beyond the
+ * repository AND beyond recovery -- the only ones this gate ever denies
+ * outright instead of asking. Each key matches a boolean field on
+ * DenyTierSwitches (src/core/deny_tier_config.ts); turning that field off
+ * downgrades the rule to 'ask', never to 'allow'.
+ *
+ * Deliberately NOT on this list, however broad or damaging: force push
+ * (most are a developer's own feature branch -- too broad to deny), a push
+ * to main/master/production (damaging but revertible), `git reset --hard`
+ * / `git clean -f` (the blast radius is one working tree and the person is
+ * right there -- `clean -f` genuinely destroys untracked work, so this one
+ * is a close call, not an obvious one), `kubectl delete|drain` (entirely
+ * namespace-dependent; a dev namespace makes this routine), and
+ * `curl | bash` (arbitrary remote code, but the person may have context
+ * this gate does not). All five stay `ask`, on purpose -- do not "tidy"
+ * this into denying more without re-reading the reasoning above.
+ */
+
+
+/**
+ * Tier 1b: the rules that never run unannounced. `why` is a catalog key,
+ * resolved at emit time in the panel's chosen language.
+ *
+ * Every rule carries a `denyToggle`, and every toggle denies by default:
+ * `deny` refuses the call and hands the reason to the model, which then picks
+ * another approach, while `ask` stops the person and waits. Running with
+ * permission prompts off is a deliberate choice that agents should not sit
+ * waiting on a human, and an `ask` quietly puts that waiting back. Turning a
+ * switch off downgrades that one rule to `ask` -- never to `allow`.
+ *
+ * Only the agent is refused. The person can always run the command in a
+ * terminal, which is what the deny message tells them.
+ */
+const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey; readonly denyToggle: DenyToggleKey }[] = [
+  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush', denyToggle: 'denyForcePush' },
+  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
+  // Irrecoverable, and beyond any repo: the whole home directory or the
+  // filesystem root.
+  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf' },
+  // `git clean -f` destroys untracked work with no reflog behind it; the
+  // blast radius is one working tree, which is why this was the closest call
+  // of the nine.
+  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
+  // Irrecoverable without a backup nobody can assume exists.
+  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable' },
+  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
+  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
+  { pattern: /\b(terraform|tofu)\s+destroy\b/, why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
+  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
 ]
 
 type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null }
@@ -354,6 +424,23 @@ function readPoliciesMirror(): readonly Policy[] {
     return parseMirroredPolicies(JSON.parse(readFileSync(POLICIES_MIRROR_PATH, 'utf8'))) ?? []
   } catch {
     return []
+  }
+}
+
+/**
+ * Fails CLOSED, not open -- the one deliberate exception to every other
+ * best-effort read in this file. A missing DENY_TIER_CONFIG_PATH (nobody
+ * has touched the panel's switches yet), an unreadable one, or one that
+ * fails parseDenyTierConfig's own shape validation all read the exact same
+ * way a brand-new install does: every switch stays at its default of
+ * `true`, still denying. See src/core/deny_tier_config.ts's module note --
+ * a config that cannot be read is not permission to stop protecting.
+ */
+function readDenyTierConfig(): DenyTierSwitches {
+  try {
+    return parseDenyTierConfig(readFileSync(DENY_TIER_CONFIG_PATH, 'utf8'))
+  } catch {
+    return DEFAULT_DENY_TIER_SWITCHES
   }
 }
 
@@ -584,14 +671,42 @@ async function main(): Promise<void> {
   if (pluginDisabledInOrca()) passThrough()
 
   if (isObviouslySafeCommand(command)) passThrough()
-  for (const { pattern, why } of NEVER_SILENTLY) {
-    if (pattern.test(command)) {
-      appendGateRecord(cwd, command, 'local-rule', 'ask', null)
+  // Naming one of these is not running it. Measured live: searching this
+  // repository's own source for a rule's phrase was refused as if the
+  // command were that rule. Under `ask` it cost a click; under `deny` it
+  // would leave an agent unable to search the code it is working on. A
+  // mention skips tier 1b and is judged by the ordinary path instead -- it
+  // is not waved through.
+  // A heredoc body is data handed to a program on stdin, not a command line,
+  // so the rules look at what is left after removing it. Writing a file whose
+  // CONTENT describes one of these rules used to be refused as if the rule
+  // were being run -- which refused the author of this very comment. A body
+  // read by a shell keeps its text, because there it really is commands.
+  const inspected = withoutHeredocBodies(command)
+  const mentionOnly = mentionsRatherThanRuns(inspected)
+  for (const { pattern, why, denyToggle } of NEVER_SILENTLY) {
+    if (mentionOnly) break
+    if (pattern.test(inspected)) {
+      // Every rule denies unless its switch was deliberately turned off, in
+      // which case it drops to 'ask' -- never to 'allow'. readDenyTierConfig()
+      // fails CLOSED, so an unreadable config denies exactly as a fresh
+      // install does.
+      const decision: Decision = readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
+      appendGateRecord(cwd, command, 'local-rule', decision, null)
       // Recorded like any other stop, with no scores: a local rule needs no
       // model and no threshold, so there is nothing here to calibrate -- but
       // whether the person accepted the interruption is still worth knowing.
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
-      emit('ask', t('localRule', { why: t(why) }))
+      // A refusal is read by the MODEL and an ask is read by a PERSON, so
+      // they resolve in different languages on purpose: the ask follows the
+      // developer's chosen locale, the refusal is always English, including
+      // the interpolated reason. Half-translating it -- an English sentence
+      // carrying a Spanish clause -- would be worse than either.
+      if (decision === 'deny') {
+        emit(decision, tEnglish('localRuleDeny', { why: tEnglish(why) }))
+      } else {
+        emit(decision, t('localRule', { why: t(why) }))
+      }
       return
     }
   }

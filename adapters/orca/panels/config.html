@@ -282,6 +282,16 @@
         </div>
       </section>
 
+      <section id="deny-tier-section">
+        <h2 data-i18n="denyTier.heading"></h2>
+        <p class="hint" data-i18n="denyTier.hint"></p>
+        <div id="deny-tier-rows"></div>
+        <div class="actions">
+          <button id="save-deny-tier" type="button" data-i18n="denyTier.save"></button>
+          <span class="said" id="deny-tier-said"></span>
+        </div>
+      </section>
+
       <section id="save-section">
         <div class="actions">
           <button id="save-all" class="primary" type="button" data-i18n="save.button"></button>
@@ -398,9 +408,36 @@
           'modSkills.save': 'Guardar selección',
           'modSkills.saving': 'Guardando…',
           'modSkills.saved': 'Guardado.',
+          'denyTier.heading': 'Nivel de bloqueo (deny)',
+          'denyTier.hint': 'Estos comandos se le niegan al agente en vez de preguntarte. Preguntar te detiene a ti y espera; negar le dice que no al modelo, que sigue con otra cosa. En el registro de este mismo gate, 3103 preguntas se respondieron que si y 1 que no, y 5 de 16 no se respondieron nunca: la pregunta costaba atencion, no compraba seguridad. Tu nunca estas bloqueado: corre el comando en tu terminal cuando quieras. Desmarcar uno no vuelve la regla silenciosa, la baja a preguntar, nunca a permitir.',
+          'denyTier.forcePushLabel': 'Reescribir una rama con force push',
+          'denyTier.forcePushHint': 'El agente no lo hace. Rehace historia que otras personas ya pueden tener.',
+          'denyTier.pushProtectedLabel': 'Empujar a main, master o production',
+          'denyTier.pushProtectedHint': 'El agente no lo hace. Publica en la rama de la que depende todo lo demas.',
+          'denyTier.resetCleanLabel': 'Descartar trabajo sin confirmar',
+          'denyTier.resetCleanHint': 'El agente no lo hace. Los archivos sin seguimiento se borran y no hay reflog que los devuelva.',
+          'denyTier.kubectlDeleteLabel': 'Borrar o vaciar recursos de Kubernetes',
+          'denyTier.kubectlDeleteHint': 'El agente no lo hace. Lo que cuesta depende por completo del namespace.',
+          'denyTier.terraformApplyLabel': 'Aplicar cambios de infraestructura',
+          'denyTier.terraformApplyHint': 'El agente no lo hace. Crea y modifica recursos reales.',
+          'denyTier.curlPipeShellLabel': 'Descargar algo y ejecutarlo de inmediato',
+          'denyTier.curlPipeShellHint': 'El agente no lo hace. Ejecuta codigo remoto que nadie ha leido.',
+          'denyTier.rmRfLabel': 'Borrar la raiz del sistema o tu directorio personal',
+          'denyTier.rmRfHint': 'El agente no lo hace. No hay deshacer ni frontera de repositorio.',
+          'denyTier.dropTableLabel': 'Eliminar o vaciar una tabla, base de datos o esquema',
+          'denyTier.dropTableHint': 'El agente no lo hace. Borra datos sin garantia de que exista un respaldo.',
+          'denyTier.terraformDestroyLabel': 'Destruir infraestructura',
+          'denyTier.terraformDestroyHint': 'El agente no lo hace. Desmonta recursos reales que otros pueden estar usando.',
+          'denyTier.save': 'Guardar nivel de bloqueo',
+          'denyTier.saving': 'Guardando…',
+          'denyTier.saved': 'Guardado.',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
+          'save.whichConfig': 'La configuración (umbrales)',
+          'save.whichCatalog': 'El catálogo de destinos',
+          'save.whichPolicies': 'Las políticas',
+          'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
           'common.timeout': 'Tiempo de espera agotado.',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
@@ -516,9 +553,36 @@
           'modSkills.save': 'Save selection settings',
           'modSkills.saving': 'Saving…',
           'modSkills.saved': 'Saved.',
+          'denyTier.heading': 'Deny tier',
+          'denyTier.hint': "These commands are refused to the agent rather than asked about. An ask stops you and waits; a refusal tells the model no and it carries on with something else. Across this gate's own log, 3103 questions were answered yes and 1 no, and 5 of 16 were never answered at all — the question was costing attention, not buying safety. You are never blocked: run the command yourself in a terminal whenever you mean to. Unchecking one never makes a rule silent — it drops to asking, never to allowing.",
+          'denyTier.forcePushLabel': 'Force-push a branch',
+          'denyTier.forcePushHint': 'The agent will not. It rewrites history other people may already have.',
+          'denyTier.pushProtectedLabel': 'Push to main, master or production',
+          'denyTier.pushProtectedHint': 'The agent will not. It publishes to the branch everything else depends on.',
+          'denyTier.resetCleanLabel': 'Discard uncommitted work',
+          'denyTier.resetCleanHint': 'The agent will not. Untracked files are gone and no reflog brings them back.',
+          'denyTier.kubectlDeleteLabel': 'Delete or drain Kubernetes resources',
+          'denyTier.kubectlDeleteHint': 'The agent will not. What it costs depends entirely on the namespace.',
+          'denyTier.terraformApplyLabel': 'Apply infrastructure changes',
+          'denyTier.terraformApplyHint': 'The agent will not. It creates and alters real resources.',
+          'denyTier.curlPipeShellLabel': 'Download something and run it straight away',
+          'denyTier.curlPipeShellHint': 'The agent will not. It executes remote code nobody has read.',
+          'denyTier.rmRfLabel': 'Delete the filesystem root or your home directory',
+          'denyTier.rmRfHint': 'The agent will not. There is no undo and no repository boundary.',
+          'denyTier.dropTableLabel': 'Drop or truncate a table, database or schema',
+          'denyTier.dropTableHint': 'The agent will not. It removes data with no guarantee a backup exists.',
+          'denyTier.terraformDestroyLabel': 'Destroy infrastructure',
+          'denyTier.terraformDestroyHint': 'The agent will not. It tears down real resources other people may be using.',
+          'denyTier.save': 'Save deny tier',
+          'denyTier.saving': 'Saving…',
+          'denyTier.saved': 'Saved.',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
+          'save.whichConfig': 'The configuration (thresholds)',
+          'save.whichCatalog': 'The destination catalog',
+          'save.whichPolicies': 'The policies',
+          'save.rejectedWhich': 'The host rejected this: {{which}}.',
           'common.timeout': 'Timed out.',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
           'common.hostRejectedRequest': 'The host rejected the request.',
@@ -696,11 +760,17 @@
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
-      function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
+      // Every value passed through here is deep-stripped of undefined-valued
+      // keys first (stripUndefinedValues, above) -- the one choke point
+      // every write goes through, so a future `field || undefined` spot
+      // anywhere in this panel is neutralized here even if it forgets to
+      // shape its own row the safe way, the way buildDestinationRow/
+      // buildPolicyRow now do at the source.
+      function write (key, value) { return call('storage.set', { key: key, value: stripUndefinedValues(value) }, true) }
       // Background write (not requested by a click): polling and the
       // heartbeat use this one, never the user lane, so a real click's
       // reserved quota is never spent by them.
-      function writeBackground (key, value) { return call('storage.set', { key: key, value: value }, false) }
+      function writeBackground (key, value) { return call('storage.set', { key: key, value: stripUndefinedValues(value) }, false) }
 
       // ---------- secret key: request/result ---------------------------------
       // A sandboxed panel cannot call `secrets.get`/`secrets.set`/
@@ -736,6 +806,50 @@
       // file's module comment.
       function buildSecretTombstone (id, atIso) {
         return { id: id, at: atIso, tombstone: true }
+      }
+
+      // ---------- shaping a value before it reaches storage.set ---------------
+      // Mirrors stripUndefinedValues/buildDestinationRow/buildPolicyRow in
+      // adapters/orca/panels/panel_values.mjs -- see that file's module
+      // comment for the defect this closes: this panel's postMessage bridge
+      // uses structured clone, not JSON.stringify, so a property explicitly
+      // set to `undefined` SURVIVES onto the wire and Orca's own
+      // `storage.set` (validated with `z.json()`) refuses it. Keep the two
+      // in sync; `grep -n stripUndefinedValues` across both files is how to
+      // check they still agree.
+      function stripUndefinedValues (value) {
+        if (Array.isArray(value)) return value.map(stripUndefinedValues)
+        if (value !== null && typeof value === 'object') {
+          var result = {}
+          Object.keys(value).forEach(function (key) {
+            var v = value[key]
+            if (v === undefined) return
+            result[key] = stripUndefinedValues(v)
+          })
+          return result
+        }
+        return value
+      }
+      function buildDestinationRow (fields) {
+        var row = {
+          id: fields.id,
+          label: fields.label,
+          kind: fields.kind,
+          worktreePath: fields.worktreePath,
+          autonomy: {
+            actThreshold: fields.actThreshold,
+            confirmThreshold: fields.confirmThreshold,
+            maxAutoDelicateness: fields.maxAutoDelicateness
+          }
+        }
+        if (fields.terminalTitleMatch) row.terminalTitleMatch = fields.terminalTitleMatch
+        return row
+      }
+      function buildPolicyRow (fields) {
+        var row = { id: fields.id, rule: fields.rule }
+        if (fields.kind) row.kind = fields.kind
+        if (fields.destinations.length > 0) row.destinations = fields.destinations
+        return row
       }
 
       function signalPanelOpen () {
@@ -953,6 +1067,42 @@
         })
       }
 
+      // ---------- deny tier: request/result -----------------------------------
+      // Same request/result pattern as the skill/tool selection switches
+      // above: this must reach a real file outside `storage`
+      // (adapters/claude/gate-bash.ts reads it directly, no channel into
+      // `storage` from a plain Node process), so the panel cannot just write
+      // to `storage` the way the Thresholds/catalog/policies "Save
+      // configuration" button does. Unlike that channel, this one fails
+      // CLOSED: a request or a mirror read that comes back malformed is
+      // never read as "off" here -- see fillDenyTierStatus below.
+      var DENY_TIER_CONFIG_REQUEST_KEY = 'denyTierConfigRequest'
+      var DENY_TIER_CONFIG_RESULT_KEY = 'denyTierConfigResult'
+      var DENY_TIER_STATUS_KEY = 'denyTierStatus'
+
+      function waitForDenyTierConfigResult (requestId, deadline) {
+        return read(DENY_TIER_CONFIG_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForDenyTierConfigResult(requestId, deadline) })
+        })
+      }
+
+      function sendDenyTierConfigRequest (switches) {
+        var requestId = 'deny-tier-config-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString() }
+        Object.keys(switches).forEach(function (k) { request[k] = switches[k] })
+        signalPanelOpen()
+        return write(DENY_TIER_CONFIG_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForDenyTierConfigResult(requestId, Date.now() + 20000)
+        })
+      }
+
       // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
@@ -1084,18 +1234,19 @@
         entry.appendChild(actions)
 
         entry._read = function () {
-          return {
+          // buildDestinationRow (above) omits terminalTitleMatch entirely
+          // when blank, rather than setting it to `undefined` -- see that
+          // function's own comment for why `|| undefined` broke every save.
+          return buildDestinationRow({
             id: idField.input.value.trim(),
             label: labelField.input.value.trim(),
             kind: kindSelect.value,
             worktreePath: pathField.input.value.trim(),
-            terminalTitleMatch: titleField.input.value.trim() || undefined,
-            autonomy: {
-              actThreshold: Number(actField.input.value),
-              confirmThreshold: Number(confirmField.input.value),
-              maxAutoDelicateness: Number(delicatenessField.input.value)
-            }
-          }
+            terminalTitleMatch: titleField.input.value.trim(),
+            actThreshold: Number(actField.input.value),
+            confirmThreshold: Number(confirmField.input.value),
+            maxAutoDelicateness: Number(delicatenessField.input.value)
+          })
         }
 
         catalogListEl.appendChild(entry)
@@ -1266,22 +1417,21 @@
         entry.appendChild(actions)
 
         entry._read = function () {
-          // kindSelect.value is '' when still unset: written back as
-          // `undefined` (dropped from the saved object, same as
-          // terminalTitleMatch above) rather than as an empty string or a
-          // guessed real kind, so store.ts's isPolicyRow still sees it as
-          // "no valid kind" next time and keeps excluding it from judgment
-          // -- without this panel ever deleting the row itself.
-          var destinations = parseDestinations()
-          return {
+          // kindSelect.value is '' when still unset: buildPolicyRow (above)
+          // omits `kind` from the saved object entirely in that case (never
+          // sets it to `undefined` -- see that function's own comment for
+          // why `|| undefined` broke every save), so store.ts's isPolicyRow
+          // still sees it as "no valid kind" next time and keeps excluding
+          // it from judgment -- without this panel ever deleting the row
+          // itself. Same "empty means unset" convention for `destinations`:
+          // an empty scope is omitted rather than written as `[]`, so a
+          // policy with no destinations still reads as "applies globally".
+          return buildPolicyRow({
             id: idField.input.value.trim(),
             rule: ruleField.input.value.trim(),
-            kind: kindSelect.value || undefined,
-            // Same "empty means unset" convention as kind/terminalTitleMatch:
-            // an empty scope is dropped rather than written as `[]`, so a
-            // policy with no destinations still reads as "applies globally".
-            destinations: destinations.length > 0 ? destinations : undefined
-          }
+            kind: kindSelect.value,
+            destinations: parseDestinations()
+          })
         }
 
         policiesListEl.appendChild(entry)
@@ -1335,6 +1485,70 @@
           said(modSkillsSaidEl, t('modSkills.saved'))
         }).catch(function (error) {
           said(modSkillsSaidEl, errorText(error), true)
+        })
+      })
+
+      // ---------- deny tier ---------------------------------------------------
+
+      /** Paints the three checkboxes from the worker's DENY_TIER_STATUS_KEY
+       *  mirror. `status` is `null`/`undefined` before the first real read --
+       *  unlike fillModSkillsStatus, that must NOT leave the checkboxes
+       *  unchecked: the fail-CLOSED default is all three CHECKED (still
+       *  denying), the same default a brand-new install reads from an
+       *  unwritten file (src/core/deny_tier_config.ts). A checkbox reads
+       *  unchecked here only when the mirror explicitly says `false`. */
+      // One entry per tier-1b rule, in the order the gate matches them. The
+      // rows are built from this list rather than written out in the markup,
+      // so a rule cannot exist in the gate with no way for a person to reach
+      // it -- which is exactly how the skills switches ended up unreachable.
+      var DENY_RULES = [
+        { key: 'denyForcePush', name: 'forcePush' },
+        { key: 'denyPushProtected', name: 'pushProtected' },
+        { key: 'denyRmRf', name: 'rmRf' },
+        { key: 'denyResetClean', name: 'resetClean' },
+        { key: 'denyDropTable', name: 'dropTable' },
+        { key: 'denyKubectlDelete', name: 'kubectlDelete' },
+        { key: 'denyTerraformApply', name: 'terraformApply' },
+        { key: 'denyTerraformDestroy', name: 'terraformDestroy' },
+        { key: 'denyCurlPipeShell', name: 'curlPipeShell' }
+      ]
+
+      function denyRowsBuilt () { return el('deny-tier-rows').childNodes.length > 0 }
+
+      function buildDenyTierRows () {
+        var host = el('deny-tier-rows')
+        DENY_RULES.forEach(function (rule) {
+          var row = elMake('div'); row.className = 'checkbox-row'
+          var box = elMake('input'); box.type = 'checkbox'; box.id = 'deny-' + rule.name
+          var text = elMake('div'); text.className = 'checkbox-text'
+          var label = elMake('span'); label.className = 'checkbox-label'
+          label.textContent = t('denyTier.' + rule.name + 'Label')
+          var hint = elMake('span'); hint.className = 'hint'
+          hint.textContent = t('denyTier.' + rule.name + 'Hint')
+          text.appendChild(label); text.appendChild(hint)
+          row.appendChild(box); row.appendChild(text)
+          host.appendChild(row)
+        })
+      }
+
+      // Absent or non-boolean means denying, the same fail-closed direction
+      // the gate and the parser take. Only an explicit false unchecks a box.
+      function fillDenyTierStatus (status) {
+        if (!denyRowsBuilt()) buildDenyTierRows()
+        DENY_RULES.forEach(function (rule) {
+          el('deny-' + rule.name).checked = !(status && status[rule.key] === false)
+        })
+      }
+
+      var denyTierSaidEl = el('deny-tier-said')
+      el('save-deny-tier').addEventListener('click', function () {
+        said(denyTierSaidEl, t('denyTier.saving'))
+        var switches = {}
+        DENY_RULES.forEach(function (rule) { switches[rule.key] = el('deny-' + rule.name).checked })
+        sendDenyTierConfigRequest(switches).then(function () {
+          said(denyTierSaidEl, t('denyTier.saved'))
+        }).catch(function (error) {
+          said(denyTierSaidEl, errorText(error), true)
         })
       })
 
@@ -1597,13 +1811,22 @@
         }
         said(saveSaidEl, t('save.saving'))
         var config = readConfig(currentConfig)
-        Promise.all([
-          write('config', config),
-          write('catalog', readCatalog()),
-          write('policies', readPolicies())
-        ]).then(function (results) {
-          var failed = results.find(function (r) { return !r || !r.ok })
-          if (failed) throw shownError(t('common.hostRejectedWrite'))
+        // Named, not anonymous: a Promise.all that only asks "did any of
+        // these fail" loses which one -- the exact "something failed and
+        // the message did not say what" shape this whole release is fixing
+        // elsewhere. Each write keeps its own label so a refusal can name
+        // the actual write(s) that failed, not a single generic sentence.
+        var namedWrites = [
+          { label: t('save.whichConfig'), promise: write('config', config) },
+          { label: t('save.whichCatalog'), promise: write('catalog', readCatalog()) },
+          { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) }
+        ]
+        Promise.all(namedWrites.map(function (w) { return w.promise })).then(function (results) {
+          var failedLabels = []
+          results.forEach(function (result, index) {
+            if (!result || !result.ok) failedLabels.push(namedWrites[index].label)
+          })
+          if (failedLabels.length > 0) throw shownError(t('save.rejectedWhich', { which: failedLabels.join(', ') }))
           writeBackground(CATALOG_POLICY_MIRROR_REQUEST_KEY, new Date().toISOString())
           currentConfig = config
           said(saveSaidEl, t('save.saved'))
@@ -1615,6 +1838,7 @@
       function load () {
         fillThresholds({})
         fillModSkillsStatus(null)
+        fillDenyTierStatus(null)
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
@@ -1629,6 +1853,7 @@
             read('policies', false),
             read(GATE_DEFAULTS_KEY, false),
             read(MOD_SKILLS_STATUS_KEY, false),
+            read(DENY_TIER_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus()
           ])
@@ -1640,6 +1865,7 @@
           policiesListEl.innerHTML = ''
           ;(results[2] || []).forEach(addPolicyRow)
           fillModSkillsStatus(results[4])
+          fillDenyTierStatus(results[5])
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
         })
