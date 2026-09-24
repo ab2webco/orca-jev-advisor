@@ -49,8 +49,25 @@ run `gentle-ai review assess --committed-only`.
     bare `git checkout <name>` (branch-or-path ambiguity; left uncaught).
   - Checks: table-driven tests in `adapters/claude/gate-bash.test.mjs`,
     unit tests for the pure matcher and the family.
-- [ ] **T2** Refresh `seed/policies.json`. Route: inline (one data file).
+- [x] **T2** Refresh `seed/policies.json`. Route: inline (one data file).
   Checks: `src/core/policy_seed*.test.ts` green.
+- [ ] **T2b** (scope addition from the coordinator, user requirement)
+  Baseline policy updates must reach existing installs.
+  1. Give `seed/policies.json` a baseline version. The schema change is allowed;
+     keep row-by-row tolerance and a test for the old bare-array shape.
+  2. Record per install which baseline version was last offered (its own
+     storage marker, like POLICY_SEED_MARKER_KEY).
+  3. When the shipped version is newer than the offered one, compute
+     `mergePolicySeeds` (added + differing) and show a notice in config.html
+     Team policies (ES + EN) with the real counts and a button into the
+     existing import/choose flow.
+  4. Never auto-apply. Rows change only via `applyPolicySeedChoices` with ids
+     the person picks. Dismissing marks the version as offered.
+  5. No invented counts: only computed numbers, and nothing shown when
+     nothing is new.
+  Checks: strict TDD; `npm run check` with screenshots at 1440/768/390/320,
+  both themes, each one read. Version comparison and merge stay in src/core;
+  storage stays in main.mjs.
 - [ ] **T3** Append "Plan review findings (2026-09-24)" to odd/CHECKPOINT.md.
   Route: inline (docs).
 
@@ -111,5 +128,56 @@ run `gentle-ai review assess --committed-only`.
   gate-level commit-message case was added after the fix, as a regression pin;
   no RED was observed for it.
 
+### T2 -- seed changes (for the person to review before merge)
+Route: inline (one data file + its test + two comments). How the seed is used
+(src/core/decisions.ts:118-141, 221-259, 598-620): Jev is handed every rule
+verbatim and asked which one "speaks directly to" the action. In the gate only
+`prohibits`/`requires_human` take effect (they turn an allow into an ask);
+`permits` falls through to the risk rule. So a vague prohibit costs prompts, and
+a vague permit is only dangerous in destination decisions. New rows name
+the exact forms and carve out the harmless neighbours.
+
+Changed (same id, same intent, so each shows as `differing` in "Import
+baseline policies" and the person chooses):
+- `read_and_test` (permits): "cleaning build artifacts" became "deleting build
+  output", and a sentence now excludes source files and points to
+  `discard_uncommitted_work`. "Cleaning" read close to `git clean`.
+- `never_write_to_main` (prohibits): adds `master`, matching the branches the
+  gate already treats as protected (`rule.pushProtected`: main/master/production).
+  Scope widened within the same intent; not flipped.
+- `unit_commits` (permits): a push is fine only as a normal push, never a force
+  push. The gate denies force pushes by default (`denyForcePush`), so the old
+  text permitted something the gate refuses.
+
+Added:
+- `discard_uncommitted_work` (prohibits): the T1 forms (checkout -- / . /
+  <ref> <path> / -f, restore without --staged, reset --hard, clean -f). It
+  explicitly allows `restore --staged`, `checkout <branch>` and `git switch`, so
+  it does not pull branch switches into a prompt.
+- `no_force_push` (prohibits): covers `--force`, `--force-with-lease` and `-f` on
+  any branch. The gate has a deny rule for this, but the seed said nothing.
+- `infrastructure_changes` (requires_human): covers terraform/tofu apply and
+  destroy and kubectl delete/drain, the other gate deny rules the seed didn't
+  cover. It carves out `plan` and read-only kubectl.
+
+Reviewed, unchanged: `own_branch`, `no_ai_attribution`, `own_pr_green`,
+`others_pr`, `large_pr`, `dependabot`, `client_always_asks`, `active_uat`,
+`cutover`, `production_data`, `production`, `friday`, `ticket_first`,
+`model_by_difficulty`, `delegate_by_scope`, `no_inventing_contracts`,
+`visual_evidence`. None was wrong against current code. No `prohibits` row was
+deleted or flipped.
+
+Not added: `curl | bash`. The deny rule covers it, and a policy row gives Jev
+nothing to weigh beyond the rule itself.
+
+Counts: 20 -> 23 rows. prohibits 8 -> 10, permits 9, requires_human 3 -> 4.
+The count test and the "eight prohibits" / "twenty" comments were updated to
+match.
+- RED (observed): 2 failures in `policy_seed.test.ts` (no discard row; counts).
+  GREEN: `npm test` -> 723/723.
+- Screenshot fixture note: `scripts/screenshot-panels.mjs` `seeds` scenario
+  still hard-codes `skipped: 20`. That gets fixed in T2b, which re-renders the
+  panel.
+
 ## Next step
-T2.
+T2b.

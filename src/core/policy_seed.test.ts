@@ -57,7 +57,7 @@ test("a row that fails validation is still the person's, and blocks the seed", (
   // This is data loss if it regresses. store.ts preserves rows the validator
   // rejects on purpose -- before `kind` existed every row lacked it, and the
   // panel keeps showing them until a human fills it in. Treating that list as
-  // empty replaces someone's rules with the shipped twenty.
+  // empty replaces someone's rules with the shipped ones.
   assert.equal(shouldSeedPolicies(undefined, [{ id: "half" }]), false);
   assert.equal(shouldSeedPolicies(undefined, [{ id: "pre-kind", rule: "written before kind existed" }]), false);
   assert.equal(shouldSeedPolicies(undefined, [{ id: "typo", kind: "prohibit", rule: "kind misspelt by hand" }]), false);
@@ -65,7 +65,7 @@ test("a row that fails validation is still the person's, and blocks the seed", (
 
 test("a marker means never again, which is what keeps a deliberately empty list empty", () => {
   // The reason this is a marker and not an emptiness check: someone who
-  // deletes all twenty rows would otherwise get them back -- eight of them
+  // deletes all the shipped rows would otherwise get them back -- ten of them
   // `prohibits` -- on the very next activation.
   assert.equal(shouldSeedPolicies({ at: "2026-09-24T00:00:00.000Z" }, []), false);
   assert.equal(shouldSeedPolicies({ at: "2026-09-24T00:00:00.000Z" }, undefined), false);
@@ -88,14 +88,28 @@ test("the marker key is the literal the worker reads, so a rename cannot go unno
   assert.equal(POLICY_SEED_MARKER_KEY, "policiesSeeded");
 });
 
-test("the shipped seed really does carry eight prohibits, which is what the marker protects", () => {
+test("the seed prohibits discarding uncommitted work, in the same forms the gate denies", () => {
+  // An agent's uncommitted work was discarded by `git checkout -- <file>` in a
+  // real session. The deny rule is the floor; this row is what Jev's policy
+  // coverage sees when that switch is turned down to ask.
+  const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "discard_uncommitted_work");
+  assert.ok(row, "no discard_uncommitted_work row in the shipped seed");
+  assert.equal(row.kind, "prohibits");
+  for (const form of ["git checkout --", "git checkout .", "git restore", "git reset --hard", "git clean -f"]) {
+    assert.ok(row.rule.includes(form), `the rule does not name ${form}`);
+  }
+  // Unstaging touches only the index; the row must not make it look forbidden.
+  assert.ok(row.rule.includes("--staged"), "the rule does not carve out git restore --staged");
+});
+
+test("the shipped seed carries ten prohibits, which is what the marker protects", () => {
   // The comments justifying the marker name this number. A seed that changes
   // shape should force them to be re-read, not quietly outdate them.
   const kinds = parseSeedPolicies(seedFile).reduce<Record<string, number>>((all, row) => {
     all[row.kind] = (all[row.kind] ?? 0) + 1;
     return all;
   }, {});
-  assert.equal(kinds.prohibits, 8, "the prohibits count in this module's comments is now wrong");
+  assert.equal(kinds.prohibits, 10, "the prohibits count in this module's comments is now wrong");
   assert.equal(kinds.permits, 9);
-  assert.equal(kinds.requires_human, 3);
+  assert.equal(kinds.requires_human, 4);
 });

@@ -5,7 +5,7 @@
 // nothing has ever read it. The catalog got a bootstrap of its own
 // (deriveInitialCatalogIfEmpty, from `orca worktree ps`); the policies got
 // none, and DEFAULT_POLICIES is the empty array. So every install started --
-// and stayed -- with zero policies unless the developer retyped all twenty by
+// and stayed -- with zero policies unless the developer retyped every row by
 // hand, which nobody does. The gate still worked, because an empty policy
 // stage simply falls through to the risk-based fallback, and that is exactly
 // why the hole went unseen: nothing broke, the judgments were just
@@ -17,7 +17,7 @@
 //      key rather than inferred from the list being empty. A developer who
 //      deletes every policy on purpose has expressed a preference, and an
 //      emptiness check would read that preference as "fresh machine" and
-//      resurrect all twenty on the next activation -- including eight
+//      resurrect every shipped row on the next activation -- including ten
 //      `prohibits` rows, which would change what the gate refuses. Deciding
 //      from a marker is what keeps an empty list a legitimate resting state.
 //   2. A machine that already holds policies is never touched, marker or not.
