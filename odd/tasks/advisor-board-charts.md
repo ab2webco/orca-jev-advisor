@@ -42,15 +42,15 @@ Out of scope: the settings panel, the gate itself, any new measurement.
   Jev `allow` / model `ask`.
 
 ## Tasks
-- [ ] T1 `src/core/ab_report.ts`: pure `foldAbResults` + tests (TDD, RED first).
-- [ ] T2 `read-measurements.mjs`: aggregate `ab-benchmark-results.jsonl` + tests.
-- [ ] T3 `board.html`: chart primitives (stacked bar, horizontal bars,
+- [x] T1 `src/core/ab_report.ts`: pure `foldAbResults` + tests (TDD, RED first).
+- [x] T2 `read-measurements.mjs`: aggregate `ab-benchmark-results.jsonl` + tests.
+- [x] T3 `board.html`: chart primitives (stacked bar, horizontal bars,
       latency comparison) as inline SVG, themed from the allowlist tokens.
-- [ ] T4 `board.html`: rebuild the six sections around them, plus the
+- [x] T4 `board.html`: rebuild the six sections around them, plus the
       "what is not measured" card.
-- [ ] T5 fixtures in `screenshot-panels.mjs` matching `jevLatency` and the
+- [x] T5 fixtures in `screenshot-panels.mjs` matching `jevLatency` and the
       A/B fold — NOT the invented `latencyMs {median,p90}` shape.
-- [ ] T6 screenshots at four widths, both themes, read every image.
+- [x] T6 screenshots at four widths, both themes, read every image.
 
 ## Checks
 `npm run check` (typecheck + 513 existing tests) and the screenshot harness.
@@ -65,3 +65,19 @@ judgment and reading the screenshots stay with the parent).
 
 ## Progress
 - Branch `feat/advisor-board-charts` created off `bfa7b84` (v0.3.1).
+- T1-T2 delegated writer, 16 tests, commit `612234a`.
+- T3-T6 inline, commit `1e0a35f`. Screenshots read at 1440/768/390/320 in
+  both themes, `ready` and `fresh`.
+- Two harness defects found by reading the images, both fixed in `1e0a35f`:
+  the fixture had drifted to an invented gate shape (so every populated gate
+  screenshot photographed the empty state), and the heartbeat went stale
+  mid-run (so the dead-worker banner appeared on almost every image).
+
+## Added scope: the silent fail-open (from MEJORAS-JEV-ADVISOR.md, P0)
+Verified at `adapters/claude/gate-bash.ts:838` -- `outcome.kind === 'none'`
+passes through writing nothing. The gate can be disarmed while the log looks
+healthy, which makes the board's headline count silently low. Delegated:
+`source: 'none'` recorded, one notice after three consecutive failures,
+and the board showing that slice.
+
+- [ ] T7 record and surface `source: 'none'`.
