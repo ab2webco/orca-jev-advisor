@@ -218,16 +218,6 @@
       <section id="thresholds-section">
         <h2 data-i18n="thresholds.heading"></h2>
         <div class="row">
-          <div><label for="actThreshold" data-i18n="thresholds.act"></label>
-            <input id="actThreshold" type="number" step="0.01" min="0" max="1" /></div>
-          <div><label for="confirmThreshold" data-i18n="thresholds.confirm"></label>
-            <input id="confirmThreshold" type="number" step="0.01" min="0" max="1" /></div>
-          <div><label for="reversibleGate">reversibleGate</label>
-            <input id="reversibleGate" type="number" step="0.01" min="0" max="1" /></div>
-        </div>
-        <div class="row">
-          <div><label for="externalGate">externalGate</label>
-            <input id="externalGate" type="number" step="0.01" min="0" max="1" /></div>
           <div><label for="consequenceCeiling">consequenceCeiling</label>
             <input id="consequenceCeiling" type="number" step="0.01" min="0" /></div>
           <div><label for="logMaxEntries" data-i18n="thresholds.logMaxEntries"></label>
@@ -355,8 +345,6 @@
           'integration.reverting': 'Revirtiendo…',
           'integration.reverted': 'Revertido.',
           'thresholds.heading': 'Umbrales',
-          'thresholds.act': 'actThreshold (actuar)',
-          'thresholds.confirm': 'confirmThreshold (confirmar)',
           'thresholds.logMaxEntries': 'Tamaño máximo del log',
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
@@ -500,8 +488,6 @@
           'integration.reverting': 'Reverting…',
           'integration.reverted': 'Reverted.',
           'thresholds.heading': 'Thresholds',
-          'thresholds.act': 'actThreshold (act)',
-          'thresholds.confirm': 'confirmThreshold (confirm)',
           'thresholds.logMaxEntries': 'Maximum log size',
           'catalog.heading': 'Destination catalog',
           'catalog.hint': 'One destination per worktree this plugin may judge or route.',
@@ -1562,10 +1548,10 @@
       function fillThresholds (config, gateDefaults) {
         config = config || {}
         var thresholds = config.thresholds || {}
-        el('actThreshold').value = thresholds.actThreshold != null ? thresholds.actThreshold : 0.9
-        el('confirmThreshold').value = thresholds.confirmThreshold != null ? thresholds.confirmThreshold : 0.6
-        el('reversibleGate').value = thresholds.reversibleGate != null ? thresholds.reversibleGate : 0.7
-        el('externalGate').value = thresholds.externalGate != null ? thresholds.externalGate : 0.35
+        // actThreshold, confirmThreshold, reversibleGate and externalGate used
+        // to live here too -- removed as dead config, read by no decision
+        // anywhere (production-honesty-pass P2). Do not reintroduce one of
+        // them without wiring it to something that actually reads it.
         // consequenceCeiling has no honest literal fallback here: 1.5 was a
         // stale copy of a value src/core/decisions.ts has since re-measured
         // to 1.78 (GATE_CONSEQUENCE_CEILING), and a panel cannot import from
@@ -1584,10 +1570,6 @@
       function readConfig (previous) {
         return {
           thresholds: {
-            actThreshold: Number(el('actThreshold').value),
-            confirmThreshold: Number(el('confirmThreshold').value),
-            reversibleGate: Number(el('reversibleGate').value),
-            externalGate: Number(el('externalGate').value),
             consequenceCeiling: Number(el('consequenceCeiling').value)
           },
           logMaxEntries: Number(el('logMaxEntries').value),
