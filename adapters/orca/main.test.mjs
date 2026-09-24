@@ -6,10 +6,13 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
+
+import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
 import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
 import {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
+  attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModSkillsConfigRequest,
   attendPolicySeedImportRequest,
@@ -18,6 +21,8 @@ import {
   CLAUDE_INTEGRATION_RESULT_KEY,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
+  DENY_TIER_CONFIG_RESULT_KEY,
+  DENY_TIER_STATUS_KEY,
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
@@ -25,6 +30,7 @@ import {
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
+  publishDenyTierStatus,
   publishGateDefaults,
   publishModSkillsStatus,
   publishWorkerHeartbeat,
@@ -280,6 +286,121 @@ test('publishModSkillsStatus: a malformed mirror value (wrong types) normalizes 
   const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
   assert.equal(status.active, false)
   assert.equal(status.activeTools, false)
+})
+
+// ---------------------------------------------------------------------------
+// Deny tier -- unlike mod-skills above, every failure/malformed-value case
+// here must fail CLOSED (all three `true`, still denying), never open. See
+// src/core/deny_tier_config.ts's module note.
+// ---------------------------------------------------------------------------
+
+test('attendDenyTierConfigRequest: an expired request publishes reason "expired"', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    denyTierConfigRequest: { id: 'dt-1', at: TEN_MINUTES_AGO, denyRmRf: false, denyDropTable: false, denyTerraformDestroy: false }
+  })
+  await attendDenyTierConfigRequest(orca, storageHost)
+  const result = await storageHost.get(DENY_TIER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'dt-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+  // Expiry must never reach the mirror -- no status republish either.
+  assert.equal(await storageHost.get(DENY_TIER_STATUS_KEY), null)
+})
+
+test('attendDenyTierConfigRequest: a fresh request saves through the mirror and publishes an ok result', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    denyTierConfigRequest: { id: 'dt-2', at: new Date().toISOString(), denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true }
+  })
+  const saved = { current: null }
+  const mirror = async (mode, stdin) => {
+    if (mode === 'deny-tier-config-save') {
+      saved.current = JSON.parse(stdin)
+      return { ok: true }
+    }
+    if (mode === 'deny-tier-config-read') {
+      return { ok: true, value: saved.current }
+    }
+    throw new Error(`unexpected mode: ${mode}`)
+  }
+  await attendDenyTierConfigRequest(orca, storageHost, { mirror })
+  const result = await storageHost.get(DENY_TIER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'dt-2')
+  assert.equal(result.ok, true)
+  assert.deepEqual(saved.current, { ...DEFAULT_DENY_TIER_SWITCHES, denyRmRf: false })
+  const status = await storageHost.get(DENY_TIER_STATUS_KEY)
+  assert.equal(status.denyRmRf, false)
+  for (const key of DENY_TOGGLE_KEYS.filter((k) => k !== 'denyRmRf')) assert.equal(status[key], true, key)
+  assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('attendDenyTierConfigRequest: a non-boolean field in the request fails CLOSED to true, never to false', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    denyTierConfigRequest: { id: 'dt-3', at: new Date().toISOString(), denyRmRf: 'no', denyDropTable: 0, denyTerraformDestroy: false }
+  })
+  const saved = { current: null }
+  const mirror = async (mode, stdin) => {
+    if (mode === 'deny-tier-config-save') { saved.current = JSON.parse(stdin); return { ok: true } }
+    return { ok: true, value: saved.current }
+  }
+  await attendDenyTierConfigRequest(orca, storageHost, { mirror })
+  assert.deepEqual(saved.current, { ...DEFAULT_DENY_TIER_SWITCHES, denyTerraformDestroy: false })
+})
+
+test('attendDenyTierConfigRequest: a mirror failure is reported, not silently swallowed as success', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    denyTierConfigRequest: { id: 'dt-4', at: new Date().toISOString(), denyRmRf: false, denyDropTable: false, denyTerraformDestroy: false }
+  })
+  const mirror = async (mode) => {
+    if (mode === 'deny-tier-config-save') return { ok: false, reason: 'exception', detail: 'disk is full' }
+    return { ok: false, reason: 'exception', detail: 'disk is full' }
+  }
+  await attendDenyTierConfigRequest(orca, storageHost, { mirror })
+  const result = await storageHost.get(DENY_TIER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'dt-4')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'exception')
+})
+
+test('publishDenyTierStatus: a failed mirror read fails CLOSED to all three true, never throws', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const mirror = async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' })
+  await publishDenyTierStatus(orca, storageHost, { mirror })
+  const status = await storageHost.get(DENY_TIER_STATUS_KEY)
+  for (const key of DENY_TOGGLE_KEYS) assert.equal(status[key], true, key)
+})
+
+// Fails closed FIELD BY FIELD, which is what parseDenyTierConfig always
+// promised and what this publish path used to contradict: it threw away the
+// whole object if any one field was wrong-typed. A wrong-typed field must not
+// decide anything for its neighbours -- in either direction.
+test('publishDenyTierStatus: a wrong-typed field fails CLOSED for that field alone', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const mirror = async () => ({ ok: true, value: { denyRmRf: 'yes', denyDropTable: null, denyTerraformDestroy: false } })
+  await publishDenyTierStatus(orca, storageHost, { mirror })
+  const status = await storageHost.get(DENY_TIER_STATUS_KEY)
+  assert.equal(status.denyRmRf, true, 'a string is not a boolean, so it stays denying')
+  assert.equal(status.denyDropTable, true, 'null is not a boolean, so it stays denying')
+  assert.equal(status.denyTerraformDestroy, false, 'a real false is honoured, whatever its neighbours look like')
+  const named = ['denyRmRf', 'denyDropTable', 'denyTerraformDestroy']
+  for (const key of DENY_TOGGLE_KEYS.filter((k) => !named.includes(k))) {
+    assert.equal(status[key], true, `${key} was never mentioned, so it stays denying`)
+  }
+})
+
+test('publishDenyTierStatus: a well-formed mirror value with one switch off is published as-is', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const mirror = async () => ({ ok: true, value: { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true } })
+  await publishDenyTierStatus(orca, storageHost, { mirror })
+  const status = await storageHost.get(DENY_TIER_STATUS_KEY)
+  assert.equal(status.denyRmRf, false)
+  for (const key of DENY_TOGGLE_KEYS.filter((k) => k !== 'denyRmRf')) assert.equal(status[key], true, key)
 })
 
 // ---------------------------------------------------------------------------

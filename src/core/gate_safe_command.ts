@@ -161,3 +161,30 @@ export function isObviouslySafeCommand(command: string): boolean {
   if (segments.length === 0) return false
   return segments.every(isSafeSegment)
 }
+
+/**
+ * Whether a command only *mentions* a dangerous phrase rather than running it.
+ *
+ * Found live: `grep -n "terraform apply stays ask" file.mjs` was refused as
+ * "creates, changes or destroys real infrastructure", because the tier-1b
+ * rules test the whole command string and the phrase sat inside a quoted
+ * search pattern. Under `ask` that cost a click. Under `deny` it makes an
+ * agent unable to grep this very repository, whose source is full of these
+ * phrases -- so the two changes had to land together.
+ *
+ * Deliberately conservative: this answers true only when EVERY segment leads
+ * with a verb that reads or prints and cannot execute its argument. Anything
+ * else -- an unrecognised verb, a shell, a segment the splitter mangled
+ * because a quoted `|` confused it -- answers false and the rule stands. The
+ * cost of a false "mention" is a dangerous command waved through; the cost of
+ * a false "run" is one interruption. They are not symmetric.
+ */
+const MENTION_ONLY_VERBS =
+  /^(grep|rg|ag|ack|echo|printf|cat|bat|head|tail|less|more|wc|nl|comm|diff|sort|uniq|column|jq|yq|fgrep|egrep|sed\s+-n|awk)\b/;
+
+export function mentionsRatherThanRuns(command: string): boolean {
+  // Reuses the gate's own splitter rather than a second, drifting copy.
+  const segments = splitSegments(command).map((segment) => segment.trim()).filter((s) => s.length > 0);
+  if (segments.length === 0) return false;
+  return segments.every((segment) => MENTION_ONLY_VERBS.test(segment));
+}
