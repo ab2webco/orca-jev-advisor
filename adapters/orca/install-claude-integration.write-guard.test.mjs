@@ -42,11 +42,17 @@ function resetFixture () {
 before(resetFixture)
 after(resetFixture)
 
-function runInstallAgainst (home) {
+function runInstallAgainst (home, extraEnv = {}) {
   const env = { ...process.env, HOME: home }
   delete env.ORCA_USER_DATA_PATH
   delete env.XDG_CONFIG_HOME
   delete env.XDG_CACHE_HOME
+  // Deliberately deleted (not merely left unset from the parent shell)
+  // before applying `extraEnv`: the "refuses..." test below relies on this
+  // being absent so resolveConfigDirCandidates has nothing to fall back on,
+  // while the sanity test passes it explicitly through `extraEnv`.
+  delete env.ORCA_SUPERVISOR_CONFIG_DIR
+  Object.assign(env, extraEnv)
   const stdout = execFileSync(process.execPath, [SCRIPT_PATH, 'install', PLUGIN_ROOT], { env, encoding: 'utf8' })
   return JSON.parse(stdout)
 }
@@ -56,10 +62,20 @@ test('refuses to install against a real-looking, non-isolated HOME under the tes
 
   const result = runInstallAgainst(FAKE_REAL_HOME)
 
-  assert.equal(result.ok, false, `expected the write guard to refuse the install, got: ${JSON.stringify(result)}`)
+  // The refusal now fires one layer earlier than it used to: src/core/
+  // paths.ts's resolveConfigDirCandidates itself refuses to hand back a
+  // real path at all under node's test runner unless
+  // ORCA_SUPERVISOR_CONFIG_DIR is set (see that module's doc) --
+  // install-claude-integration.mjs never even reaches guarded_fs.ts's
+  // per-write check on ~/.claude/settings.json, because it never resolves
+  // its own STATE_DIR (bookkeeping) first. Still reported through the
+  // exact same `{ok:false, reason:'exception', detail}` contract as any
+  // other failure (see install-claude-integration.mjs's module-scope
+  // try/catch around its path resolution).
+  assert.equal(result.ok, false, `expected the paths guard to refuse the install, got: ${JSON.stringify(result)}`)
   assert.equal(result.reason, 'exception')
-  assert.match(result.detail, /write guard/i)
-  assert.match(result.detail, /refusing to write/i)
+  assert.match(result.detail, /paths guard/i)
+  assert.match(result.detail, /refused to hand back/i)
 
   // The strongest assertion: not merely that the JSON says "no", but that
   // nothing was actually written to the fabricated real-looking home.
@@ -73,7 +89,14 @@ test('still installs normally against an isolated (mkdtemp-style) HOME', () => {
   // entire suite depends on writes succeeding against a temp HOME.
   const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-sanity-'))
   try {
-    const result = runInstallAgainst(tempHome)
+    const result = runInstallAgainst(tempHome, {
+      // resolveConfigDirCandidates refuses to compute a real path at all
+      // under node's test runner unless an explicit override is set (see
+      // src/core/paths.ts's module doc) -- a temp HOME alone is no longer
+      // enough by itself. This points it at exactly what it would have
+      // computed for `tempHome` on darwin with no XDG override.
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
     assert.equal(result.ok, true, `expected a normal install to succeed, got: ${JSON.stringify(result)}`)
     const settings = JSON.parse(readFileSync(join(tempHome, '.claude', 'settings.json'), 'utf8'))
     assert.ok(settings.hooks, 'a real install must still write hooks under an isolated HOME')

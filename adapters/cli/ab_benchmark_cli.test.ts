@@ -12,11 +12,32 @@
 // to run it.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test, { after } from "node:test";
 
 import { serializeSampleEntry, type AbSampleEntry } from "../../src/core/ab_benchmark.ts";
 import { DEFAULT_AB_BENCHMARK_CONFIG } from "../../src/core/ab_benchmark_config.ts";
-import { parseCliArgs, runCompare, type JevCaller } from "./ab_benchmark_cli.ts";
+import type { JevCaller } from "./ab_benchmark_cli.ts";
+
+// src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute a
+// real path at all under node's test runner unless an explicit override is
+// set (see that module's doc) -- ab_benchmark_cli.ts resolves its own
+// CACHE_DIR/CONFIG_DIR unconditionally at module scope (never used by
+// parseCliArgs/runCompare themselves, which this file tests, but evaluated
+// regardless on import). A static `import ... from "./ab_benchmark_cli.ts"`
+// is hoisted ahead of any other top-level statement in this file, so the
+// override could never be set first that way -- hence the plain dynamic
+// import below, after the override is in place. `import type` above stays
+// static: a type-only import is fully erased and never evaluates the
+// module.
+const PATHS_OVERRIDE_DIR = mkdtempSync(join(tmpdir(), "orca-jev-ab-benchmark-cli-test-"));
+process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(PATHS_OVERRIDE_DIR, "config");
+process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, "cache");
+after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }));
+
+const { parseCliArgs, runCompare } = await import("./ab_benchmark_cli.ts");
 
 function queuedEntry(overrides: Partial<AbSampleEntry> = {}): AbSampleEntry {
   return {

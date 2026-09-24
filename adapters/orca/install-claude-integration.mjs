@@ -92,9 +92,29 @@ const PLATFORM = normalizePlatform(process.platform)
 // ~/.config/orca-supervisor -- and losing sight of them would mean uninstall
 // could no longer restore what install captured, which is the one file that
 // cannot be reconstructed later.
-const STATE_DIRS = resolveConfigDirCandidates(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
-const STATE_DIR = STATE_DIRS[0]
-const STATE_PATH = join(STATE_DIR, 'claude-settings-install-state.json')
+//
+// resolveConfigDirCandidates itself now refuses to hand back a real path at
+// all while running under node's test runner with no explicit
+// ORCA_SUPERVISOR_CONFIG_DIR override (see src/core/paths.ts's module doc)
+// -- a stronger, earlier version of exactly the guarantee guarded_fs.ts's
+// per-write checks already gave this file. That refusal is deliberately
+// caught here, at module scope, rather than left to crash the process
+// uncaught: main()'s own try/catch below already reports every other
+// failure through `{ok:false, reason:'exception', detail}` on stdout, and
+// a path-resolution refusal deserves the exact same clean, parseable
+// report instead of an uncaught-exception stack trace on stderr with a
+// non-zero exit and no JSON at all.
+let STATE_DIRS = []
+let STATE_DIR = ''
+let STATE_PATH = ''
+let STATE_DIR_RESOLUTION_ERROR = null
+try {
+  STATE_DIRS = resolveConfigDirCandidates(PLATFORM, { home: HOME, appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
+  STATE_DIR = STATE_DIRS[0]
+  STATE_PATH = join(STATE_DIR, 'claude-settings-install-state.json')
+} catch (error) {
+  STATE_DIR_RESOLUTION_ERROR = error
+}
 
 // ---------------------------------------------------------------------------
 // Install targets.
@@ -828,6 +848,7 @@ async function main () {
   const pluginRoot = process.argv[3]
   let result
   try {
+    if (STATE_DIR_RESOLUTION_ERROR) throw STATE_DIR_RESOLUTION_ERROR
     if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
       result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status> <pluginRoot>' }
     } else if (mode === 'install') {

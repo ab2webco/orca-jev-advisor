@@ -33,10 +33,16 @@ function resetFixture () {
 before(resetFixture)
 after(resetFixture)
 
-function runMirrorAgainst (home, mode, stdinContent) {
+function runMirrorAgainst (home, mode, stdinContent, extraEnv = {}) {
   const env = { ...process.env, HOME: home }
   delete env.XDG_CONFIG_HOME
   delete env.XDG_CACHE_HOME
+  // Deliberately deleted (not merely left unset from the parent shell)
+  // before applying `extraEnv`: the "refuses..." test below relies on this
+  // being absent so resolveConfigDir has nothing to fall back on, while the
+  // sanity test passes it explicitly through `extraEnv`.
+  delete env.ORCA_SUPERVISOR_CONFIG_DIR
+  Object.assign(env, extraEnv)
   const stdout = execFileSync(process.execPath, [SCRIPT_PATH, mode], { env, encoding: 'utf8', input: stdinContent })
   return JSON.parse(stdout)
 }
@@ -46,10 +52,19 @@ test('refuses catalog-save against a real-looking, non-isolated HOME under the t
 
   const result = runMirrorAgainst(FAKE_REAL_HOME, 'catalog-save', JSON.stringify({ destinations: [] }))
 
-  assert.equal(result.ok, false, `expected the write guard to refuse catalog-save, got: ${JSON.stringify(result)}`)
+  // The refusal now fires one layer earlier than it used to: src/core/
+  // paths.ts's resolveConfigDir itself refuses to hand back a real path at
+  // all under node's test runner unless ORCA_SUPERVISOR_CONFIG_DIR is set
+  // (see that module's doc) -- write-secret-mirror.mjs never even reaches
+  // guarded_fs.ts's per-write check below, because it never gets a real
+  // CONFIG_DIR to write into in the first place. Still reported through
+  // the exact same `{ok:false, reason:'exception', detail}` contract as
+  // any other failure (see write-secret-mirror.mjs's module-scope try/catch
+  // around its path resolution).
+  assert.equal(result.ok, false, `expected the paths guard to refuse catalog-save, got: ${JSON.stringify(result)}`)
   assert.equal(result.reason, 'exception')
-  assert.match(result.detail, /write guard/i)
-  assert.match(result.detail, /refusing to write/i)
+  assert.match(result.detail, /paths guard/i)
+  assert.match(result.detail, /refused to hand back/i)
   assert.equal(existsSync(FAKE_CATALOG_PATH), false, 'the guard must fire before any file is created')
   assert.equal(existsSync(FAKE_REAL_HOME), false, 'the guard must fire before even the directory is created')
 })
@@ -57,7 +72,14 @@ test('refuses catalog-save against a real-looking, non-isolated HOME under the t
 test('still saves normally against an isolated (mkdtemp-style) HOME', () => {
   const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-mirror-sanity-'))
   try {
-    const result = runMirrorAgainst(tempHome, 'catalog-save', JSON.stringify({ destinations: [] }))
+    const result = runMirrorAgainst(tempHome, 'catalog-save', JSON.stringify({ destinations: [] }), {
+      // resolveConfigDir refuses to compute a real path at all under node's
+      // test runner unless an explicit override is set (see src/core/
+      // paths.ts's module doc) -- a temp HOME alone is no longer enough by
+      // itself. This points it at exactly what it would have computed for
+      // `tempHome` on darwin with no XDG override.
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
     assert.equal(result.ok, true, `expected a normal catalog-save to succeed, got: ${JSON.stringify(result)}`)
     const written = JSON.parse(readFileSync(join(tempHome, '.config', 'orca-supervisor', 'catalog.json'), 'utf8'))
     assert.deepEqual(written, { destinations: [] })

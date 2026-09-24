@@ -114,11 +114,19 @@ test('agrees with src/core/paths.ts on every platform shape', async () => {
     { name: 'Linux, no XDG', platform: 'linux' as const, home: '/home/dev', env: {} },
     { name: 'Linux WITH XDG set', platform: 'linux' as const, home: '/home/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
   ];
+  // Pass an explicit empty `env` (the third, test-isolation-guard
+  // argument): this test file itself runs under node's test runner, and
+  // src/core/paths.ts's resolveConfigDir/resolveCacheDir now refuse to
+  // compute a real path at all in that case unless an explicit override is
+  // set (see that module's doc). This test compares pure platform logic,
+  // not real filesystem safety, so it opts out of the guard the same way
+  // src/core/paths.test.ts's own platform-behavior tests do.
+  const NOT_TEST_ENV = {};
   for (const c of cases) {
     const mine = computeHomePaths({ home: c.home, ...c.env });
     const theirs = {
-      configDir: resolveConfigDir(c.platform, { home: c.home, xdgConfigHome: c.env.xdgConfigHome }),
-      cacheDir: resolveCacheDir(c.platform, { home: c.home, xdgCacheHome: c.env.xdgCacheHome }),
+      configDir: resolveConfigDir(c.platform, { home: c.home, xdgConfigHome: c.env.xdgConfigHome }, NOT_TEST_ENV),
+      cacheDir: resolveCacheDir(c.platform, { home: c.home, xdgCacheHome: c.env.xdgCacheHome }, NOT_TEST_ENV),
     };
     assert.equal(mine?.configDir, theirs.configDir, `${c.name}: config dir diverged`);
     assert.equal(mine?.cacheDir, theirs.cacheDir, `${c.name}: cache dir diverged`);

@@ -55,6 +55,11 @@ function decisionRow (id, at) {
 function run (home) {
   const env = { ...process.env, HOME: home }
   delete env.XDG_CACHE_HOME
+  // src/core/paths.ts's resolveCacheDir refuses to compute a real path at
+  // all under node's test runner (see its module doc) -- this points it at
+  // exactly the directory it would have computed for `home` on darwin with
+  // no XDG override, matching modSkillsLogPathFor above.
+  env.ORCA_SUPERVISOR_CACHE_DIR = join(home, '.cache', 'orca-supervisor')
   const stdout = execFileSync(process.execPath, [SCRIPT_PATH], { env, encoding: 'utf8' })
   return JSON.parse(stdout)
 }
