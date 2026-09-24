@@ -240,7 +240,12 @@
         <h2 data-i18n="policies.heading"></h2>
         <p class="hint" data-i18n="policies.hint"></p>
         <div id="policies-list"></div>
-        <div class="actions"><button id="add-policy-row" type="button" data-i18n="policies.add"></button></div>
+        <div class="actions">
+          <button id="add-policy-row" type="button" data-i18n="policies.add"></button>
+          <button id="import-policy-seeds" type="button" data-i18n="policies.importSeeds"></button>
+          <span class="said" id="policy-import-said"></span>
+        </div>
+        <p class="hint" data-i18n="policies.importHint"></p>
       </section>
 
       <section id="save-section">
@@ -345,6 +350,11 @@
           'policies.fieldDestinationsHint': 'Vacío = aplica a todos los destinos (comportamiento actual). Ids separados por comas para limitar esta política a destinos específicos.',
           'policies.unknownDestination': 'Estos ids no existen en el catálogo actual: {{ids}}',
           'policies.remove': 'Quitar',
+          'policies.importSeeds': 'Importar políticas base',
+          'policies.importHint': 'Agrega las políticas base incluidas con el plugin que todavía no tienes; lo que ya agregaste o editaste queda intacto.',
+          'policies.importing': 'Importando…',
+          'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
+          'policies.importNone': 'No hay políticas nuevas para agregar.',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
@@ -364,6 +374,7 @@
           'error.expired': 'La solicitud expiró antes de que el plugin la atendiera. Vuelve a intentarlo.',
           'error.orcaCliNotFound': 'No se encontró el CLI de Orca. Reinicia Orca; si el problema sigue, la instalación podría estar dañada.',
           'error.orcaCliFailed': 'El CLI de Orca devolvió un error al listar los worktrees. Revisa el registro de Orca.',
+          'error.seedUnavailable': 'No se pudieron cargar las políticas base incluidas con el plugin.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
@@ -449,6 +460,11 @@
           'policies.fieldDestinationsHint': "Empty = applies to all destinations (today's behavior). Comma-separated ids to limit this policy to specific destinations.",
           'policies.unknownDestination': "These ids don't exist in the current catalog: {{ids}}",
           'policies.remove': 'Remove',
+          'policies.importSeeds': 'Import baseline policies',
+          'policies.importHint': "Adds the plugin's baseline policies you don't already have; anything you already added or edited is left untouched.",
+          'policies.importing': 'Importing…',
+          'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
+          'policies.importNone': 'No new policies to add.',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
@@ -468,6 +484,7 @@
           'error.expired': 'The request expired before the plugin attended it. Try again.',
           'error.orcaCliNotFound': 'Could not find the Orca CLI. Restart Orca; if this keeps happening, the install may be damaged.',
           'error.orcaCliFailed': "The Orca CLI returned an error while listing worktrees. Check Orca's log.",
+          'error.seedUnavailable': "Could not load the plugin's baseline policies.",
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
       }
@@ -489,7 +506,8 @@
         'missing-plugin-root': 'error.missingPluginRoot',
         expired: 'error.expired',
         'orca-cli-not-found': 'error.orcaCliNotFound',
-        'orca-cli-failed': 'error.orcaCliFailed'
+        'orca-cli-failed': 'error.orcaCliFailed',
+        'seed-unavailable': 'error.seedUnavailable'
       }
       /**
        * An error whose text is safe to put in front of a person.
@@ -820,6 +838,36 @@
         return write(CATALOG_REFRESH_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForCatalogRefreshResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- policy seed import: request/result --------------------------
+      // Same request/result pattern as catalog refresh above: the panel
+      // cannot call main.mjs's cmdImportPolicySeeds directly (same
+      // sandboxed bridge restriction), so the "Import baseline policies"
+      // button leaves a request and main.mjs's poll loop attends it.
+      var POLICY_SEED_IMPORT_REQUEST_KEY = 'policySeedImportRequest'
+      var POLICY_SEED_IMPORT_RESULT_KEY = 'policySeedImportResult'
+
+      function waitForPolicySeedImportResult (requestId, deadline) {
+        return read(POLICY_SEED_IMPORT_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForPolicySeedImportResult(requestId, deadline) })
+        })
+      }
+
+      function sendPolicySeedImportRequest () {
+        var requestId = 'policy-seed-import-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString() }
+        signalPanelOpen()
+        return write(POLICY_SEED_IMPORT_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForPolicySeedImportResult(requestId, Date.now() + 20000)
         })
       }
 
@@ -1166,6 +1214,23 @@
         })
         return rows.filter(function (r) { return r.id.length > 0 && r.rule.length > 0 })
       }
+
+      var policyImportSaidEl = el('policy-import-said')
+      el('import-policy-seeds').addEventListener('click', function () {
+        said(policyImportSaidEl, t('policies.importing'))
+        sendPolicySeedImportRequest().then(function (result) {
+          var added = (result && typeof result.added === 'number') ? result.added : 0
+          var skipped = (result && typeof result.skipped === 'number') ? result.skipped : 0
+          said(policyImportSaidEl, added > 0 ? t('policies.importDone', { added: String(added), skipped: String(skipped) }) : t('policies.importNone'))
+          return read('policies', false)
+        }).then(function (policies) {
+          if (!policies) return
+          policiesListEl.innerHTML = ''
+          policies.forEach(addPolicyRow)
+        }).catch(function (error) {
+          said(policyImportSaidEl, errorText(error), true)
+        })
+      })
 
       // ---------- umbrales --------------------------------------------------
 

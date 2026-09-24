@@ -11,14 +11,17 @@ import {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendLocaleRequest,
+  attendPolicySeedImportRequest,
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  cmdImportPolicySeeds,
   cmdRefreshCatalog,
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
+  POLICY_SEED_IMPORT_RESULT_KEY,
   publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
@@ -40,6 +43,14 @@ function fakeStorageHost (initial) {
     _store: store
   }
 }
+
+// cmdImportPolicySeeds/cmdRefreshCatalog's real `mirrorCatalogAndPolicies`
+// spawns a real child process that writes to the ACTUAL machine's
+// CONFIG_DIR (~/.config/orca-supervisor), regardless of which storageHost is
+// passed to it -- it is never scoped to the fake host above. Every test that
+// can reach `added > 0` MUST override it with this no-op, or it silently
+// overwrites this developer's own real catalog.json/policies.json on disk.
+function noopMirror () { return Promise.resolve() }
 
 function fakeSecretsHost (initial) {
   const store = { ...(initial || {}) }
@@ -253,4 +264,68 @@ test('deriveInitialCatalogIfEmpty: stays non-throwing and leaves the catalog emp
   })
   const catalog = await storageHost.get('catalog')
   assert.equal(catalog.destinations.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// T9 -- seed/policies.json ships with the plugin but nothing could import
+// it; adding it must merge by id and never clobber an existing row. See
+// odd/tasks/panel-worker-wakeup.md.
+// ---------------------------------------------------------------------------
+
+test('cmdImportPolicySeeds: imports the real shipped seed policies into an empty store', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.equal(result.ok, true)
+  assert.ok(result.added > 0)
+  assert.equal(result.skipped, 0)
+  const stored = await storageHost.get('policies')
+  assert.ok(stored.some((row) => row.id === 'read_and_test'))
+})
+
+test('cmdImportPolicySeeds: never overwrites a policy id the developer already has', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.equal(result.ok, true)
+  const stored = await storageHost.get('policies')
+  const row = stored.find((r) => r.id === 'read_and_test')
+  assert.equal(row.rule, 'my own edited rule')
+  assert.equal(row.kind, 'prohibits')
+})
+
+test('cmdImportPolicySeeds: reports a real reason code when the seed file cannot be read', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const result = await cmdImportPolicySeeds(orca, storageHost, { seedPath: '/nonexistent/policies.json' })
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'seed-unavailable')
+  // Never partially written on failure.
+  assert.equal(await storageHost.get('policies'), null)
+})
+
+test('attendPolicySeedImportRequest: an expired request publishes reason "expired"', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policySeedImportRequest: { id: 'psi-1', at: TEN_MINUTES_AGO }
+  })
+  await attendPolicySeedImportRequest(orca, storageHost)
+  const result = await storageHost.get(POLICY_SEED_IMPORT_RESULT_KEY)
+  assert.equal(result.id, 'psi-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+})
+
+test('attendPolicySeedImportRequest: a fresh request imports the seeds and publishes an ok result', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policySeedImportRequest: { id: 'psi-2', at: new Date().toISOString() }
+  })
+  await attendPolicySeedImportRequest(orca, storageHost, { mirror: noopMirror })
+  const result = await storageHost.get(POLICY_SEED_IMPORT_RESULT_KEY)
+  assert.equal(result.id, 'psi-2')
+  assert.equal(result.ok, true)
+  assert.ok(result.added > 0)
 })

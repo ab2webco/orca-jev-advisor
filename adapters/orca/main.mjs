@@ -47,6 +47,8 @@ import {
   interpretDestinationPolicy
 } from '../../src/core/decisions.ts'
 import { isMissingCommandError, resolveOrcaCliCandidates } from '../../src/core/orca_cli.ts'
+import { loadPolicies } from '../../src/core/policies.ts'
+import { mergePolicySeeds } from '../../src/core/policy_seed_import.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
 import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog } from '../../src/core/store.ts'
 import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
@@ -408,6 +410,54 @@ async function uninstallClaudeIntegration (orca) {
 
 async function claudeIntegrationStatus () {
   return runClaudeIntegrationScript('status')
+}
+
+// ---------------------------------------------------------------------------
+// Policy seed import -- seed/policies.json ships with the plugin as its
+// shared baseline (loaded by the same `loadPolicies` tools/decide.ts and
+// tools/policy-gate.ts use; see src/core/policies.ts's own module note).
+// Nothing before this could bring it IN: mirrorCatalogAndPolicies above only
+// ever mirrors the developer's OWN policies OUT to gate-bash.ts's JSON file,
+// so every fresh install starts with an empty policy list and no way to
+// adopt the baseline this repo already carries.
+//
+// Resolved relative to PLUGIN_ROOT (this worker's own installed tree), never
+// an absolute path -- the seed ships inside the plugin, wherever it happens
+// to be installed. Merge-only, by id (see src/core/policy_seed_import.ts):
+// an id the developer already has, however that row looks, complete or not,
+// is left exactly as it is; only genuinely new ids are added. Never throws.
+// ---------------------------------------------------------------------------
+
+const POLICY_SEED_PATH = join(PLUGIN_ROOT, 'seed', 'policies.json')
+
+/** advisor's policy-seed-import action, attended the same way as
+ *  advisor.refreshCatalog: reads the shipped seed file, merges it into
+ *  whatever is already stored (raw, not through getPolicies -- that would
+ *  silently drop an existing incomplete row instead of preserving it), and
+ *  re-mirrors on any real change. `options.seedPath`/`options.mirror` are
+ *  test-only: production always reads the plugin's own POLICY_SEED_PATH and
+ *  always re-mirrors for real. (mirrorCatalogAndPolicies spawns a real
+ *  sidecar that writes to the actual machine's CONFIG_DIR regardless of
+ *  which storageHost is passed to it -- tests MUST override this, never let
+ *  it run against a fake host, or it silently overwrites this developer's
+ *  own real catalog.json/policies.json on disk.) */
+async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
+  const seedPath = options.seedPath ?? POLICY_SEED_PATH
+  const mirror = options.mirror ?? mirrorCatalogAndPolicies
+  try {
+    const seeds = await loadPolicies(seedPath)
+    const existingRaw = await storageHost.get('policies')
+    const existing = Array.isArray(existingRaw) ? existingRaw : []
+    const { merged, added, skipped } = mergePolicySeeds(existing, seeds)
+    if (added > 0) {
+      await storageHost.set('policies', merged)
+      await mirror(orca, storageHost)
+    }
+    return { ok: true, added, skipped }
+  } catch (error) {
+    orca.log(`policy seed import failed: ${String(error?.message ?? error).slice(0, 200)}`)
+    return { ok: false, reason: 'seed-unavailable', detail: String(error?.message ?? error).slice(0, 300) }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -847,6 +897,38 @@ async function attendCatalogRefreshRequest (orca, storageHost) {
 }
 
 // ---------------------------------------------------------------------------
+// Policy seed import -- same request/result shape as catalog refresh above:
+// the panel's TEAM POLICIES section cannot call cmdImportPolicySeeds
+// directly (same sandboxed bridge restriction), so its import action leaves
+// a request here.
+// ---------------------------------------------------------------------------
+
+const POLICY_SEED_IMPORT_REQUEST_KEY = 'policySeedImportRequest'
+const POLICY_SEED_IMPORT_RESULT_KEY = 'policySeedImportResult'
+
+/** Attends one pending policy-seed-import request from the panel, if any. */
+async function attendPolicySeedImportRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(POLICY_SEED_IMPORT_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(POLICY_SEED_IMPORT_REQUEST_KEY).catch((error) =>
+    orca.log(`policy seed import request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(POLICY_SEED_IMPORT_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, added: null, skipped: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`policy seed import result publish failed: ${err.message}`))
+    return
+  }
+
+  const result = await cmdImportPolicySeeds(orca, storageHost, options)
+  await storageHost.set(POLICY_SEED_IMPORT_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, skipped: result.skipped ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`policy seed import result publish failed: ${err.message}`))
+}
+
+// ---------------------------------------------------------------------------
 // Board maintenance -- the only cross-worktree awareness this plugin has
 // that does not require spawning the `orca` CLI, since `agent.status.changed`
 // is the one global event and storage is shared across worktree instances.
@@ -1183,6 +1265,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => attendCatalogRefreshRequest(orca, storageHost))
       .catch((error) => orca.log(`catalog refresh request handling failed: ${error.message}`))
+      .then(() => attendPolicySeedImportRequest(orca, storageHost))
+      .catch((error) => orca.log(`policy seed import request handling failed: ${error.message}`))
       .then(() => storageHost.get(PANEL_SEEN_KEY).catch(() => null))
       .then((seen) => {
         if (secretPollStopped) return
@@ -1280,14 +1364,17 @@ export {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendLocaleRequest,
+  attendPolicySeedImportRequest,
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  cmdImportPolicySeeds,
   cmdRefreshCatalog,
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
+  POLICY_SEED_IMPORT_RESULT_KEY,
   publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,

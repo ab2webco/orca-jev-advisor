@@ -83,7 +83,7 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
       the Orca install, so its own binary locates the bundled CLI without
       hardcoding an install path), fall back to PATH, and when it still cannot
       be found say so in the panel instead of returning an empty list.
-- [ ] T9 `seed/policies.json` ships with the plugin and `loadPolicies()` exists
+- [x] T9 `seed/policies.json` ships with the plugin and `loadPolicies()` exists
       in core, but nothing can import them: the panel only ever mirrors
       policies OUT. Every developer therefore starts with an empty policy list
       and no way to adopt the shared baseline. Add an import action, through
@@ -207,3 +207,65 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
   tests in `adapters/orca/main.test.mjs` (`deriveCatalogFromOrca` x3,
   `cmdRefreshCatalog` x1, `deriveInitialCatalogIfEmpty` x2), all hermetic via
   the injected `runCommand` -- no real subprocess is spawned by these tests.
+  Learned mid-task: the very first version of these tests (before the
+  `options.mirror` override below existed) DID spawn a real subprocess and
+  overwrote this developer's actual `~/.config/orca-supervisor/catalog.json`
+  and `policies.json` on this machine, because `mirrorCatalogAndPolicies`'s
+  sidecar writes to the real, hardcoded `CONFIG_DIR` regardless of which
+  storageHost (fake or real) is passed to it. Caught immediately, fixed
+  before finishing the task -- see T9's note and the report for what was and
+  wasn't recoverable.
+
+- T9 done: `src/core/policy_seed_import.ts` (new, pure, tested) merges a
+  seed policy list into an already-stored one, by id only -- an id already
+  present, however that row looks (including one left incomplete, blank
+  `kind`), is left exactly as it is; only genuinely new ids are appended.
+  `main.mjs` gained `cmdImportPolicySeeds` (reads `seed/policies.json` via
+  the existing `loadPolicies`, resolved from `PLUGIN_ROOT` -- never an
+  absolute path -- reads the raw stored `policies` value directly, not
+  through `getPolicies`, since that silently drops an invalid row instead of
+  preserving it, merges, writes back only when something was actually added,
+  then re-mirrors) and `attendPolicySeedImportRequest`/
+  `POLICY_SEED_IMPORT_REQUEST_KEY`/`POLICY_SEED_IMPORT_RESULT_KEY`, wired into
+  the same poll loop as the other panel actions, same TTL/expired handling as
+  T3. `config.html`'s TEAM POLICIES section gained an "Import baseline
+  policies" button using the same request/poll pattern as "Refresh from
+  Orca" (`sendPolicySeedImportRequest`/`waitForPolicySeedImportResult`),
+  reporting added/skipped counts, and a `seed-unavailable` reason code (both
+  ES/EN catalogs) for a missing or malformed seed file.
+  Tests: `src/core/policy_seed_import.test.ts` (4 tests) and 5 new tests in
+  `adapters/orca/main.test.mjs` covering import-into-empty, never-overwrite,
+  the `seed-unavailable` reason, and both branches of the attend wrapper.
+  Learned mid-task (see T8's note): `cmdImportPolicySeeds`/
+  `attendPolicySeedImportRequest` both take an `options.mirror` override for
+  exactly this reason -- the real `mirrorCatalogAndPolicies` writes to disk
+  outside any storageHost's control, so every test that can reach
+  `added > 0` must inject a no-op mirror. Production (the real poll loop)
+  passes no options and always re-mirrors for real, unchanged.
+  Verified by inspection, not screenshot (T6/screenshots are out of scope
+  for T8/T9): extracted `config.html`'s inline `<script>` and ran
+  `node --check` on it after each edit -- no syntax break.
+
+- Incident during T8/T9 (full disclosure): the first draft of the T9 tests
+  called `cmdImportPolicySeeds`/`attendPolicySeedImportRequest` without an
+  override, which reached the real `mirrorCatalogAndPolicies` and spawned
+  `write-secret-mirror.mjs` for real. That sidecar's `CONFIG_DIR` is this
+  actual machine's `~/.config/orca-supervisor`, independent of the fake
+  `storageHost` the tests used, so it overwrote `catalog.json` (with an
+  empty `{destinations: []}`) and `policies.json` (with just the 20 seed
+  rows) on this developer's real machine. Caught immediately by noticing the
+  tests took 150-180ms each (a real child-process spawn) instead of
+  sub-millisecond. `catalog.json` was restored from
+  `~/.config/orca-supervisor/catalog.json.test-pollution.bak`, which already
+  existed on this machine before this session (evidence someone hit this
+  same class of problem before and made a manual backup) -- verified
+  content looks like a real, populated catalog, restored as-is.
+  `policies.json` had NO backup and could not be safely restored: it is
+  reported as unresolved in the final report, with a possible-but-unverified
+  candidate noted (a `/tmp/policies.json` with different, Spanish-named ids,
+  dated the day before) rather than silently overwritten with a guess. The
+  fix: `cmdImportPolicySeeds`/`attendPolicySeedImportRequest` now take an
+  `options.mirror` override (test-only; production always uses the real
+  `mirrorCatalogAndPolicies`), and every test that can add a policy passes a
+  `noopMirror`. Re-ran the full suite after the fix and confirmed both real
+  files' mtimes are unchanged.
