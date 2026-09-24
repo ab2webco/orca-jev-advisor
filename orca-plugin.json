@@ -53,6 +53,10 @@
       {
         "id": "advisor.uninstallClaude",
         "title": "Advisor: Revert the Claude Code side"
+      },
+      {
+        "id": "advisor.refreshCatalog",
+        "title": "Advisor: Add newly seen worktrees to the catalog"
       }
     ],
     "events": [
