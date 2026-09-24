@@ -63,13 +63,23 @@
  * a log, or to any field but `value` on `read` -- and that leaves this
  * process only over the pipe its own parent already owns.
  */
-import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
 import { parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
+// Guarded stand-ins for the mutating fs/promises calls this file makes --
+// see guarded_fs.ts's module doc for why every write in this script goes
+// through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/chmod.
+import {
+  guardedChmod as chmod,
+  guardedMkdir as mkdir,
+  guardedRename as rename,
+  guardedRm as rm,
+  guardedWriteFile as writeFile
+} from '../../src/core/guarded_fs.ts'
 
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
 // platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
@@ -150,8 +160,14 @@ async function readExisting () {
  * file lands with whatever ordinary permissions the platform default
  * (`fs.writeFile`'s own default, minus umask on POSIX) gives it. Used by
  * catalog-save/policies-save, since neither file is secret.
+ *
+ * `path` has NO default -- every caller must name its destination
+ * explicitly. It used to default to MIRROR_PATH, which is exactly the
+ * shape of bug this project can no longer afford: a caller that forgets to
+ * pass a path landed silently on the real one instead of failing to
+ * typecheck/call. See src/core/write_guard.ts's module doc for why.
  */
-async function writeAtomic (content, path = MIRROR_PATH, mode = 0o600) {
+async function writeAtomic (content, path, mode = 0o600) {
   await mkdir(dirname(path), { recursive: true })
   const tempPath = `${path}.${randomUUID()}.tmp`
   const hasMode = typeof mode === 'number'
@@ -185,7 +201,7 @@ async function save (key) {
     while (next.length > 0 && next[next.length - 1].trim() === '') next.pop()
     next.push(`${ENV_VAR_NAME}=${key}`)
   }
-  await writeAtomic(`${next.join('\n')}\n`)
+  await writeAtomic(`${next.join('\n')}\n`, MIRROR_PATH)
   return { ok: true }
 }
 
@@ -199,7 +215,7 @@ async function clear () {
     await rm(MIRROR_PATH, { force: true })
     return { ok: true }
   }
-  await writeAtomic(`${remaining.join('\n').replace(/\n+$/, '')}\n`)
+  await writeAtomic(`${remaining.join('\n').replace(/\n+$/, '')}\n`, MIRROR_PATH)
   return { ok: true }
 }
 

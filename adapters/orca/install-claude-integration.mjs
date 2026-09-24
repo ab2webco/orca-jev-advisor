@@ -54,7 +54,17 @@
  * orca-jev-mod-skills (plus its own marker file), and our own bookkeeping
  * under ~/.config/orca-supervisor/.
  */
-import { cp, lstat, mkdir, readdir, readFile, readlink, rename, rm, writeFile } from 'node:fs/promises'
+import { lstat, readdir, readFile, readlink } from 'node:fs/promises'
+// Guarded stand-ins for the mutating fs/promises calls this file makes --
+// see guarded_fs.ts's module doc for why every write in this script goes
+// through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/cp.
+import {
+  guardedCp as cp,
+  guardedMkdir as mkdir,
+  guardedRename as rename,
+  guardedRm as rm,
+  guardedWriteFile as writeFile
+} from '../../src/core/guarded_fs.ts'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
