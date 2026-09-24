@@ -25,8 +25,10 @@ import {
   publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
+  seedPoliciesIfEmpty,
   WORKER_HEARTBEAT_KEY
 } from './main.mjs'
+import { POLICY_SEED_MARKER_KEY } from '../../src/core/policy_seed.ts'
 
 function fakeOrca () {
   const logs = []
@@ -171,85 +173,52 @@ test('attendCatalogRefreshRequest: an expired request publishes reason "expired"
 })
 
 // ---------------------------------------------------------------------------
-// T8 -- the CLI resolution must be derived from process.execPath (never a
-// hardcoded install path), and "the CLI could not be found" must never be
-// reported the same way as "the CLI ran and found nothing". See
-// odd/tasks/panel-worker-wakeup.md.
+// T8 -- "the CLI could not be found or errored" must never be reported the
+// same way as "the CLI ran and found nothing to add" (see cmdRefreshCatalog's
+// own module note). deriveCatalogFromOrca now shells out for real, through
+// the same cross-platform helper as the other two call sites (see
+// src/core/orca_cli.ts and src/core/orca_cli.test.ts for the Windows/shell
+// contract itself); it takes no injectable runCommand, so these force a real,
+// deterministic failure by clearing PATH for the duration of the call rather
+// than stubbing the child process. See odd/tasks/panel-worker-wakeup.md.
 // ---------------------------------------------------------------------------
 
-function enoentError (command) {
-  const error = new Error(`spawn ${command} ENOENT`)
-  error.code = 'ENOENT'
-  return error
+/** Runs `fn` with PATH cleared, so a bare command name genuinely ENOENTs
+ *  instead of depending on whatever happens to be on this machine or this
+ *  developer's shell -- restores PATH afterwards no matter what. */
+async function withoutPath (fn) {
+  const savedPath = process.env.PATH
+  process.env.PATH = ''
+  try {
+    return await fn()
+  } finally {
+    process.env.PATH = savedPath
+  }
 }
 
-const DARWIN_EXEC_PATH = '/Applications/Orca.app/Contents/MacOS/Orca'
-
-test('deriveCatalogFromOrca: every candidate missing reports orca-cli-not-found, not an empty success', async () => {
+test('deriveCatalogFromOrca: reports a real failure detail instead of a fake empty success', async () => {
   const orca = fakeOrca()
-  const calls = []
-  const result = await deriveCatalogFromOrca(orca, {
-    execPath: DARWIN_EXEC_PATH,
-    platform: 'darwin',
-    runCommand: async (command) => { calls.push(command); throw enoentError(command) }
-  })
-  assert.equal(result.ok, false)
-  assert.equal(result.reason, 'orca-cli-not-found')
-  // Both candidates (the bundled path derived from execPath, then the bare
-  // PATH fallback) must actually have been tried, in that order.
-  assert.deepEqual(calls, ['/Applications/Orca.app/Contents/Resources/bin/orca', 'orca'])
+  const result = await withoutPath(() => deriveCatalogFromOrca(orca))
+  assert.equal(result.destinations.length, 0)
+  assert.ok(typeof result.failure === 'string' && result.failure.length > 0, 'no failure detail was reported')
+  assert.match(result.failure, /ENOENT/)
 })
 
-test('deriveCatalogFromOrca: falls through a missing bundled path to a bare "orca" that is actually on PATH', async () => {
-  const orca = fakeOrca()
-  const payload = JSON.stringify({ id: 1, ok: true, result: { worktrees: [{ repo: 'demo', path: '/Users/dev/demo' }] } })
-  const result = await deriveCatalogFromOrca(orca, {
-    execPath: DARWIN_EXEC_PATH,
-    platform: 'darwin',
-    runCommand: async (command) => {
-      if (command === 'orca') return { stdout: payload }
-      throw enoentError(command)
-    }
-  })
-  assert.equal(result.ok, true)
-  assert.equal(result.destinations.length, 1)
-  assert.equal(result.destinations[0].worktreePath, '/Users/dev/demo')
-})
-
-test('deriveCatalogFromOrca: a candidate that is found but errors reports orca-cli-failed, not orca-cli-not-found', async () => {
-  const orca = fakeOrca()
-  const result = await deriveCatalogFromOrca(orca, {
-    execPath: DARWIN_EXEC_PATH,
-    platform: 'darwin',
-    runCommand: async () => { throw new Error('Command failed: exit code 1') }
-  })
-  assert.equal(result.ok, false)
-  assert.equal(result.reason, 'orca-cli-failed')
-})
-
-test('cmdRefreshCatalog: surfaces orca-cli-not-found instead of reporting success with zero additions', async () => {
+test('cmdRefreshCatalog: surfaces derivation-failed instead of reporting success with zero additions', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
-  const result = await cmdRefreshCatalog(orca, storageHost, {
-    execPath: DARWIN_EXEC_PATH,
-    platform: 'darwin',
-    runCommand: async (command) => { throw enoentError(command) }
-  })
+  const result = await withoutPath(() => cmdRefreshCatalog(orca, storageHost))
   assert.equal(result.ok, false)
-  assert.equal(result.reason, 'orca-cli-not-found')
+  assert.equal(result.reason, 'derivation-failed')
   assert.equal(result.added, undefined)
 })
 
-test('deriveInitialCatalogIfEmpty: the "only when empty" guard skips derivation entirely -- runCommand is never called', async () => {
+test('deriveInitialCatalogIfEmpty: the "only when empty" guard leaves an already-populated catalog untouched', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
     catalog: { destinations: [{ id: 'x', label: 'x', kind: 'project', worktreePath: '/x', autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 } }] }
   })
-  await deriveInitialCatalogIfEmpty(orca, storageHost, {
-    execPath: DARWIN_EXEC_PATH,
-    platform: 'darwin',
-    runCommand: async () => { throw new Error('must not be called: the catalog was not empty') }
-  })
+  await withoutPath(() => deriveInitialCatalogIfEmpty(orca, storageHost))
   const catalog = await storageHost.get('catalog')
   assert.equal(catalog.destinations.length, 1)
 })
@@ -257,11 +226,7 @@ test('deriveInitialCatalogIfEmpty: the "only when empty" guard skips derivation 
 test('deriveInitialCatalogIfEmpty: stays non-throwing and leaves the catalog empty when the CLI cannot be found', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
-  await deriveInitialCatalogIfEmpty(orca, storageHost, {
-    execPath: DARWIN_EXEC_PATH,
-    platform: 'darwin',
-    runCommand: async (command) => { throw enoentError(command) }
-  })
+  await withoutPath(() => deriveInitialCatalogIfEmpty(orca, storageHost))
   const catalog = await storageHost.get('catalog')
   assert.equal(catalog.destinations.length, 0)
 })
@@ -328,4 +293,65 @@ test('attendPolicySeedImportRequest: a fresh request imports the seeds and publi
   assert.equal(result.id, 'psi-2')
   assert.equal(result.ok, true)
   assert.ok(result.added > 0)
+})
+
+// ---------------------------------------------------------------------------
+// Policy seeding at activation.
+//
+// seed/policies.json shipped for the life of this plugin and nothing read it,
+// so every install ran with an empty policy stage. These exercise the real
+// function against the real shipped file -- the point is precisely that the
+// file is read, so stubbing it away would test nothing.
+// ---------------------------------------------------------------------------
+
+test('a fresh install gets the shipped policies, and the marker that stops a second planting', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({})
+
+  await seedPoliciesIfEmpty(orca, host)
+
+  const planted = host._store.policies
+  assert.ok(Array.isArray(planted), 'nothing was planted')
+  assert.ok(planted.length > 0, 'the seed planted an empty list')
+  for (const row of planted) {
+    assert.equal(typeof row.id, 'string')
+    assert.equal(typeof row.rule, 'string')
+    assert.ok(['permits', 'requires_human', 'prohibits'].includes(row.kind), `bad kind: ${row.kind}`)
+  }
+  assert.equal(typeof host._store[POLICY_SEED_MARKER_KEY]?.at, 'string', 'no marker was written')
+})
+
+test('a second activation plants nothing, because the marker is already there', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({})
+  await seedPoliciesIfEmpty(orca, host)
+  const first = host._store.policies
+
+  host._store.policies = []          // the developer deleted every row on purpose
+  await seedPoliciesIfEmpty(orca, host)
+
+  assert.deepEqual(host._store.policies, [], 'a deliberately emptied list was resurrected')
+  assert.ok(first.length > 0, 'the first planting did nothing, so this proves nothing')
+})
+
+test('policies already on the machine are never overwritten', async () => {
+  const orca = fakeOrca()
+  const mine = [{ id: 'mine', kind: 'prohibits', rule: 'my own rule' }]
+  const host = fakeStorageHost({ policies: mine })
+
+  await seedPoliciesIfEmpty(orca, host)
+
+  assert.deepEqual(host._store.policies, mine, 'an existing policy list was replaced by the seed')
+})
+
+test('a storage that throws is survived rather than propagated, because this must not block activation', async () => {
+  const orca = fakeOrca()
+  const host = {
+    async get () { throw new Error('storage is down') },
+    async set () { throw new Error('storage is down') }
+  }
+
+  await seedPoliciesIfEmpty(orca, host)   // must not reject
+
+  assert.ok(orca._logs.some((line) => line.includes('policy seeding failed')), 'the failure was not logged')
 })

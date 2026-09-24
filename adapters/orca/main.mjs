@@ -35,7 +35,6 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { promisify } from 'node:util'
 
 import { callJev, JevRequestError, JevTimeoutError } from '../../src/core/jev.ts'
 import {
@@ -46,11 +45,11 @@ import {
   GATE_CONSEQUENCE_CEILING,
   interpretDestinationPolicy
 } from '../../src/core/decisions.ts'
-import { isMissingCommandError, resolveOrcaCliCandidates } from '../../src/core/orca_cli.ts'
-import { loadPolicies } from '../../src/core/policies.ts'
+import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
+import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, shouldSeedPolicies } from '../../src/core/policy_seed.ts'
 import { mergePolicySeeds } from '../../src/core/policy_seed_import.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
-import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog } from '../../src/core/store.ts'
+import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
 import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
@@ -218,49 +217,25 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
 // reusing that cache.
 // ---------------------------------------------------------------------------
 
-const execFileAsync = promisify(execFile)
-
-/** The real `runCommand` deriveCatalogFromOrca uses in production: an actual
- *  child process. Kept as its own function, injectable via `options`, so
- *  tests can simulate "CLI missing" / "CLI found but errors" deterministically
- *  -- regardless of what actually happens to be on the test machine's own
- *  PATH (unlike the worker's real, restricted PATH, a plain `node --test`
- *  run inherits a full developer shell PATH, which may well have a real
- *  `orca` on it). */
-function runOrcaCliCommand (command, args) {
-  return execFileAsync(command, args, { timeout: 5000 })
-}
-
-/** Runs `orca worktree ps --json` and turns the result into a typed result,
- *  never a bare array: "the CLI could not be found anywhere" (every
- *  candidate from resolveOrcaCliCandidates ENOENTs -- see src/core/
- *  orca_cli.ts for why the worker's own PATH often does not have it) and
- *  "the CLI was found and something else went wrong" are different facts,
- *  and only one of them is the installing developer's problem to fix.
+/** Runs `orca worktree ps --json` and turns the result into destinations.
  *  Never throws: a derivation that cannot run leaves the catalog exactly as
  *  it was, which is always a safe, working state -- same fail-open shape as
- *  resolveWorktreeProjects's own `orca worktree list` call. */
-async function deriveCatalogFromOrca (orca, options = {}) {
-  const execPath = options.execPath ?? process.execPath
-  const platform = options.platform ?? PLATFORM
-  const runCommand = options.runCommand ?? runOrcaCliCommand
-  const candidates = resolveOrcaCliCandidates(execPath, platform)
-  let lastError = null
-  for (const command of candidates) {
-    try {
-      const { stdout } = await runCommand(command, ['worktree', 'ps', '--json'])
-      const worktrees = parseWorktreeList(JSON.parse(stdout))
-      return { ok: true, destinations: deriveDestinations(worktrees) }
-    } catch (error) {
-      lastError = error
-      if (!isMissingCommandError(error)) {
-        orca.log(`catalog derivation (orca worktree ps) failed: ${String(error?.message ?? error).slice(0, 160)}`)
-        return { ok: false, reason: 'orca-cli-failed', detail: String(error?.message ?? error).slice(0, 200) }
-      }
-    }
+ *  resolveWorktreeProjects's own `orca worktree list` call. Reports the
+ *  failure detail rather than swallowing it (see cmdRefreshCatalog below for
+ *  why that distinction matters to the caller). */
+async function deriveCatalogFromOrca (orca) {
+  try {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
+    const worktrees = parseWorktreeList(JSON.parse(stdout))
+    return { destinations: deriveDestinations(worktrees), failure: null }
+  } catch (error) {
+    const detail = String(error?.message ?? error).slice(0, 200)
+    orca.log(`catalog derivation (orca worktree ps) failed: ${detail.slice(0, 160)}`)
+    return { destinations: [], failure: detail }
   }
-  orca.log(`catalog derivation: orca CLI not found (tried ${candidates.length} location(s))`)
-  return { ok: false, reason: 'orca-cli-not-found', detail: String(lastError?.message ?? lastError ?? 'orca CLI not found').slice(0, 200) }
 }
 
 /** Bootstraps the catalog from Orca's own worktree list, but ONLY when it
@@ -268,17 +243,58 @@ async function deriveCatalogFromOrca (orca, options = {}) {
  *  settings (thresholds, policy scoping), so a catalog they have already
  *  edited, even down to one row, is never touched here. Never throws: this
  *  is a nice-to-have bootstrap, not something that should ever block
- *  activation. `options` is forwarded to deriveCatalogFromOrca, untouched in
- *  production (see that function's own note on why it exists). */
-async function deriveInitialCatalogIfEmpty (orca, storageHost, options = {}) {
+ *  activation. */
+async function deriveInitialCatalogIfEmpty (orca, storageHost) {
   try {
     const catalog = await getCatalog(storageHost)
     if (catalog.destinations.length > 0) return
-    const derived = await deriveCatalogFromOrca(orca, options)
-    if (!derived.ok || derived.destinations.length === 0) return
-    await setCatalog(storageHost, { destinations: derived.destinations })
+    const { destinations: derived } = await deriveCatalogFromOrca(orca)
+    if (derived.length === 0) return
+    await setCatalog(storageHost, { destinations: derived })
   } catch (error) {
     orca.log(`initial catalog derivation failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+/** Plants `seed/policies.json` on an install that has never been offered it.
+ *  The shipped file had never been read by anything, so every machine ran
+ *  with an empty policy stage -- see src/core/policy_seed.ts for why the
+ *  decision hangs on a marker key rather than on the list being empty, and
+ *  why a machine that already holds policies is left alone. Never throws and
+ *  never mirrors: like the catalog bootstrap above it is a nice-to-have that
+ *  must not block activation, and the caller chains the single mirror that
+ *  carries both. */
+async function seedPoliciesIfEmpty (orca, storageHost) {
+  try {
+    const [marker, stored] = await Promise.all([
+      storageHost.get(POLICY_SEED_MARKER_KEY),
+      storageHost.get('policies')
+    ])
+    if (marker !== undefined && marker !== null) return
+    if (!shouldSeedPolicies(marker, stored)) {
+      // Declining still marks the install. Without this an existing machine --
+      // one that upgraded into this code holding its own rules -- would carry
+      // no marker at all, and the day its owner deletes every row on purpose,
+      // the next activation would read that as a fresh install and plant all
+      // twenty, eight `prohibits` among them. The marker is what makes
+      // "deliberately empty" a state this function can recognise later.
+      await storageHost.set(POLICY_SEED_MARKER_KEY, { at: new Date().toISOString(), planted: 0, reason: 'already-had-policies' })
+      return
+    }
+    const { readFile } = await import('node:fs/promises')
+    // A seed that is missing or unreadable throws here and is retried on the
+    // next activation, which costs one log line and is the behaviour we want:
+    // the rows are worth another attempt once the file is readable again.
+    const raw = await readFile(join(PLUGIN_ROOT, 'seed', 'policies.json'), 'utf8')
+    const seeded = parseSeedPolicies(JSON.parse(raw))
+    if (seeded.length > 0) await setPolicies(storageHost, seeded)
+    // Written after the rows, never before: if the process dies in between,
+    // the next activation finds twenty valid rows and no marker, declines,
+    // and marks. Nothing is planted twice and nothing is lost.
+    await storageHost.set(POLICY_SEED_MARKER_KEY, { at: new Date().toISOString(), planted: seeded.length })
+    orca.log(`policy seed planted: ${seeded.length} row(s)`)
+  } catch (error) {
+    orca.log(`initial policy seeding failed: ${String(error?.message ?? error).slice(0, 160)}`)
   }
 }
 
@@ -289,20 +305,18 @@ async function deriveInitialCatalogIfEmpty (orca, storageHost, options = {}) {
  *  removed -- a worktree disappearing from Orca's list is not this
  *  plugin's call to prune. Re-mirrors to catalog.json when it changes
  *  anything, so the gate sees the addition without waiting for the panel's
- *  own save button. When the CLI itself could not be found or failed, that
- *  is reported as-is (see deriveCatalogFromOrca) rather than folded into
- *  "0 added", which would tell the person nothing is wrong while adding
- *  nothing -- the exact defect this replaces. `options` is forwarded to
- *  deriveCatalogFromOrca, untouched in production. */
-async function cmdRefreshCatalog (orca, storageHost, options = {}) {
+ *  own save button. */
+async function cmdRefreshCatalog (orca, storageHost) {
   try {
     const current = await getCatalog(storageHost)
-    const derived = await deriveCatalogFromOrca(orca, options)
-    if (!derived.ok) {
-      return { ok: false, reason: derived.reason, detail: derived.detail }
-    }
+    const { destinations: derived, failure } = await deriveCatalogFromOrca(orca)
+    // A refresh that could not ask Orca anything is NOT a refresh that found
+    // nothing new. Reporting both as `ok: true, added: 0` is what made a
+    // broken CLI call look to the developer like a dead button, with the real
+    // cause reachable only by opening Orca's log.
+    if (failure !== null) return { ok: false, reason: 'derivation-failed', detail: failure }
     const existingIds = new Set(current.destinations.map((d) => d.id))
-    const additions = derived.destinations.filter((d) => !existingIds.has(d.id))
+    const additions = derived.filter((d) => !existingIds.has(d.id))
     if (additions.length > 0) {
       await setCatalog(storageHost, { destinations: [...current.destinations, ...additions] })
       await mirrorCatalogAndPolicies(orca, storageHost)
@@ -351,6 +365,10 @@ async function resolveWorkerLocale () {
 // ---------------------------------------------------------------------------
 
 const PLUGIN_ROOT = join(__dirname, '..', '..')
+
+/** The CLI this plugin shells out to. Named so every invocation is findable,
+ *  and so the three call sites cannot drift apart again. */
+const ORCA_CLI_BIN = 'orca'
 const CLAUDE_INTEGRATION_SCRIPT = join(__dirname, 'install-claude-integration.mjs')
 const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 
@@ -414,12 +432,21 @@ async function claudeIntegrationStatus () {
 
 // ---------------------------------------------------------------------------
 // Policy seed import -- seed/policies.json ships with the plugin as its
-// shared baseline (loaded by the same `loadPolicies` tools/decide.ts and
-// tools/policy-gate.ts use; see src/core/policies.ts's own module note).
-// Nothing before this could bring it IN: mirrorCatalogAndPolicies above only
-// ever mirrors the developer's OWN policies OUT to gate-bash.ts's JSON file,
-// so every fresh install starts with an empty policy list and no way to
-// adopt the baseline this repo already carries.
+// shared baseline. seedPoliciesIfEmpty (above) plants it automatically on a
+// fresh install; this is the OTHER path to the same file, for a developer
+// who wants to pull the baseline in later -- onto a machine that already has
+// some policies of its own, after the marker has already been consumed, or
+// simply on demand from the panel's "Import baseline policies" button.
+//
+// Reads the seed file with parseSeedPolicies (src/core/policy_seed.ts) --
+// the same reader seedPoliciesIfEmpty uses, on purpose: two different
+// readers of the one shipped file would drift, and parseSeedPolicies's
+// "malformed rows cost only themselves" behaviour is exactly what a manual
+// import should do with a seed file, not throw the whole import away over
+// one bad row (loadPolicies in src/core/policies.ts is a different, stricter
+// contract for tools/decide.ts and tools/policy-gate.ts's own
+// developer-authored policy files, where a malformed row IS a
+// misconfiguration to surface loudly; it is not reused here).
 //
 // Resolved relative to PLUGIN_ROOT (this worker's own installed tree), never
 // an absolute path -- the seed ships inside the plugin, wherever it happens
@@ -445,7 +472,9 @@ async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
   const seedPath = options.seedPath ?? POLICY_SEED_PATH
   const mirror = options.mirror ?? mirrorCatalogAndPolicies
   try {
-    const seeds = await loadPolicies(seedPath)
+    const { readFile } = await import('node:fs/promises')
+    const raw = await readFile(seedPath, 'utf8')
+    const seeds = parseSeedPolicies(JSON.parse(raw))
     const existingRaw = await storageHost.get('policies')
     const existing = Array.isArray(existingRaw) ? existingRaw : []
     const { merged, added, skipped } = mergePolicySeeds(existing, seeds)
@@ -956,7 +985,7 @@ async function resolveWorktreeProjects (orca) {
     const { execFile } = await import('node:child_process')
     const { promisify } = await import('node:util')
     const execFileAsync = promisify(execFile)
-    const { stdout } = await execFileAsync('orca', ['worktree', 'list', '--json'], { timeout: 5000 })
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreeList, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
     const parsed = JSON.parse(stdout)
     const worktrees = parsed?.result?.worktrees
     if (Array.isArray(worktrees)) {
@@ -1193,7 +1222,7 @@ async function cmdDoctor (orca, storageHost, secretsHost) {
     // Read-only reachability probe -- never touches a terminal. `status`
     // requires a running Orca Lab runtime, which this check can assume:
     // this code only runs inside the plugin worker, which Orca itself forked.
-    await execFileAsync('orca', ['status', '--json'], { timeout: 5000 })
+    await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.status, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
     cliOk = true
     cliDetail = 'orca CLI responds (status ok).'
   } catch (error) {
@@ -1305,6 +1334,8 @@ export default function activate (orca) {
   // the panel's save button again.
   deriveInitialCatalogIfEmpty(orca, storageHost)
     .catch((error) => orca.log(`initial catalog derivation failed: ${error.message}`))
+    .then(() => seedPoliciesIfEmpty(orca, storageHost))
+    .catch((error) => orca.log(`initial policy seeding failed: ${error.message}`))
     .then(() => mirrorCatalogAndPolicies(orca, storageHost))
     .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
   // "Al activarse, el worker debe dejar funcionando todo lo que hoy es
@@ -1378,6 +1409,7 @@ export {
   publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
+  seedPoliciesIfEmpty,
   WORKER_HEARTBEAT_KEY,
   WORKER_HEARTBEAT_STALE_MS
 }
