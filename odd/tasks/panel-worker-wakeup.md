@@ -246,6 +246,50 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
   for T8/T9): extracted `config.html`'s inline `<script>` and ran
   `node --check` on it after each edit -- no syntax break.
 
+- T8/T9 superseded by integration (branch `integrate/pr3-cli-and-seeds`, off
+  `main`): a teammate (jhonj182, PR #3, `origin/jhonj182/verify-worker-note`)
+  independently fixed the same two problems and their T8 solution was judged
+  better and taken wholesale. `src/core/orca_cli.ts`/`orca_cli.test.ts` above
+  (candidate-path resolution via `process.execPath`, `orca-cli-not-found`/
+  `orca-cli-failed` as distinct reasons, hermetic tests via an injected
+  `runCommand`) are DELETED and replaced by the teammate's module of the same
+  name: a single cross-platform helper (`orcaCliOptions`/`ORCA_CLI_ARGUMENTS`)
+  that runs the real CLI through the platform shell on Windows ONLY (fixing
+  the actual defect on that platform -- this session's own `.cmd` filename
+  guess never worked there, since `execFile` never consults PATHEXT
+  regardless of filename), with `cwd` required rather than inherited to close
+  a second exposure (cmd.exe resolving a bare command from the current
+  directory before PATH). All three call sites (catalog derivation, board
+  project resolution, doctor's reachability probe) now go through it. The
+  `orca-cli-not-found`/`orca-cli-failed` distinction is gone; both branches
+  now report as `derivation-failed`. `deriveCatalogFromOrca` and
+  `cmdRefreshCatalog` no longer take an `options` injection parameter --
+  their tests instead force a deterministic ENOENT by clearing
+  `process.env.PATH` for the call. Net effect on the suite: 261 tests on
+  `main` before this integration, 275 after (`node --test
+  --experimental-strip-types`) plus 4 more in the teammate's new
+  `scripts/panels.spec.mjs` (Playwright, run via `npm run test:panels`,
+  wired into `check`) -- no coverage lost, all passing.
+  T9's `cmdImportPolicySeeds` (the panel's "Import baseline policies"
+  button) survives unchanged in effect, composing with the teammate's new
+  `seedPoliciesIfEmpty` (`src/core/policy_seed.ts`, plants the shipped seed
+  automatically on first run behind a marker key, never touching a machine
+  that already holds policies). `cmdImportPolicySeeds` was switched from
+  `loadPolicies` (src/core/policies.ts) to `parseSeedPolicies` (the
+  teammate's own seed reader) so the two seeding paths share one parser of
+  `seed/policies.json` instead of two with different malformed-row
+  behaviour; `loadPolicies` stays as-is for tools/decide.ts and
+  tools/policy-gate.ts's own developer-authored policy files.
+  Verified: full suite green, `npm run test:panels` green (including the new
+  end-to-end check that a failed refresh says so in the panel, and that the
+  auto-seeded policies are what a person actually sees), config.html's inline
+  `<script>` extracted and `node --check`'d after every edit, real
+  `~/.config/orca-supervisor/{policies,catalog}.json` shasums unchanged
+  before and after every test run, `gate-bash.ts` loaded end-to-end
+  (`echo '{}' | node --experimental-strip-types adapters/claude/gate-bash.ts`,
+  exit 0) to confirm the `store.ts` `isPolicyRow` export change did not
+  break the live command gate.
+
 - Incident during T8/T9 (full disclosure): the first draft of the T9 tests
   called `cmdImportPolicySeeds`/`attendPolicySeedImportRequest` without an
   override, which reached the real `mirrorCatalogAndPolicies` and spawned
