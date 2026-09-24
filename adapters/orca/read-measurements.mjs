@@ -13,6 +13,8 @@
  *   gate-approvals.jsonl          adapters/claude/gate-bash.ts (pending half)
  *                                 adapters/claude/gate-outcome.ts (outcome half)
  *                                 (src/core/approval_record.ts)
+ *   ab-benchmark-results.jsonl    adapters/cli/ab_benchmark_cli.ts
+ *                                 (src/core/ab_benchmark.ts, src/core/ab_report.ts)
  *
  * Aggregation happens here, not in the worker or the panel: these files
  * can grow over a week of real use, and shipping every raw line across
@@ -37,11 +39,13 @@ import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
+import { foldAbResults } from '../../src/core/ab_report.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const MOD_SKILLS_LOG_PATH = join(CACHE_DIR, 'mod-skills-measurements.jsonl')
 const APPROVALS_LOG_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
+const AB_BENCHMARK_LOG_PATH = join(CACHE_DIR, 'ab-benchmark-results.jsonl')
 
 function isRecord (value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -325,11 +329,113 @@ async function aggregateApprovals () {
   }
 }
 
+/**
+ * Guards a raw parsed JSONL row into the exact AbComparisonResult shape
+ * foldAbResults() expects (see src/core/ab_benchmark.ts), same discipline
+ * as toGateDecisionRecord() above: a hand-edited or half-written line on
+ * disk is `unknown` regardless of what ab_benchmark_cli.ts's own writer
+ * promises. A row missing or mistyping a required field -- including
+ * inside the nested `jev`/`bigModel` objects -- is dropped (counted as
+ * corrupt) rather than fed to the fold with a guessed default.
+ */
+function toAbComparisonResult (row) {
+  if (
+    typeof row.id !== 'string' ||
+    typeof row.at !== 'string' ||
+    typeof row.commandFamily !== 'string' ||
+    (row.destinationKind !== null && typeof row.destinationKind !== 'string') ||
+    (row.agree !== null && typeof row.agree !== 'boolean')
+  ) {
+    return null
+  }
+
+  const jev = row.jev
+  if (
+    !isRecord(jev) ||
+    (jev.verdict !== 'allow' && jev.verdict !== 'ask') ||
+    typeof jev.latencyMs !== 'number' ||
+    typeof jev.inputTokens !== 'number' ||
+    typeof jev.outputTokens !== 'number'
+  ) {
+    return null
+  }
+
+  const bigModel = row.bigModel
+  if (
+    !isRecord(bigModel) ||
+    (bigModel.verdict !== 'allow' && bigModel.verdict !== 'ask' && bigModel.verdict !== 'deny' && bigModel.verdict !== null) ||
+    (bigModel.latencyMs !== null && typeof bigModel.latencyMs !== 'number') ||
+    (bigModel.inputTokens !== null && typeof bigModel.inputTokens !== 'number') ||
+    (bigModel.outputTokens !== null && typeof bigModel.outputTokens !== 'number') ||
+    (bigModel.cacheCreationInputTokens !== null && typeof bigModel.cacheCreationInputTokens !== 'number') ||
+    (bigModel.cacheReadInputTokens !== null && typeof bigModel.cacheReadInputTokens !== 'number') ||
+    (bigModel.modelId !== null && typeof bigModel.modelId !== 'string') ||
+    (bigModel.failureReason !== null &&
+      bigModel.failureReason !== 'cli_not_found' &&
+      bigModel.failureReason !== 'cli_error' &&
+      bigModel.failureReason !== 'unparseable_envelope' &&
+      bigModel.failureReason !== 'unparseable_verdict')
+  ) {
+    return null
+  }
+
+  return {
+    id: row.id,
+    at: row.at,
+    commandFamily: row.commandFamily,
+    destinationKind: row.destinationKind,
+    jev: {
+      verdict: jev.verdict,
+      latencyMs: jev.latencyMs,
+      inputTokens: jev.inputTokens,
+      outputTokens: jev.outputTokens,
+    },
+    bigModel: {
+      verdict: bigModel.verdict,
+      latencyMs: bigModel.latencyMs,
+      inputTokens: bigModel.inputTokens,
+      outputTokens: bigModel.outputTokens,
+      cacheCreationInputTokens: bigModel.cacheCreationInputTokens,
+      cacheReadInputTokens: bigModel.cacheReadInputTokens,
+      modelId: bigModel.modelId,
+      failureReason: bigModel.failureReason,
+    },
+    agree: row.agree,
+  }
+}
+
+/**
+ * Reads and folds ab-benchmark-results.jsonl (see src/core/ab_report.ts's
+ * own module note for why this fold is separate from ab_benchmark.ts's
+ * own buildReport()). A missing file yields the empty summary, the same
+ * way readJsonl() already returns `{rows: [], corrupt: 0}` on ENOENT --
+ * never treated as an error, since the A/B benchmark may simply never
+ * have been run yet.
+ */
+async function aggregateAbBenchmark () {
+  const { rows, corrupt } = await readJsonl(AB_BENCHMARK_LOG_PATH)
+  const results = []
+  let malformed = 0
+  for (const row of rows) {
+    const result = toAbComparisonResult(row)
+    if (result === null) malformed += 1
+    else results.push(result)
+  }
+
+  const summary = foldAbResults(results)
+  return { ...summary, corruptLines: corrupt + malformed }
+}
+
 async function main () {
   let result
   try {
-    const [gate, modSkills, approvals] = await Promise.all([aggregateGate(), aggregateModSkills(), aggregateApprovals()])
-    result = { ok: true, gate, modSkills, approvals }
+    const [gate, modSkills, approvals, abBenchmark] = await Promise.all([
+      aggregateGate(),
+      aggregateModSkills(),
+      aggregateApprovals(),
+      aggregateAbBenchmark(),
+    ])
+    result = { ok: true, gate, modSkills, approvals, abBenchmark }
   } catch (error) {
     result = { ok: false, reason: 'excepcion', detail: String(error?.message ?? error).slice(0, 300) }
   }
