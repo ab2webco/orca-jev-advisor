@@ -49,6 +49,9 @@ const FRESH = {}
 /** A machine where the worker has run and published everything it mirrors. */
 const READY = {
   workerHeartbeat: { at: iso },
+  // Mirrors GATE_CONSEQUENCE_CEILING; the panel must render this rather than a
+  // literal of its own, which is the drift T7 fixed.
+  gateDefaults: { consequenceCeiling: 1.78, checkedAt: iso },
   secretStatus: { isConfigured: true, endsWith: '9f2a', checkedAt: iso },
   claudeIntegrationStatus: {
     installed: true,
