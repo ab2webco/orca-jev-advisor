@@ -19,8 +19,10 @@ import {
   publishGateDefaults,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
+  seedPoliciesIfEmpty,
   WORKER_HEARTBEAT_KEY
 } from './main.mjs'
+import { POLICY_SEED_MARKER_KEY } from '../../src/core/policy_seed.ts'
 
 function fakeOrca () {
   const logs = []
@@ -154,4 +156,65 @@ test('attendCatalogRefreshRequest: an expired request publishes reason "expired"
   assert.equal(result.id, 'cr-1')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+// ---------------------------------------------------------------------------
+// Policy seeding at activation.
+//
+// seed/policies.json shipped for the life of this plugin and nothing read it,
+// so every install ran with an empty policy stage. These exercise the real
+// function against the real shipped file -- the point is precisely that the
+// file is read, so stubbing it away would test nothing.
+// ---------------------------------------------------------------------------
+
+test('a fresh install gets the shipped policies, and the marker that stops a second planting', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({})
+
+  await seedPoliciesIfEmpty(orca, host)
+
+  const planted = host._store.policies
+  assert.ok(Array.isArray(planted), 'nothing was planted')
+  assert.ok(planted.length > 0, 'the seed planted an empty list')
+  for (const row of planted) {
+    assert.equal(typeof row.id, 'string')
+    assert.equal(typeof row.rule, 'string')
+    assert.ok(['permits', 'requires_human', 'prohibits'].includes(row.kind), `bad kind: ${row.kind}`)
+  }
+  assert.equal(typeof host._store[POLICY_SEED_MARKER_KEY]?.at, 'string', 'no marker was written')
+})
+
+test('a second activation plants nothing, because the marker is already there', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({})
+  await seedPoliciesIfEmpty(orca, host)
+  const first = host._store.policies
+
+  host._store.policies = []          // the developer deleted every row on purpose
+  await seedPoliciesIfEmpty(orca, host)
+
+  assert.deepEqual(host._store.policies, [], 'a deliberately emptied list was resurrected')
+  assert.ok(first.length > 0, 'the first planting did nothing, so this proves nothing')
+})
+
+test("policies already on the machine are never overwritten", async () => {
+  const orca = fakeOrca()
+  const mine = [{ id: 'mine', kind: 'prohibits', rule: 'my own rule' }]
+  const host = fakeStorageHost({ policies: mine })
+
+  await seedPoliciesIfEmpty(orca, host)
+
+  assert.deepEqual(host._store.policies, mine, 'an existing policy list was replaced by the seed')
+})
+
+test('a storage that throws is survived rather than propagated, because this must not block activation', async () => {
+  const orca = fakeOrca()
+  const host = {
+    async get () { throw new Error('storage is down') },
+    async set () { throw new Error('storage is down') }
+  }
+
+  await seedPoliciesIfEmpty(orca, host)   // must not reject
+
+  assert.ok(orca._logs.some((line) => line.includes('policy seeding failed')), 'the failure was not logged')
 })
