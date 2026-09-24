@@ -106,3 +106,58 @@ test('config.html: the setup click handler surfaces a returned modCopyWarning in
   assert.match(setupHandlerMatch[0], /modCopyWarning/, 'the handler must inspect the resolved result for modCopyWarning')
   assert.match(setupHandlerMatch[0], /doneWithWarning/, 'a present warning must render through integration.doneWithWarning, not plain "Done."')
 })
+
+// The switches and the copy on disk were two truths nobody crossed: after an
+// update that did not reapply the copy, the panel said "not installed" on one
+// line while `active: true` sat in the config behind the switches above it.
+// Observed in the field with modCopy exists:false across all four config roots
+// and mod-skills-measurements.jsonl never created.
+//
+// modSkillsLine is pure over its three arguments, so this lifts it out of the
+// panel source and runs it for real rather than grepping for a string.
+function loadModSkillsLine () {
+  const match = configHtml.match(/function modSkillsLine \([\s\S]*?\n {6}\}/)
+  assert.ok(match, 'modSkillsLine not found in config.html')
+  const keys = []
+  const factory = new Function(
+    't', 'formatSince',
+    `${match[0]}; return modSkillsLine`
+  )
+  const line = factory(
+    (key) => { keys.push(key); return key },
+    () => 'some-date'
+  )
+  return { line, keys }
+}
+
+test('modSkillsLine: switches on with no copy on disk reports the contradiction, not a plain "not installed"', () => {
+  const { line } = loadModSkillsLine()
+  assert.equal(line({ exists: false }, null, { active: true, activeTools: false }), 'integration.modOnButMissing')
+  assert.equal(line({ exists: false }, null, { active: false, activeTools: true }), 'integration.modOnButMissing')
+  assert.equal(line(null, null, { active: true, activeTools: true }), 'integration.modOnButMissing')
+})
+
+test('modSkillsLine: no copy and both switches off is the ordinary "not installed"', () => {
+  const { line } = loadModSkillsLine()
+  assert.equal(line({ exists: false }, null, { active: false, activeTools: false }), 'integration.modNotInstalled')
+  assert.equal(line({ exists: false }, null, null), 'integration.modNotInstalled')
+  assert.equal(line({ exists: false }, null, undefined), 'integration.modNotInstalled')
+})
+
+test('modSkillsLine: an installed copy still reports never-run and recording as before', () => {
+  const { line } = loadModSkillsLine()
+  assert.equal(line({ exists: true }, null, { active: true }), 'integration.modNeverRun')
+  assert.equal(
+    line({ exists: true }, { ok: true, modSkills: { totalDecisions: 0 } }, { active: true }),
+    'integration.modNeverRun'
+  )
+  assert.equal(
+    line({ exists: true }, { ok: true, modSkills: { totalDecisions: 12, firstAt: 'a', lastAt: 'b' } }, { active: true }),
+    'integration.modRecording'
+  )
+})
+
+test('config.html: both catalogs carry the new contradiction string', () => {
+  const occurrences = configHtml.match(/'integration\.modOnButMissing':/g) || []
+  assert.equal(occurrences.length, 2, 'expected the key in the es and en catalogs')
+})

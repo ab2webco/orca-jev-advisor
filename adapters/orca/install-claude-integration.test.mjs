@@ -60,6 +60,11 @@ function run (mode, home, pluginRoot = PLUGIN_ROOT) {
   delete env.ORCA_USER_DATA_PATH
   delete env.XDG_CONFIG_HOME
   delete env.XDG_CACHE_HOME
+  // src/core/paths.ts's resolveConfigDirCandidates refuses to compute a
+  // real path at all under node's test runner (see its module doc) -- this
+  // points it at exactly the directory it would have computed for `home`
+  // on darwin with no XDG override, matching the `stateDir` fixture below.
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
   const stdout = execFileSync(process.execPath, [SCRIPT_PATH, mode, pluginRoot], { env, encoding: 'utf8' })
   return JSON.parse(stdout)
 }

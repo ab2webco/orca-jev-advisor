@@ -28,7 +28,7 @@ test("empty input yields an honest zeroed summary, not nulls masquerading as dat
   const summary = foldGateDecisions([]);
   assert.equal(summary.totalDecisions, 0);
   assert.deepEqual(summary.byVerdict, { allow: 0, ask: 0, deny: 0 });
-  assert.deepEqual(summary.bySource, { "local-rule": 0, cache: 0, jev: 0 });
+  assert.deepEqual(summary.bySource, { "local-rule": 0, cache: 0, jev: 0, none: 0 });
   assert.deepEqual(summary.byCommandFamily, []);
   assert.deepEqual(summary.byProject, []);
   assert.equal(summary.jevLatency.sampleCount, 0);
@@ -46,7 +46,20 @@ test("counts verdicts and sources independently", () => {
   ]);
   assert.equal(summary.totalDecisions, 5);
   assert.deepEqual(summary.byVerdict, { allow: 2, ask: 2, deny: 1 });
-  assert.deepEqual(summary.bySource, { "local-rule": 2, cache: 1, jev: 2 });
+  assert.deepEqual(summary.bySource, { "local-rule": 2, cache: 1, jev: 2, none: 0 });
+});
+
+test("a 'none' record -- Jev was asked but never answered, so the command passed unjudged -- counts in its own bucket, never folded into 'jev'", () => {
+  const summary = foldGateDecisions([
+    record({ source: "jev", verdict: "allow", latencyMs: 400 }),
+    record({ source: "none", verdict: "allow", latencyMs: null }),
+    record({ source: "none", verdict: "allow", latencyMs: null }),
+  ]);
+  assert.equal(summary.totalDecisions, 3);
+  assert.deepEqual(summary.bySource, { "local-rule": 0, cache: 0, jev: 1, none: 2 });
+  // A 'none' record never carries a real latency (see gate_measurement.ts),
+  // and even if it somehow did, latency is only ever meaningful for 'jev'.
+  assert.equal(summary.jevLatency.sampleCount, 1);
 });
 
 test("jev latency: median and max come only from jev-sourced records with a real latencyMs", () => {

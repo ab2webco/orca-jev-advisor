@@ -49,6 +49,13 @@ function run (home, command, { cwd, apiKey } = {}) {
   const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home }
   delete env.XDG_CACHE_HOME
   delete env.XDG_CONFIG_HOME
+  // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute
+  // a real path at all under node's test runner (see its module doc) --
+  // this points them at exactly the directories they would have computed
+  // for `home` on darwin with no XDG override, so gate-bash.ts's own
+  // CACHE_DIR/CONFIG_DIR still land inside this throwaway HOME.
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  env.ORCA_SUPERVISOR_CACHE_DIR = join(home, '.cache', 'orca-supervisor')
   if (apiKey === undefined) {
     delete env.TYPESAFE_API_KEY
   } else {

@@ -117,3 +117,28 @@ thresholds exist. Sampling a fraction would collect the same distribution at a
 fraction of the load. Do this only after the mod has run long enough to know
 what the distribution looks like — sampling a thing you have never observed is
 how you miss the tail.
+
+---
+
+## Everything below was done on 2026-09-24 and is no longer backlog
+
+The four findings from `MEJORAS-JEV-ADVISOR.md` were verified and then fixed
+on `feat/advisor-board-charts`, not deferred:
+
+- **Silent fail-open** -- `GateSource` gains `'none'`, recorded on the
+  pass-through, with one notice after three consecutive failures
+  (`909536a`), and the board shows the unjudged slice (`8172970`).
+- **Panel not crossing the switches with the copy on disk** -- `20a9a2a`.
+- **Measurement mode with no sampling and no activation metric** --
+  `mod_skills_sampling.ts` (25% of prompts, 40/day, fail-open) and
+  `mod_skills_readiness.ts` (1000 comparable prompts at a 70% match rate),
+  with the panel rendering how far off the threshold is.
+- **Windows symlink** -- already resolved in 0.3.1, which replaced the
+  symlink with a copy. Only the README still described the deleted code
+  (`9484732`).
+
+The upstream issue (no event fires when a hook-originated `ask` is refused
+under `bypassPermissions`) is drafted with counts verified against the real
+log -- 61 pendings, 50 joined, 49 approved, 0 refused by a human -- and is
+waiting on the repository owner to post it, since it publishes under their
+account.

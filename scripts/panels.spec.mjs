@@ -18,14 +18,26 @@
 // than fails. `npm run test:panels` is the command that runs this.
 
 import { strict as assert } from 'node:assert'
+import { mkdtempSync } from 'node:fs'
 import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
-import { parseSeedPolicies } from '../src/core/policy_seed.ts'
-import { seedPoliciesIfEmpty } from '../adapters/orca/main.mjs'
+// main.mjs pulls in src/core/secrets.ts, which resolves the config dir at
+// MODULE scope -- and src/core/paths.ts now refuses to hand back the real
+// ~/.config/orca-supervisor under the test runner. So the override has to be
+// set before that module graph loads, and a static `import` is hoisted above
+// every statement in this file. Hence the dynamic import below, the same
+// shape main.test.mjs and the A/B CLI test use. Third occurrence of the same
+// hoisting trap; the comment is here so the fourth is quick to diagnose.
+const ISOLATED_ROOT = mkdtempSync(join(tmpdir(), 'orca-panels-spec-'))
+process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(ISOLATED_ROOT, 'config')
+process.env.ORCA_SUPERVISOR_CACHE_DIR = join(ISOLATED_ROOT, 'cache')
+
+const { parseSeedPolicies } = await import('../src/core/policy_seed.ts')
+const { seedPoliciesIfEmpty } = await import('../adapters/orca/main.mjs')
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')

@@ -100,6 +100,21 @@ test("parseGateDecisionRecords: an empty string yields an empty list", () => {
   assert.deepEqual(parseGateDecisionRecords(""), []);
 });
 
+test("a 'none' source round-trips through build/serialize/parse -- Jev was asked but never answered, so the command passed unjudged", () => {
+  const record = buildGateDecisionRecord({
+    id: "none-1",
+    at: "2026-09-24T00:00:00.000Z",
+    project: "orca-supervisor",
+    command: "npm test",
+    source: "none",
+    verdict: "allow",
+    latencyMs: null,
+  });
+  assert.equal(record.source, "none");
+  const raw = serializeGateRecord(record);
+  assert.deepEqual(parseGateDecisionRecords(raw), [record]);
+});
+
 test("parseGateDecisionRecords: counting source:'jev' entries gives the real-decision total the AB benchmark reports against", () => {
   const jev1 = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
   const jev2 = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "git push", source: "jev", verdict: "ask", latencyMs: 410 });

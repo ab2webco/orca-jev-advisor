@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeHomePaths, resolveModSkillsSwitches } from "./hooks/runtime.ts";
+import { computeHomePaths, measurementDecisionsToday, resolveModSkillsSamplingConfig, resolveModSkillsSwitches } from "./hooks/runtime.ts";
 
 test("returns null when neither HOME nor USERPROFILE is set", () => {
   assert.equal(computeHomePaths({}), null);
@@ -114,11 +114,19 @@ test('agrees with src/core/paths.ts on every platform shape', async () => {
     { name: 'Linux, no XDG', platform: 'linux' as const, home: '/home/dev', env: {} },
     { name: 'Linux WITH XDG set', platform: 'linux' as const, home: '/home/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
   ];
+  // Pass an explicit empty `env` (the third, test-isolation-guard
+  // argument): this test file itself runs under node's test runner, and
+  // src/core/paths.ts's resolveConfigDir/resolveCacheDir now refuse to
+  // compute a real path at all in that case unless an explicit override is
+  // set (see that module's doc). This test compares pure platform logic,
+  // not real filesystem safety, so it opts out of the guard the same way
+  // src/core/paths.test.ts's own platform-behavior tests do.
+  const NOT_TEST_ENV = {};
   for (const c of cases) {
     const mine = computeHomePaths({ home: c.home, ...c.env });
     const theirs = {
-      configDir: resolveConfigDir(c.platform, { home: c.home, xdgConfigHome: c.env.xdgConfigHome }),
-      cacheDir: resolveCacheDir(c.platform, { home: c.home, xdgCacheHome: c.env.xdgCacheHome }),
+      configDir: resolveConfigDir(c.platform, { home: c.home, xdgConfigHome: c.env.xdgConfigHome }, NOT_TEST_ENV),
+      cacheDir: resolveCacheDir(c.platform, { home: c.home, xdgCacheHome: c.env.xdgCacheHome }, NOT_TEST_ENV),
     };
     assert.equal(mine?.configDir, theirs.configDir, `${c.name}: config dir diverged`);
     assert.equal(mine?.cacheDir, theirs.cacheDir, `${c.name}: cache dir diverged`);
@@ -199,4 +207,123 @@ test("resolveModSkillsSwitches: a read that throws falls back to both off, never
   };
   const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
   assert.deepEqual(result, { active: false, activeTools: false });
+});
+
+// ---------------------------------------------------------------------------
+// resolveModSkillsSamplingConfig -- the sampling half of mod-skills'
+// measurement-mode cost fix (src/core/mod_skills_sampling.ts). Reads
+// <configDir>/mod-skills-sampling-config.json the same best-effort way
+// resolveModSkillsSwitches reads mod-skills-config.json: missing file,
+// unreachable home, or a read that throws all fall back to the safe
+// default (sampling ON at a reduced rate, never OFF and never the old
+// unsampled behaviour), never a thrown error.
+// ---------------------------------------------------------------------------
+
+test("resolveModSkillsSamplingConfig: no home resolvable falls back to the default", async () => {
+  const engine = fakeEngine({}, {});
+  const result = await resolveModSkillsSamplingConfig(engine as Parameters<typeof resolveModSkillsSamplingConfig>[0]);
+  assert.deepEqual(result, { enabled: true, sampleRate: 0.25, dailyPromptCap: 40 });
+});
+
+test("resolveModSkillsSamplingConfig: the file has never been written -- falls back to the default", async () => {
+  const engine = fakeEngine({ HOME: "/home/dev" }, {});
+  const result = await resolveModSkillsSamplingConfig(engine as Parameters<typeof resolveModSkillsSamplingConfig>[0]);
+  assert.deepEqual(result, { enabled: true, sampleRate: 0.25, dailyPromptCap: 40 });
+});
+
+test("resolveModSkillsSamplingConfig: reads a real file", async () => {
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { "/home/dev/.config/orca-supervisor/mod-skills-sampling-config.json": '{"enabled":false,"sampleRate":0.5,"dailyPromptCap":10}' },
+  );
+  const result = await resolveModSkillsSamplingConfig(engine as Parameters<typeof resolveModSkillsSamplingConfig>[0]);
+  assert.deepEqual(result, { enabled: false, sampleRate: 0.5, dailyPromptCap: 10 });
+});
+
+test("resolveModSkillsSamplingConfig: malformed JSON on disk falls back to the default, never throws", async () => {
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { "/home/dev/.config/orca-supervisor/mod-skills-sampling-config.json": "{not json" },
+  );
+  const result = await resolveModSkillsSamplingConfig(engine as Parameters<typeof resolveModSkillsSamplingConfig>[0]);
+  assert.deepEqual(result, { enabled: true, sampleRate: 0.25, dailyPromptCap: 40 });
+});
+
+test("resolveModSkillsSamplingConfig: a read that throws falls back to the default, never propagates", async () => {
+  const engine: FakeEngine = {
+    env: { get: async (name: string) => (name === "HOME" ? "/home/dev" : undefined) },
+    fs: {
+      exists: async () => true,
+      read: async () => {
+        throw new Error("disk on fire");
+      },
+    },
+  };
+  const result = await resolveModSkillsSamplingConfig(engine as Parameters<typeof resolveModSkillsSamplingConfig>[0]);
+  assert.deepEqual(result, { enabled: true, sampleRate: 0.25, dailyPromptCap: 40 });
+});
+
+// ---------------------------------------------------------------------------
+// measurementDecisionsToday -- the sampling cap's own "today", read the same
+// tolerant way gate-bash.ts's samplesQueuedToday reads the AB-benchmark
+// queue: filter the mod's own existing measurement log
+// (mod-skills-measurements.jsonl) by `at`'s UTC date prefix, so the daily
+// cap means "today", not "ever". Reused rather than inventing a second
+// counter file, and only measurement-mode decisions count -- active mode
+// never goes through the sampling gate this counts for.
+// ---------------------------------------------------------------------------
+
+function measurementLogPath(home: string): string {
+  return `${home}/.cache/orca-supervisor/mod-skills-measurements.jsonl`;
+}
+
+test("measurementDecisionsToday: no home resolvable reads as 0", async () => {
+  const engine = fakeEngine({}, {});
+  const result = await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 0);
+});
+
+test("measurementDecisionsToday: the log has never been written -- reads as 0", async () => {
+  const engine = fakeEngine({ HOME: "/home/dev" }, {});
+  const result = await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 0);
+});
+
+test("measurementDecisionsToday: counts only measurement-mode decisions whose `at` starts with today, ignoring active-mode decisions, observations, and other days", async () => {
+  const lines = [
+    { type: "decision", id: "a", at: "2026-09-24T08:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "b", at: "2026-09-24T09:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "c", at: "2026-09-23T09:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "d", at: "2026-09-24T10:00:00.000Z", mode: "active" },
+    { type: "observation", id: "a", at: "2026-09-24T08:05:00.000Z", skill: "graft" },
+  ];
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { [measurementLogPath("/home/dev")]: lines.map((line) => `${JSON.stringify(line)}\n`).join("") },
+  );
+  const result = await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 2);
+});
+
+test("measurementDecisionsToday: a hand-edited/malformed line is skipped, never thrown on", async () => {
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { [measurementLogPath("/home/dev")]: '{not json\n{"type":"decision","id":"a","at":"2026-09-24T08:00:00.000Z","mode":"measurement"}\n' },
+  );
+  const result = await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 1);
+});
+
+test("measurementDecisionsToday: a read that throws reads as 0, never propagates", async () => {
+  const engine: FakeEngine = {
+    env: { get: async (name: string) => (name === "HOME" ? "/home/dev" : undefined) },
+    fs: {
+      exists: async () => true,
+      read: async () => {
+        throw new Error("disk on fire");
+      },
+    },
+  };
+  const result = await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 0);
 });

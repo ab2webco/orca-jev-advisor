@@ -69,6 +69,12 @@ function run (home, payload) {
   const env = { ...process.env, HOME: home }
   delete env.XDG_CACHE_HOME
   delete env.XDG_CONFIG_HOME
+  // src/core/paths.ts's resolveCacheDir refuses to compute a real path at
+  // all under node's test runner (see its module doc) -- this points it at
+  // exactly the directory it would have computed for `home` on darwin with
+  // no XDG override, so gate-outcome.ts's own CACHE_DIR still lands inside
+  // this throwaway HOME.
+  env.ORCA_SUPERVISOR_CACHE_DIR = join(home, '.cache', 'orca-supervisor')
   execFileSync(process.execPath, [SCRIPT_PATH], {
     env,
     input: JSON.stringify(payload),
