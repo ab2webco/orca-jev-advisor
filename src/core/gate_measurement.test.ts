@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { buildGateDecisionRecord, commandFamily, parseGateDecisionRecords, serializeGateRecord } from "./gate_measurement.ts";
+import { buildGateDecisionRecord, canonicalCommandFamily, commandFamily, parseGateDecisionRecords, serializeGateRecord } from "./gate_measurement.ts";
 
 test("an env assignment never reaches the family name", () => {
   assert.equal(commandFamily("TOKEN=ghp_secret123 gh pr merge 812"), "gh cli");
@@ -175,4 +175,22 @@ test("a record written before pluginVersion existed parses back with the field s
   const parsed = parseGateDecisionRecords(legacyLine);
   assert.equal(parsed.length, 1, "the pre-existing record must survive, not be skipped as malformed");
   assert.equal(parsed[0]?.pluginVersion, undefined);
+});
+
+test("discarding uncommitted work groups with reset/clean, a branch switch does not", () => {
+  assert.equal(commandFamily("git reset --hard"), "git discard");
+  assert.equal(commandFamily("git clean -fd"), "git discard");
+  assert.equal(commandFamily("git checkout -- src/app.ts"), "git discard");
+  assert.equal(commandFamily("git checkout ."), "git discard");
+  assert.equal(commandFamily("git restore src/app.ts"), "git discard");
+  assert.equal(commandFamily("cd repo && git restore ."), "git discard");
+  assert.equal(commandFamily("git checkout main"), "git");
+  assert.equal(commandFamily("git checkout -b feature/x"), "git");
+  assert.equal(commandFamily("git restore --staged src/app.ts"), "git");
+});
+
+test("a record written under the old reset/clean label reads as the same family", () => {
+  assert.equal(canonicalCommandFamily("git reset/clean"), "git discard");
+  assert.equal(canonicalCommandFamily("git discard"), "git discard");
+  assert.equal(canonicalCommandFamily("terraform"), "terraform");
 });

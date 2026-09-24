@@ -200,6 +200,19 @@ test('gate.byCommandFamily carries interventions per family and a familiesWithNo
   assert.equal(result.gate.familiesWithNoInterventions, 1)
 })
 
+test('gate.byCommandFamily: a row written under the old "git reset/clean" label counts with "git discard", not as a second family', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('a', { commandFamily: 'git reset/clean', verdict: 'deny', source: 'local-rule' }),
+    gateDecisionRow('b', { commandFamily: 'git discard', verdict: 'deny', source: 'local-rule' }),
+  ])
+  const result = run(home)
+  const families = result.gate.byCommandFamily.map((f) => f.commandFamily)
+  assert.equal(families.includes('git reset/clean'), false)
+  const discard = result.gate.byCommandFamily.find((f) => f.commandFamily === 'git discard')
+  assert.equal(discard.interventions, 2)
+})
+
 test('gate.jevLatency exposes p95Ms alongside medianMs and maxMs', () => {
   const home = makeHome()
   writeGateLog(home, Array.from({ length: 20 }, (_, i) =>

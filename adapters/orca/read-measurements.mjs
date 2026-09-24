@@ -38,6 +38,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
+import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
@@ -132,7 +133,8 @@ function toGateDecisionRecord (row) {
     id: row.id,
     at: row.at,
     project: row.project,
-    commandFamily: row.commandFamily,
+    // Stamped at write time: a log that spans a family rename reads as one family.
+    commandFamily: canonicalCommandFamily(row.commandFamily),
     source: row.source,
     verdict: row.verdict,
     latencyMs: row.latencyMs,
@@ -333,7 +335,8 @@ function toPendingApprovalRecord (row) {
     at: row.at,
     project: row.project,
     destinationId: row.destinationId,
-    commandFamily: row.commandFamily,
+    // Stamped at write time: a log that spans a family rename reads as one family.
+    commandFamily: canonicalCommandFamily(row.commandFamily),
     shape: row.shape,
     reversible: row.reversible,
     external: row.external,
@@ -462,7 +465,8 @@ function toAbComparisonResult (row) {
   return {
     id: row.id,
     at: row.at,
-    commandFamily: row.commandFamily,
+    // Stamped at write time: a log that spans a family rename reads as one family.
+    commandFamily: canonicalCommandFamily(row.commandFamily),
     destinationKind: row.destinationKind,
     jev: {
       verdict: jev.verdict,

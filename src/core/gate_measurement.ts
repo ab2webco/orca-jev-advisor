@@ -8,6 +8,8 @@
 // which specific file or branch, only a coarse command *family* (`git
 // push`, `rm -rf`, `terraform`, ...) and which project it happened in.
 
+import { startsWithGitDiscard } from "./git_discard.ts";
+
 /**
  * `"none"` means the gate reached the point of asking Jev and got no answer
  * back at all -- network error, timeout, or budget exceeded (see askJev in
@@ -46,10 +48,29 @@ export interface GateDecisionRecord {
   readonly pluginVersion?: string;
 }
 
+/** The family for discarding uncommitted work. Records written before checkout and restore joined it carry `LEGACY_DISCARD_FAMILY`. */
+export const DISCARD_FAMILY = "git discard";
+const LEGACY_DISCARD_FAMILY = "git reset/clean";
+
+/**
+ * The family a record on disk belongs to today. `commandFamily` is stamped
+ * at write time, so a log spanning the rename would otherwise show the same
+ * family twice.
+ */
+export function canonicalCommandFamily(family: string): string {
+  return family === LEGACY_DISCARD_FAMILY ? DISCARD_FAMILY : family;
+}
+
 /** `spansPipe` marks a shape that only exists ACROSS a pipe, so it must be matched before the command is split. */
-const FAMILY_PATTERNS: readonly { readonly pattern: RegExp; readonly family: string; readonly spansPipe?: boolean }[] = [
+const FAMILY_PATTERNS: readonly { readonly pattern: { test(segment: string): boolean }; readonly family: string; readonly spansPipe?: boolean }[] = [
   { pattern: /^git\s+push\b/, family: "git push" },
-  { pattern: /^git\s+(reset|clean)\b/, family: "git reset/clean" },
+  // Every way of throwing away uncommitted work in one family: reset and
+  // clean as before, plus checkout/restore in the forms that overwrite the
+  // working tree (see git_discard.ts). `git checkout <branch>` stays `git`.
+  {
+    pattern: { test: (segment) => /^git\s+(reset|clean)\b/.test(segment) || startsWithGitDiscard(segment) },
+    family: DISCARD_FAMILY,
+  },
   { pattern: /^git\s+branch\b/, family: "git branch" },
   { pattern: /^rm\s+-[a-zA-Z]*[rf]/, family: "rm -rf" },
   { pattern: /^kubectl\b/, family: "kubectl" },

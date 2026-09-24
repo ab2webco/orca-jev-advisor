@@ -979,19 +979,19 @@ async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
 
 // ---------------------------------------------------------------------------
 // Deny-tier switches -- same request/result/status shape as the skill/tool
-// selection switches above, for the three NEVER_SILENTLY rules
-// adapters/claude/gate-bash.ts denies outright (rm -rf /, DROP/TRUNCATE
-// TABLE, terraform destroy). See src/core/deny_tier_config.ts's module
-// note for why this one is different: it fails CLOSED (all three default
-// to `true`, still denying) rather than open, so a missing or malformed
-// mirror file must never quietly disable protection.
+// selection switches above, for the nine NEVER_SILENTLY rules
+// adapters/claude/gate-bash.ts denies by default (DENY_TOGGLE_KEYS in
+// src/core/deny_tier_config.ts). See that file's module note for why this
+// one is different: it fails CLOSED (every switch defaults to `true`, still
+// denying) rather than open, so a missing or malformed mirror file must
+// never quietly disable protection.
 // ---------------------------------------------------------------------------
 
 const DENY_TIER_CONFIG_REQUEST_KEY = 'denyTierConfigRequest'
 const DENY_TIER_CONFIG_RESULT_KEY = 'denyTierConfigResult'
 const DENY_TIER_STATUS_KEY = 'denyTierStatus'
 
-/** Reads the mirror file's current switches, defaulting to all three on
+/** Reads the mirror file's current switches, defaulting to all of them on
  *  (still denying) on any failure or malformed value -- never thrown,
  *  matching the file's own fail-CLOSED contract (src/core/deny_tier_config.ts).
  *  `options.mirror` lets tests substitute a fake in place of the real

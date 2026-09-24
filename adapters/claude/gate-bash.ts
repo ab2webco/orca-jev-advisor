@@ -82,6 +82,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
+import { discardsUncommittedWork } from '../../src/core/git_discard.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -194,24 +195,19 @@ function resolveGateActionReason(reason: GateActionReason): string {
 type Decision = 'allow' | 'deny' | 'ask'
 
 /**
- * The three NEVER_SILENTLY rules whose blast radius reaches beyond the
- * repository AND beyond recovery -- the only ones this gate ever denies
- * outright instead of asking. Each key matches a boolean field on
- * DenyTierSwitches (src/core/deny_tier_config.ts); turning that field off
- * downgrades the rule to 'ask', never to 'allow'.
+ * Every NEVER_SILENTLY rule below denies by default: all nine switches in
+ * DEFAULT_DENY_TIER_SWITCHES (src/core/deny_tier_config.ts) are `true`. A
+ * rule's `denyToggle` names its switch; turning one off downgrades that
+ * rule to 'ask', never to 'allow'.
  *
- * Deliberately NOT on this list, however broad or damaging: force push
- * (most are a developer's own feature branch -- too broad to deny), a push
- * to main/master/production (damaging but revertible), `git reset --hard`
- * / `git clean -f` (the blast radius is one working tree and the person is
- * right there -- `clean -f` genuinely destroys untracked work, so this one
- * is a close call, not an obvious one), `kubectl delete|drain` (entirely
- * namespace-dependent; a dev namespace makes this routine), and
- * `curl | bash` (arbitrary remote code, but the person may have context
- * this gate does not). All five stay `ask`, on purpose -- do not "tidy"
- * this into denying more without re-reading the reasoning above.
+ * This used to be three rules (`rm -rf /`, DROP/TRUNCATE, terraform
+ * destroy), with force push, pushes to protected branches, reset/clean,
+ * kubectl delete|drain and `curl | bash` left at 'ask' because a person was
+ * right there to answer. The approvals log overturned that (see the module
+ * note above and deny_tier_config.ts): the question was answered "yes"
+ * almost every time, or not at all, so it bought attention rather than
+ * safety. What did not change is the floor: no switch reaches 'allow'.
  */
-
 
 /**
  * Tier 1b: the rules that never run unannounced. `why` is a catalog key,
@@ -227,7 +223,7 @@ type Decision = 'allow' | 'deny' | 'ask'
  * Only the agent is refused. The person can always run the command in a
  * terminal, which is what the deny message tells them.
  */
-const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey; readonly denyToggle: DenyToggleKey }[] = [
+const NEVER_SILENTLY: readonly { readonly pattern: { test(command: string): boolean }; readonly why: GateKey; readonly denyToggle: DenyToggleKey }[] = [
   { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush', denyToggle: 'denyForcePush' },
   { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
@@ -237,6 +233,13 @@ const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey
   // blast radius is one working tree, which is why this was the closest call
   // of the nine.
   { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
+  // The same loss through `git checkout -- <path>`, `git checkout .`,
+  // `git checkout -f` or `git restore <path>`: the working tree is
+  // overwritten and uncommitted changes are gone. This form discarded an
+  // agent's work in a real session while the rule above did not know it.
+  // A branch switch, `-b`/`-B`, `git switch` and `git restore --staged` are
+  // not matched -- see src/core/git_discard.ts for each reason.
+  { pattern: { test: discardsUncommittedWork }, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
   // Irrecoverable without a backup nobody can assume exists.
   { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable' },
   { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },

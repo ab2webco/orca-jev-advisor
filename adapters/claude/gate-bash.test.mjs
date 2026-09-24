@@ -170,7 +170,7 @@ test('an expired cached verdict is dropped from disk instead of being reused for
 // ---------------------------------------------------------------------------
 
 /** `<home>/.config/orca-supervisor/deny-tier-config.json` -- the fail-CLOSED
- *  mirror gate-bash.ts reads for the three deny-tier switches (see
+ *  mirror gate-bash.ts reads for the deny-tier switches (see
  *  src/core/deny_tier_config.ts). */
 function denyTierConfigPath (home) {
   return join(home, '.config', 'orca-supervisor', 'deny-tier-config.json')
@@ -306,3 +306,60 @@ test('AB benchmark: no queue file is created on a deny-tier local-rule verdict -
   run(home, 'rm -rf /')
   assert.equal(existsSync(abBenchmarkQueuePath(home)), false)
 })
+
+// ---------------------------------------------------------------------------
+// Discarding uncommitted work. `git checkout -- <file>` discarded an agent's
+// uncommitted work in a real session while `rule.resetClean` only knew
+// `reset --hard` and `clean -f`; the same loss through checkout or restore
+// reached Jev instead, and scored on both sides of the ceiling. These fire
+// under the same `denyResetClean` switch, before the API key check.
+// ---------------------------------------------------------------------------
+
+/** The decision the hook emitted, or 'none' when it passed through silently. */
+function decisionFor (home, command) {
+  const stdout = run(home, command)
+  return stdout === '' ? 'none' : JSON.parse(stdout).hookSpecificOutput.permissionDecision
+}
+
+const DISCARDING_COMMANDS = [
+  'git checkout -- src/app.ts',
+  'git checkout -- .',
+  'git checkout .',
+  'git checkout main -- src/app.ts',
+  'git checkout -f',
+  'git checkout --force',
+  'git checkout -f main',
+  'git checkout --force feature/x',
+  'git restore src/app.ts',
+  'git restore .',
+  'git restore --worktree src/app.ts',
+  'git restore --source=HEAD~1 src/app.ts',
+]
+
+const NON_DISCARDING_COMMANDS = [
+  'git checkout main',
+  'git checkout -b new-branch',
+  'git checkout -B rebuilt origin/main',
+  'git checkout src/app.ts',
+  'git switch main',
+  'git switch -c new-branch',
+  'git restore --staged src/app.ts',
+  'git restore -S src/app.ts',
+]
+
+for (const command of DISCARDING_COMMANDS) {
+  test(`discarding uncommitted work denies by default and drops to ask when its switch is off: ${command}`, () => {
+    const home = makeHome()
+    assert.equal(decisionFor(home, command), 'deny')
+    writeDenyTierConfig(home, { denyResetClean: false })
+    assert.equal(decisionFor(home, command), 'ask', 'switched off must reach ask, never allow')
+  })
+}
+
+for (const command of NON_DISCARDING_COMMANDS) {
+  test(`not a discard, so no local rule stops it: ${command}`, () => {
+    const home = makeHome()
+    const decision = decisionFor(home, command)
+    assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+  })
+}
