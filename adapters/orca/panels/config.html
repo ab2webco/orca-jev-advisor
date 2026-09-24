@@ -362,6 +362,8 @@
           'error.exception': 'Ocurrió un error inesperado.',
           'error.missingPluginRoot': 'Falta la ruta del plugin.',
           'error.expired': 'La solicitud expiró antes de que el plugin la atendiera. Vuelve a intentarlo.',
+          'error.orcaCliNotFound': 'No se encontró el CLI de Orca. Reinicia Orca; si el problema sigue, la instalación podría estar dañada.',
+          'error.orcaCliFailed': 'El CLI de Orca devolvió un error al listar los worktrees. Revisa el registro de Orca.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
@@ -464,6 +466,8 @@
           'error.exception': 'An unexpected error occurred.',
           'error.missingPluginRoot': 'The plugin path is missing.',
           'error.expired': 'The request expired before the plugin attended it. Try again.',
+          'error.orcaCliNotFound': 'Could not find the Orca CLI. Restart Orca; if this keeps happening, the install may be damaged.',
+          'error.orcaCliFailed': "The Orca CLI returned an error while listing worktrees. Check Orca's log.",
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
         }
       }
@@ -483,7 +487,9 @@
         'launch-failed': 'error.launchFailed',
         exception: 'error.exception',
         'missing-plugin-root': 'error.missingPluginRoot',
-        expired: 'error.expired'
+        expired: 'error.expired',
+        'orca-cli-not-found': 'error.orcaCliNotFound',
+        'orca-cli-failed': 'error.orcaCliFailed'
       }
       /**
        * An error whose text is safe to put in front of a person.

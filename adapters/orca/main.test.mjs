@@ -14,6 +14,9 @@ import {
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  cmdRefreshCatalog,
+  deriveCatalogFromOrca,
+  deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
   publishGateDefaults,
@@ -154,4 +157,100 @@ test('attendCatalogRefreshRequest: an expired request publishes reason "expired"
   assert.equal(result.id, 'cr-1')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+// ---------------------------------------------------------------------------
+// T8 -- the CLI resolution must be derived from process.execPath (never a
+// hardcoded install path), and "the CLI could not be found" must never be
+// reported the same way as "the CLI ran and found nothing". See
+// odd/tasks/panel-worker-wakeup.md.
+// ---------------------------------------------------------------------------
+
+function enoentError (command) {
+  const error = new Error(`spawn ${command} ENOENT`)
+  error.code = 'ENOENT'
+  return error
+}
+
+const DARWIN_EXEC_PATH = '/Applications/Orca.app/Contents/MacOS/Orca'
+
+test('deriveCatalogFromOrca: every candidate missing reports orca-cli-not-found, not an empty success', async () => {
+  const orca = fakeOrca()
+  const calls = []
+  const result = await deriveCatalogFromOrca(orca, {
+    execPath: DARWIN_EXEC_PATH,
+    platform: 'darwin',
+    runCommand: async (command) => { calls.push(command); throw enoentError(command) }
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'orca-cli-not-found')
+  // Both candidates (the bundled path derived from execPath, then the bare
+  // PATH fallback) must actually have been tried, in that order.
+  assert.deepEqual(calls, ['/Applications/Orca.app/Contents/Resources/bin/orca', 'orca'])
+})
+
+test('deriveCatalogFromOrca: falls through a missing bundled path to a bare "orca" that is actually on PATH', async () => {
+  const orca = fakeOrca()
+  const payload = JSON.stringify({ id: 1, ok: true, result: { worktrees: [{ repo: 'demo', path: '/Users/dev/demo' }] } })
+  const result = await deriveCatalogFromOrca(orca, {
+    execPath: DARWIN_EXEC_PATH,
+    platform: 'darwin',
+    runCommand: async (command) => {
+      if (command === 'orca') return { stdout: payload }
+      throw enoentError(command)
+    }
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.destinations.length, 1)
+  assert.equal(result.destinations[0].worktreePath, '/Users/dev/demo')
+})
+
+test('deriveCatalogFromOrca: a candidate that is found but errors reports orca-cli-failed, not orca-cli-not-found', async () => {
+  const orca = fakeOrca()
+  const result = await deriveCatalogFromOrca(orca, {
+    execPath: DARWIN_EXEC_PATH,
+    platform: 'darwin',
+    runCommand: async () => { throw new Error('Command failed: exit code 1') }
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'orca-cli-failed')
+})
+
+test('cmdRefreshCatalog: surfaces orca-cli-not-found instead of reporting success with zero additions', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
+  const result = await cmdRefreshCatalog(orca, storageHost, {
+    execPath: DARWIN_EXEC_PATH,
+    platform: 'darwin',
+    runCommand: async (command) => { throw enoentError(command) }
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'orca-cli-not-found')
+  assert.equal(result.added, undefined)
+})
+
+test('deriveInitialCatalogIfEmpty: the "only when empty" guard skips derivation entirely -- runCommand is never called', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [{ id: 'x', label: 'x', kind: 'project', worktreePath: '/x', autonomy: { actThreshold: 0.9, confirmThreshold: 0.6, maxAutoDelicateness: 2 } }] }
+  })
+  await deriveInitialCatalogIfEmpty(orca, storageHost, {
+    execPath: DARWIN_EXEC_PATH,
+    platform: 'darwin',
+    runCommand: async () => { throw new Error('must not be called: the catalog was not empty') }
+  })
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 1)
+})
+
+test('deriveInitialCatalogIfEmpty: stays non-throwing and leaves the catalog empty when the CLI cannot be found', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
+  await deriveInitialCatalogIfEmpty(orca, storageHost, {
+    execPath: DARWIN_EXEC_PATH,
+    platform: 'darwin',
+    runCommand: async (command) => { throw enoentError(command) }
+  })
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 0)
 })
