@@ -68,7 +68,7 @@ run `gentle-ai review assess --committed-only`.
   Checks: strict TDD; `npm run check` with screenshots at 1440/768/390/320,
   both themes, each one read. Version comparison and merge stay in src/core;
   storage stays in main.mjs.
-- [ ] **T3** Append "Plan review findings (2026-09-24)" to odd/CHECKPOINT.md.
+- [x] **T3** Append "Plan review findings (2026-09-24)" to odd/CHECKPOINT.md.
   Route: inline (docs).
 
 ## Progress / evidence

@@ -229,3 +229,85 @@ a status strip; a time window; and the empty-log state. Spec in
 - Screenshots: 1440 / 768 / 390 / 320, both themes, and read every image.
   `npm run check` renders them. Two concurrent runs delete each other's
   working directory, so never read screenshots while another run may be going.
+
+---
+
+## Plan review findings (2026-09-24)
+
+A review of "The design being proposed" against the code, done while the
+checkout/restore deny rule and the seed refresh landed
+(odd/tasks/gate-destructive-restore-and-seed-refresh.md). These are inputs to
+the cache-redesign change (SDD, next PR). Line numbers are from commit
+`45bf189`.
+
+1. **Cache migration: a reset is accepted, and it must be explicit.** The user
+   accepted that the cache may be reset on this update, so no
+   backward-compatible reader is needed. The reset must be deliberate: a
+   versioned cache key or a schema tag on the file, read and compared on
+   load. It must not be a silent drop by the entry validator. Today
+   `pruneGateCache` (`src/core/gate_cache.ts:76`) drops malformed entries one
+   by one, so a new entry shape would vanish entry by entry and nobody could
+   tell a migration from a corrupt file.
+
+2. **The ~2.30 deny ceiling is redundant for every catastrophic example, and
+   has no verdict to land in.** Every catastrophic row in the measured table
+   is already denied by a local regex before Jev is asked: `kubectl delete`
+   (`rule.kubectlDelete`), `rm -rf /` and `rm -rf $HOME` (`rule.rmRf`),
+   `terraform destroy` (`rule.terraformDestroy`), `DROP`/`TRUNCATE`
+   (`rule.dropTable`), `git push --force` (`rule.forcePush`). The threshold
+   would only ever act on commands no rule names, and the table has none of
+   those. Separately, `GateVerdict` is `"allow" | "ask"`
+   (`src/core/decisions.ts:341`), so a deny needs a new `deny` arm there. Every
+   consumer then has to handle it: gate-bash's verdict mapping, the
+   measurement/approval records, and the panel defaults publisher
+   `publishGateDefaults` (`adapters/orca/main.mjs:651`), which today only
+   carries `consequenceCeiling`. The literal `2.3` also exists at
+   `decisions.ts:502`, where it picks the reason text
+   (`reason.breaksSomethingImportant` vs `reason.needsCleanupAfter`). A deny
+   ceiling and that reason split must be one named constant, not two literals
+   that drift.
+
+3. **A 90-day TTL contradicts the cache's own stated rationale.**
+   `gate_cache.ts:25-39` says 30 days was chosen because what goes stale is
+   what is NOT in the key: model judgment and the catalog/policy mirror at call
+   time. "A quarter is too long to trust blindly against either drifting."
+   Policy and catalog drift are still not in the key (and T2 of this PR just
+   changed the shipped policies). A 90-day settled TTL needs either the
+   policy/catalog digest folded into the key, or a written reason why that
+   rationale no longer holds.
+
+4. **Confidence is dropped four layers above the cache.** The plan stores score
+   and confidence per observation, but confidence never reaches the cache
+   writer. `decideAction` produces the axes. `GateActionResult.axes` carries
+   only `reversible`/`external`/`consequence`/`ceiling`. `JevOutcome.axes`
+   (`adapters/claude/gate-bash.ts:677-690`, `GateAxes`) carries the same.
+   `appendPendingApproval` records those. The cache write
+   (`gate-bash.ts:916`) stores only `{decision, reason, at}`. Carrying
+   confidence means widening every one of those types, not just the cache
+   entry.
+
+5. **"Settle" is defined twice, inconsistently, and the band has no width.**
+   The invariant says "a shape whose score lands near the threshold does not
+   settle on one observation". The design says "Settled (N observations
+   agreeing)". One is about distance to the line, the other about agreement
+   count. Neither says what "near" or "inside the band" means numerically.
+   The measured noise near the line is +/-0.09 (`git checkout -q main`), but
+   no band width was ever chosen.
+
+6. **Two smaller leaks.** `commandShape` returns null (never cached) on globs
+   as well as substitutions (`src/core/command_shape.ts:93`: `UNKNOWABLE`
+   matches `*` and `?[`). So "one call per shape" does not hold for any
+   globbed command, and those will never accumulate observations.
+   `pruneGateCache(raw, now = Date.now())` (`gate_cache.ts:76`) defaults the
+   clock inside `src/core`, which breaks the "src/core is pure" constraint.
+   The default should go, and the caller should inject `now`.
+
+**Still open (the user's decisions, unchanged by this review):**
+
+- Observations to settle an entry: proposed **3**. Open. Finding 5 must be
+  resolved first (agreement count vs distance band).
+- TTL: proposed **90 days** settled / **7 days** unsettled. Open. See finding 3.
+- Store score + confidence per observation: proposed **yes**. Open. See
+  finding 4 for the cost.
+- Deny ceiling: proposed **~2.30**. Open. See finding 2: redundant for every
+  measured catastrophic example, and it needs a `deny` verdict arm first.
