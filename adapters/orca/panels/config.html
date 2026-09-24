@@ -259,7 +259,8 @@
 
       <section id="mod-skills-section">
         <h2 data-i18n="modSkills.heading"></h2>
-        <p class="hint" data-i18n="modSkills.hint"></p>
+        <p class="hint" id="mod-skills-hint"></p>
+        <p class="hint" id="mod-skills-readiness"></p>
         <div class="checkbox-row">
           <input id="mod-skills-active" type="checkbox" />
           <div class="checkbox-text">
@@ -407,7 +408,12 @@
           'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
           'policies.importNone': 'No hay políticas nuevas para agregar.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
-          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). Déjalos apagados hasta que exista una semana de datos en modo medición para calibrarlos.',
+          'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
+          'modSkills.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} prompts comparables. Faltan {{shortfall}}.',
+          'modSkills.readiness.rateLow': 'Medición: ya hay {{comparable}} prompts comparables, pero el acierto es {{matchRate}}% y el umbral es {{minMatchRate}}%. Encenderlos ahora aplicaría un criterio que los datos no respaldan.',
+          'modSkills.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} prompts comparables con {{matchRate}}% de acierto, contra {{minComparable}} y {{minMatchRate}}%. Ya hay con qué calibrar.',
+          'modSkills.readiness.unknown': 'Medición: sin lectura todavía.',
+          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). Déjalos apagados hasta que la medición alcance su umbral: {{minComparable}} prompts comparables y un acierto de al menos {{minMatchRate}}% frente a lo que el modelo cargó de verdad. La línea de abajo dice cuánto falta.',
           'modSkills.activeLabel': 'Dejar que Jev elija la skill (modo activo)',
           'modSkills.activeHint': 'Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.',
           'modSkills.activeToolsLabel': 'Dejar que Jev elija la herramienta (modo activo)',
@@ -561,7 +567,12 @@
           'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
           'policies.importNone': 'No new policies to add.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
-          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until a week of measurement-mode data exists to calibrate them from.",
+          'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
+          'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
+          'modSkills.readiness.rateLow': 'Measurement: {{comparable}} comparable prompts already, but the match rate is {{matchRate}}% against a threshold of {{minMatchRate}}%. Turning these on now would apply a criterion the data does not support.',
+          'modSkills.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
+          'modSkills.readiness.unknown': 'Measurement: nothing read yet.',
+          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
           'modSkills.activeHint': "Off (today): only records which skill Jev would have picked, in a local log; nothing the model sees changes. On: withholds the skill listing from the model and injects the winning skill's own instructions instead.",
           'modSkills.activeToolsLabel': 'Let Jev choose the tool (active mode)',
@@ -1497,6 +1508,38 @@
        *  (or if the worker has never published it), which leaves both
        *  checkboxes unchecked -- the same "off" the file itself defaults to
        *  when it has never been written. */
+      // Mirrors DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS in
+      // src/core/mod_skills_readiness.ts. Used only until the worker has
+      // published a summary carrying the real ones -- the hint above the
+      // switches names a number, and a hint that names no number is exactly
+      // the "a week of data" hand-wave this replaced.
+      var READINESS_FALLBACK = { minComparable: 1000, minMatchRate: 0.7 }
+
+      /** Paints the hint's thresholds and the live "how far off" line.
+       *  A null matchRate is never rendered as 0%: it means no comparable
+       *  evidence yet, which is a different sentence. */
+      function renderModSkillsReadiness (measurements) {
+        var mod = measurements && measurements.ok ? measurements.modSkills : null
+        var readiness = mod && mod.readiness ? mod.readiness : null
+        var thresholds = (readiness && readiness.thresholds) || READINESS_FALLBACK
+        var params = {
+          minComparable: String(thresholds.minComparable),
+          minMatchRate: String(Math.round(thresholds.minMatchRate * 100))
+        }
+        el('mod-skills-hint').textContent = t('modSkills.hint', params)
+
+        var lineEl = el('mod-skills-readiness')
+        if (!readiness) { lineEl.textContent = t('modSkills.readiness.unknown'); return }
+        var comparable = mod.comparableCount || 0
+        params.comparable = String(comparable)
+        params.shortfall = String(readiness.comparableShortfall || 0)
+        params.matchRate = mod.matchRate == null ? '-' : String(Math.round(mod.matchRate * 1000) / 10)
+        if (comparable === 0) { lineEl.textContent = t('modSkills.readiness.noData'); return }
+        if (readiness.reason === 'ready') { lineEl.textContent = t('modSkills.readiness.ready', params); return }
+        if (readiness.reason === 'match-rate-too-low') { lineEl.textContent = t('modSkills.readiness.rateLow', params); return }
+        lineEl.textContent = t('modSkills.readiness.shortfall', params)
+      }
+
       function fillModSkillsStatus (status) {
         el('mod-skills-active').checked = !!(status && status.active === true)
         el('mod-skills-active-tools').checked = !!(status && status.activeTools === true)
@@ -1846,6 +1889,7 @@
           read(MOD_SKILLS_STATUS_KEY, false)
         ]).then(function (results) {
           renderClaudeIntegrationStatus(results[0], results[1], results[2], results[3])
+          renderModSkillsReadiness(results[2])
         })
       }
 

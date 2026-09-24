@@ -83,7 +83,23 @@ const READY = {
       { id: 'tooling', label: 'tooling', description: 'Internal tooling', care: 'normal' }
     ]
   },
-  policies: { rules: [] },
+  // An ARRAY, because that is what the worker stores and what the panel's
+  // `(results[2] || []).forEach(addPolicyRow)` expects. The first version of
+  // this line was `{ rules: [] }`, an object with no .forEach, so load()
+  // threw, its catch painted "Something went wrong and it could not finish"
+  // in red across the bottom of the panel, and every settings screenshot ever
+  // taken by this harness carried that error while the harness itself
+  // reported "no script errors" -- the throw was caught, so it never reached
+  // pageerror. Rows are the real first three of seed/policies.json.
+  policies: [
+    {
+      id: 'read_and_test',
+      kind: 'permits',
+      rule: 'Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always.',
+    },
+    { id: 'own_branch', kind: 'permits', rule: 'All work goes on a feature branch. Work happens there without asking.' },
+    { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main or develop, not even a one-line fix.' },
+  ],
   board: { entries: [] },
   // The shape is read-measurements.mjs's own output, not a flat invention:
   // `{ ok, gate, modSkills, approvals }`, with the board reading
@@ -149,6 +165,17 @@ const READY = {
       wideLatencyMeanMs: null,
       fitLatencyMeanMs: null,
       byProject: [],
+      // evaluateModSkillsReadiness()'s shape (src/core/mod_skills_readiness.ts).
+      // Zero comparable prompts is the honest state of this machine: the mod
+      // has never run here, which is exactly why the panel must say how far
+      // off the threshold is instead of "not ready yet".
+      readiness: {
+        ready: false,
+        comparableShortfall: 1000,
+        matchRateMet: null,
+        reason: 'not-enough-samples',
+        thresholds: { minComparable: 1000, minMatchRate: 0.7 },
+      },
     },
     // Twenty real paired samples: Jev's median against the model's, and the
     // model NAMED -- the user was explicit that "the big model" is not a name.
