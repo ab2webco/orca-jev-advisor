@@ -74,11 +74,29 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
       come from the core constant, not a literal, and nothing may re-introduce
       a second copy of it.
 
+- [ ] T8 `deriveCatalogFromOrca` runs `execFile('orca', ...)` and depends on
+      the CLI being on the worker's PATH. A macOS app launched from the Dock
+      gets `/usr/bin:/bin:/usr/sbin:/sbin`, which does not contain
+      `/usr/local/bin/orca`, so the spawn fails with ENOENT, the catch returns
+      an empty list, and "Refresh from Orca" reports nothing wrong while adding
+      nothing. Resolve the CLI from `process.execPath` (the worker runs inside
+      the Orca install, so its own binary locates the bundled CLI without
+      hardcoding an install path), fall back to PATH, and when it still cannot
+      be found say so in the panel instead of returning an empty list.
+- [ ] T9 `seed/policies.json` ships with the plugin and `loadPolicies()` exists
+      in core, but nothing can import them: the panel only ever mirrors
+      policies OUT. Every developer therefore starts with an empty policy list
+      and no way to adopt the shared baseline. Add an import action, through
+      the same request/poll path the other panel actions use.
+
 ## Acceptance
 - With no worker, saving a key writes no plaintext key anywhere on disk.
 - With no worker, every panel surface states the cause and the remedy.
 - A request attended after its TTL produces a visible `expired` result.
 - No panel default contradicts the core constant it mirrors.
+- A catalog refresh that cannot find the Orca CLI says so; it never reports
+  success with an empty result.
+- The shipped policy seeds can be adopted from the panel.
 - All tests pass; screenshots read at all four widths.
 
 ## Progress

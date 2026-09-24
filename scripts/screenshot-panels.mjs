@@ -38,6 +38,11 @@ const THEMES = /** @type {const} */ (['light', 'dark'])
 const PANELS = ['config.html', 'board.html']
 
 const iso = new Date('2026-09-23T12:00:00.000Z').toISOString()
+// The heartbeat MUST be generated at run time. A fixed timestamp is stale by
+// definition the moment the clock moves past the staleness window, so pinning
+// it meant the `ready` scenario silently exercised the "worker is dead" path
+// and the live path was never photographed at all.
+const liveIso = () => new Date().toISOString()
 
 /**
  * A machine where the worker has never run: every key absent. This is what a
@@ -48,14 +53,21 @@ const FRESH = {}
 
 /** A machine where the worker has run and published everything it mirrors. */
 const READY = {
-  workerHeartbeat: { at: iso },
+  workerHeartbeat: { at: liveIso() },
   // Mirrors GATE_CONSEQUENCE_CEILING; the panel must render this rather than a
   // literal of its own, which is the drift T7 fixed.
   gateDefaults: { consequenceCeiling: 1.78, checkedAt: iso },
-  secretStatus: { isConfigured: true, endsWith: '9f2a', checkedAt: iso },
+  // These shapes are the worker's, not invented: publishSecretStatus writes
+  // `configured` (NOT `isConfigured`), and the integration status is an `ok`
+  // envelope around a `hook` record. A fixture that does not match what the
+  // worker writes photographs a panel nobody will ever see -- the first draft
+  // of this file said `isConfigured` and rendered "No key configured" while
+  // claiming to show a configured one.
+  secretStatus: { configured: true, endsWith: '9f2a', checkedAt: iso },
   claudeIntegrationStatus: {
-    installed: true,
-    accounts: [{ id: 'account-one', hooksInstalled: true }],
+    ok: true,
+    hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+    secretMirror: { ok: true },
     checkedAt: iso
   },
   localeStatus: { value: 'en', checkedAt: iso },
