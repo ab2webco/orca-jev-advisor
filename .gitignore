@@ -12,3 +12,12 @@ package-lock.json
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 /graft/
+# Local AI runtime state
+.atl/
+
+# Orca worktrees live as sibling folders inside the repo root (the same
+# convention orca-oss uses); they are checkouts, never content of this one.
+/gate-learning-cache-and-deny-threshold/
+# Claude Code's own per-agent worktrees and local state.
+.claude/
+.ignore

@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { buildGateDecisionRecord, commandFamily, parseGateDecisionRecords, serializeGateRecord } from "./gate_measurement.ts";
+import { buildGateDecisionRecord, canonicalCommandFamily, commandFamily, parseGateDecisionRecords, serializeGateRecord } from "./gate_measurement.ts";
 
 test("an env assignment never reaches the family name", () => {
   assert.equal(commandFamily("TOKEN=ghp_secret123 gh pr merge 812"), "gh cli");
@@ -122,4 +122,75 @@ test("parseGateDecisionRecords: counting source:'jev' entries gives the real-dec
   const raw = serializeGateRecord(jev1) + serializeGateRecord(jev2) + serializeGateRecord(cached);
   const records = parseGateDecisionRecords(raw);
   assert.equal(records.filter((r) => r.source === "jev").length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// pluginVersion -- odd/tasks/panel-interventions-and-mod-copy.md T2. Which
+// build produced a decision matters concretely: 17 `ask` records for the
+// pipe-to-shell family read like the deny tier failing, until the version
+// shows five of them predate 0.4.0 -- a build that ran before the deny tier
+// existed at all. A time filter cannot separate that; the version can.
+// ---------------------------------------------------------------------------
+
+test("a record carries the plugin version it was produced by", () => {
+  const record = buildGateDecisionRecord({
+    id: "v1",
+    at: "2026-09-24T00:00:00.000Z",
+    project: "orca-supervisor",
+    command: "npm test",
+    source: "cache",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.4.0",
+  });
+  assert.equal(record.pluginVersion, "0.4.0");
+});
+
+test("pluginVersion round-trips through serialize/parse", () => {
+  const record = buildGateDecisionRecord({
+    id: "v2",
+    at: "2026-09-24T00:00:00.000Z",
+    project: null,
+    command: "git push",
+    source: "local-rule",
+    verdict: "ask",
+    latencyMs: null,
+    pluginVersion: "0.4.0",
+  });
+  const raw = serializeGateRecord(record);
+  assert.deepEqual(parseGateDecisionRecords(raw), [record]);
+});
+
+test("a record written before pluginVersion existed parses back with the field simply absent -- never dropped, never treated as corrupt", () => {
+  const legacyLine = `${JSON.stringify({
+    type: "gate-decision",
+    id: "legacy-1",
+    at: "2026-01-01T00:00:00.000Z",
+    project: "orca-supervisor",
+    commandFamily: "curl | shell",
+    source: "local-rule",
+    verdict: "ask",
+    latencyMs: null,
+  })}\n`;
+  const parsed = parseGateDecisionRecords(legacyLine);
+  assert.equal(parsed.length, 1, "the pre-existing record must survive, not be skipped as malformed");
+  assert.equal(parsed[0]?.pluginVersion, undefined);
+});
+
+test("discarding uncommitted work groups with reset/clean, a branch switch does not", () => {
+  assert.equal(commandFamily("git reset --hard"), "git discard");
+  assert.equal(commandFamily("git clean -fd"), "git discard");
+  assert.equal(commandFamily("git checkout -- src/app.ts"), "git discard");
+  assert.equal(commandFamily("git checkout ."), "git discard");
+  assert.equal(commandFamily("git restore src/app.ts"), "git discard");
+  assert.equal(commandFamily("cd repo && git restore ."), "git discard");
+  assert.equal(commandFamily("git checkout main"), "git");
+  assert.equal(commandFamily("git checkout -b feature/x"), "git");
+  assert.equal(commandFamily("git restore --staged src/app.ts"), "git");
+});
+
+test("a record written under the old reset/clean label reads as the same family", () => {
+  assert.equal(canonicalCommandFamily("git reset/clean"), "git discard");
+  assert.equal(canonicalCommandFamily("git discard"), "git discard");
+  assert.equal(canonicalCommandFamily("terraform"), "terraform");
 });

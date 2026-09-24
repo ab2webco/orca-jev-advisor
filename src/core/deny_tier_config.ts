@@ -1,10 +1,10 @@
-// gate-bash.ts's three configurable deny-tier switches: `rm -rf /` (and
-// `~`/`$HOME`), `DROP`/`TRUNCATE TABLE`/`DATABASE`/`SCHEMA`, and
-// `terraform`/`tofu destroy`. See NEVER_SILENTLY in adapters/claude/
-// gate-bash.ts for the principle these three -- and only these three --
-// exist for: blast radius beyond the repository AND beyond recovery.
-// Everything else NEVER_SILENTLY catches stays `ask`, deliberately, because
-// a person is right there to answer it.
+// gate-bash.ts's deny-tier switches: nine in all (DENY_TOGGLE_KEYS below),
+// one per kind of NEVER_SILENTLY rule in adapters/claude/gate-bash.ts, and
+// every one denies by default (DEFAULT_DENY_TIER_SWITCHES is all `true`).
+// A switch can guard more than one entry: `denyResetClean` guards two, and
+// covers every way of discarding uncommitted work the gate recognises: `git reset --hard`, `git clean -f`, and the working-tree
+// forms of `git checkout` and `git restore` (src/core/git_discard.ts). See
+// NEVER_SILENTLY for why deny, not ask, is the default.
 //
 // This is the same "worker writes a plain file, a process with no channel
 // into Orca's `storage` reads it directly" shape src/core/mod_skills_config.ts
@@ -22,9 +22,8 @@
 // permission to stop protecting.
 //
 // Turning a switch off never means "allow" -- adapters/claude/gate-bash.ts
-// downgrades a disabled rule to `ask`, the same question a human already
-// answers for every other NEVER_SILENTLY rule. Nothing here ever becomes
-// silent.
+// downgrades a disabled rule to `ask`, a question the person answers.
+// Nothing here ever becomes silent.
 
 /**
  * One switch per tier-1b rule. Every one of them denies by default.

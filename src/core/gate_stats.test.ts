@@ -30,9 +30,13 @@ test("empty input yields an honest zeroed summary, not nulls masquerading as dat
   assert.deepEqual(summary.byVerdict, { allow: 0, ask: 0, deny: 0 });
   assert.deepEqual(summary.bySource, { "local-rule": 0, cache: 0, jev: 0, none: 0 });
   assert.deepEqual(summary.byCommandFamily, []);
+  assert.equal(summary.familiesWithNoInterventions, 0);
   assert.deepEqual(summary.byProject, []);
+  assert.deepEqual(summary.byPluginVersion, []);
+  assert.equal(summary.noPluginVersionCount, 0);
   assert.equal(summary.jevLatency.sampleCount, 0);
   assert.equal(summary.jevLatency.medianMs, null);
+  assert.equal(summary.jevLatency.p95Ms, null);
   assert.equal(summary.jevLatency.maxMs, null);
 });
 
@@ -108,11 +112,13 @@ test("command families aggregate total and per-family verdict breakdown, sorted 
     commandFamily: "git push",
     total: 3,
     byVerdict: { allow: 1, ask: 2, deny: 0 },
+    interventions: 2,
   });
   assert.deepEqual(summary.byCommandFamily[1], {
     commandFamily: "rm -rf",
     total: 1,
     byVerdict: { allow: 0, ask: 0, deny: 1 },
+    interventions: 1,
   });
 });
 
@@ -134,4 +140,99 @@ test("a single record produces sane singleton stats (median equals the one value
   assert.equal(summary.jevLatency.medianMs, 42);
   assert.equal(summary.jevLatency.maxMs, 42);
   assert.equal(summary.jevLatency.sampleCount, 1);
+});
+
+// ---------------------------------------------------------------------------
+// p95Ms -- odd/tasks/panel-interventions-and-mod-copy.md T3. A maximum is
+// one sample and says nothing about the shape of the tail; p95 sits beside
+// the median. Nearest-rank convention throughout: for n sorted-ascending
+// samples, p95 is the value at index ceil(0.95 * n) - 1 -- always an actual
+// recorded latency, never an interpolated value nobody measured.
+// ---------------------------------------------------------------------------
+
+test("p95Ms is null, never 0, when there is no sample at all", () => {
+  const summary = foldGateDecisions([]);
+  assert.equal(summary.jevLatency.p95Ms, null);
+});
+
+test("p95Ms for a singleton sample equals that one value, same as median and max", () => {
+  const summary = foldGateDecisions([record({ source: "jev", verdict: "allow", latencyMs: 42 })]);
+  assert.equal(summary.jevLatency.p95Ms, 42);
+});
+
+test("p95Ms picks the nearest-rank sample out of 20, not an interpolation between two", () => {
+  const latencies = Array.from({ length: 20 }, (_, i) => (i + 1) * 10); // 10..200
+  const summary = foldGateDecisions(latencies.map((latencyMs) => record({ source: "jev", verdict: "allow", latencyMs })));
+  // ceil(0.95 * 20) = 19th rank (1-based) -> index 18 (0-based) -> value 190.
+  assert.equal(summary.jevLatency.p95Ms, 190);
+  assert.equal(summary.jevLatency.maxMs, 200);
+});
+
+test("p95Ms differs from maxMs once the tail has more than one sample past it", () => {
+  const latencies = Array.from({ length: 100 }, (_, i) => i + 1); // 1..100
+  const summary = foldGateDecisions(latencies.map((latencyMs) => record({ source: "jev", verdict: "allow", latencyMs })));
+  assert.equal(summary.jevLatency.p95Ms, 95);
+  assert.equal(summary.jevLatency.maxMs, 100);
+  assert.notEqual(summary.jevLatency.p95Ms, summary.jevLatency.maxMs);
+});
+
+// ---------------------------------------------------------------------------
+// interventions per family -- odd/tasks/panel-interventions-and-mod-copy.md
+// T4. Measured over 2,773 real decisions: 91 families, 61 of them 100%
+// allowed. Sorting by total buries every one that actually intervened.
+// ---------------------------------------------------------------------------
+
+test("each family reports its own interventions (ask + deny), independent of total", () => {
+  const summary = foldGateDecisions([
+    record({ commandFamily: "grep", verdict: "allow", source: "cache" }),
+    record({ commandFamily: "grep", verdict: "allow", source: "cache" }),
+    record({ commandFamily: "terraform", verdict: "ask", source: "local-rule" }),
+    record({ commandFamily: "terraform", verdict: "deny", source: "local-rule" }),
+  ]);
+  const grep = summary.byCommandFamily.find((f) => f.commandFamily === "grep");
+  const terraform = summary.byCommandFamily.find((f) => f.commandFamily === "terraform");
+  assert.equal(grep?.interventions, 0);
+  assert.equal(terraform?.interventions, 2);
+});
+
+test("familiesWithNoInterventions counts families whose interventions is 0, without dropping them from byCommandFamily", () => {
+  const summary = foldGateDecisions([
+    record({ commandFamily: "grep", verdict: "allow", source: "cache" }),
+    record({ commandFamily: "ls", verdict: "allow", source: "cache" }),
+    record({ commandFamily: "terraform", verdict: "ask", source: "local-rule" }),
+  ]);
+  assert.equal(summary.byCommandFamily.length, 3, "the fold stays complete; the panel decides what to show");
+  assert.equal(summary.familiesWithNoInterventions, 2);
+});
+
+test("familiesWithNoInterventions is 0 for an empty summary, not a stray count", () => {
+  const summary = foldGateDecisions([]);
+  assert.equal(summary.familiesWithNoInterventions, 0);
+});
+
+// ---------------------------------------------------------------------------
+// byPluginVersion / noPluginVersionCount -- so a caller can tell "17 asks
+// for this family" apart from "17 asks, 5 of them from before the deny tier
+// existed" without inventing a time-window heuristic that cannot make that
+// distinction (see gate_measurement.ts's own header on why).
+// ---------------------------------------------------------------------------
+
+test("byPluginVersion tallies which builds appear in the folded set, and noPluginVersionCount counts records with no version at all", () => {
+  const summary = foldGateDecisions([
+    record({ verdict: "ask", source: "local-rule", pluginVersion: "0.4.0" }),
+    record({ verdict: "ask", source: "local-rule", pluginVersion: "0.4.0" }),
+    record({ verdict: "ask", source: "local-rule", pluginVersion: "0.2.6" }),
+    record({ verdict: "ask", source: "local-rule" }), // no pluginVersion at all: pre-0.4.0 on-disk shape.
+  ]);
+  assert.deepEqual(summary.byPluginVersion, [
+    { pluginVersion: "0.4.0", total: 2 },
+    { pluginVersion: "0.2.6", total: 1 },
+  ]);
+  assert.equal(summary.noPluginVersionCount, 1);
+});
+
+test("byPluginVersion and noPluginVersionCount are empty/zero for an empty summary", () => {
+  const summary = foldGateDecisions([]);
+  assert.deepEqual(summary.byPluginVersion, []);
+  assert.equal(summary.noPluginVersionCount, 0);
 });
