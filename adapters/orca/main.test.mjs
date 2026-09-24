@@ -19,6 +19,7 @@ import {
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
   DENY_TIER_CONFIG_RESULT_KEY,
@@ -156,6 +157,27 @@ test('attendClaudeIntegrationRequest: an expired request publishes reason "expir
   assert.equal(result.id, 'ci-1')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+// odd/tasks/production-honesty-pass.md P5 -- install-claude-integration.mjs's
+// install() already returns modCopyWarning when the skills-mod copy fails
+// even though the rest of the install succeeded; the bug was that the shape
+// stored for the panel (`{id, at, ok, reason, detail}`) dropped it on the
+// floor, so the panel said "Done." over an install that had not, in fact,
+// fully succeeded. claudeIntegrationResultPayload is the exact shaping
+// function attendClaudeIntegrationRequest hands to storageHost.set -- pulled
+// out and exported so this can be proven without spawning the real
+// installer subprocess against this developer's actual ~/.claude.
+test('claudeIntegrationResultPayload carries modCopyWarning through -- P5, the panel must not say "Done." over a silently dropped failure', () => {
+  const payload = claudeIntegrationResultPayload('ci-2', { ok: true, modCopyWarning: 'copy-failed' })
+  assert.equal(payload.id, 'ci-2')
+  assert.equal(payload.ok, true)
+  assert.equal(payload.modCopyWarning, 'copy-failed')
+})
+
+test('claudeIntegrationResultPayload reports modCopyWarning as null when the install had nothing to warn about', () => {
+  const payload = claudeIntegrationResultPayload('ci-3', { ok: true })
+  assert.equal(payload.modCopyWarning, null)
 })
 
 test('attendLocaleRequest: an expired request publishes reason "expired"', async () => {
