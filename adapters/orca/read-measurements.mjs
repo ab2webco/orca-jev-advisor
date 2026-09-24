@@ -38,6 +38,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
+import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
@@ -106,9 +107,24 @@ function toGateDecisionRecord (row) {
     typeof row.at !== 'string' ||
     (row.project !== null && typeof row.project !== 'string') ||
     typeof row.commandFamily !== 'string' ||
-    (row.source !== 'local-rule' && row.source !== 'cache' && row.source !== 'jev') ||
+    // 'none' is a real GateSource (src/core/gate_measurement.ts): Jev was
+    // asked but never answered, so the command failed open unjudged. This
+    // check used to omit it, which meant every 'none' row -- exactly the
+    // rows the 0.4.0 fail-open fix writes -- was silently discarded as
+    // malformed. The fold never saw them, so the board's "passed unjudged"
+    // count could only ever render zero: a working feature, hidden by a
+    // guard that never learned about it. Third time a silent drop in this
+    // file has hidden something that was actually working; check the other
+    // guards in this file before trusting any of their omissions again.
+    (row.source !== 'local-rule' && row.source !== 'cache' && row.source !== 'jev' && row.source !== 'none') ||
     (row.verdict !== 'allow' && row.verdict !== 'ask' && row.verdict !== 'deny') ||
-    (row.latencyMs !== null && typeof row.latencyMs !== 'number')
+    (row.latencyMs !== null && typeof row.latencyMs !== 'number') ||
+    // Optional ON READ, not on write (see gate_measurement.ts's own doc on
+    // GateDecisionRecord.pluginVersion): absent entirely is a record from
+    // before this field existed and must be kept, never dropped and never
+    // counted as corrupt. Present but not a string is malformed, same
+    // discipline as every other field here.
+    (row.pluginVersion !== undefined && typeof row.pluginVersion !== 'string')
   ) {
     return null
   }
@@ -117,10 +133,16 @@ function toGateDecisionRecord (row) {
     id: row.id,
     at: row.at,
     project: row.project,
-    commandFamily: row.commandFamily,
+    // Stamped at write time: a log that spans a family rename reads as one family.
+    commandFamily: canonicalCommandFamily(row.commandFamily),
     source: row.source,
     verdict: row.verdict,
     latencyMs: row.latencyMs,
+    // Conditional spread, not `pluginVersion: row.pluginVersion`: this
+    // record must be indistinguishable from a legacy record parsed off
+    // disk where the key never existed at all, same reasoning as
+    // buildGateDecisionRecord in gate_measurement.ts.
+    ...(row.pluginVersion !== undefined ? { pluginVersion: row.pluginVersion } : {}),
   }
 }
 
@@ -157,7 +179,41 @@ async function aggregateGate () {
         verdict: d.verdict,
         latencyMs: d.latencyMs,
       })),
+    notRunByCommandFamily: await aggregateNotRunByCommandFamily(),
   }
+}
+
+/**
+ * odd/tasks/panel-interventions-and-mod-copy.md T4 -- a per-family notRun
+ * count, sitting on the `gate` aggregate as a sibling to `byCommandFamily`
+ * rather than merged into it: this comes from gate-approvals.jsonl, a much
+ * smaller population (only the asks the gate actually stopped for) than
+ * gate-decisions.jsonl (every decision). Each PendingApprovalRecord already
+ * carries its own `commandFamily`, stamped by the same commandFamily()
+ * function gate-decisions.jsonl's records use, so the two logs already
+ * share one taxonomy -- this is a group-by on an already-labelled field,
+ * never an invented cross-log join, and a pending record with no family
+ * is impossible: toPendingApprovalRecord already requires the string.
+ */
+async function aggregateNotRunByCommandFamily () {
+  const { pending, outcomes } = await readApprovalRecords()
+  const pendingByFamily = new Map()
+  for (const record of pending) {
+    const forFamily = pendingByFamily.get(record.commandFamily) ?? []
+    forFamily.push(record)
+    pendingByFamily.set(record.commandFamily, forFamily)
+  }
+
+  // summarizeApprovals (src/core/approval_record.ts) is the same tested
+  // fold aggregateApprovals() uses for the plugin-wide total -- reused here
+  // per family instead of reimplemented, so the TTL and outcome-join logic
+  // can never drift between the two call sites.
+  return [...pendingByFamily.entries()]
+    .map(([commandFamily, familyPending]) => ({
+      commandFamily,
+      notRun: summarizeApprovals(familyPending, outcomes).notRun,
+    }))
+    .sort((a, b) => b.notRun - a.notRun)
 }
 
 async function aggregateModSkills () {
@@ -279,7 +335,8 @@ function toPendingApprovalRecord (row) {
     at: row.at,
     project: row.project,
     destinationId: row.destinationId,
-    commandFamily: row.commandFamily,
+    // Stamped at write time: a log that spans a family rename reads as one family.
+    commandFamily: canonicalCommandFamily(row.commandFamily),
     shape: row.shape,
     reversible: row.reversible,
     external: row.external,
@@ -301,15 +358,13 @@ function toApprovalOutcomeRecord (row) {
 }
 
 /**
- * Joins the pending and outcome halves that live in the same file
- * (gate-bash.ts and gate-outcome.ts both append to gate-approvals.jsonl)
- * with the pure fold in src/core/approval_record.ts, then asks that same
- * module what the labelled decisions say the ceiling should be. Nothing
- * here invents a threshold: ceilingEvidence() itself returns null rather
- * than a number whenever approvals and rejections overlap or one side has
- * no evidence yet, and this function passes that null straight through.
+ * Guards and joins gate-approvals.jsonl's raw rows into the pending/outcome
+ * halves both aggregateApprovals() (plugin-wide) and
+ * aggregateNotRunByCommandFamily() (per-family) fold with
+ * src/core/approval_record.ts's summarizeApprovals(). Pulled out so both
+ * call sites read and guard the same file the same way instead of drifting.
  */
-async function aggregateApprovals () {
+async function readApprovalRecords () {
   const { rows, corrupt } = await readJsonl(APPROVALS_LOG_PATH)
   const pending = []
   const outcomes = []
@@ -325,6 +380,20 @@ async function aggregateApprovals () {
       else outcomes.push(record)
     }
   }
+  return { pending, outcomes, corruptLines: corrupt + malformed }
+}
+
+/**
+ * Joins the pending and outcome halves that live in the same file
+ * (gate-bash.ts and gate-outcome.ts both append to gate-approvals.jsonl)
+ * with the pure fold in src/core/approval_record.ts, then asks that same
+ * module what the labelled decisions say the ceiling should be. Nothing
+ * here invents a threshold: ceilingEvidence() itself returns null rather
+ * than a number whenever approvals and rejections overlap or one side has
+ * no evidence yet, and this function passes that null straight through.
+ */
+async function aggregateApprovals () {
+  const { pending, outcomes, corruptLines } = await readApprovalRecords()
 
   const summary = summarizeApprovals(pending, outcomes)
   return {
@@ -338,7 +407,7 @@ async function aggregateApprovals () {
     // outcome), but a crashed session after a real run leaves the same
     // trace, so this is never folded into `ceiling`'s evidence either way.
     notRun: summary.notRun,
-    corruptLines: corrupt + malformed,
+    corruptLines,
     ceiling: ceilingEvidence(summary.labelled),
   }
 }
@@ -396,7 +465,8 @@ function toAbComparisonResult (row) {
   return {
     id: row.id,
     at: row.at,
-    commandFamily: row.commandFamily,
+    // Stamped at write time: a log that spans a family rename reads as one family.
+    commandFamily: canonicalCommandFamily(row.commandFamily),
     destinationKind: row.destinationKind,
     jev: {
       verdict: jev.verdict,

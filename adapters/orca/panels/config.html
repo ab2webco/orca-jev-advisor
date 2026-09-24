@@ -248,6 +248,13 @@
       <section id="policies-section">
         <h2 data-i18n="policies.heading"></h2>
         <p class="hint" data-i18n="policies.hint"></p>
+        <div id="policy-seed-notice" style="display:none; margin-bottom: 14px">
+          <p class="hint warn" id="policy-seed-notice-text"></p>
+          <div class="actions">
+            <button id="policy-seed-notice-review" type="button" data-i18n="policies.seedNoticeReview"></button>
+            <button id="policy-seed-notice-dismiss" class="link" type="button" data-i18n="policies.seedNoticeDismiss"></button>
+          </div>
+        </div>
         <div id="policies-list"></div>
         <div class="actions">
           <button id="add-policy-row" type="button" data-i18n="policies.add"></button>
@@ -361,6 +368,7 @@
           'integration.done': 'Listo.',
           'integration.doneWithWarning': 'Listo, con un aviso: {{warning}}',
           'integration.modCopyFailed': 'no se pudo copiar el mod de skills a su lugar; el hook de Bash y el resto de la integración sí quedaron instalados.',
+          'integration.modCopyIncomplete': 'el mod de skills se copió, pero quedaron entradas que el instalador no puede reproducir; lo que hay en el disco no es exactamente lo que trae el plugin.',
           'integration.reverting': 'Revirtiendo…',
           'integration.reverted': 'Revertido.',
           'thresholds.heading': 'Techo del gate y tamaño del log',
@@ -415,6 +423,11 @@
           'policies.importing': 'Importando…',
           'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
           'policies.importNone': 'No hay políticas nuevas para agregar.',
+          'policies.seedNoticeText': 'La base que trae el plugin cambió: {{added}} nueva(s), {{differing}} distinta(s) de las tuyas.',
+          'policies.seedNoticeReview': 'Revisar los cambios',
+          'policies.seedNoticeDismiss': 'Descartar',
+          'policies.seedNoticeDismissing': 'Descartando…',
+          'policies.seedNoticeDismissed': 'Descartado. No se cambió ninguna política.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
           'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
           'modSkills.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} prompts comparables. Faltan {{shortfall}}.',
@@ -436,7 +449,7 @@
           'denyTier.pushProtectedLabel': 'Empujar a main, master o production',
           'denyTier.pushProtectedHint': 'El agente no lo hace. Publica en la rama de la que depende todo lo demas.',
           'denyTier.resetCleanLabel': 'Descartar trabajo sin confirmar',
-          'denyTier.resetCleanHint': 'El agente no lo hace. Los archivos sin seguimiento se borran y no hay reflog que los devuelva.',
+          'denyTier.resetCleanHint': 'El agente no lo hace. Los cambios sin confirmar y los archivos sin seguimiento se pierden, y no hay reflog que los devuelva.',
           'denyTier.kubectlDeleteLabel': 'Borrar o vaciar recursos de Kubernetes',
           'denyTier.kubectlDeleteHint': 'El agente no lo hace. Lo que cuesta depende por completo del namespace.',
           'denyTier.terraformApplyLabel': 'Aplicar cambios de infraestructura',
@@ -527,6 +540,7 @@
           'integration.done': 'Done.',
           'integration.doneWithWarning': 'Done, with a warning: {{warning}}',
           'integration.modCopyFailed': 'could not copy the skills mod into place; the Bash hook and the rest of the integration are still installed.',
+          'integration.modCopyIncomplete': "the skills mod was copied, but some entries the installer cannot reproduce were left out; what is on disk is not exactly what the plugin ships.",
           'integration.reverting': 'Reverting…',
           'integration.reverted': 'Reverted.',
           'thresholds.heading': 'Gate ceiling & log size',
@@ -581,6 +595,11 @@
           'policies.importing': 'Importing…',
           'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
           'policies.importNone': 'No new policies to add.',
+          'policies.seedNoticeText': 'The shipped baseline changed: {{added}} new, {{differing}} different from yours.',
+          'policies.seedNoticeReview': 'Review the changes',
+          'policies.seedNoticeDismiss': 'Dismiss',
+          'policies.seedNoticeDismissing': 'Dismissing…',
+          'policies.seedNoticeDismissed': 'Dismissed. No policy was changed.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
           'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
@@ -602,7 +621,7 @@
           'denyTier.pushProtectedLabel': 'Push to main, master or production',
           'denyTier.pushProtectedHint': 'The agent will not. It publishes to the branch everything else depends on.',
           'denyTier.resetCleanLabel': 'Discard uncommitted work',
-          'denyTier.resetCleanHint': 'The agent will not. Untracked files are gone and no reflog brings them back.',
+          'denyTier.resetCleanHint': 'The agent will not. Uncommitted changes and untracked files are gone, and no reflog brings them back.',
           'denyTier.kubectlDeleteLabel': 'Delete or drain Kubernetes resources',
           'denyTier.kubectlDeleteHint': 'The agent will not. What it costs depends entirely on the namespace.',
           'denyTier.terraformApplyLabel': 'Apply infrastructure changes',
@@ -695,7 +714,8 @@
       // already-localized prose, so it is mapped through the catalog here
       // rather than shown as-is (odd/tasks/production-honesty-pass.md P5).
       var MOD_COPY_WARNING_KEYS = {
-        'copy-failed': 'integration.modCopyFailed'
+        'copy-failed': 'integration.modCopyFailed',
+        'copy-incomplete': 'integration.modCopyIncomplete'
       }
       function modCopyWarningMessage (code) {
         return t(MOD_COPY_WARNING_KEYS[code] || 'integration.modCopyFailed')
@@ -1089,6 +1109,39 @@
         return write(POLICY_SEED_IMPORT_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForPolicySeedImportResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- baseline notice status, and dismissing it -------------------
+      // main.mjs's POLICY_SEED_NOTICE_STATUS_KEY is plain data (like
+      // MOD_SKILLS_STATUS_KEY/DENY_TIER_STATUS_KEY above): the panel just
+      // reads it, never asks for a fresh computation. Dismissing, like the
+      // import above, needs a request/result round trip because it writes to
+      // storage -- the only difference is there is no payload to choose,
+      // just "mark this baseline offered".
+      var POLICY_SEED_NOTICE_STATUS_KEY = 'policySeedNoticeStatus'
+      var POLICY_SEED_DISMISS_REQUEST_KEY = 'policySeedDismissRequest'
+      var POLICY_SEED_DISMISS_RESULT_KEY = 'policySeedDismissResult'
+
+      function waitForPolicySeedDismissResult (requestId, deadline) {
+        return read(POLICY_SEED_DISMISS_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForPolicySeedDismissResult(requestId, deadline) })
+        })
+      }
+
+      function sendPolicySeedDismissRequest () {
+        var requestId = 'policy-seed-dismiss-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString() }
+        signalPanelOpen()
+        return write(POLICY_SEED_DISMISS_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForPolicySeedDismissResult(requestId, Date.now() + 20000)
         })
       }
 
@@ -1596,6 +1649,47 @@
 
       el('import-policy-seeds').addEventListener('click', function () { runPolicySeedImport(null) })
 
+      // ---------- baseline notice: render, review, dismiss --------------------
+
+      var policySeedNoticeEl = el('policy-seed-notice')
+      var policySeedNoticeTextEl = el('policy-seed-notice-text')
+
+      /** Paints (or hides) the "the shipped baseline changed" notice from the
+       *  worker's POLICY_SEED_NOTICE_STATUS_KEY mirror. Rendered ONLY when the
+       *  status exists, says it is due, and its own counts are non-zero -- the
+       *  panel never invents a reason to show this and never computes the
+       *  counts itself; both numbers here are always the worker's. */
+      function renderPolicySeedNotice (status) {
+        var added = (status && typeof status.added === 'number') ? status.added : 0
+        var differing = (status && typeof status.differing === 'number') ? status.differing : 0
+        var visible = !!status && status.due === true && (added + differing) > 0
+        policySeedNoticeEl.style.display = visible ? '' : 'none'
+        if (!visible) return
+        policySeedNoticeTextEl.textContent = t('policies.seedNoticeText', { added: String(added), differing: String(differing) })
+      }
+
+      function loadPolicySeedNoticeStatus () {
+        return read(POLICY_SEED_NOTICE_STATUS_KEY, false).then(renderPolicySeedNotice)
+      }
+
+      el('policy-seed-notice-review').addEventListener('click', function () {
+        // The existing choose-flow already renders the differing rows and
+        // lets the person tick which ones to adopt -- this notice never
+        // writes `policies` itself, only opens that same flow with nothing
+        // pre-accepted.
+        runPolicySeedImport([]).then(loadPolicySeedNoticeStatus)
+      })
+
+      el('policy-seed-notice-dismiss').addEventListener('click', function () {
+        said(policyImportSaidEl, t('policies.seedNoticeDismissing'))
+        sendPolicySeedDismissRequest().then(function () {
+          said(policyImportSaidEl, t('policies.seedNoticeDismissed'))
+          return loadPolicySeedNoticeStatus()
+        }).catch(function (error) {
+          said(policyImportSaidEl, errorText(error), true)
+        })
+      })
+
       // ---------- skill/tool selection switches --------------------------------
 
       /** Paints the two checkboxes from the worker's MOD_SKILLS_STATUS_KEY
@@ -2055,6 +2149,7 @@
         fillThresholds({})
         fillModSkillsStatus(null)
         fillDenyTierStatus(null)
+        renderPolicySeedNotice(null)
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
@@ -2070,6 +2165,7 @@
             read(GATE_DEFAULTS_KEY, false),
             read(MOD_SKILLS_STATUS_KEY, false),
             read(DENY_TIER_STATUS_KEY, false),
+            read(POLICY_SEED_NOTICE_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus()
           ])
@@ -2082,6 +2178,7 @@
           ;(results[2] || []).forEach(addPolicyRow)
           fillModSkillsStatus(results[4])
           fillDenyTierStatus(results[5])
+          renderPolicySeedNotice(results[6])
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
         })

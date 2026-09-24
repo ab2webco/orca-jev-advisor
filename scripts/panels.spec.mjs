@@ -36,7 +36,8 @@ const ISOLATED_ROOT = mkdtempSync(join(tmpdir(), 'orca-panels-spec-'))
 process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(ISOLATED_ROOT, 'config')
 process.env.ORCA_SUPERVISOR_CACHE_DIR = join(ISOLATED_ROOT, 'cache')
 
-const { parseSeedPolicies } = await import('../src/core/policy_seed.ts')
+const { parseSeedPolicies, parseSeedVersion } = await import('../src/core/policy_seed.ts')
+const { decidePolicySeedNotice } = await import('../src/core/policy_seed_notice.ts')
 const { seedPoliciesIfEmpty } = await import('../adapters/orca/main.mjs')
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -53,7 +54,33 @@ try {
   chromium = null
 }
 
-const SHIPPED = parseSeedPolicies(JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8')))
+const RAW_SEED = JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8'))
+const SHIPPED = parseSeedPolicies(RAW_SEED)
+const SHIPPED_VERSION = parseSeedVersion(RAW_SEED)
+
+// The three rows this release added, and the wording it tightened on an id
+// it already had -- both real, from seed/policies.json's own history (see
+// odd/tasks/gate-destructive-restore-and-seed-refresh.md's T2 notes), never
+// invented for this fixture. Used below to drive the baseline notice off a
+// realistic "install that seeded an earlier release" list, so its counts
+// come from the real `mergePolicySeeds`/`decidePolicySeedNotice`, not a
+// guess.
+const BASELINE_UPDATE_REMOVED_IDS = ['discard_uncommitted_work', 'no_force_push', 'infrastructure_changes']
+const BASELINE_UPDATE_OLD_UNIT_COMMITS_RULE =
+  "Committing without asking is fine on the feature branch, with its tests and its docs in the same commit. " +
+  "Pushing the branch to the remote too, as long as it isn't a shared branch."
+
+function existingBeforeBaselineUpdate () {
+  return SHIPPED.filter((row) => !BASELINE_UPDATE_REMOVED_IDS.includes(row.id)).map((row) =>
+    row.id === 'unit_commits' ? { ...row, rule: BASELINE_UPDATE_OLD_UNIT_COMMITS_RULE } : row)
+}
+
+const BASELINE_UPDATE_DECISION = decidePolicySeedNotice({
+  shippedVersion: SHIPPED_VERSION,
+  offeredVersion: 0,
+  existing: existingBeforeBaselineUpdate(),
+  shipped: SHIPPED
+})
 
 /**
  * The storage a fresh install ends up with, produced by running the REAL
@@ -99,10 +126,22 @@ function hostBridge (storage) {
     let value = null
     if (msg.action === 'storage.get') {
       const key = msg.params?.key
-      // A refresh request is answered with the paired result, keyed by the id
-      // the panel itself minted -- the same handshake the worker performs.
+      // A request/result round trip is answered with the paired result,
+      // keyed by the id the panel itself minted -- the same handshake the
+      // worker performs. `storage.__policySeedImportResult`/
+      // `storage.__policySeedDismissResult` let a test override ok/added/
+      // etc; a plain "it worked" is the default so a test that only cares
+      // about the request being sent does not have to supply one.
       if (key === 'catalogRefreshResult' && window.__written.catalogRefreshRequest) {
         value = { ...storage.__refreshResult, id: window.__written.catalogRefreshRequest.id }
+      } else if (key === 'policySeedImportResult' && window.__written.policySeedImportRequest) {
+        value = {
+          ok: true, added: 0, skipped: 0, replaced: 0, differing: [],
+          ...storage.__policySeedImportResult,
+          id: window.__written.policySeedImportRequest.id
+        }
+      } else if (key === 'policySeedDismissResult' && window.__written.policySeedDismissRequest) {
+        value = { ok: true, ...storage.__policySeedDismissResult, id: window.__written.policySeedDismissRequest.id }
       } else {
         value = storage[key] ?? null
       }
@@ -199,6 +238,122 @@ test('a refresh that genuinely adds nothing keeps saying exactly that', { skip: 
 
     const said = await page.evaluate(() => document.getElementById('catalog-refresh-said').innerText)
     assert.doesNotMatch(said, /could not be read/i, 'a healthy refresh was reported as a failure')
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// T2b -- the "shipped baseline changed" notice in Team Policies. See
+// odd/tasks/gate-destructive-restore-and-seed-refresh.md and
+// src/core/policy_seed_notice.ts. BASELINE_UPDATE_DECISION above is the real
+// decidePolicySeedNotice output for a realistic "seeded an earlier release"
+// install, never invented numbers.
+// ---------------------------------------------------------------------------
+
+test('the baseline notice shows the worker\'s real counts when the status says it is due', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  assert.ok(BASELINE_UPDATE_DECISION.due, 'the fixture scenario is not actually due, so this proves nothing')
+  const { browser, page, errors } = await openPanel({
+    policies: existingBeforeBaselineUpdate(),
+    policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, at: new Date().toISOString() }
+  })
+  try {
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('policy-seed-notice')).display !== 'none')
+    assert.ok(visible, 'the notice did not render even though the status says it is due')
+    const text = await page.evaluate(() => document.getElementById('policy-seed-notice-text').innerText)
+    assert.ok(text.includes(String(BASELINE_UPDATE_DECISION.added)), `notice text "${text}" is missing the real added count`)
+    assert.ok(text.includes(String(BASELINE_UPDATE_DECISION.differing)), `notice text "${text}" is missing the real differing count`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the baseline notice stays hidden when there is no status at all', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ policies: [] })
+  try {
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('policy-seed-notice')).display !== 'none')
+    assert.equal(visible, false)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the baseline notice stays hidden when the status says it is not due', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    policies: [],
+    policySeedNoticeStatus: { due: false, added: 5, differing: 2, shippedVersion: SHIPPED_VERSION, at: new Date().toISOString() }
+  })
+  try {
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('policy-seed-notice')).display !== 'none')
+    assert.equal(visible, false, 'a not-due status still rendered the notice')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the baseline notice stays hidden when due but the counts are both zero', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  // The worker should never publish this combination (decidePolicySeedNotice
+  // requires added+differing > 0 for due), but the panel double-checks
+  // rather than trusting `due` alone, so it can never show an empty notice.
+  const { browser, page } = await openPanel({
+    policies: [],
+    policySeedNoticeStatus: { due: true, added: 0, differing: 0, shippedVersion: SHIPPED_VERSION, at: new Date().toISOString() }
+  })
+  try {
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('policy-seed-notice')).display !== 'none')
+    assert.equal(visible, false)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('clicking the notice\'s review button sends a policy-seed-import request with no accepted ids', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    policies: existingBeforeBaselineUpdate(),
+    policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, at: new Date().toISOString() }
+  })
+  try {
+    await page.click('#policy-seed-notice-review')
+    await page.waitForFunction(() => !!window.__written.policySeedImportRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.policySeedImportRequest)
+    assert.equal(typeof request.id, 'string')
+    assert.equal(request.acceptedIds, undefined, 'the notice button pre-accepted ids it should have left for the person to choose')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('clicking the notice\'s dismiss button sends a policy-seed-dismiss request', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    policies: existingBeforeBaselineUpdate(),
+    policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, at: new Date().toISOString() }
+  })
+  try {
+    await page.click('#policy-seed-notice-dismiss')
+    await page.waitForFunction(() => !!window.__written.policySeedDismissRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.policySeedDismissRequest)
+    assert.equal(typeof request.id, 'string')
+    assert.equal(typeof request.at, 'string')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every policies.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  // t() falls back to the Spanish catalog on a missing key, which hides a
+  // one-sided addition from a Spanish-locale reader but leaves an English
+  // reader looking at the literal key string -- this catches either gap in
+  // either direction, for every `policies.*` key, not only the new ones.
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('policies.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('policies.') === 0)
+    const missingInEn = esKeys.filter((key) => enKeys.indexOf(key) === -1)
+    const missingInEs = enKeys.filter((key) => esKeys.indexOf(key) === -1)
+    assert.deepEqual(missingInEn, [], `es-only policies.* keys missing from en: ${missingInEn.join(', ')}`)
+    assert.deepEqual(missingInEs, [], `en-only policies.* keys missing from es: ${missingInEs.join(', ')}`)
   } finally {
     await browser.close()
   }

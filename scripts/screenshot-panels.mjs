@@ -26,10 +26,21 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
+import { parseSeedPolicies, parseSeedVersion } from '../src/core/policy_seed.ts'
+import { mergePolicySeeds } from '../src/core/policy_seed_import.ts'
+import { decidePolicySeedNotice } from '../src/core/policy_seed_notice.ts'
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
 const OUT_DIR = join(ROOT, '.screenshots')
 const WORK_DIR = join(OUT_DIR, '.rendered')
+
+// The real shipped seed, read once so every fixture below that needs a
+// merge/notice count computes it for real -- no invented number anywhere a
+// screenshot can show it.
+const RAW_SEED = JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8'))
+const SHIPPED_POLICIES = parseSeedPolicies(RAW_SEED)
+const SHIPPED_POLICIES_VERSION = parseSeedVersion(RAW_SEED)
 
 /** The panel throttles its own host calls; anything shorter photographs a spinner. */
 const SETTLE_MS = 6000
@@ -247,44 +258,68 @@ const DEGRADED = {
  * so the panel shows both versions and the person picks. This scenario exists
  * because that list only appears after a live request/result round-trip, and
  * an interactive surface nobody has photographed is a surface nobody has
- * checked. The two differing rows are real ids from seed/policies.json with
- * the wording genuinely shipped in an earlier seed.
+ * checked. This install's two rows are real ids from seed/policies.json, with
+ * the wording genuinely shipped in an earlier seed; `added`/`skipped`/
+ * `differing` are the real `mergePolicySeeds` output for exactly that list
+ * against the real shipped seed, never a hand-typed count that can drift from
+ * it the way `skipped: 20` once silently did after the seed grew to 23 rows.
  */
+const SEEDS_EDITED_ROWS = {
+  never_write_to_main: { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main.' },
+  own_branch: { id: 'own_branch', kind: 'permits', rule: 'Work on a branch.', destinations: ['app'] },
+}
+// Every shipped row, with those two edited by hand: the result then reports
+// what an install that already imported really sees -- nothing new, two rows
+// to choose between -- and the list on screen agrees with the counts.
+const SEEDS_EXISTING_POLICIES = SHIPPED_POLICIES.map((row) => SEEDS_EDITED_ROWS[row.id] ?? row)
+const SEEDS_MERGE = mergePolicySeeds(SEEDS_EXISTING_POLICIES, SHIPPED_POLICIES)
+
 const SEEDS = {
   ...READY,
+  policies: SEEDS_EXISTING_POLICIES,
   policySeedImportResult: {
     ok: true,
-    added: 0,
-    skipped: 20,
+    added: SEEDS_MERGE.added,
+    skipped: SEEDS_MERGE.skipped,
     replaced: 0,
-    differing: [
-      {
-        id: 'never_write_to_main',
-        fields: ['rule'],
-        existing: { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main.' },
-        seed: {
-          id: 'never_write_to_main',
-          kind: 'prohibits',
-          rule: 'Never write directly on main or develop, not even a one-line fix.',
-        },
-      },
-      {
-        id: 'own_branch',
-        fields: ['rule', 'destinations'],
-        existing: { id: 'own_branch', kind: 'permits', rule: 'Work on a branch.', destinations: ['app'] },
-        seed: {
-          id: 'own_branch',
-          kind: 'permits',
-          rule: 'All work goes on a feature branch. Work happens there without asking.',
-        },
-      },
-    ],
+    differing: SEEDS_MERGE.differing,
   },
 }
 
-const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED, seeds: SEEDS }
+/**
+ * An install that seeded (or imported) an earlier release and never opened
+ * the panel since: the shipped baseline notice is already `due`, with no
+ * click needed to see it. The existing list is the real shipped seed minus
+ * the three rows this release added and with the wording it tightened on
+ * `unit_commits` reverted -- both real, from seed/policies.json's own
+ * history (see odd/tasks/gate-destructive-restore-and-seed-refresh.md's T2
+ * notes) -- and `policySeedNoticeStatus` is the real `decidePolicySeedNotice`
+ * output for that list, never an invented due/added/differing combination.
+ */
+const BASELINE_REMOVED_IDS = ['discard_uncommitted_work', 'no_force_push', 'infrastructure_changes']
+const BASELINE_OLD_UNIT_COMMITS_RULE =
+  "Committing without asking is fine on the feature branch, with its tests and its docs in the same commit. " +
+  "Pushing the branch to the remote too, as long as it isn't a shared branch."
+const BASELINE_EXISTING_POLICIES = SHIPPED_POLICIES
+  .filter((row) => !BASELINE_REMOVED_IDS.includes(row.id))
+  .map((row) => (row.id === 'unit_commits' ? { ...row, rule: BASELINE_OLD_UNIT_COMMITS_RULE } : row))
+const BASELINE_NOTICE_DECISION = decidePolicySeedNotice({
+  shippedVersion: SHIPPED_POLICIES_VERSION,
+  offeredVersion: 0,
+  existing: BASELINE_EXISTING_POLICIES,
+  shipped: SHIPPED_POLICIES,
+})
 
-/** A scenario may need one click before the shot -- see SEEDS. */
+const BASELINE = {
+  ...READY,
+  policies: BASELINE_EXISTING_POLICIES,
+  policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, at: iso },
+}
+
+const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE }
+
+/** A scenario may need one click before the shot -- see SEEDS. `baseline`
+ *  needs none: the notice renders straight from policySeedNoticeStatus. */
 const SCENARIO_CLICKS = { seeds: { panel: 'config.html', selector: '#import-policy-seeds' } }
 
 /**

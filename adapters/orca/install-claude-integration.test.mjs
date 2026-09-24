@@ -15,7 +15,7 @@
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -415,10 +415,10 @@ test('uninstall still removes a pre-fix symlink install that has no marker, by i
 
 test('a copy failure is reported through modCopyWarning, not swallowed -- the rest of the install still succeeds', () => {
   const home = makeHome()
-  // A pluginRoot with no adapters/claude/mod-skills under it: cp() fails
-  // with ENOENT, exactly the shape of a real permission failure -- the hook
-  // and env-var install do not depend on the source existing, so they still
-  // succeed while only the mod copy fails.
+  // A pluginRoot with no adapters/claude/mod-skills under it: the manual
+  // copy's readdir(source) fails with ENOENT, exactly the shape of a real
+  // permission failure -- the hook and env-var install do not depend on the
+  // source existing, so they still succeed while only the mod copy fails.
   const brokenRoot = mkdtempSync(join(tmpdir(), 'orca-jev-broken-root-'))
   tempDirs.push(brokenRoot)
 
@@ -427,4 +427,113 @@ test('a copy failure is reported through modCopyWarning, not swallowed -- the re
   assert.equal(result.changes.modCopy, false)
   assert.ok(result.modCopyWarning, 'the top-level result must carry a warning, not drop it')
   assert.ok(result.targets[0].modCopyWarning, 'the per-target result must carry it too')
+})
+
+// ---------------------------------------------------------------------------
+// The manual recursive copy that replaces fs.cp -- fs.cp's own recursive
+// copy is denied outright by the plugin worker's permission sandbox
+// (ERR_ACCESS_DENIED, on every real machine measured), while readdir/mkdir/
+// readFile/writeFile are all separately permitted. These fixtures are built
+// with mkdirSync/writeFileSync/symlinkSync -- never fs.cp -- so a test here
+// can never accidentally pass through an API production cannot use.
+// ---------------------------------------------------------------------------
+
+test('the manual copy reaches files nested two directories deep, with contents matching the source exactly', () => {
+  const home = makeHome()
+  const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
+  tempDirs.push(pluginRoot)
+  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  mkdirSync(join(source, 'a', 'b'), { recursive: true })
+  writeFileSync(join(source, 'top.txt'), 'top level', 'utf8')
+  writeFileSync(join(source, 'a', 'mid.txt'), 'mid level', 'utf8')
+  writeFileSync(join(source, 'a', 'b', 'deep.txt'), 'deep level', 'utf8')
+
+  const result = run('install', home, pluginRoot)
+  assert.equal(result.changes.modCopy, true)
+
+  const copyPath = modCopyPathFor(home)
+  assert.equal(readFileSync(join(copyPath, 'top.txt'), 'utf8'), 'top level')
+  assert.equal(readFileSync(join(copyPath, 'a', 'mid.txt'), 'utf8'), 'mid level')
+  assert.equal(readFileSync(join(copyPath, 'a', 'b', 'deep.txt'), 'utf8'), 'deep level')
+})
+
+test('the manual copy skips a symbolic link inside the source tree instead of following or recreating it', () => {
+  const home = makeHome()
+  const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
+  tempDirs.push(pluginRoot)
+  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  mkdirSync(source, { recursive: true })
+  writeFileSync(join(source, 'kept.txt'), 'a real file', 'utf8')
+  symlinkSync(join(source, 'kept.txt'), join(source, 'linked.txt'))
+
+  const result = run('install', home, pluginRoot)
+  assert.equal(result.changes.modCopy, true)
+
+  const copyPath = modCopyPathFor(home)
+  assert.equal(readFileSync(join(copyPath, 'kept.txt'), 'utf8'), 'a real file', 'a regular file must still be copied')
+  assert.throws(() => lstatSync(join(copyPath, 'linked.txt')), 'a symlink in the source tree must not be followed or recreated in the copy')
+})
+
+test('a copy failure\'s underlying error text reaches the per-target record as modCopyDetail, separate from the stable modCopyWarning reason code', () => {
+  const home = makeHome()
+  const brokenRoot = mkdtempSync(join(tmpdir(), 'orca-jev-broken-root-'))
+  tempDirs.push(brokenRoot)
+
+  const result = run('install', home, brokenRoot)
+  assert.equal(result.targets[0].modCopyWarning, 'copy-failed', 'the machine-readable reason code must stay exactly as panels already key off it')
+  assert.ok(typeof result.targets[0].modCopyDetail === 'string' && result.targets[0].modCopyDetail.length > 0, 'the underlying error text must reach the per-target record, not just the reason code')
+  assert.notEqual(result.targets[0].modCopyDetail, result.targets[0].modCopyWarning, 'the detail is the diagnosis, not a repeat of the reason code')
+})
+
+test('install\'s top-level result counts how many targets actually got the mod copy and how many failed it', () => {
+  const home = makeHome()
+  const okResult = run('install', home)
+  assert.deepEqual(okResult.modCopyTargets, { landed: 1, failed: 0 }, 'the only discovered target (home) got the mod copy')
+
+  const brokenHome = makeHome()
+  const brokenRoot = mkdtempSync(join(tmpdir(), 'orca-jev-broken-root-'))
+  tempDirs.push(brokenRoot)
+  const failResult = run('install', brokenHome, brokenRoot)
+  assert.equal(failResult.ok, true, 'the hook/env install still succeeds even though the mod copy failed')
+  assert.deepEqual(failResult.modCopyTargets, { landed: 0, failed: 1 }, 'ok:true must not read as "the mod landed everywhere" when it silently did not land anywhere')
+})
+
+// Portability, not luck: every file in mod-skills is 0644 today, so a copy
+// that ignores modes looks correct. The day somebody adds a file that has to
+// be executable, writeFile's own 0644 would drop the bit silently, and a hook
+// that cannot run is indistinguishable from a hook that was never installed.
+// `chmod` is permitted under the worker's sandbox -- measured, unlike fs.cp.
+test('the manual copy carries the executable bit across instead of leaving writeFile\'s default', () => {
+  const home = makeHome()
+  const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
+  tempDirs.push(pluginRoot)
+  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  mkdirSync(join(source, 'bin'), { recursive: true })
+  writeFileSync(join(source, 'plain.txt'), 'not executable', 'utf8')
+  writeFileSync(join(source, 'bin', 'run.sh'), '#!/bin/sh\necho hi\n', 'utf8')
+  chmodSync(join(source, 'bin', 'run.sh'), 0o755)
+
+  const result = run('install', home, pluginRoot)
+  assert.equal(result.changes.modCopy, true)
+
+  const copyPath = modCopyPathFor(home)
+  assert.equal(statSync(join(copyPath, 'bin', 'run.sh')).mode & 0o777, 0o755, 'the executable bit must survive the copy')
+  assert.equal(statSync(join(copyPath, 'plain.txt')).mode & 0o777, 0o644, 'an ordinary file keeps an ordinary mode')
+})
+
+test('a skipped entry is reported as copy-incomplete, never as a clean copy', () => {
+  const home = makeHome()
+  const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
+  tempDirs.push(pluginRoot)
+  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  mkdirSync(source, { recursive: true })
+  writeFileSync(join(source, 'kept.txt'), 'a real file', 'utf8')
+  symlinkSync(join(source, 'kept.txt'), join(source, 'linked.txt'))
+
+  const result = run('install', home, pluginRoot)
+  // The copy DID happen -- this is not 'copy-failed' -- but the tree on disk
+  // is not the tree that shipped, and the panel has to be able to say so.
+  assert.equal(result.changes.modCopy, true)
+  assert.equal(result.targets[0].modCopyWarning, 'copy-incomplete')
+  assert.match(result.targets[0].modCopyDetail, /linked\.txt/)
 })

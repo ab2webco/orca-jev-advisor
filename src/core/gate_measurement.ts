@@ -8,6 +8,8 @@
 // which specific file or branch, only a coarse command *family* (`git
 // push`, `rm -rf`, `terraform`, ...) and which project it happened in.
 
+import { startsWithGitDiscard } from "./git_discard.ts";
+
 /**
  * `"none"` means the gate reached the point of asking Jev and got no answer
  * back at all -- network error, timeout, or budget exceeded (see askJev in
@@ -30,12 +32,45 @@ export interface GateDecisionRecord {
   readonly verdict: GateVerdict;
   /** Only meaningful for `source: "jev"`; null for a local-rule or cache verdict, which never call the network. */
   readonly latencyMs: number | null;
+  /**
+   * Which plugin build produced this decision (e.g. `"0.4.0"`).
+   *
+   * Optional ON READ, not on write: every new record is stamped with the
+   * build that wrote it, but a record already on disk from before this
+   * field existed simply lacks the key. That absence is exactly the case
+   * this field exists to make visible -- five `ask` records for the
+   * pipe-to-shell family looked like the deny tier failing until their
+   * version showed they predated 0.4.0, the release that introduced the
+   * deny tier at all. A time filter cannot separate that; the version can.
+   * A record missing this field must never be dropped or treated as
+   * corrupt -- see parseGateDecisionRecords below.
+   */
+  readonly pluginVersion?: string;
+}
+
+/** The family for discarding uncommitted work. Records written before checkout and restore joined it carry `LEGACY_DISCARD_FAMILY`. */
+export const DISCARD_FAMILY = "git discard";
+const LEGACY_DISCARD_FAMILY = "git reset/clean";
+
+/**
+ * The family a record on disk belongs to today. `commandFamily` is stamped
+ * at write time, so a log spanning the rename would otherwise show the same
+ * family twice.
+ */
+export function canonicalCommandFamily(family: string): string {
+  return family === LEGACY_DISCARD_FAMILY ? DISCARD_FAMILY : family;
 }
 
 /** `spansPipe` marks a shape that only exists ACROSS a pipe, so it must be matched before the command is split. */
-const FAMILY_PATTERNS: readonly { readonly pattern: RegExp; readonly family: string; readonly spansPipe?: boolean }[] = [
+const FAMILY_PATTERNS: readonly { readonly pattern: { test(segment: string): boolean }; readonly family: string; readonly spansPipe?: boolean }[] = [
   { pattern: /^git\s+push\b/, family: "git push" },
-  { pattern: /^git\s+(reset|clean)\b/, family: "git reset/clean" },
+  // Every way of throwing away uncommitted work in one family: reset and
+  // clean as before, plus checkout/restore in the forms that overwrite the
+  // working tree (see git_discard.ts). `git checkout <branch>` stays `git`.
+  {
+    pattern: { test: (segment) => /^git\s+(reset|clean)\b/.test(segment) || startsWithGitDiscard(segment) },
+    family: DISCARD_FAMILY,
+  },
   { pattern: /^git\s+branch\b/, family: "git branch" },
   { pattern: /^rm\s+-[a-zA-Z]*[rf]/, family: "rm -rf" },
   { pattern: /^kubectl\b/, family: "kubectl" },
@@ -117,6 +152,8 @@ export interface BuildGateDecisionRecordInput {
   readonly source: GateSource;
   readonly verdict: GateVerdict;
   readonly latencyMs: number | null;
+  /** Required at construction time: whoever builds a record today always knows the build producing it. */
+  readonly pluginVersion: string;
 }
 
 export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): GateDecisionRecord {
@@ -129,6 +166,13 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     source: input.source,
     verdict: input.verdict,
     latencyMs: input.latencyMs,
+    // Conditionally spread, not `pluginVersion: input.pluginVersion`: an
+    // explicit `pluginVersion: undefined` key is a different shape than a
+    // truly absent one for JSON.stringify's own output (it drops the key
+    // either way) but NOT for object equality on the in-memory record, and
+    // this record must be indistinguishable from one parsed back off disk
+    // where the key never existed at all.
+    ...(input.pluginVersion !== undefined ? { pluginVersion: input.pluginVersion } : {}),
   };
 }
 
@@ -155,7 +199,10 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     typeof record.commandFamily === "string" &&
     isGateSource(record.source) &&
     isGateVerdict(record.verdict) &&
-    (record.latencyMs === null || typeof record.latencyMs === "number")
+    (record.latencyMs === null || typeof record.latencyMs === "number") &&
+    // Absent entirely (a record written before this field existed) is valid;
+    // present-but-wrong-type is not, same discipline as every other field.
+    (record.pluginVersion === undefined || typeof record.pluginVersion === "string")
   );
 }
 

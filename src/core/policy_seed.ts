@@ -5,7 +5,7 @@
 // nothing has ever read it. The catalog got a bootstrap of its own
 // (deriveInitialCatalogIfEmpty, from `orca worktree ps`); the policies got
 // none, and DEFAULT_POLICIES is the empty array. So every install started --
-// and stayed -- with zero policies unless the developer retyped all twenty by
+// and stayed -- with zero policies unless the developer retyped every row by
 // hand, which nobody does. The gate still worked, because an empty policy
 // stage simply falls through to the risk-based fallback, and that is exactly
 // why the hole went unseen: nothing broke, the judgments were just
@@ -17,7 +17,7 @@
 //      key rather than inferred from the list being empty. A developer who
 //      deletes every policy on purpose has expressed a preference, and an
 //      emptiness check would read that preference as "fresh machine" and
-//      resurrect all twenty on the next activation -- including eight
+//      resurrect every shipped row on the next activation -- including ten
 //      `prohibits` rows, which would change what the gate refuses. Deciding
 //      from a marker is what keeps an empty list a legitimate resting state.
 //   2. A machine that already holds policies is never touched, marker or not.
@@ -25,21 +25,54 @@
 //      wrote their own rules long ago, and those must survive it untouched.
 // ---------------------------------------------------------------------------
 
+import { isRecord } from "../guards.ts";
 import { isPolicyRow, type PolicyRow } from "./store.ts";
 
 /** Records that the shipped policies have been offered to this install once. */
 export const POLICY_SEED_MARKER_KEY = "policiesSeeded";
 
 /**
+ * The rows inside a seed payload, tolerating both shapes this file has ever
+ * shipped as: the original bare array, and the versioned
+ * `{ version, policies }` object added so an install can be told when the
+ * baseline changes (see parseSeedVersion below, and policy_seed_notice.ts
+ * for what reads the two together). Anything else -- not an array, and not
+ * an object with a `policies` array -- yields no rows rather than throwing;
+ * parseSeedPolicies' row-by-row tolerance starts from whatever this returns.
+ */
+function seedRowsOf(payload: unknown): readonly unknown[] {
+  if (Array.isArray(payload)) return payload;
+  if (isRecord(payload) && Array.isArray(payload.policies)) return payload.policies;
+  return [];
+}
+
+/**
  * Keeps only the rows that are valid policies.
  *
  * Row by row, never all-or-nothing: the same choice getPolicies makes and for
  * the same reason. One malformed row in a hand-edited seed should cost that
- * row, not the other nineteen.
+ * row, not the other rows around it.
  */
 export function parseSeedPolicies(payload: unknown): readonly PolicyRow[] {
-  if (!Array.isArray(payload)) return [];
-  return payload.filter(isPolicyRow);
+  return seedRowsOf(payload).filter(isPolicyRow);
+}
+
+/**
+ * The shipped baseline's hand-bumped integer version, read from the same
+ * payload seedRowsOf reads its rows from.
+ *
+ * The original bare-array shape (and anything malformed: not an object, a
+ * missing `version`, a non-integer, a negative one) has no version at all --
+ * rather than guessing, this reports 0, which is deliberately lower than any
+ * real shipped version. That is what makes an install that has only ever
+ * seen the pre-version seed (or none at all) read as "never offered
+ * anything" to policy_seed_notice.ts's decidePolicySeedNotice, so it is told
+ * about the baseline the very first time this code runs on it.
+ */
+export function parseSeedVersion(payload: unknown): number {
+  if (!isRecord(payload)) return 0;
+  const version = payload.version;
+  return typeof version === "number" && Number.isInteger(version) && version >= 0 ? version : 0;
 }
 
 /**
