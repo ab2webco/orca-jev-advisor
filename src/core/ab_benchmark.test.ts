@@ -348,30 +348,62 @@ function comparison(overrides: Partial<AbComparisonResult> = {}): AbComparisonRe
   };
 }
 
-test("buildReport: an empty result set reports zero counts and null stats, never a fabricated number", () => {
+test("buildReport: an empty result set reports zero counts, an empty byModel list, and null stats -- never a fabricated number", () => {
   const report = buildReport([]);
   assert.equal(report.sampleCount, 0);
-  assert.equal(report.agreementRate, null);
+  assert.deepEqual(report.byModel, []);
   assert.equal(report.jevLatency, null);
-  assert.equal(report.bigModelLatency, null);
 });
 
-test("buildReport: agreement rate is computed only over CONCLUSIVE comparisons -- an inconclusive one never counts as disagreement", () => {
+test("buildReport: groups by the model id the CLI actually reported -- never one averaged figure across models", () => {
+  const results = [
+    comparison({ id: "a", bigModel: { ...comparison().bigModel, modelId: "claude-opus-5-5[1m]" }, agree: true }),
+    comparison({ id: "b", bigModel: { ...comparison().bigModel, modelId: "claude-sonnet-5" }, agree: false }),
+  ];
+  const report = buildReport(results);
+  assert.equal(report.byModel.length, 2);
+  assert.equal(report.byModel[0]?.modelId, "claude-opus-5-5[1m]");
+  assert.equal(report.byModel[0]?.sampleCount, 1);
+  assert.equal(report.byModel[1]?.modelId, "claude-sonnet-5");
+  assert.equal(report.byModel[1]?.sampleCount, 1);
+});
+
+test("buildReport: a sample with no reported model id is grouped under modelId: null (\"model not reported\"), never merged into a named group or dropped", () => {
+  const results = [
+    comparison({ id: "a", bigModel: { ...comparison().bigModel, modelId: "claude-opus-5-5[1m]" } }),
+    comparison({
+      id: "b",
+      agree: null,
+      bigModel: { ...comparison().bigModel, modelId: null, verdict: null, latencyMs: null, failureReason: "cli_not_found" },
+    }),
+  ];
+  const report = buildReport(results);
+  assert.equal(report.byModel.length, 2);
+  const notReported = report.byModel.find((g) => g.modelId === null);
+  assert.ok(notReported);
+  assert.equal(notReported.sampleCount, 1);
+  assert.equal(notReported.inconclusiveCount, 1);
+});
+
+test("buildReport: within a model's group, agreement rate is computed only over CONCLUSIVE comparisons -- an inconclusive one never counts as disagreement", () => {
   const results = [
     comparison({ id: "a", agree: true }),
     comparison({ id: "b", agree: false }),
-    comparison({ id: "c", agree: null, bigModel: { ...comparison().bigModel, verdict: null, latencyMs: null, failureReason: "cli_not_found" } }),
+    comparison({ id: "c", agree: null, bigModel: { ...comparison().bigModel, verdict: null, latencyMs: null, failureReason: "cli_error" } }),
   ];
   const report = buildReport(results);
   assert.equal(report.sampleCount, 3);
-  assert.equal(report.conclusiveCount, 2);
-  assert.equal(report.inconclusiveCount, 1);
-  assert.equal(report.agreeCount, 1);
-  assert.equal(report.disagreeCount, 1);
-  assert.equal(report.agreementRate, 0.5);
+  assert.equal(report.byModel.length, 1, "all three share the same modelId, so they group together");
+  const group = report.byModel[0] as NonNullable<(typeof report.byModel)[number]>;
+  assert.equal(group.sampleCount, 3);
+  assert.equal(group.conclusiveCount, 2);
+  assert.equal(group.inconclusiveCount, 1);
+  assert.equal(group.agreeCount, 1);
+  assert.equal(group.disagreeCount, 1);
+  assert.equal(group.agreementRate, 0.5);
 });
 
-test("buildReport: jevLatency is computed over every sample (Jev always answers or the sample would not exist); bigModelLatency only over conclusive ones", () => {
+test("buildReport: jevLatency is computed over every sample (Jev always answers or the sample would not exist); a model group's latency only over its own conclusive samples", () => {
   const results = [
     comparison({ id: "a", jev: { ...comparison().jev, latencyMs: 300 }, agree: true }),
     comparison({
@@ -383,18 +415,35 @@ test("buildReport: jevLatency is computed over every sample (Jev always answers 
   ];
   const report = buildReport(results);
   assert.deepEqual(report.jevLatency, { count: 2, medianMs: 400, minMs: 300, maxMs: 500 });
-  assert.deepEqual(report.bigModelLatency, { count: 1, medianMs: 5466, minMs: 5466, maxMs: 5466 });
+  assert.equal(report.byModel.length, 1, "both samples share the fixture's default modelId, so they group together");
+  assert.deepEqual(report.byModel[0]?.latency, { count: 1, medianMs: 5466, minMs: 5466, maxMs: 5466 }, "only sample a's latency counts -- sample b never reached a big-model latency");
 });
 
-test("buildReport: sums tokens as tokens on both sides, never converts them to a cost", () => {
-  const results = [comparison(), comparison({ id: "b" })];
+test("buildReport: named model groups stay in first-seen order, and a 'model not reported' group always sorts last regardless of when it appeared", () => {
+  const results = [
+    comparison({ id: "a", bigModel: { ...comparison().bigModel, modelId: null, verdict: null, latencyMs: null, failureReason: "cli_not_found" }, agree: null }),
+    comparison({ id: "b", bigModel: { ...comparison().bigModel, modelId: "claude-sonnet-5" } }),
+    comparison({ id: "c", bigModel: { ...comparison().bigModel, modelId: "claude-opus-5-5[1m]" } }),
+  ];
+  const report = buildReport(results);
+  assert.deepEqual(
+    report.byModel.map((g) => g.modelId),
+    ["claude-sonnet-5", "claude-opus-5-5[1m]", null],
+  );
+});
+
+test("buildReport: sums tokens as tokens within each model's group, never converts them to a cost, never averages across models", () => {
+  const results = [
+    comparison({ id: "a", bigModel: { ...comparison().bigModel, modelId: "claude-opus-5-5[1m]" } }),
+    comparison({ id: "b", bigModel: { ...comparison().bigModel, modelId: "claude-opus-5-5[1m]" } }),
+  ];
   const report = buildReport(results);
   assert.deepEqual(report.jevTokens, { input: 160, output: 40 });
-  assert.deepEqual(report.bigModelTokens, { input: 20, output: 10, cacheCreation: 200, cacheRead: 0 });
-  for (const value of Object.values(report)) {
-    if (typeof value === "object" && value !== null) {
-      for (const key of Object.keys(value)) assert.doesNotMatch(key.toLowerCase(), /cost|usd|dollar/);
-    }
+  assert.equal(report.byModel.length, 1);
+  assert.deepEqual(report.byModel[0]?.tokens, { input: 20, output: 10, cacheCreation: 200, cacheRead: 0 });
+  const flat = [report, ...report.byModel];
+  for (const value of flat) {
+    for (const key of Object.keys(value)) assert.doesNotMatch(key.toLowerCase(), /cost|usd|dollar/);
   }
 });
 

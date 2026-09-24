@@ -282,26 +282,42 @@ function formatLatency(stats: AbBenchmarkReport["jevLatency"]): string {
   return stats === null ? "no data" : `median ${stats.medianMs}ms, range ${stats.minMs}-${stats.maxMs}ms (n=${stats.count})`;
 }
 
+/** The real model id, exactly as the CLI reported it -- never a category. "model not reported" is the one allowed exception, and only when the CLI's envelope genuinely carried no id. */
+function modelLabel(modelId: string | null): string {
+  return modelId ?? "model not reported";
+}
+
 function printReport(report: AbBenchmarkReport): void {
   console.log("");
-  console.log("=== AB benchmark: Jev vs. the large model ===");
-  console.log(`samples compared: ${report.sampleCount} (${report.conclusiveCount} conclusive, ${report.inconclusiveCount} inconclusive)`);
-  console.log(`time to decide -- Jev:       ${formatLatency(report.jevLatency)}`);
-  console.log(`time to decide -- large model: ${formatLatency(report.bigModelLatency)}`);
-  console.log(
-    report.agreementRate === null
-      ? "agreement rate: n/a (no conclusive comparison)"
-      : `agreement rate: ${(report.agreementRate * 100).toFixed(1)}% (${report.agreeCount} agreed, ${report.disagreeCount} disagreed)`,
-  );
-  console.log(`tokens -- Jev:        input ${report.jevTokens.input}, output ${report.jevTokens.output}`);
-  console.log(
-    `tokens -- large model: input ${report.bigModelTokens.input}, output ${report.bigModelTokens.output}, cache-creation ${report.bigModelTokens.cacheCreation}, cache-read ${report.bigModelTokens.cacheRead}`,
-  );
+  console.log("=== AB benchmark: Jev vs. `claude -p` ===");
+  console.log(`samples compared: ${report.sampleCount}`);
+  console.log(`time to decide -- Jev: ${formatLatency(report.jevLatency)}`);
+  console.log(`tokens -- Jev:         input ${report.jevTokens.input}, output ${report.jevTokens.output}`);
   console.log(
     report.decisionsBigModelSkipped === null
-      ? "decisions the large model did not have to make: n/a (no gate-decisions.jsonl to read)"
-      : `decisions the large model did not have to make: ${report.decisionsBigModelSkipped}`,
+      ? "decisions no model had to make: n/a (no gate-decisions.jsonl to read)"
+      : `decisions no model had to make: ${report.decisionsBigModelSkipped}`,
   );
+  // Grouped by model id, never averaged across models: a median over two
+  // different models is not a measurement of either one (see this file's
+  // own module note and src/core/ab_benchmark.ts's BigModelGroupReport).
+  if (report.byModel.length === 0) {
+    console.log("");
+    console.log("(no large-model comparison this run)");
+  }
+  for (const group of report.byModel) {
+    console.log("");
+    console.log(`--- ${modelLabel(group.modelId)} ---`);
+    console.log(`samples: ${group.sampleCount} (${group.conclusiveCount} conclusive, ${group.inconclusiveCount} inconclusive)`);
+    console.log(`time to decide: ${formatLatency(group.latency)}`);
+    console.log(
+      group.agreementRate === null
+        ? "agreement rate vs. Jev: n/a (no conclusive comparison)"
+        : `agreement rate vs. Jev: ${(group.agreementRate * 100).toFixed(1)}% (${group.agreeCount} agreed, ${group.disagreeCount} disagreed)`,
+    );
+    console.log(`tokens: input ${group.tokens.input}, output ${group.tokens.output}, cache-creation ${group.tokens.cacheCreation}, cache-read ${group.tokens.cacheRead}`);
+  }
+  console.log("");
   console.log("condition: every large-model call above is a FRESH `claude -p` invocation (no --resume) -- each one pays full session-bootstrap cache-creation cost, which is what a real always-on replacement for Jev would actually pay, not a warmed-up best case.");
 }
 
@@ -327,10 +343,11 @@ async function runCompareCommand(args: Extract<CliArgs, { command: "compare" }>)
     totalJevDecisions: countRealJevDecisions(),
     onSample: (result, index, total) => {
       completed = index;
+      const label = modelLabel(result.bigModel.modelId);
       const verdictLine =
         result.bigModel.failureReason !== null
-          ? `large model: ${result.bigModel.failureReason}`
-          : `large model: ${result.bigModel.verdict} (${result.bigModel.latencyMs}ms)${result.agree === false ? " -- DISAGREES" : ""}`;
+          ? `${label}: ${result.bigModel.failureReason}`
+          : `${label}: ${result.bigModel.verdict} (${result.bigModel.latencyMs}ms)${result.agree === false ? " -- DISAGREES" : ""}`;
       console.log(`[${index}/${total}] ${result.commandFamily} -- Jev: ${result.jev.verdict} (${result.jev.latencyMs}ms) | ${verdictLine}`);
     },
   });

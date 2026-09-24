@@ -290,6 +290,16 @@ export interface AbComparisonResult {
     readonly outputTokens: number | null;
     readonly cacheCreationInputTokens: number | null;
     readonly cacheReadInputTokens: number | null;
+    /**
+     * The real model id this call reported (e.g. "claude-opus-5-5[1m]"),
+     * persisted here -- not only on the transient ClaudeCliEnvelope -- so a
+     * stored comparison still says WHICH model it measured after the fact.
+     * The model behind `claude -p` will change over time; a row that only
+     * ever said "the large model was slower" would be unreadable in three
+     * months. null when the CLI's envelope carried no `modelUsage` key --
+     * reported as "model not reported" wherever this is displayed, never
+     * defaulted or guessed.
+     */
     readonly modelId: string | null;
     readonly failureReason: BigModelFailureReason | null;
   };
@@ -379,18 +389,39 @@ export function computeLatencyStats(samplesMs: readonly number[]): LatencyStats 
   return { count: sorted.length, medianMs, minMs: sorted[0] as number, maxMs: sorted[sorted.length - 1] as number };
 }
 
-export interface AbBenchmarkReport {
+/**
+ * One model's slice of the report. `modelId` is exactly what the CLI
+ * reported (e.g. "claude-opus-5-5[1m]") -- never a category like "the large
+ * model", and never guessed when absent: a sample whose envelope carried no
+ * `modelUsage` key groups under `modelId: null` ("model not reported"),
+ * kept apart from every named model rather than merged into one of them or
+ * silently dropped.
+ */
+export interface BigModelGroupReport {
+  readonly modelId: string | null;
   readonly sampleCount: number;
   readonly conclusiveCount: number;
   readonly inconclusiveCount: number;
   readonly agreeCount: number;
   readonly disagreeCount: number;
-  /** Fraction of CONCLUSIVE comparisons that agreed; null when none were conclusive. Never counts an inconclusive one as disagreement. */
+  /** Fraction of this group's CONCLUSIVE comparisons that agreed; null when none were conclusive. Never counts an inconclusive one as disagreement. */
   readonly agreementRate: number | null;
+  readonly latency: LatencyStats | null;
+  readonly tokens: { readonly input: number; readonly output: number; readonly cacheCreation: number; readonly cacheRead: number };
+}
+
+export interface AbBenchmarkReport {
+  readonly sampleCount: number;
   readonly jevLatency: LatencyStats | null;
-  readonly bigModelLatency: LatencyStats | null;
   readonly jevTokens: { readonly input: number; readonly output: number };
-  readonly bigModelTokens: { readonly input: number; readonly output: number; readonly cacheCreation: number; readonly cacheRead: number };
+  /**
+   * One entry per distinct model id the large-model side reported across
+   * `results`, in first-seen order, with a `modelId: null` ("model not
+   * reported") group last when present. Deliberately never averaged or
+   * flattened across models -- a median over two different models is not a
+   * measurement of either one. Empty when `results` is empty.
+   */
+  readonly byModel: readonly BigModelGroupReport[];
   /**
    * The wider count of real Jev decisions this benchmark's sample was drawn
    * from, minus how many were actually sampled -- "every verdict Jev
@@ -402,16 +433,10 @@ export interface AbBenchmarkReport {
   readonly decisionsBigModelSkipped: number | null;
 }
 
-export function buildReport(results: readonly AbComparisonResult[], totalJevDecisions: number | null = null): AbBenchmarkReport {
-  const conclusive = results.filter((r): r is AbComparisonResult & { agree: boolean } => r.agree !== null);
+function buildModelGroupReport(modelId: string | null, group: readonly AbComparisonResult[]): BigModelGroupReport {
+  const conclusive = group.filter((r): r is AbComparisonResult & { agree: boolean } => r.agree !== null);
   const agreeCount = conclusive.filter((r) => r.agree).length;
-  const disagreeCount = conclusive.length - agreeCount;
-
-  const jevTokens = results.reduce(
-    (acc, r) => ({ input: acc.input + r.jev.inputTokens, output: acc.output + r.jev.outputTokens }),
-    { input: 0, output: 0 },
-  );
-  const bigModelTokens = results.reduce(
+  const tokens = group.reduce(
     (acc, r) => ({
       input: acc.input + (r.bigModel.inputTokens ?? 0),
       output: acc.output + (r.bigModel.outputTokens ?? 0),
@@ -420,20 +445,44 @@ export function buildReport(results: readonly AbComparisonResult[], totalJevDeci
     }),
     { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 },
   );
+  return {
+    modelId,
+    sampleCount: group.length,
+    conclusiveCount: conclusive.length,
+    inconclusiveCount: group.length - conclusive.length,
+    agreeCount,
+    disagreeCount: conclusive.length - agreeCount,
+    agreementRate: conclusive.length > 0 ? agreeCount / conclusive.length : null,
+    latency: computeLatencyStats(conclusive.map((r) => r.bigModel.latencyMs).filter((v): v is number => v !== null)),
+    tokens,
+  };
+}
+
+export function buildReport(results: readonly AbComparisonResult[], totalJevDecisions: number | null = null): AbBenchmarkReport {
+  const groups = new Map<string | null, AbComparisonResult[]>();
+  for (const result of results) {
+    const key = result.bigModel.modelId;
+    const existing = groups.get(key);
+    if (existing) existing.push(result);
+    else groups.set(key, [result]);
+  }
+  // First-seen order for named models; a "model not reported" group (null)
+  // always sorts last, whenever it appeared, so it never buries a real
+  // model's figures above the fold.
+  const namedKeys = [...groups.keys()].filter((key): key is string => key !== null);
+  const orderedKeys: (string | null)[] = groups.has(null) ? [...namedKeys, null] : namedKeys;
+  const byModel = orderedKeys.map((key) => buildModelGroupReport(key, groups.get(key) as AbComparisonResult[]));
+
+  const jevTokens = results.reduce(
+    (acc, r) => ({ input: acc.input + r.jev.inputTokens, output: acc.output + r.jev.outputTokens }),
+    { input: 0, output: 0 },
+  );
 
   return {
     sampleCount: results.length,
-    conclusiveCount: conclusive.length,
-    inconclusiveCount: results.length - conclusive.length,
-    agreeCount,
-    disagreeCount,
-    agreementRate: conclusive.length > 0 ? agreeCount / conclusive.length : null,
     jevLatency: computeLatencyStats(results.map((r) => r.jev.latencyMs)),
-    bigModelLatency: computeLatencyStats(
-      conclusive.map((r) => r.bigModel.latencyMs).filter((v): v is number => v !== null),
-    ),
     jevTokens,
-    bigModelTokens,
+    byModel,
     decisionsBigModelSkipped: totalJevDecisions === null ? null : Math.max(0, totalJevDecisions - results.length),
   };
 }
