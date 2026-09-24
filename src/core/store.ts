@@ -62,10 +62,15 @@ export interface AutonomyConfig {
   readonly maxAutoDelicateness: number;
   /**
    * Per-destination override for decisions.ts's GATE_CONSEQUENCE_CEILING.
-   * Optional -- absent means "use the global consequenceCeiling" (see
-   * PluginConfig.thresholds.consequenceCeiling below). This is the only
+   * Optional -- absent means the gate falls back to GATE_CONSEQUENCE_CEILING
+   * itself (decisions.ts's decideAction: `options?.consequenceCeiling ??
+   * GATE_CONSEQUENCE_CEILING`). There used to be an editable "global"
+   * consequenceCeiling on PluginConfig.thresholds below that this comment
+   * pointed to -- removed in production-honesty-pass P2 once it turned out
+   * getConfig() never fed it back into a decision either; this is the only
+   * consequenceCeiling actually read anywhere. This is the only
    * field compatible with decideAction's `consequence.score` axis (a
-   * continuous value with the same ~1.5 ceiling shape); the other
+   * continuous value with the same ~1.78 ceiling shape); the other
    * AutonomyConfig fields (actThreshold, confirmThreshold,
    * maxAutoDelicateness) belong to decideDestination's unrelated
    * delicateness-level family and are never a substitute for this.
@@ -297,42 +302,41 @@ export async function setLog(host: StorageHost, entries: readonly LogEntryRaw[])
 // config: plugin-wide settings edited from the config panel.
 // ---------------------------------------------------------------------------
 
-export interface PluginThresholds {
-  readonly actThreshold: number;
-  readonly confirmThreshold: number;
-  readonly reversibleGate: number;
-  readonly externalGate: number;
-  readonly consequenceCeiling: number;
-}
-
-function isPluginThresholds(value: unknown): value is PluginThresholds {
-  return (
-    isRecord(value) &&
-    isNumber(value.actThreshold) &&
-    isNumber(value.confirmThreshold) &&
-    isNumber(value.reversibleGate) &&
-    isNumber(value.externalGate) &&
-    isNumber(value.consequenceCeiling)
-  );
-}
-
+// actThreshold, confirmThreshold, reversibleGate, externalGate AND
+// consequenceCeiling used to live here too, as a nested `thresholds` object
+// -- declared, validated, defaulted and editable from the config panel, and
+// read by no decision anywhere. Verified twice: first this file's own grep
+// of src/ and adapters/ (excluding tests/panels/i18n; see
+// odd/tasks/production-honesty-pass.md P2) found the first four dead; the
+// coordinator then verified independently that getConfig() has exactly two
+// callers -- log.ts (logMaxEntries) and main.mjs's cmdDecide (jevBudgetMs) --
+// so consequenceCeiling was dead the same way. All five removed rather than
+// wired: nobody could say what they were supposed to do, and inventing a
+// meaning for a number is how this project got a wrong ceiling twice
+// already. `thresholds` is gone as a wrapper too, not left empty -- an empty
+// object achieving nothing is a smaller version of the same defect.
+//
+// The consequenceCeiling NUMBER is still useful (it's the ceiling the gate
+// actually applies, and a destination can override it in its own row), so
+// the panel still shows it -- read-only now, sourced from main.mjs's
+// GATE_DEFAULTS_KEY mirror of decisions.ts's GATE_CONSEQUENCE_CEILING. It is
+// simply no longer part of this plugin's editable, stored config, and this
+// file no longer imports GATE_CONSEQUENCE_CEILING (nothing here uses it).
+//
+// A config saved before this removal still carries a `thresholds` object
+// with all five old keys in storage -- isPluginConfig below no longer looks
+// at `thresholds` at all, so it is ignored rather than failing validation;
+// an old config is not a corrupt one.
 export interface PluginConfig {
-  readonly thresholds: PluginThresholds;
   readonly logMaxEntries: number;
   readonly jevBudgetMs: number;
 }
 
 function isPluginConfig(value: unknown): value is PluginConfig {
-  return isRecord(value) && isPluginThresholds(value.thresholds) && isNumber(value.logMaxEntries) && isNumber(value.jevBudgetMs);
+  return isRecord(value) && isNumber(value.logMaxEntries) && isNumber(value.jevBudgetMs);
 }
 
-// Same threshold values already validated against the live API in
-// tools/decide.ts and adapters/claude/gate-bash.ts -- see decisions.ts's gate
-// constants. Kept here as the *editable* defaults; decisions.ts's own
-// constants remain the source of truth for the CLI/hook entry points that
-// do not read plugin config.
 const DEFAULT_CONFIG: PluginConfig = {
-  thresholds: { actThreshold: 0.9, confirmThreshold: 0.6, reversibleGate: 0.7, externalGate: 0.35, consequenceCeiling: 1.5 },
   logMaxEntries: 500,
   jevBudgetMs: 4_000,
 };
