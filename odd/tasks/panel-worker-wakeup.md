@@ -89,6 +89,18 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
       and no way to adopt the shared baseline. Add an import action, through
       the same request/poll path the other panel actions use.
 
+- [ ] T10 The skills mod's `active` and `activeTools` switches cannot be set by
+      anyone. `hooks/index.ts:117` reads them from the `options` object, and
+      the contract (`claude-code.d.ts:6125-6135`) says `options` holds only the
+      fields a manifest declares under `userConfig`, stored in
+      `settings.json` `pluginConfigs[<plugin>].options`. Nothing in this repo
+      declares `userConfig`, and the mod installs as a skill directory with no
+      plugin manifest at all, so `options` is always empty and both flags are
+      permanently false. A setting that exists in code and is reachable from
+      nowhere is an unfinished feature. Move the switches to the plugin's own
+      config, where every other setting already lives, and give them a control
+      in the panel -- off by default, and labelled with the reason.
+
 ## Acceptance
 - With no worker, saving a key writes no plaintext key anywhere on disk.
 - With no worker, every panel surface states the cause and the remedy.
@@ -97,6 +109,7 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
 - A catalog refresh that cannot find the Orca CLI says so; it never reports
   success with an empty result.
 - The shipped policy seeds can be adopted from the panel.
+- Every switch the code reads can be set by a person, or it does not ship.
 - All tests pass; screenshots read at all four widths.
 
 ## Progress
