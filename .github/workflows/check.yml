@@ -1,0 +1,46 @@
+# What "green" means for this plugin.
+#
+# Until this existed, a pull request here showed no checks at all: 282 tests
+# nobody ran, on something every Orca developer installs. Twice in one week a
+# defect shipped that a machine would have caught -- a command registered but
+# never declared, and a panel default that had drifted from the constant it
+# mirrors -- and both had tests written for them only afterwards.
+#
+# `npm run check` is the same command a person runs locally: the unit tests,
+# then the panel assertions, then the screenshots. The screenshots are kept as
+# an artifact rather than left in a runner's scrollback, because a panel that
+# renders the wrong words passes every other check in this file.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # The plugin itself has zero runtime dependencies -- Orca clones this
+      # tree and runs it without installing anything, so a runtime dependency
+      # would break every install. This only brings in the dev-only harness.
+      - run: npm install --no-audit --no-fund
+
+      - run: npx playwright install --with-deps chromium
+
+      - run: npm run check
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-screenshots
+          path: .screenshots/
+          if-no-files-found: warn
+          retention-days: 14
