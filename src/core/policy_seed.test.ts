@@ -51,13 +51,21 @@ test("a machine that has never been seeded and holds no policies gets the seed",
   assert.equal(shouldSeedPolicies(undefined, undefined), true);
   assert.equal(shouldSeedPolicies(undefined, null), true);
   assert.equal(shouldSeedPolicies(undefined, []), true);
-  // An array holding nothing valid is as empty as the gate is concerned.
-  assert.equal(shouldSeedPolicies(undefined, [{ id: "half" }]), true);
+});
+
+test("a row that fails validation is still the person's, and blocks the seed", () => {
+  // This is data loss if it regresses. store.ts preserves rows the validator
+  // rejects on purpose -- before `kind` existed every row lacked it, and the
+  // panel keeps showing them until a human fills it in. Treating that list as
+  // empty replaces someone's rules with the shipped twenty.
+  assert.equal(shouldSeedPolicies(undefined, [{ id: "half" }]), false);
+  assert.equal(shouldSeedPolicies(undefined, [{ id: "pre-kind", rule: "written before kind existed" }]), false);
+  assert.equal(shouldSeedPolicies(undefined, [{ id: "typo", kind: "prohibit", rule: "kind misspelt by hand" }]), false);
 });
 
 test("a marker means never again, which is what keeps a deliberately empty list empty", () => {
   // The reason this is a marker and not an emptiness check: someone who
-  // deletes all twenty rows would otherwise get them back -- three of them
+  // deletes all twenty rows would otherwise get them back -- eight of them
   // `prohibits` -- on the very next activation.
   assert.equal(shouldSeedPolicies({ at: "2026-09-24T00:00:00.000Z" }, []), false);
   assert.equal(shouldSeedPolicies({ at: "2026-09-24T00:00:00.000Z" }, undefined), false);
@@ -78,4 +86,16 @@ test("policies already on the machine are never overwritten, marker or not", () 
 
 test("the marker key is the literal the worker reads, so a rename cannot go unnoticed", () => {
   assert.equal(POLICY_SEED_MARKER_KEY, "policiesSeeded");
+});
+
+test("the shipped seed really does carry eight prohibits, which is what the marker protects", () => {
+  // The comments justifying the marker name this number. A seed that changes
+  // shape should force them to be re-read, not quietly outdate them.
+  const kinds = parseSeedPolicies(seedFile).reduce<Record<string, number>>((all, row) => {
+    all[row.kind] = (all[row.kind] ?? 0) + 1;
+    return all;
+  }, {});
+  assert.equal(kinds.prohibits, 8, "the prohibits count in this module's comments is now wrong");
+  assert.equal(kinds.permits, 9);
+  assert.equal(kinds.requires_human, 3);
 });

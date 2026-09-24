@@ -225,7 +225,7 @@ async function deriveCatalogFromOrca (orca) {
     const { execFile } = await import('node:child_process')
     const { promisify } = await import('node:util')
     const execFileAsync = promisify(execFile)
-    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM))
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
     const worktrees = parseWorktreeList(JSON.parse(stdout))
     return { destinations: deriveDestinations(worktrees), failure: null }
   } catch (error) {
@@ -267,15 +267,27 @@ async function seedPoliciesIfEmpty (orca, storageHost) {
       storageHost.get(POLICY_SEED_MARKER_KEY),
       storageHost.get('policies')
     ])
-    if (!shouldSeedPolicies(marker, stored)) return
+    if (marker !== undefined && marker !== null) return
+    if (!shouldSeedPolicies(marker, stored)) {
+      // Declining still marks the install. Without this an existing machine --
+      // one that upgraded into this code holding its own rules -- would carry
+      // no marker at all, and the day its owner deletes every row on purpose,
+      // the next activation would read that as a fresh install and plant all
+      // twenty, eight `prohibits` among them. The marker is what makes
+      // "deliberately empty" a state this function can recognise later.
+      await storageHost.set(POLICY_SEED_MARKER_KEY, { at: new Date().toISOString(), planted: 0, reason: 'already-had-policies' })
+      return
+    }
     const { readFile } = await import('node:fs/promises')
+    // A seed that is missing or unreadable throws here and is retried on the
+    // next activation, which costs one log line and is the behaviour we want:
+    // the rows are worth another attempt once the file is readable again.
     const raw = await readFile(join(PLUGIN_ROOT, 'seed', 'policies.json'), 'utf8')
     const seeded = parseSeedPolicies(JSON.parse(raw))
-    // The marker is written even when the file yields nothing, so a seed that
-    // is missing or unreadable is not retried on every single activation.
-    // Nothing is lost by that: a machine that wants the rows can still get
-    // them from a plugin that ships a readable seed, by clearing the key.
     if (seeded.length > 0) await setPolicies(storageHost, seeded)
+    // Written after the rows, never before: if the process dies in between,
+    // the next activation finds twenty valid rows and no marker, declines,
+    // and marks. Nothing is planted twice and nothing is lost.
     await storageHost.set(POLICY_SEED_MARKER_KEY, { at: new Date().toISOString(), planted: seeded.length })
     orca.log(`policy seed planted: ${seeded.length} row(s)`)
   } catch (error) {
@@ -879,7 +891,7 @@ async function resolveWorktreeProjects (orca) {
     const { execFile } = await import('node:child_process')
     const { promisify } = await import('node:util')
     const execFileAsync = promisify(execFile)
-    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreeList, orcaCliOptions(PLATFORM))
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreeList, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
     const parsed = JSON.parse(stdout)
     const worktrees = parsed?.result?.worktrees
     if (Array.isArray(worktrees)) {
@@ -1116,7 +1128,7 @@ async function cmdDoctor (orca, storageHost, secretsHost) {
     // Read-only reachability probe -- never touches a terminal. `status`
     // requires a running Orca Lab runtime, which this check can assume:
     // this code only runs inside the plugin worker, which Orca itself forked.
-    await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.status, orcaCliOptions(PLATFORM))
+    await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.status, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
     cliOk = true
     cliDetail = 'orca CLI responds (status ok).'
   } catch (error) {

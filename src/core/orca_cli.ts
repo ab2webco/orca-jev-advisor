@@ -18,14 +18,28 @@
 // apply. It is enabled on Windows ONLY: elsewhere a shell adds a process, adds
 // quoting rules, and buys nothing, because the shebang already works.
 //
-// On the safety of `shell: true` here: with a shell, arguments are re-parsed
-// by cmd.exe, whose quoting cannot be made reliably injection-proof for
-// attacker-controlled input. That is acceptable in this one place, and only
-// because every argument this plugin ever passes is a compile-time literal --
-// see ORCA_CLI_ARGUMENTS and the test that holds it to that. Nothing derived
-// from a repository, a branch name, a panel field or a Jev response is ever
-// passed to the CLI. If that ever changes, this helper is the wrong tool and
-// the call must move to `spawn` with an explicit interpreter.
+// On the safety of `shell: true` here, there are TWO exposures, not one, and
+// the second is the one that is easy to miss:
+//
+//   1. Arguments are re-parsed by cmd.exe, whose quoting cannot be made
+//      reliably injection-proof. Acceptable in this one place only because
+//      every argument this plugin passes is a compile-time literal -- see
+//      ORCA_CLI_ARGUMENTS and the test that holds it to that. Nothing derived
+//      from a repository, a branch name, a panel field or a Jev response is
+//      ever passed. If that changes, this helper is the wrong tool and the
+//      call must move to `spawn` with an explicit interpreter.
+//   2. cmd.exe resolves a bare command name from the CURRENT DIRECTORY before
+//      it consults PATH. The worker's cwd is not ours to assume, and this
+//      plugin's whole job is to sit inside repositories: a checkout carrying
+//      an `orca.cmd` at its root would be executed at plugin activation. That
+//      is why `cwd` is required below rather than inherited -- callers pass a
+//      directory this plugin controls, so the first place cmd.exe looks is a
+//      place no repository can write to.
+//
+// Node 24 (which package.json requires) raises DEP0190 for args + shell:true.
+// The warning is about exposure 1, which the literal-arguments invariant
+// already answers; it is recorded here so the next person does not have to
+// rediscover why the deprecation was accepted rather than silenced.
 // ---------------------------------------------------------------------------
 
 import type { SupportedPlatform } from "./paths.ts";
@@ -55,15 +69,22 @@ export const ORCA_CLI_TIMEOUT_MS = 5000;
  * it appears to, and exceeding it kills the child and surfaces as the same
  * empty result every other failure here produces.
  */
-export function orcaCliOptions(platform: SupportedPlatform): {
+export function orcaCliOptions(platform: SupportedPlatform, cwd: string): {
   timeout: number;
   maxBuffer: number;
   shell: boolean;
+  cwd: string;
+  windowsHide: boolean;
 } {
   return {
     timeout: ORCA_CLI_TIMEOUT_MS,
     maxBuffer: 16 * 1024 * 1024,
     // See the module note: PATHEXT resolution for `.cmd` shims, Windows only.
     shell: platform === "win32",
+    // Required, never inherited -- see exposure 2 in the module note.
+    cwd,
+    // Without this every call flashes a console window on Windows, three
+    // times at activation alone.
+    windowsHide: true,
   };
 }

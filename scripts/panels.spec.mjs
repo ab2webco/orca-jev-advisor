@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
 import { parseSeedPolicies } from '../src/core/policy_seed.ts'
+import { seedPoliciesIfEmpty } from '../adapters/orca/main.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')
@@ -41,6 +42,25 @@ try {
 }
 
 const SHIPPED = parseSeedPolicies(JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8')))
+
+/**
+ * The storage a fresh install ends up with, produced by running the REAL
+ * seeding the worker runs at activation -- not by hand-injecting the rows.
+ *
+ * That distinction is the whole point. An earlier version of this file put
+ * `{ policies: SHIPPED }` straight into the fake storage, which made the test
+ * pass even with seeding entirely disabled: it proved the panel can render
+ * policies, never that anything puts them there.
+ */
+async function storageAfterRealSeeding () {
+  const store = {}
+  const host = {
+    async get (key) { return Object.prototype.hasOwnProperty.call(store, key) ? store[key] : null },
+    async set (key, value) { store[key] = value }
+  }
+  await seedPoliciesIfEmpty({ log: () => {} }, host)
+  return store
+}
 
 const temps = []
 after(async () => { for (const dir of temps) await rm(dir, { recursive: true, force: true }) })
@@ -100,7 +120,10 @@ test('the seeded policies are the ones a person actually sees in the panel', { s
   // plugin and nothing read it, so this section rendered empty on every
   // install. Asserting the rows are IN STORAGE would not have caught it --
   // they were never in storage. This asserts the person sees them.
-  const { browser, page, errors } = await openPanel({ policies: SHIPPED })
+  const seeded = await storageAfterRealSeeding()
+  assert.ok(Array.isArray(seeded.policies) && seeded.policies.length > 0,
+    'activation planted nothing, so there is nothing for the panel to show')
+  const { browser, page, errors } = await openPanel(seeded)
   try {
     const shown = await page.evaluate(() => document.getElementById('policies-list').innerText)
     assert.ok(SHIPPED.length > 0, 'the shipped seed is empty, so this proves nothing')

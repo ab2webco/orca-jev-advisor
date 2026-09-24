@@ -17,7 +17,7 @@
 //      key rather than inferred from the list being empty. A developer who
 //      deletes every policy on purpose has expressed a preference, and an
 //      emptiness check would read that preference as "fresh machine" and
-//      resurrect all twenty on the next activation -- including three
+//      resurrect all twenty on the next activation -- including eight
 //      `prohibits` rows, which would change what the gate refuses. Deciding
 //      from a marker is what keeps an empty list a legitimate resting state.
 //   2. A machine that already holds policies is never touched, marker or not.
@@ -57,8 +57,16 @@ export function shouldSeedPolicies(marker: unknown, stored: unknown): boolean {
   // treating an unrecognised one as "never seeded" would re-plant the rows
   // this rule exists to protect.
   if (marker !== undefined && marker !== null) return false;
-  // An install with policies already keeps them, whatever they are: even a
-  // single valid row is someone's decision and outranks the defaults.
-  if (Array.isArray(stored) && stored.some(isPolicyRow)) return false;
+  // An install with anything stored keeps it, whatever shape it is in.
+  //
+  // Deliberately `length > 0` and NOT `some(isPolicyRow)`. A row that fails
+  // validation today is still something a person wrote: store.ts preserves
+  // exactly those rows on purpose (see getPolicies' note -- before `kind`
+  // existed, EVERY row lacked it) and the config panel keeps showing them,
+  // id and rule intact, until a human picks the missing kind. Deciding from
+  // the validator here would read that half-migrated list as an empty machine
+  // and replace the person's rules with the shipped ones. Emptiness is a fact
+  // about the array, not about what the gate can currently judge with.
+  if (Array.isArray(stored) && stored.length > 0) return false;
   return true;
 }
