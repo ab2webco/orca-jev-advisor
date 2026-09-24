@@ -35,6 +35,7 @@ import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 
 import { callJev, JevRequestError, JevTimeoutError } from '../../src/core/jev.ts'
 import {
@@ -45,6 +46,7 @@ import {
   GATE_CONSEQUENCE_CEILING,
   interpretDestinationPolicy
 } from '../../src/core/decisions.ts'
+import { isMissingCommandError, resolveOrcaCliCandidates } from '../../src/core/orca_cli.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
 import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog } from '../../src/core/store.ts'
 import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
@@ -214,22 +216,49 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
 // reusing that cache.
 // ---------------------------------------------------------------------------
 
-/** Runs `orca worktree ps --json` and turns the result into destinations.
+const execFileAsync = promisify(execFile)
+
+/** The real `runCommand` deriveCatalogFromOrca uses in production: an actual
+ *  child process. Kept as its own function, injectable via `options`, so
+ *  tests can simulate "CLI missing" / "CLI found but errors" deterministically
+ *  -- regardless of what actually happens to be on the test machine's own
+ *  PATH (unlike the worker's real, restricted PATH, a plain `node --test`
+ *  run inherits a full developer shell PATH, which may well have a real
+ *  `orca` on it). */
+function runOrcaCliCommand (command, args) {
+  return execFileAsync(command, args, { timeout: 5000 })
+}
+
+/** Runs `orca worktree ps --json` and turns the result into a typed result,
+ *  never a bare array: "the CLI could not be found anywhere" (every
+ *  candidate from resolveOrcaCliCandidates ENOENTs -- see src/core/
+ *  orca_cli.ts for why the worker's own PATH often does not have it) and
+ *  "the CLI was found and something else went wrong" are different facts,
+ *  and only one of them is the installing developer's problem to fix.
  *  Never throws: a derivation that cannot run leaves the catalog exactly as
  *  it was, which is always a safe, working state -- same fail-open shape as
  *  resolveWorktreeProjects's own `orca worktree list` call. */
-async function deriveCatalogFromOrca (orca) {
-  try {
-    const { execFile } = await import('node:child_process')
-    const { promisify } = await import('node:util')
-    const execFileAsync = promisify(execFile)
-    const { stdout } = await execFileAsync('orca', ['worktree', 'ps', '--json'], { timeout: 5000 })
-    const worktrees = parseWorktreeList(JSON.parse(stdout))
-    return deriveDestinations(worktrees)
-  } catch (error) {
-    orca.log(`catalog derivation (orca worktree ps) failed: ${String(error?.message ?? error).slice(0, 160)}`)
-    return []
+async function deriveCatalogFromOrca (orca, options = {}) {
+  const execPath = options.execPath ?? process.execPath
+  const platform = options.platform ?? PLATFORM
+  const runCommand = options.runCommand ?? runOrcaCliCommand
+  const candidates = resolveOrcaCliCandidates(execPath, platform)
+  let lastError = null
+  for (const command of candidates) {
+    try {
+      const { stdout } = await runCommand(command, ['worktree', 'ps', '--json'])
+      const worktrees = parseWorktreeList(JSON.parse(stdout))
+      return { ok: true, destinations: deriveDestinations(worktrees) }
+    } catch (error) {
+      lastError = error
+      if (!isMissingCommandError(error)) {
+        orca.log(`catalog derivation (orca worktree ps) failed: ${String(error?.message ?? error).slice(0, 160)}`)
+        return { ok: false, reason: 'orca-cli-failed', detail: String(error?.message ?? error).slice(0, 200) }
+      }
+    }
   }
+  orca.log(`catalog derivation: orca CLI not found (tried ${candidates.length} location(s))`)
+  return { ok: false, reason: 'orca-cli-not-found', detail: String(lastError?.message ?? lastError ?? 'orca CLI not found').slice(0, 200) }
 }
 
 /** Bootstraps the catalog from Orca's own worktree list, but ONLY when it
@@ -237,14 +266,15 @@ async function deriveCatalogFromOrca (orca) {
  *  settings (thresholds, policy scoping), so a catalog they have already
  *  edited, even down to one row, is never touched here. Never throws: this
  *  is a nice-to-have bootstrap, not something that should ever block
- *  activation. */
-async function deriveInitialCatalogIfEmpty (orca, storageHost) {
+ *  activation. `options` is forwarded to deriveCatalogFromOrca, untouched in
+ *  production (see that function's own note on why it exists). */
+async function deriveInitialCatalogIfEmpty (orca, storageHost, options = {}) {
   try {
     const catalog = await getCatalog(storageHost)
     if (catalog.destinations.length > 0) return
-    const derived = await deriveCatalogFromOrca(orca)
-    if (derived.length === 0) return
-    await setCatalog(storageHost, { destinations: derived })
+    const derived = await deriveCatalogFromOrca(orca, options)
+    if (!derived.ok || derived.destinations.length === 0) return
+    await setCatalog(storageHost, { destinations: derived.destinations })
   } catch (error) {
     orca.log(`initial catalog derivation failed: ${String(error?.message ?? error).slice(0, 160)}`)
   }
@@ -257,13 +287,20 @@ async function deriveInitialCatalogIfEmpty (orca, storageHost) {
  *  removed -- a worktree disappearing from Orca's list is not this
  *  plugin's call to prune. Re-mirrors to catalog.json when it changes
  *  anything, so the gate sees the addition without waiting for the panel's
- *  own save button. */
-async function cmdRefreshCatalog (orca, storageHost) {
+ *  own save button. When the CLI itself could not be found or failed, that
+ *  is reported as-is (see deriveCatalogFromOrca) rather than folded into
+ *  "0 added", which would tell the person nothing is wrong while adding
+ *  nothing -- the exact defect this replaces. `options` is forwarded to
+ *  deriveCatalogFromOrca, untouched in production. */
+async function cmdRefreshCatalog (orca, storageHost, options = {}) {
   try {
     const current = await getCatalog(storageHost)
-    const derived = await deriveCatalogFromOrca(orca)
+    const derived = await deriveCatalogFromOrca(orca, options)
+    if (!derived.ok) {
+      return { ok: false, reason: derived.reason, detail: derived.detail }
+    }
     const existingIds = new Set(current.destinations.map((d) => d.id))
-    const additions = derived.filter((d) => !existingIds.has(d.id))
+    const additions = derived.destinations.filter((d) => !existingIds.has(d.id))
     if (additions.length > 0) {
       await setCatalog(storageHost, { destinations: [...current.destinations, ...additions] })
       await mirrorCatalogAndPolicies(orca, storageHost)
@@ -1246,6 +1283,9 @@ export {
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  cmdRefreshCatalog,
+  deriveCatalogFromOrca,
+  deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
   publishGateDefaults,

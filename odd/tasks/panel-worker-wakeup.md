@@ -74,7 +74,7 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
       come from the core constant, not a literal, and nothing may re-introduce
       a second copy of it.
 
-- [ ] T8 `deriveCatalogFromOrca` runs `execFile('orca', ...)` and depends on
+- [x] T8 `deriveCatalogFromOrca` runs `execFile('orca', ...)` and depends on
       the CLI being on the worker's PATH. A macOS app launched from the Dock
       gets `/usr/bin:/bin:/usr/sbin:/sbin`, which does not contain
       `/usr/local/bin/orca`, so the spawn fails with ENOENT, the catch returns
@@ -181,3 +181,29 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
   *displayed* default honest; it does not make the field functional, which
   would mean touching `gate-bash.ts`'s decision call sites (and possibly
   `src/core`) and is a separate, unrequested change.
+
+- T8 done: `src/core/orca_cli.ts` (new, pure, tested) resolves the bundled
+  CLI's expected path by walking up from `process.execPath` one
+  platform-specific hop (`Contents/Resources/bin/orca` on darwin,
+  `resources/bin/<orca|orca.exe>` next to the executable on linux/win32),
+  then falls back to bare `orca`/`orca.exe`/`orca.cmd`/`orca` on PATH (in that
+  order on Windows, since `execFile` does not apply PATHEXT resolution to a
+  bare command the way a real shell does). `deriveCatalogFromOrca` in
+  `main.mjs` now tries every candidate in order and returns a typed result
+  instead of a bare array: `{ok:true, destinations}` on success,
+  `{ok:false, reason:'orca-cli-not-found'}` when every candidate ENOENTs, or
+  `{ok:false, reason:'orca-cli-failed'}` when a candidate is found but errors
+  (bad JSON, non-zero exit, etc) -- the two facts the task called out as
+  needing to stay distinguishable. `cmdRefreshCatalog` forwards a `!derived.ok`
+  result as-is instead of folding it into "0 added" (the exact silent-failure
+  defect reported), and `deriveInitialCatalogIfEmpty` keeps its "only when
+  empty" guard and stays non-throwing on either failure reason. Both gained
+  an `options` parameter (`execPath`/`platform`/`runCommand`) purely for test
+  injection; production call sites pass none and get the real
+  `process.execPath`/`PLATFORM`/a real child process, unchanged. New reason
+  codes `orca-cli-not-found`/`orca-cli-failed` added to `ERROR_REASON_KEYS`
+  and both ES/EN catalogs in `config.html`.
+  Tests: `src/core/orca_cli.test.ts` (7 tests, pure path resolution) and 6 new
+  tests in `adapters/orca/main.test.mjs` (`deriveCatalogFromOrca` x3,
+  `cmdRefreshCatalog` x1, `deriveInitialCatalogIfEmpty` x2), all hermetic via
+  the injected `runCommand` -- no real subprocess is spawned by these tests.
