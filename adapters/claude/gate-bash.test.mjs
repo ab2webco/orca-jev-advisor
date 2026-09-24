@@ -197,18 +197,38 @@ test('deny tier: terraform destroy is denied, not just asked', () => {
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
-test('deny tier: terraform apply stays ask -- only destroy was split out into deny', () => {
+// These two used to assert the opposite, back when deny was the exception.
+// The numbers overturned that: 3103 approvals against 1 refusal, and 5 of 16
+// questions never answered. An `ask` stops the person; a `deny` refuses the
+// model and lets it pick another way. What must NOT change is the floor --
+// switching a rule off reaches `ask`, never `allow` -- so each of these now
+// asserts both halves.
+test('terraform apply denies by default, and drops to ask when its switch is off', () => {
   const home = makeHome()
-  const stdout = run(home, 'terraform apply -auto-approve')
-  const payload = JSON.parse(stdout)
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(
+    JSON.parse(run(home, 'terraform apply -auto-approve')).hookSpecificOutput.permissionDecision,
+    'deny',
+  )
+  writeDenyTierConfig(home, { denyTerraformApply: false })
+  assert.equal(
+    JSON.parse(run(home, 'terraform apply -auto-approve')).hookSpecificOutput.permissionDecision,
+    'ask',
+    'switched off must reach ask, never allow',
+  )
 })
 
-test('an ask-tier rule (force push) still emits ask, never deny', () => {
+test('a force push denies by default, and drops to ask when its switch is off', () => {
   const home = makeHome()
-  const stdout = run(home, 'git push --force origin main')
-  const payload = JSON.parse(stdout)
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(
+    JSON.parse(run(home, 'git push --force origin main')).hookSpecificOutput.permissionDecision,
+    'deny',
+  )
+  writeDenyTierConfig(home, { denyForcePush: false })
+  assert.equal(
+    JSON.parse(run(home, 'git push --force origin main')).hookSpecificOutput.permissionDecision,
+    'ask',
+    'switched off must reach ask, never allow',
+  )
 })
 
 test('deny tier: a rule switched off downgrades to ask, never to allow', () => {

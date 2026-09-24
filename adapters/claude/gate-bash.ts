@@ -75,14 +75,14 @@ import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
-import { isObviouslySafeCommand } from '../../src/core/gate_safe_command.ts'
+import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { DEFAULT_DENY_TIER_SWITCHES, parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
-import type { DenyTierSwitches } from '../../src/core/deny_tier_config.ts'
+import type { DenyTierSwitches, DenyToggleKey } from '../../src/core/deny_tier_config.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
@@ -181,23 +181,38 @@ type Decision = 'allow' | 'deny' | 'ask'
  * this gate does not). All five stay `ask`, on purpose -- do not "tidy"
  * this into denying more without re-reading the reasoning above.
  */
-type DenyToggleKey = keyof DenyTierSwitches
 
-/** Tier 1b: never runs without explicit human intervention. `why` is a catalog key, resolved at emit time in the panel's chosen language. `denyToggle` is set only for the three rules above, and only when its switch is on does the match become 'deny' instead of 'ask'. */
-const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey; readonly denyToggle?: DenyToggleKey }[] = [
-  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush' },
-  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected' },
+
+/**
+ * Tier 1b: the rules that never run unannounced. `why` is a catalog key,
+ * resolved at emit time in the panel's chosen language.
+ *
+ * Every rule carries a `denyToggle`, and every toggle denies by default:
+ * `deny` refuses the call and hands the reason to the model, which then picks
+ * another approach, while `ask` stops the person and waits. Running with
+ * permission prompts off is a deliberate choice that agents should not sit
+ * waiting on a human, and an `ask` quietly puts that waiting back. Turning a
+ * switch off downgrades that one rule to `ask` -- never to `allow`.
+ *
+ * Only the agent is refused. The person can always run the command in a
+ * terminal, which is what the deny message tells them.
+ */
+const NEVER_SILENTLY: readonly { readonly pattern: RegExp; readonly why: GateKey; readonly denyToggle: DenyToggleKey }[] = [
+  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush', denyToggle: 'denyForcePush' },
+  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root.
   { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf' },
-  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean' },
+  // `git clean -f` destroys untracked work with no reflog behind it; the
+  // blast radius is one working tree, which is why this was the closest call
+  // of the nine.
+  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
   // Irrecoverable without a backup nobody can assume exists.
   { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable' },
-  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete' },
-  // `apply` is routine and stays ask; only `destroy` is split out into deny.
-  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply' },
+  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
+  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
   { pattern: /\b(terraform|tofu)\s+destroy\b/, why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
-  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell' },
+  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
 ]
 
 type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null }
@@ -644,13 +659,21 @@ async function main(): Promise<void> {
   if (pluginDisabledInOrca()) passThrough()
 
   if (isObviouslySafeCommand(command)) passThrough()
+  // Naming one of these is not running it. Measured live: searching this
+  // repository's own source for a rule's phrase was refused as if the
+  // command were that rule. Under `ask` it cost a click; under `deny` it
+  // would leave an agent unable to search the code it is working on. A
+  // mention skips tier 1b and is judged by the ordinary path instead -- it
+  // is not waved through.
+  const mentionOnly = mentionsRatherThanRuns(command)
   for (const { pattern, why, denyToggle } of NEVER_SILENTLY) {
+    if (mentionOnly) break
     if (pattern.test(command)) {
-      // Only the three deny-tier rules ever carry a denyToggle, and only
-      // when its switch is (still) on does the match become 'deny' instead
-      // of 'ask' -- readDenyTierConfig() fails CLOSED, so an unreadable
-      // config denies exactly as a fresh install would.
-      const decision: Decision = denyToggle !== undefined && readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
+      // Every rule denies unless its switch was deliberately turned off, in
+      // which case it drops to 'ask' -- never to 'allow'. readDenyTierConfig()
+      // fails CLOSED, so an unreadable config denies exactly as a fresh
+      // install does.
+      const decision: Decision = readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
       appendGateRecord(cwd, command, 'local-rule', decision, null)
       // Recorded like any other stop, with no scores: a local rule needs no
       // model and no threshold, so there is nothing here to calibrate -- but

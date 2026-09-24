@@ -26,19 +26,45 @@
 // answers for every other NEVER_SILENTLY rule. Nothing here ever becomes
 // silent.
 
-export interface DenyTierSwitches {
-  readonly denyRmRf: boolean;
-  readonly denyDropTable: boolean;
-  readonly denyTerraformDestroy: boolean;
-}
+/**
+ * One switch per tier-1b rule. Every one of them denies by default.
+ *
+ * The defaults were the other way round for exactly one release, and the
+ * numbers overturned it: across the real approvals log, 3103 commands were
+ * approved and 1 was refused, while 5 of 16 questions were never answered at
+ * all. A question whose answer is yes 99.97% of the time is not buying
+ * safety, it is buying the person's attention -- and Claude Code's dialog
+ * opens with the cursor on "Yes", so a reflex Enter defeats it anyway.
+ *
+ * `deny` refuses the call and hands the reason to the model, which then picks
+ * another approach (`claude-code.d.ts`: "Refuses the call; the model receives
+ * the text as the reason"). `ask` stops the human and waits. Running with
+ * permission prompts turned off is a deliberate choice that agents should not
+ * sit waiting on a person, and an `ask` quietly puts that waiting back.
+ *
+ * The person is never blocked -- only the agent is. Anyone can still run the
+ * command themselves in a terminal.
+ */
+export const DENY_TOGGLE_KEYS = [
+  "denyForcePush",
+  "denyPushProtected",
+  "denyRmRf",
+  "denyResetClean",
+  "denyDropTable",
+  "denyKubectlDelete",
+  "denyTerraformApply",
+  "denyTerraformDestroy",
+  "denyCurlPipeShell",
+] as const;
 
-// On (denying) by default at every layer -- see the module note above for
-// why this is the opposite of DEFAULT_MOD_SKILLS_SWITCHES.
-export const DEFAULT_DENY_TIER_SWITCHES: DenyTierSwitches = {
-  denyRmRf: true,
-  denyDropTable: true,
-  denyTerraformDestroy: true,
-};
+export type DenyToggleKey = (typeof DENY_TOGGLE_KEYS)[number];
+export type DenyTierSwitches = { readonly [K in DenyToggleKey]: boolean };
+
+/** Denying at every layer. Built from the key list so a new rule cannot be
+ *  added without a default, and cannot silently default to off. */
+export const DEFAULT_DENY_TIER_SWITCHES: DenyTierSwitches = Object.freeze(
+  Object.fromEntries(DENY_TOGGLE_KEYS.map((key) => [key, true])),
+) as DenyTierSwitches;
 
 /**
  * Parses `<configDir>/deny-tier-config.json`'s content. Never throws: a
@@ -57,8 +83,7 @@ export function parseDenyTierConfig(content: string): DenyTierSwitches {
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return DEFAULT_DENY_TIER_SWITCHES;
 
   const record = parsed as Record<string, unknown>;
-  const denyRmRf = typeof record.denyRmRf === "boolean" ? record.denyRmRf : true;
-  const denyDropTable = typeof record.denyDropTable === "boolean" ? record.denyDropTable : true;
-  const denyTerraformDestroy = typeof record.denyTerraformDestroy === "boolean" ? record.denyTerraformDestroy : true;
-  return { denyRmRf, denyDropTable, denyTerraformDestroy };
+  return Object.fromEntries(
+    DENY_TOGGLE_KEYS.map((key) => [key, typeof record[key] === "boolean" ? record[key] : true]),
+  ) as DenyTierSwitches;
 }
