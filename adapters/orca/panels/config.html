@@ -96,6 +96,13 @@
       input:focus-visible, select:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; border-color: transparent;
       }
+      /* A read-only value, not an editable control -- see thresholds-section's
+         consequenceCeiling. Same box shape as input/select so the row still
+         lines up, but a muted fill (not the input's transparent one) reads as
+         "this cannot be typed into" without needing extra copy per language. */
+      output { display: block; width: 100%; padding: 7px 9px; border-radius: var(--radius-md);
+               border: 1px solid var(--border, var(--fb-border)); background: var(--muted, var(--fb-muted));
+               color: var(--foreground, var(--fb-foreground)); }
       button {
         font: inherit; font-weight: 500; padding: 7px 14px;
         border-radius: var(--radius-md); cursor: pointer;
@@ -217,9 +224,10 @@
 
       <section id="thresholds-section">
         <h2 data-i18n="thresholds.heading"></h2>
-        <div class="row">
-          <div><label for="consequenceCeiling">consequenceCeiling</label>
-            <input id="consequenceCeiling" type="number" step="0.01" min="0" /></div>
+        <p class="hint" data-i18n="thresholds.ceilingHint"></p>
+        <div class="row two">
+          <div><label for="consequenceCeiling" data-i18n="thresholds.ceilingLabel"></label>
+            <output id="consequenceCeiling"></output></div>
           <div><label for="logMaxEntries" data-i18n="thresholds.logMaxEntries"></label>
             <input id="logMaxEntries" type="number" step="1" min="1" /></div>
         </div>
@@ -344,7 +352,9 @@
           'integration.done': 'Listo.',
           'integration.reverting': 'Revirtiendo…',
           'integration.reverted': 'Revertido.',
-          'thresholds.heading': 'Umbrales',
+          'thresholds.heading': 'Techo del gate y tamaño del log',
+          'thresholds.ceilingLabel': 'Techo de consecuencia',
+          'thresholds.ceilingHint': 'El techo de consecuencia que aplica la puerta de comandos por defecto. Un destino puede anular este número desde su propia fila en el catálogo, abajo. No es editable aquí: viene de medición, no de preferencia (ver el comentario de GATE_CONSEQUENCE_CEILING en decisions.ts).',
           'thresholds.logMaxEntries': 'Tamaño máximo del log',
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
@@ -388,7 +398,7 @@
           'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
           'policies.importNone': 'No hay políticas nuevas para agregar.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
-          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Umbrales, más arriba). Déjalos apagados hasta que exista una semana de datos en modo medición para calibrarlos.',
+          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). Déjalos apagados hasta que exista una semana de datos en modo medición para calibrarlos.',
           'modSkills.activeLabel': 'Dejar que Jev elija la skill (modo activo)',
           'modSkills.activeHint': 'Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.',
           'modSkills.activeToolsLabel': 'Dejar que Jev elija la herramienta (modo activo)',
@@ -422,7 +432,7 @@
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
-          'save.whichConfig': 'La configuración (umbrales)',
+          'save.whichConfig': 'La configuración (tamaño del log)',
           'save.whichCatalog': 'El catálogo de destinos',
           'save.whichPolicies': 'Las políticas',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
@@ -487,7 +497,9 @@
           'integration.done': 'Done.',
           'integration.reverting': 'Reverting…',
           'integration.reverted': 'Reverted.',
-          'thresholds.heading': 'Thresholds',
+          'thresholds.heading': 'Gate ceiling & log size',
+          'thresholds.ceilingLabel': 'Consequence ceiling',
+          'thresholds.ceilingHint': "The consequence ceiling the command gate applies by default. A destination can override this number from its own row in the catalog below. Not editable here: it comes from measurement, not preference (see GATE_CONSEQUENCE_CEILING's own comment in decisions.ts).",
           'thresholds.logMaxEntries': 'Maximum log size',
           'catalog.heading': 'Destination catalog',
           'catalog.hint': 'One destination per worktree this plugin may judge or route.',
@@ -531,7 +543,7 @@
           'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
           'policies.importNone': 'No new policies to add.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
-          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Thresholds, above). Leave both off until a week of measurement-mode data exists to calibrate them from.",
+          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until a week of measurement-mode data exists to calibrate them from.",
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
           'modSkills.activeHint': "Off (today): only records which skill Jev would have picked, in a local log; nothing the model sees changes. On: withholds the skill listing from the model and injects the winning skill's own instructions instead.",
           'modSkills.activeToolsLabel': 'Let Jev choose the tool (active mode)',
@@ -565,7 +577,7 @@
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
-          'save.whichConfig': 'The configuration (thresholds)',
+          'save.whichConfig': 'The configuration (log size)',
           'save.whichCatalog': 'The destination catalog',
           'save.whichPolicies': 'The policies',
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
@@ -1545,33 +1557,32 @@
       // fallback a panel could hardcode).
       var GATE_DEFAULTS_KEY = 'gateDefaults'
 
+      // actThreshold, confirmThreshold, reversibleGate and externalGate used
+      // to live here too -- removed as dead config, read by no decision
+      // anywhere (production-honesty-pass P2). consequenceCeiling was kept at
+      // first because this task's own inventory named it live; it was not --
+      // getConfig() has exactly two real callers (logMaxEntries, jevBudgetMs)
+      // and never this field, so it was a fifth dead field, not a fourth. It
+      // is still shown below, because the number is genuinely useful, but as
+      // a read-only <output>, never an <input> -- do not turn it back into an
+      // editable control without first wiring it to something that reads it.
       function fillThresholds (config, gateDefaults) {
         config = config || {}
-        var thresholds = config.thresholds || {}
-        // actThreshold, confirmThreshold, reversibleGate and externalGate used
-        // to live here too -- removed as dead config, read by no decision
-        // anywhere (production-honesty-pass P2). Do not reintroduce one of
-        // them without wiring it to something that actually reads it.
         // consequenceCeiling has no honest literal fallback here: 1.5 was a
         // stale copy of a value src/core/decisions.ts has since re-measured
         // to 1.78 (GATE_CONSEQUENCE_CEILING), and a panel cannot import from
         // src/core. The real number comes from the worker's GATE_DEFAULTS_KEY
         // mirror (see T7 in odd/tasks/panel-worker-wakeup.md); until that has
         // ever been published, this stays honestly blank rather than show a
-        // guessed number, and "Save configuration" refuses to persist a
-        // blank ceiling (see that button's click handler).
+        // guessed number. There is nothing to "save" here anymore, so there
+        // is no blank-value save guard either -- see readConfig below.
         var gateConsequenceCeiling = gateDefaults && typeof gateDefaults.consequenceCeiling === 'number' ? gateDefaults.consequenceCeiling : null
-        el('consequenceCeiling').value = thresholds.consequenceCeiling != null
-          ? thresholds.consequenceCeiling
-          : (gateConsequenceCeiling != null ? gateConsequenceCeiling : '')
+        el('consequenceCeiling').value = gateConsequenceCeiling != null ? String(gateConsequenceCeiling) : ''
         el('logMaxEntries').value = config.logMaxEntries != null ? config.logMaxEntries : 500
       }
 
       function readConfig (previous) {
         return {
-          thresholds: {
-            consequenceCeiling: Number(el('consequenceCeiling').value)
-          },
           logMaxEntries: Number(el('logMaxEntries').value),
           jevBudgetMs: (previous && previous.jevBudgetMs) || 4000
         }
@@ -1782,15 +1793,10 @@
       var currentConfig = null
 
       el('save-all').addEventListener('click', function () {
-        // Number('') is 0, not NaN. If this field is still blank -- the
-        // worker's GATE_DEFAULTS_KEY mirror has never been published and
-        // nothing was saved before -- saving must never turn "we don't know
-        // the real ceiling yet" into a silently-persisted 0 (see T7 in
-        // odd/tasks/panel-worker-wakeup.md).
-        if (el('consequenceCeiling').value === '') {
-          said(saveSaidEl, t('common.workerSilent'), true)
-          return
-        }
+        // consequenceCeiling used to be saved from here too, with a guard
+        // against persisting a blank/guessed value (see T7 in
+        // odd/tasks/panel-worker-wakeup.md). It is read-only now and never
+        // part of readConfig's output, so there is nothing left to guard.
         said(saveSaidEl, t('save.saving'))
         var config = readConfig(currentConfig)
         // Named, not anonymous: a Promise.all that only asks "did any of

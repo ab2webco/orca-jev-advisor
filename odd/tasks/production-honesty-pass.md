@@ -56,7 +56,10 @@ Strategy: `ask-on-risk`. TDD: strict. Runner:
       removed from the config, the panel and the store. Do not leave an
       editable control that changes nothing.
 - [x] P3 `store.ts`'s default ceiling comes from `GATE_CONSEQUENCE_CEILING`
-      rather than a literal.
+      rather than a literal. **Moot as of the Progress note below**: the
+      default this fixed no longer exists (`consequenceCeiling` was removed
+      from the editable config as a fifth dead field). Marked done because
+      there is nothing left to do, not because the fix still stands.
 - [ ] P4 The skills mod is copied rather than symlinked, with a content marker
       so an update replaces a stale copy; uninstall removes it.
 - [ ] P5 A failed mod install reaches the panel instead of being dropped from
@@ -83,41 +86,85 @@ Inventory measured and recorded above.
 P1, P2 and P3 done on `fix/thresholds-honesty` (off `main`, not merged). P4-P7
 belong to a different writer and were left untouched.
 
-- **P2 decision: removed, not wired.** `actThreshold`, `confirmThreshold`,
-  `reversibleGate` and `externalGate` are gone from `PluginThresholds`
-  (`src/core/store.ts`), the config panel (`adapters/orca/panels/config.html`)
-  and their validators/defaults. Confirmed by grep (whole `src/` and
-  `adapters/`, excluding tests/panels/i18n) that no decision anywhere read
-  them, matching this doc's own inventory. Backward compatible: a stored
-  config still carrying the four keys loads through unchanged, because
-  `isPluginThresholds` now only requires `consequenceCeiling` to be a number
-  and ignores unknown keys instead of rejecting the object.
+- **P2 decision (first pass): removed, not wired.** `actThreshold`,
+  `confirmThreshold`, `reversibleGate` and `externalGate` are gone from
+  `PluginThresholds` (`src/core/store.ts`), the config panel
+  (`adapters/orca/panels/config.html`) and their validators/defaults.
+  Confirmed by grep (whole `src/` and `adapters/`, excluding
+  tests/panels/i18n) that no decision anywhere read them, matching this
+  doc's own inventory. Backward compatible: a stored config still carrying
+  the four keys loads through unchanged, because the validator ignores
+  unknown keys instead of rejecting the object.
   - Caveat this pass surfaced: `consequenceCeiling` on `PluginConfig.thresholds`
     (the one field this doc named as live) is *also* not read by any decision
     at runtime -- `gate-bash.ts`'s `decideGateAction` call takes its ceiling
     from `catalog.ts`'s per-destination `autonomy.consequenceCeiling` (a
     different, live object with the same field name) or straight from
     `decisions.ts`'s `GATE_CONSEQUENCE_CEILING`, never from `getConfig()`.
-    Only `jevBudgetMs` (the sibling field) is actually consumed, in
-    `main.mjs`'s `cmdDecide`. Kept the field per this task's explicit
-    instruction (P3 says to fix its default, not remove it) rather than
-    expanding scope; flagged here rather than silently agreeing with the
-    inventory.
-- **P3.** `DEFAULT_CONFIG.thresholds.consequenceCeiling` in `store.ts` now
-  imports and uses `GATE_CONSEQUENCE_CEILING` from `decisions.ts` instead of
-  repeating `1.5`.
-- **P1 guard.** New test `adapters/orca/panels/config_html_thresholds.test.mjs`
-  reads `config.html` as text (it cannot import from `src/core`) and asserts:
-  the four removed fields have no input element and no `el(id)` reference
-  left in the panel; `consequenceCeiling`'s fallback chain never hardcodes a
-  bare decimal (only defers to the worker-published `gateDefaults` mirror or
-  stays blank). A self-check test proves the detector actually flags the
-  historical shape of the defect (`... : 1.78`) before trusting it against
-  the real file. `externalGate`'s own drift (0.35 vs `GATE_EXTERNAL_GATE`
-  0.5) is moot: the field no longer exists, so there is nothing left to drift.
+    Flagged rather than acted on, since P3 as written only asked to fix this
+    field's default, not remove it.
+- **P3 (first pass).** `DEFAULT_CONFIG.thresholds.consequenceCeiling` in
+  `store.ts` imported and used `GATE_CONSEQUENCE_CEILING` from
+  `decisions.ts` instead of repeating `1.5`. Superseded below.
+- **P1 guard (first pass).** New test
+  `adapters/orca/panels/config_html_thresholds.test.mjs` read `config.html`
+  as text (it cannot import from `src/core`) and asserted the four removed
+  fields had no input element or `el(id)` reference left, and that
+  `consequenceCeiling`'s fallback chain never hardcoded a bare decimal.
+  Extended below.
 
-Tests: `node --test --experimental-strip-types` -- 398 pass (391 baseline +
-4 in `store.test.ts` + 3 in the new panel guard file), 0 fail. Extracted
-`config.html`'s inline `<script>` and ran `node --check` on it: syntax OK.
+### Update: the caveat was right -- it was five dead fields, not four
+
+The coordinator verified the caveat above independently: `getConfig()` has
+exactly two callers in the whole codebase, `src/core/log.ts:63`
+(`logMaxEntries`) and `adapters/orca/main.mjs:1226` (`jevBudgetMs`).
+`consequenceCeiling` was never one of them. Acted on this correction rather
+than preserving the original task description's boundary:
+
+- **`consequenceCeiling` removed from the editable config entirely.**
+  `PluginConfig` no longer has a `thresholds` object at all -- `PluginThresholds`
+  and `isPluginThresholds` are gone from `src/core/store.ts`, and
+  `GATE_CONSEQUENCE_CEILING` is no longer imported there (nothing in that
+  file uses it anymore). `PluginConfig` is now just `{ logMaxEntries,
+  jevBudgetMs }`. Keeping an empty `thresholds: {}` wrapper around zero live
+  fields would have been a smaller copy of the same defect, so the wrapper
+  went too, not just the one field.
+  - Backward compatibility preserved the same way as the first pass: a config
+    saved before this change still has a `thresholds` object with all five
+    old keys sitting in storage; `isPluginConfig` no longer looks at
+    `thresholds` at all, so it's ignored, not rejected. Proved by test (see
+    below).
+- **P3 is moot.** The default it fixed (`consequenceCeiling: 1.5` ->
+  `GATE_CONSEQUENCE_CEILING`) no longer exists, because the field it defaulted
+  is gone. Its checkbox above is marked done because there is nothing left to
+  do, not because the fix still stands.
+- **The number is still shown -- read-only.** `adapters/orca/panels/config.html`'s
+  `consequenceCeiling` input became an `<output>` element: not part of
+  `readConfig()`'s saved object anymore, sourced only from the worker's
+  published `gateDefaults` mirror (`GATE_DEFAULTS_KEY`, unchanged -- that was
+  already an import, never a literal, so no drift risk there). Added
+  explanatory copy in both catalogs: this is the ceiling the gate applies by
+  default, a destination can override it from its own catalog row, and the
+  number comes from measurement, not preference. The "Save configuration"
+  blank-ceiling guard is gone too -- there is nothing left to guard.
+- **Section renamed.** With only a read-only ceiling and the editable log
+  size left in it, "Thresholds"/"Umbrales" no longer described the section.
+  Renamed to "Gate ceiling & log size" / "Techo del gate y tamaño del log"
+  in both catalogs, and updated the one in-panel cross-reference that named
+  the old heading (`modSkills.hint`, both languages).
+- **P1 guard extended.** `config_html_thresholds.test.mjs` now also asserts
+  that none of the FIVE fields (the four removed ones plus
+  `consequenceCeiling`) has an editable `<input>` element anywhere in the
+  panel -- a regex-based check independent of whatever value the field might
+  show, so it catches a reintroduced editable control even if its fallback
+  value happens to be correct. A self-check test proves the detector flags a
+  synthetic `<input id="consequenceCeiling">` and correctly ignores the real
+  `<output>`. Also asserts `readConfig()` no longer builds a `thresholds`
+  object at all.
+
+Tests: `node --test --experimental-strip-types` -- 400 pass, 0 fail (391
+baseline + 3 in `store.test.ts`'s config section + 6 in the panel guard
+file). Extracted `config.html`'s inline `<script>` and ran `node --check` on
+it after each round of panel edits: syntax OK both times.
 
 Not verified: panel screenshots (developer takes those; not run here).
