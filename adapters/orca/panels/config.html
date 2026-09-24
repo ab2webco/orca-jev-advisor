@@ -255,11 +255,13 @@
           <span class="said" id="policy-import-said"></span>
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
+        <div id="policy-diffs"></div>
       </section>
 
       <section id="mod-skills-section">
         <h2 data-i18n="modSkills.heading"></h2>
-        <p class="hint" data-i18n="modSkills.hint"></p>
+        <p class="hint" id="mod-skills-hint"></p>
+        <p class="hint" id="mod-skills-readiness"></p>
         <div class="checkbox-row">
           <input id="mod-skills-active" type="checkbox" />
           <div class="checkbox-text">
@@ -350,6 +352,7 @@
           // sobre un mod que nunca corrió ni una sola vez (P6,
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Mod de skills: no instalado. Usa «Configurar», abajo, para instalarlo.',
+          'integration.modOnButMissing': 'Mod de skills: los interruptores de abajo están encendidos, pero el mod no está en el disco — ahora mismo no manda nada. Pulsa «Configurar», abajo, para reinstalarlo; si sigue igual, ejecuta «Advisor: Check configuration» desde la paleta de comandos de Orca una vez, que es lo que despierta al proceso del plugin.',
           'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code -- una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
           'integration.modRecording': 'Mod de skills: registrando. {{count}} prompts desde {{since}}, el más reciente {{last}}. Esto es modo medición: todavía nada de lo que ve el modelo cambia.',
           'integration.setup': 'Configurar',
@@ -401,12 +404,24 @@
           'policies.unknownDestination': 'Estos ids no existen en el catálogo actual: {{ids}}',
           'policies.remove': 'Quitar',
           'policies.importSeeds': 'Importar políticas base',
+          'policies.diffHeading': 'La versión que trae el plugin difiere de la tuya en {{n}} política(s). Marca las que quieras adoptar; lo que no marques se queda como está.',
+          'policies.diffLabel': '{{id}} — difiere en: {{fields}}',
+          'policies.diffField': '{{field}} — tuya: «{{mine}}» · del plugin: «{{baseline}}»',
+          'policies.diffAllDestinations': '(todos los destinos)',
+          'policies.diffApply': 'Adoptar las marcadas',
+          'policies.diffNoneChosen': 'No marcaste ninguna, así que no se cambió nada.',
+          'policies.importReplaced': 'Listo: {{replaced}} reemplazada(s), {{added}} añadida(s).',
           'policies.importHint': 'Agrega las políticas base incluidas con el plugin que todavía no tienes; lo que ya agregaste o editaste queda intacto.',
           'policies.importing': 'Importando…',
           'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
           'policies.importNone': 'No hay políticas nuevas para agregar.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
-          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). Déjalos apagados hasta que exista una semana de datos en modo medición para calibrarlos.',
+          'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
+          'modSkills.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} prompts comparables. Faltan {{shortfall}}.',
+          'modSkills.readiness.rateLow': 'Medición: ya hay {{comparable}} prompts comparables, pero el acierto es {{matchRate}}% y el umbral es {{minMatchRate}}%. Encenderlos ahora aplicaría un criterio que los datos no respaldan.',
+          'modSkills.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} prompts comparables con {{matchRate}}% de acierto, contra {{minComparable}} y {{minMatchRate}}%. Ya hay con qué calibrar.',
+          'modSkills.readiness.unknown': 'Medición: sin lectura todavía.',
+          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). Déjalos apagados hasta que la medición alcance su umbral: {{minComparable}} prompts comparables y un acierto de al menos {{minMatchRate}}% frente a lo que el modelo cargó de verdad. La línea de abajo dice cuánto falta.',
           'modSkills.activeLabel': 'Dejar que Jev elija la skill (modo activo)',
           'modSkills.activeHint': 'Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.',
           'modSkills.activeToolsLabel': 'Dejar que Jev elija la herramienta (modo activo)',
@@ -503,6 +518,7 @@
           // mod that had never run a single time (P6,
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Skills mod: not installed. Use "Set up", below, to install it.',
+          'integration.modOnButMissing': 'Skills mod: the switches below are on, but the mod is not on disk — right now they command nothing. Press "Set up", below, to reinstall it; if it stays this way, run "Advisor: Check configuration" once from Orca\'s command palette, which is what wakes the plugin\'s process.',
           'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS -- an already-open session will not pick it up. Start a new one to begin recording.',
           'integration.modRecording': 'Skills mod: recording. {{count}} prompts since {{since}}, most recently {{last}}. This is measurement mode: nothing the model sees changes yet.',
           'integration.setup': 'Set up',
@@ -554,12 +570,24 @@
           'policies.unknownDestination': "These ids don't exist in the current catalog: {{ids}}",
           'policies.remove': 'Remove',
           'policies.importSeeds': 'Import baseline policies',
+          'policies.diffHeading': "The version shipped with the plugin differs from yours in {{n}} of the policies you already have. Tick the ones you want to adopt; anything you leave unticked stays as it is.",
+          'policies.diffLabel': '{{id}} -- differs in: {{fields}}',
+          'policies.diffField': '{{field}} -- yours: "{{mine}}" · the plugin\'s: "{{baseline}}"',
+          'policies.diffAllDestinations': '(every destination)',
+          'policies.diffApply': 'Adopt the ticked ones',
+          'policies.diffNoneChosen': 'Nothing was ticked, so nothing changed.',
+          'policies.importReplaced': 'Done: {{replaced}} replaced, {{added}} added.',
           'policies.importHint': "Adds the plugin's baseline policies you don't already have; anything you already added or edited is left untouched.",
           'policies.importing': 'Importing…',
           'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
           'policies.importNone': 'No new policies to add.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
-          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until a week of measurement-mode data exists to calibrate them from.",
+          'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
+          'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
+          'modSkills.readiness.rateLow': 'Measurement: {{comparable}} comparable prompts already, but the match rate is {{matchRate}}% against a threshold of {{minMatchRate}}%. Turning these on now would apply a criterion the data does not support.',
+          'modSkills.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
+          'modSkills.readiness.unknown': 'Measurement: nothing read yet.',
+          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
           'modSkills.activeHint': "Off (today): only records which skill Jev would have picked, in a local log; nothing the model sees changes. On: withholds the skill listing from the model and injects the winning skill's own instructions instead.",
           'modSkills.activeToolsLabel': 'Let Jev choose the tool (active mode)',
@@ -1049,9 +1077,14 @@
         })
       }
 
-      function sendPolicySeedImportRequest () {
+      function sendPolicySeedImportRequest (acceptedIds) {
         var requestId = 'policy-seed-import-' + Date.now() + '-' + Math.random().toString(36).slice(2)
         var request = { id: requestId, at: new Date().toISOString() }
+        // Only sent when the person ticked something. An import with no
+        // acceptedIds still only ADDS, exactly as it always has -- there is
+        // no accept-all anywhere, because a blind overwrite would destroy a
+        // policy somebody edited, which is worse than never updating one.
+        if (acceptedIds && acceptedIds.length > 0) request.acceptedIds = acceptedIds
         signalPanelOpen()
         return write(POLICY_SEED_IMPORT_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
@@ -1472,12 +1505,85 @@
       }
 
       var policyImportSaidEl = el('policy-import-said')
-      el('import-policy-seeds').addEventListener('click', function () {
+      var policyDiffsEl = el('policy-diffs')
+
+      /** The baseline shipped a different wording for an id you already have.
+       *  Merge-by-id can never reach it -- that is the point, an edited policy
+       *  must survive -- so the only honest way through is to show both
+       *  versions and let the person pick, one row at a time. */
+      function renderPolicySeedDiffs (differing) {
+        policyDiffsEl.innerHTML = ''
+        if (!differing || differing.length === 0) return
+        var heading = document.createElement('p')
+        heading.className = 'hint'
+        heading.textContent = t('policies.diffHeading', { n: String(differing.length) })
+        policyDiffsEl.appendChild(heading)
+
+        differing.forEach(function (diff) {
+          var row = document.createElement('div')
+          row.className = 'checkbox-row'
+          var box = document.createElement('input')
+          box.type = 'checkbox'
+          box.setAttribute('data-policy-diff-id', diff.id)
+          var text = document.createElement('div')
+          text.className = 'checkbox-text'
+          var label = document.createElement('span')
+          label.className = 'checkbox-label'
+          label.textContent = t('policies.diffLabel', { id: diff.id, fields: (diff.fields || []).join(', ') })
+          text.appendChild(label)
+          ;(diff.fields || []).forEach(function (field) {
+            var line = document.createElement('span')
+            line.className = 'hint'
+            line.textContent = t('policies.diffField', {
+              field: field,
+              mine: policyFieldText(diff.existing, field),
+              baseline: policyFieldText(diff.seed, field)
+            })
+            text.appendChild(line)
+          })
+          row.appendChild(box)
+          row.appendChild(text)
+          policyDiffsEl.appendChild(row)
+        })
+
+        var actions = document.createElement('div')
+        actions.className = 'actions'
+        var apply = document.createElement('button')
+        apply.type = 'button'
+        apply.id = 'apply-policy-diffs'
+        apply.textContent = t('policies.diffApply')
+        apply.addEventListener('click', function () {
+          var accepted = []
+          policyDiffsEl.querySelectorAll('input[data-policy-diff-id]').forEach(function (box) {
+            if (box.checked) accepted.push(box.getAttribute('data-policy-diff-id'))
+          })
+          if (accepted.length === 0) { said(policyImportSaidEl, t('policies.diffNoneChosen')); return }
+          runPolicySeedImport(accepted)
+        })
+        actions.appendChild(apply)
+        policyDiffsEl.appendChild(actions)
+      }
+
+      /** One field of a policy as a person reads it. `destinations` is a list
+       *  and an absent one means "every destination", which is a different
+       *  sentence from an empty list nobody wrote. */
+      function policyFieldText (policy, field) {
+        if (!policy) return ''
+        if (field !== 'destinations') return String(policy[field] == null ? '' : policy[field])
+        var destinations = policy.destinations
+        if (!destinations || destinations.length === 0) return t('policies.diffAllDestinations')
+        return destinations.join(', ')
+      }
+
+      function runPolicySeedImport (acceptedIds) {
         said(policyImportSaidEl, t('policies.importing'))
-        sendPolicySeedImportRequest().then(function (result) {
+        return sendPolicySeedImportRequest(acceptedIds).then(function (result) {
           var added = (result && typeof result.added === 'number') ? result.added : 0
           var skipped = (result && typeof result.skipped === 'number') ? result.skipped : 0
-          said(policyImportSaidEl, added > 0 ? t('policies.importDone', { added: String(added), skipped: String(skipped) }) : t('policies.importNone'))
+          var replaced = (result && typeof result.replaced === 'number') ? result.replaced : 0
+          if (replaced > 0) said(policyImportSaidEl, t('policies.importReplaced', { replaced: String(replaced), added: String(added) }))
+          else said(policyImportSaidEl, added > 0 ? t('policies.importDone', { added: String(added), skipped: String(skipped) }) : t('policies.importNone'))
+          renderPolicySeedDiffs(result && result.differing)
           return read('policies', false)
         }).then(function (policies) {
           if (!policies) return
@@ -1486,7 +1592,9 @@
         }).catch(function (error) {
           said(policyImportSaidEl, errorText(error), true)
         })
-      })
+      }
+
+      el('import-policy-seeds').addEventListener('click', function () { runPolicySeedImport(null) })
 
       // ---------- skill/tool selection switches --------------------------------
 
@@ -1495,6 +1603,38 @@
        *  (or if the worker has never published it), which leaves both
        *  checkboxes unchecked -- the same "off" the file itself defaults to
        *  when it has never been written. */
+      // Mirrors DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS in
+      // src/core/mod_skills_readiness.ts. Used only until the worker has
+      // published a summary carrying the real ones -- the hint above the
+      // switches names a number, and a hint that names no number is exactly
+      // the "a week of data" hand-wave this replaced.
+      var READINESS_FALLBACK = { minComparable: 1000, minMatchRate: 0.7 }
+
+      /** Paints the hint's thresholds and the live "how far off" line.
+       *  A null matchRate is never rendered as 0%: it means no comparable
+       *  evidence yet, which is a different sentence. */
+      function renderModSkillsReadiness (measurements) {
+        var mod = measurements && measurements.ok ? measurements.modSkills : null
+        var readiness = mod && mod.readiness ? mod.readiness : null
+        var thresholds = (readiness && readiness.thresholds) || READINESS_FALLBACK
+        var params = {
+          minComparable: String(thresholds.minComparable),
+          minMatchRate: String(Math.round(thresholds.minMatchRate * 100))
+        }
+        el('mod-skills-hint').textContent = t('modSkills.hint', params)
+
+        var lineEl = el('mod-skills-readiness')
+        if (!readiness) { lineEl.textContent = t('modSkills.readiness.unknown'); return }
+        var comparable = mod.comparableCount || 0
+        params.comparable = String(comparable)
+        params.shortfall = String(readiness.comparableShortfall || 0)
+        params.matchRate = mod.matchRate == null ? '-' : String(Math.round(mod.matchRate * 1000) / 10)
+        if (comparable === 0) { lineEl.textContent = t('modSkills.readiness.noData'); return }
+        if (readiness.reason === 'ready') { lineEl.textContent = t('modSkills.readiness.ready', params); return }
+        if (readiness.reason === 'match-rate-too-low') { lineEl.textContent = t('modSkills.readiness.rateLow', params); return }
+        lineEl.textContent = t('modSkills.readiness.shortfall', params)
+      }
+
       function fillModSkillsStatus (status) {
         el('mod-skills-active').checked = !!(status && status.active === true)
         el('mod-skills-active-tools').checked = !!(status && status.activeTools === true)
@@ -1756,8 +1896,19 @@
        *                             installed but never run.
        *   recording               -- N prompts, since when, most recent.
        */
-      function modSkillsLine (modCopy, measurements) {
-        if (!modCopy || !modCopy.exists) return t('integration.modNotInstalled')
+      function modSkillsLine (modCopy, measurements, modSkillsStatus) {
+        // The switches and the copy on disk are two separate truths, and
+        // until now nobody crossed them: after an update that did not
+        // reapply the copy, this panel would say "not installed" in one
+        // place while the switches above it sat ON in another -- switches
+        // commanding a mod that is not there. Observed in the field with
+        // `modCopy exists:false` across all four config roots while
+        // mod-skills-config.json read `active:true, activeTools:true`, and
+        // mod-skills-measurements.jsonl had never been created at all.
+        var switchedOn = !!(modSkillsStatus && (modSkillsStatus.active === true || modSkillsStatus.activeTools === true))
+        if (!modCopy || !modCopy.exists) {
+          return switchedOn ? t('integration.modOnButMissing') : t('integration.modNotInstalled')
+        }
         var mod = measurements && measurements.ok ? measurements.modSkills : null
         var count = mod ? mod.totalDecisions || 0 : 0
         if (!mod || count === 0) return t('integration.modNeverRun')
@@ -1780,7 +1931,7 @@
       // is running -- a fixed 20s guess used to stand in for this and could
       // say "not running" about a worker that was, in fact, running (see T4
       // in odd/tasks/panel-worker-wakeup.md).
-      function renderClaudeIntegrationStatus (status, heartbeat, measurements) {
+      function renderClaudeIntegrationStatus (status, heartbeat, measurements, modSkillsStatus) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
         if (status === null) {
@@ -1820,7 +1971,7 @@
           : t('integration.mirrorUnknown')
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
-        claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements)))
+        claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements, modSkillsStatus)))
       }
 
       var MEASUREMENTS_STATUS_KEY = 'measurementsSummary'
@@ -1829,9 +1980,11 @@
         return Promise.all([
           read(CLAUDE_INTEGRATION_STATUS_KEY, false),
           read(WORKER_HEARTBEAT_KEY, false),
-          read(MEASUREMENTS_STATUS_KEY, false)
+          read(MEASUREMENTS_STATUS_KEY, false),
+          read(MOD_SKILLS_STATUS_KEY, false)
         ]).then(function (results) {
-          renderClaudeIntegrationStatus(results[0], results[1], results[2])
+          renderClaudeIntegrationStatus(results[0], results[1], results[2], results[3])
+          renderModSkillsReadiness(results[2])
         })
       }
 

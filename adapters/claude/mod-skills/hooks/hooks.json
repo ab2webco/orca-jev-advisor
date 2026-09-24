@@ -1,5 +1,5 @@
 {
-  "description": "Lets Jev (TypeSafe) pick at most one skill per prompt from the installed skills' descriptions, instead of the model reading all of their listings on every prompt. Two Jev stages (rank every skill + gate, then re-read the top three with their SKILL.md and one fits noul each) plus the current Orca worktree/project/branch in the state. Starts in measurement mode: nothing observable changes, only a JSONL record per prompt. Active mode (withhold the listing, inject the winner) is off until that data sets its thresholds.",
+  "description": "Lets Jev (TypeSafe) pick at most one skill per prompt from the installed skills' descriptions, instead of the model reading all of their listings on every prompt. Two Jev stages (rank every skill + gate, then re-read the top three with their SKILL.md and one fits noul each) plus the current Orca worktree/project/branch in the state. Measurement mode is the default and changes nothing observable -- only a JSONL record per prompt. Active mode (withhold the listing, inject the winner) and active-tools mode are switches in the Advisor settings panel; they are off until that record sets the thresholds, but the person can turn them on at any time.",
   "modules": [
     "./index.ts"
   ]

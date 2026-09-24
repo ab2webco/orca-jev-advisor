@@ -5,11 +5,30 @@
 // odd/tasks/panel-worker-wakeup.md for the task list this backs.
 
 import { strict as assert } from 'node:assert'
-import { test } from 'node:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { after, test } from 'node:test'
 
 import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
 import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
-import {
+import { POLICY_SEED_MARKER_KEY } from '../../src/core/policy_seed.ts'
+
+// src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute a
+// real path at all under node's test runner unless an explicit override is
+// set (see that module's doc) -- main.mjs resolves its own CACHE_DIR/
+// CONFIG_DIR unconditionally at module scope on import (this file never
+// spawns a real sidecar against them; every test below that could reach
+// one passes `noopMirror`, see below). A static `import ... from
+// './main.mjs'` is hoisted ahead of any other top-level statement in this
+// file, so the override could never be set first that way -- hence the
+// plain dynamic import below, after the override is in place.
+const PATHS_OVERRIDE_DIR = mkdtempSync(join(tmpdir(), 'orca-jev-main-test-'))
+process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(PATHS_OVERRIDE_DIR, 'config')
+process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, 'cache')
+after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }))
+
+const {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -38,8 +57,7 @@ import {
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
   WORKER_HEARTBEAT_KEY
-} from './main.mjs'
-import { POLICY_SEED_MARKER_KEY } from '../../src/core/policy_seed.ts'
+} = await import('./main.mjs')
 
 function fakeOrca () {
   const logs = []
@@ -546,6 +564,68 @@ test('attendPolicySeedImportRequest: a fresh request imports the seeds and publi
   assert.equal(result.id, 'psi-2')
   assert.equal(result.ok, true)
   assert.ok(result.added > 0)
+  assert.ok(Array.isArray(result.differing))
+})
+
+test('cmdImportPolicySeeds: reports a differing id without applying it when no ids are accepted', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.equal(result.ok, true)
+  assert.equal(result.replaced, 0)
+  const entry = result.differing.find((d) => d.id === 'read_and_test')
+  assert.ok(entry, 'expected read_and_test to be reported as differing')
+  assert.ok(entry.fields.includes('rule'))
+  assert.ok(entry.fields.includes('kind'))
+  const stored = await storageHost.get('policies')
+  const row = stored.find((r) => r.id === 'read_and_test')
+  assert.equal(row.rule, 'my own edited rule')
+  assert.equal(row.kind, 'prohibits')
+})
+
+test('cmdImportPolicySeeds: applies only the explicitly accepted differing ids', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror, acceptedIds: ['read_and_test'] })
+  assert.equal(result.ok, true)
+  assert.equal(result.replaced, 1)
+  const stored = await storageHost.get('policies')
+  const row = stored.find((r) => r.id === 'read_and_test')
+  assert.equal(row.kind, 'permits')
+  assert.notEqual(row.rule, 'my own edited rule')
+})
+
+test('cmdImportPolicySeeds: an accepted id absent from this seed run is ignored, not thrown', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror, acceptedIds: ['stale-panel-selection'] })
+  assert.equal(result.ok, true)
+  assert.equal(result.replaced, 0)
+  const stored = await storageHost.get('policies')
+  const row = stored.find((r) => r.id === 'read_and_test')
+  assert.equal(row.rule, 'my own edited rule')
+})
+
+test('attendPolicySeedImportRequest: forwards the request\'s acceptedIds to apply the chosen differences', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }],
+    policySeedImportRequest: { id: 'psi-3', at: new Date().toISOString(), acceptedIds: ['read_and_test'] }
+  })
+  await attendPolicySeedImportRequest(orca, storageHost, { mirror: noopMirror })
+  const result = await storageHost.get(POLICY_SEED_IMPORT_RESULT_KEY)
+  assert.equal(result.id, 'psi-3')
+  assert.equal(result.ok, true)
+  assert.equal(result.replaced, 1)
+  const stored = await storageHost.get('policies')
+  const row = stored.find((r) => r.id === 'read_and_test')
+  assert.notEqual(row.rule, 'my own edited rule')
 })
 
 // ---------------------------------------------------------------------------

@@ -33,7 +33,18 @@ function decide(command) {
     ['--experimental-strip-types', GATE],
     {
       input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: home, tool_use_id: 'probe' }),
-      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: '', XDG_CACHE_HOME: '' },
+      env: {
+        ...process.env,
+        HOME: home,
+        XDG_CONFIG_HOME: '',
+        XDG_CACHE_HOME: '',
+        // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to
+        // compute a real path at all under node's test runner -- see its
+        // module doc. This points them at exactly what they would have
+        // computed for `home` on darwin with no XDG override.
+        ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor'),
+        ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor'),
+      },
       encoding: 'utf8',
     },
   )

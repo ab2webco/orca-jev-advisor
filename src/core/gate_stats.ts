@@ -32,6 +32,8 @@ export interface GateSourceCounts {
   readonly "local-rule": number;
   readonly cache: number;
   readonly jev: number;
+  /** `"none"` records: Jev was asked but never answered, so the command passed unjudged. See gate_measurement.ts's GateSource. */
+  readonly none: number;
 }
 
 export interface GateLatencyStats {
@@ -96,7 +98,7 @@ interface MutableFamilyStat {
  */
 export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateStatsSummary {
   let byVerdict = emptyVerdictCounts();
-  const bySource: { "local-rule": number; cache: number; jev: number } = { "local-rule": 0, cache: 0, jev: 0 };
+  const bySource: { "local-rule": number; cache: number; jev: number; none: number } = { "local-rule": 0, cache: 0, jev: 0, none: 0 };
   const familyStats = new Map<string, MutableFamilyStat>();
   const projectCounts = new Map<string | null, number>();
   const jevLatencies: number[] = [];

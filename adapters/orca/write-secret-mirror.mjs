@@ -84,33 +84,58 @@ import {
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
 // platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
 // convention on top of it (see src/core/paths.ts).
-const CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
-const MIRROR_PATH = join(CONFIG_DIR, 'env')
+//
+// resolveConfigDir itself now refuses to hand back a real path at all
+// while running under node's test runner with no explicit
+// ORCA_SUPERVISOR_CONFIG_DIR override (see that module's doc) -- a
+// stronger, earlier version of exactly the guarantee guarded_fs.ts's
+// per-write checks already gave this file. That refusal is deliberately
+// caught here, at module scope, rather than left to crash the process
+// uncaught: main()'s own try/catch below already reports every other
+// failure through `{ok:false, reason:'exception', detail}` on stdout, and
+// a path-resolution refusal deserves the exact same clean, parseable
+// report instead of an uncaught-exception stack trace on stderr with a
+// non-zero exit and no JSON at all.
+let CONFIG_DIR = ''
+let MIRROR_PATH = ''
+let LOCALE_PATH = ''
+let CATALOG_PATH = ''
+let POLICIES_PATH = ''
+let MOD_SKILLS_CONFIG_PATH = ''
+let DENY_TIER_CONFIG_PATH = ''
+let CONFIG_DIR_RESOLUTION_ERROR = null
+try {
+  CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
+  MIRROR_PATH = join(CONFIG_DIR, 'env')
+  // The config panel's message-language choice, mirrored the same way as
+  // the key -- but never sensitive, so it crosses via argv (not stdin) and
+  // is its own small plain-text file, never mixed into the key's. Read
+  // directly by adapters/claude/gate-bash.ts and adapters/claude/
+  // mod-skills, which have no channel into Orca's own `storage` (see
+  // src/core/i18n.ts).
+  LOCALE_PATH = join(CONFIG_DIR, 'locale')
+  // Destination catalog and team policies -- mirrored the same way as the
+  // key and the locale, but neither is sensitive: the config panel already
+  // shows both in the clear, so they get the platform's ordinary file
+  // permissions (see writeAtomic's `mode` parameter) instead of 0600.
+  // adapters/claude/gate-bash.ts reads these two files directly.
+  CATALOG_PATH = join(CONFIG_DIR, 'catalog.json')
+  POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
+  // mod-skills' `active`/`activeTools` switches -- see
+  // src/core/mod_skills_config.ts's module note (T10,
+  // odd/tasks/panel-worker-wakeup.md). Neither is sensitive, so it gets
+  // ordinary file permissions like the catalog/policies files above, not
+  // the key's forced 0600.
+  MOD_SKILLS_CONFIG_PATH = join(CONFIG_DIR, 'mod-skills-config.json')
+  // The three deny-tier switches -- see src/core/deny_tier_config.ts's
+  // module note. Not sensitive, same ordinary file permissions as the
+  // switches above; the fail-CLOSED default lives in the parser, not in
+  // this file's permission mode.
+  DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
+} catch (error) {
+  CONFIG_DIR_RESOLUTION_ERROR = error
+}
 const ENV_VAR_NAME = 'TYPESAFE_API_KEY'
-// The config panel's message-language choice, mirrored the same way as the
-// key -- but never sensitive, so it crosses via argv (not stdin) and is
-// its own small plain-text file, never mixed into the key's. Read directly
-// by adapters/claude/gate-bash.ts and adapters/claude/mod-skills, which
-// have no channel into Orca's own `storage` (see src/core/i18n.ts).
-const LOCALE_PATH = join(CONFIG_DIR, 'locale')
-// Destination catalog and team policies -- mirrored the same way as the
-// key and the locale, but neither is sensitive: the config panel already
-// shows both in the clear, so they get the platform's ordinary file
-// permissions (see writeAtomic's `mode` parameter) instead of 0600.
-// adapters/claude/gate-bash.ts reads these two files directly.
-const CATALOG_PATH = join(CONFIG_DIR, 'catalog.json')
-const POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
-// mod-skills' `active`/`activeTools` switches -- see
-// src/core/mod_skills_config.ts's module note (T10,
-// odd/tasks/panel-worker-wakeup.md). Neither is sensitive, so it gets
-// ordinary file permissions like the catalog/policies files above, not the
-// key's forced 0600.
-const MOD_SKILLS_CONFIG_PATH = join(CONFIG_DIR, 'mod-skills-config.json')
-// The three deny-tier switches -- see src/core/deny_tier_config.ts's module
-// note. Not sensitive, same ordinary file permissions as the switches
-// above; the fail-CLOSED default lives in the parser, not in this file's
-// permission mode.
-const DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
 
 async function readStdin () {
   const chunks = []
@@ -338,6 +363,7 @@ async function main () {
   const mode = process.argv[2]
   let result
   try {
+    if (CONFIG_DIR_RESOLUTION_ERROR) throw CONFIG_DIR_RESOLUTION_ERROR
     if (mode === 'save') {
       result = await save((await readStdin()).trim())
     } else if (mode === 'locale-save') {

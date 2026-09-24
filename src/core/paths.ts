@@ -18,8 +18,76 @@
 // its sandbox) and resolves `home` itself from `$.env.get('HOME')` /
 // `$.env.get('USERPROFILE')` before calling in here -- see
 // mod-skills/hooks/runtime.ts's `resolveHomePaths`.
+//
+// Test isolation (`resolveConfigDir`/`resolveCacheDir`/their `*Candidates`
+// siblings only) -- see odd/tasks/write-guard-test-isolation.md for the
+// incident history: a `node --test` run reaching these functions with a
+// real, unoverridden home has already corrupted the developer's real
+// ~/.config/orca-supervisor and wiped every gate hook out of ~/.claude/
+// settings.json, more than once, silently. `src/core/write_guard.ts`
+// guards the WRITE side of that (every mutating fs call in the two
+// sidecars that do the actual writing); this module guards the RESOLUTION
+// side, so a caller can never even be HANDED a real path to write to (or
+// read from) while running under node's own test runner:
+//
+//   - Two environment variables, honoured on win32, darwin AND linux alike
+//     (unlike XDG_CONFIG_HOME/XDG_CACHE_HOME below, which are Linux-only by
+//     platform convention), always take precedence over the platform
+//     default: `ORCA_SUPERVISOR_CONFIG_DIR` for resolveConfigDir/
+//     resolveConfigDirCandidates, `ORCA_SUPERVISOR_CACHE_DIR` for
+//     resolveCacheDir/resolveCacheDirCandidates. This is NOT a test-only
+//     escape hatch -- a developer who genuinely wants this plugin's config
+//     or cache to live somewhere unusual can set either one too -- but it
+//     is also the ONLY way a test running under node's test runner can get
+//     a path out of these functions at all.
+//   - Absent that override, running under node's test runner
+//     (`isRunningUnderNodeTestRunner`, reused from write_guard.ts rather
+//     than reinventing a second notion of "under test") makes these
+//     functions throw `RealConfigPathBlockedError` instead of silently
+//     computing and returning the real per-platform path. There is no
+//     third option (e.g. "the computed path happens to already be safe") --
+//     under test, it is the override or nothing, so a test can never rely
+//     on an accidentally-safe-looking `home` it was given.
+//   - Outside the test runner, with no override set, nothing changes: same
+//     paths, same platform rules, same XDG behaviour on Linux, computed
+//     exactly as before this guard existed.
 
 import { posix, win32 } from "node:path";
+
+import { isRunningUnderNodeTestRunner } from "./write_guard.ts";
+
+/** Honoured on every platform (see this module's header comment), always ahead of the platform default; set by a test to redirect resolveConfigDir/resolveConfigDirCandidates, or by a developer with an unusual layout. */
+export const CONFIG_DIR_OVERRIDE_ENV = "ORCA_SUPERVISOR_CONFIG_DIR";
+/** Same as {@link CONFIG_DIR_OVERRIDE_ENV}, for resolveCacheDir/resolveCacheDirCandidates. */
+export const CACHE_DIR_OVERRIDE_ENV = "ORCA_SUPERVISOR_CACHE_DIR";
+
+/**
+ * Thrown by {@link resolveConfigDir}/{@link resolveCacheDir} (and their
+ * `*Candidates` siblings) instead of silently returning a real path while
+ * running under node's test runner with no override set. Modeled on
+ * write_guard.ts's `RealConfigWriteBlockedError`: a distinct class, not a
+ * plain Error, so a test asserting refusal can confirm it was THIS guard
+ * that fired.
+ */
+export class RealConfigPathBlockedError extends Error {
+  /** Which exported function refused -- `"resolveConfigDir"` or `"resolveCacheDir"`. */
+  readonly resolver: string;
+  /** The real path this resolver would have returned had the guard not fired. */
+  readonly wouldHaveReturned: string;
+  /** The env var (see {@link CONFIG_DIR_OVERRIDE_ENV}/{@link CACHE_DIR_OVERRIDE_ENV}) that would have avoided this. */
+  readonly overrideEnvVar: string;
+
+  constructor(resolver: string, wouldHaveReturned: string, overrideEnvVar: string) {
+    super(
+      `orca-supervisor paths guard: ${resolver} refused to hand back the real path it would have used ("${wouldHaveReturned}") while running under node's test runner. ` +
+        `Set ${overrideEnvVar} to an explicit test directory before this module loads (e.g. a mkdtempSync(join(tmpdir(), ...)) path) -- production callers outside the test runner are unaffected.`,
+    );
+    this.name = "RealConfigPathBlockedError";
+    this.resolver = resolver;
+    this.wouldHaveReturned = wouldHaveReturned;
+    this.overrideEnvVar = overrideEnvVar;
+  }
+}
 
 export type SupportedPlatform = "win32" | "darwin" | "linux";
 
@@ -74,8 +142,26 @@ export function joinPath(platform: SupportedPlatform, ...parts: string[]): strin
  * `src/core/orca_accounts.ts`'s userData resolution, so a developer's Orca
  * and this plugin agree on where things live when XDG_CONFIG_HOME is set --
  * previously this ignored it outright and always wrote to `~/.config`.
+ *
+ * `env` (default: the process's real environment) governs the test-isolation
+ * guard described in this module's header comment: an explicit
+ * `ORCA_SUPERVISOR_CONFIG_DIR` always wins outright, on every platform; with
+ * none set, running under node's test runner throws
+ * {@link RealConfigPathBlockedError} instead of computing the real path
+ * below. `env` is a parameter (not baked in) purely so this function's own
+ * tests can exercise both branches deterministically.
  */
-export function resolveConfigDir(platform: SupportedPlatform, paths: HomePaths): string {
+export function resolveConfigDir(platform: SupportedPlatform, paths: HomePaths, env: NodeJS.ProcessEnv = process.env): string {
+  const override = env[CONFIG_DIR_OVERRIDE_ENV];
+  if (override !== undefined && override.length > 0) return override;
+  const computed = computeConfigDir(platform, paths);
+  if (isRunningUnderNodeTestRunner(env)) {
+    throw new RealConfigPathBlockedError("resolveConfigDir", computed, CONFIG_DIR_OVERRIDE_ENV);
+  }
+  return computed;
+}
+
+function computeConfigDir(platform: SupportedPlatform, paths: HomePaths): string {
   const join = joinerFor(platform);
   if (platform === "win32") {
     const base = paths.appDataDir && paths.appDataDir.length > 0 ? paths.appDataDir : join(paths.home, "AppData", "Roaming");
@@ -102,17 +188,25 @@ export function resolveConfigDir(platform: SupportedPlatform, paths: HomePaths):
  * exactly where it is, so downgrading or unsetting the variable finds it
  * again. On every other platform, and on Linux without the variable, there
  * is one candidate and this changes nothing.
+ *
+ * The legacy entry is a second raw join, not itself routed through
+ * {@link resolveConfigDir} -- so under node's test runner (see this
+ * module's header comment) it is dropped entirely rather than leaking a
+ * second, unguarded real-looking path once an override has made the
+ * primary safe. `resolveConfigDir` itself still throws first when no
+ * override is set at all, exactly as it would if called directly.
  */
-export function resolveConfigDirCandidates(platform: SupportedPlatform, paths: HomePaths): readonly string[] {
-  const primary = resolveConfigDir(platform, paths);
-  if (platform !== "linux") return [primary];
+export function resolveConfigDirCandidates(platform: SupportedPlatform, paths: HomePaths, env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  const primary = resolveConfigDir(platform, paths, env);
+  if (platform !== "linux" || isRunningUnderNodeTestRunner(env)) return [primary];
   const legacy = joinPath(platform, paths.home, ".config", "orca-supervisor");
   return primary === legacy ? [primary] : [primary, legacy];
 }
 
-export function resolveCacheDirCandidates(platform: SupportedPlatform, paths: HomePaths): readonly string[] {
-  const primary = resolveCacheDir(platform, paths);
-  if (platform !== "linux") return [primary];
+/** Cache-dir counterpart of {@link resolveConfigDirCandidates}; see its doc comment for the test-isolation behaviour. */
+export function resolveCacheDirCandidates(platform: SupportedPlatform, paths: HomePaths, env: NodeJS.ProcessEnv = process.env): readonly string[] {
+  const primary = resolveCacheDir(platform, paths, env);
+  if (platform !== "linux" || isRunningUnderNodeTestRunner(env)) return [primary];
   const legacy = joinPath(platform, paths.home, ".cache", "orca-supervisor");
   return primary === legacy ? [primary] : [primary, legacy];
 }
@@ -123,9 +217,22 @@ export function resolveCacheDirCandidates(platform: SupportedPlatform, paths: Ho
  * `~/.cache/orca-supervisor`) on Linux, `%LOCALAPPDATA%/orca-supervisor/Cache`
  * on Windows (Windows convention keeps cache-like data under LOCALAPPDATA,
  * not the roaming profile). See {@link resolveConfigDir} for why Linux
- * alone honors the XDG variable.
+ * alone honors the XDG variable, and for what `env` (default: the
+ * process's real environment) governs -- the same test-isolation guard,
+ * keyed on {@link CACHE_DIR_OVERRIDE_ENV} instead of
+ * {@link CONFIG_DIR_OVERRIDE_ENV}.
  */
-export function resolveCacheDir(platform: SupportedPlatform, paths: HomePaths): string {
+export function resolveCacheDir(platform: SupportedPlatform, paths: HomePaths, env: NodeJS.ProcessEnv = process.env): string {
+  const override = env[CACHE_DIR_OVERRIDE_ENV];
+  if (override !== undefined && override.length > 0) return override;
+  const computed = computeCacheDir(platform, paths);
+  if (isRunningUnderNodeTestRunner(env)) {
+    throw new RealConfigPathBlockedError("resolveCacheDir", computed, CACHE_DIR_OVERRIDE_ENV);
+  }
+  return computed;
+}
+
+function computeCacheDir(platform: SupportedPlatform, paths: HomePaths): string {
   const join = joinerFor(platform);
   if (platform === "win32") {
     const base = paths.localAppDataDir && paths.localAppDataDir.length > 0 ? paths.localAppDataDir : join(paths.home, "AppData", "Local");

@@ -9,3 +9,6 @@ node_modules/
 # never installs anything, so a lockfile for a dev-only screenshot tool is
 # weight every user carries for a tool no user runs.
 package-lock.json
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

@@ -69,6 +69,7 @@ import {
 } from '../../../../src/core/skill_decisions.ts'
 import type { FitResult, SkillCandidate, SkillCandidateDetail, WideResult } from '../../../../src/core/skill_decisions.ts'
 import { buildDecisionRecord, buildObservationRecord, serializeRecord } from '../../../../src/core/skill_measurement.ts'
+import { shouldSamplePrompt } from '../../../../src/core/mod_skills_sampling.ts'
 import { listToolInventory } from '../../../../src/core/tool_inventory.ts'
 import type { ToolSummary } from '../../../../src/core/tool_inventory.ts'
 import {
@@ -92,7 +93,7 @@ import { MOD_SKILLS_CATALOG } from '../../../../src/core/i18n_mod_skills.ts'
 import type { ModSkillsKey } from '../../../../src/core/i18n_mod_skills.ts'
 import { TOOLS_CATALOG } from '../../../../src/core/i18n_tools.ts'
 import type { ToolsKey } from '../../../../src/core/i18n_tools.ts'
-import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsSwitches } from './runtime.ts'
+import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, measurementDecisionsToday, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsSamplingConfig, resolveModSkillsSwitches } from './runtime.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -207,6 +208,24 @@ export default ((on, options) => {
     const skillOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
         const activeMode = await resolveActiveMode($)
+
+        // Sampling (src/core/mod_skills_sampling.ts): measurement mode's
+        // two Jev calls below (rank every skill + gate, then re-read the
+        // shortlist with their SKILL.md) exist purely for calibration data
+        // -- see src/core/mod_skills_readiness.ts for what "enough of that
+        // data" now means. Spending them on every prompt of every session,
+        // indefinitely, is the bug this gate fixes; active mode's own
+        // decision is functionally load-bearing (it is what gets injected),
+        // so it is never sampled -- only measurement mode is. An unsampled
+        // prompt does nothing at all: no Jev call, no record, exactly like
+        // today's missing-API-key branch below.
+        if (!activeMode) {
+          const samplingConfig = await resolveModSkillsSamplingConfig($)
+          const today = new Date(await $.clock.now()).toISOString().slice(0, 10)
+          const promptsSampledToday = await measurementDecisionsToday($, today)
+          if (!shouldSamplePrompt(samplingConfig, promptsSampledToday, Math.random())) return { block: null, status: null }
+        }
+
         if (inventoryCache === null) {
           const cwd = await $.session.cwd()
           const home = await resolveHomeDir($)

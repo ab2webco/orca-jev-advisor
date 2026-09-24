@@ -11,6 +11,8 @@ import { DEFAULT_LOCALE, parseLocaleFile } from '../../../../src/core/i18n.ts'
 import type { Locale } from '../../../../src/core/i18n.ts'
 import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig } from '../../../../src/core/mod_skills_config.ts'
 import type { ModSkillsSwitches } from '../../../../src/core/mod_skills_config.ts'
+import { DEFAULT_MOD_SKILLS_SAMPLING_CONFIG, parseModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
+import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
 import type { ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory.ts'
 import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
@@ -148,6 +150,67 @@ export async function resolveModSkillsSwitches($: EngineInterface): Promise<ModS
     return parseModSkillsConfig(await $.fs.read(path))
   } catch {
     return DEFAULT_MOD_SKILLS_SWITCHES
+  }
+}
+
+// ---------------------------------------------------------------------------
+// mod-skills' own sampling switch (src/core/mod_skills_sampling.ts) --
+// measurement mode's two Jev calls per prompt, sampled rather than spent on
+// every prompt of every session indefinitely. Read from
+// `<configDir>/mod-skills-sampling-config.json`, the same self-contained way
+// resolveModSkillsSwitches reads mod-skills-config.json: best-effort, and
+// falls back to DEFAULT_MOD_SKILLS_SAMPLING_CONFIG (sampling ON at a
+// reduced rate, never the old unsampled behaviour) on any missing file,
+// unreachable home, malformed JSON, or unexpected failure.
+// ---------------------------------------------------------------------------
+
+export async function resolveModSkillsSamplingConfig($: EngineInterface): Promise<ModSkillsSamplingConfig> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
+    const path = `${paths.configDir}/mod-skills-sampling-config.json`
+    if (!(await $.fs.exists(path))) return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
+    return parseModSkillsSamplingConfig(await $.fs.read(path))
+  } catch {
+    return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
+  }
+}
+
+/**
+ * How many measurement-mode decisions this mod's own log
+ * (mod-skills-measurements.jsonl, see appendMeasurement below) already
+ * holds for `today` (UTC date, e.g. "2026-09-24"), so the sampling
+ * config's daily cap means "today", not "ever" -- same date-prefix
+ * technique as gate-bash.ts's own samplesQueuedToday over the AB-benchmark
+ * queue, reused here rather than inventing a second counter file. Only
+ * `mode: "measurement"` decisions count: active mode never goes through the
+ * sampling gate this feeds. Best-effort: an unreadable or missing log, or a
+ * hand-edited/malformed line, reads as 0 (or is skipped) and never blocks a
+ * prompt.
+ */
+export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return 0
+    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
+    if (!(await $.fs.exists(path))) return 0
+    const content = await $.fs.read(path)
+    let count = 0
+    for (const line of content.split('\n')) {
+      if (line.length === 0) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (typeof parsed !== 'object' || parsed === null) continue
+      const record = parsed as Record<string, unknown>
+      if (record.type === 'decision' && record.mode === 'measurement' && typeof record.at === 'string' && record.at.startsWith(today)) count += 1
+    }
+    return count
+  } catch {
+    return 0
   }
 }
 

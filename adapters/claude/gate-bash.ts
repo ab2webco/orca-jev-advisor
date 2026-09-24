@@ -84,6 +84,7 @@ import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
+import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
@@ -113,6 +114,12 @@ const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
 const NO_KEY_WARNED_PATH = join(CACHE_DIR, 'gate-bash.no-key-warned.json')
+const UNREACHABLE_WARNED_PATH = join(CACHE_DIR, 'gate-bash.unreachable-warned.json')
+// How many consecutive `{ kind: 'none' }` outcomes (askJev could not reach
+// the backend at all) must happen before decideUnreachableNotice fires --
+// see src/core/gate_unreachable_notice.ts. A single dropped request is
+// ordinary network noise, not a signal the gate is disarmed.
+const UNREACHABLE_WARN_THRESHOLD = 3
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
@@ -412,6 +419,37 @@ function writeNoKeyWarned(warned: boolean): void {
   } catch {
     // A mark that can't be written is never a reason to block anything;
     // worst case, the notice repeats next time.
+  }
+}
+
+/**
+ * Same marker shape as readAuthWarned/readNoKeyWarned, for the THIRD way
+ * Jev goes quiet: a key that is present and accepted, but the backend never
+ * answers at all -- askJev's `{ kind: 'none' }` outcome (network error,
+ * timeout, or budget exceeded). This one persists a consecutive-failure
+ * COUNT rather than a boolean, because decideUnreachableNotice
+ * (src/core/gate_unreachable_notice.ts) only warns once a run of failures
+ * reaches UNREACHABLE_WARN_THRESHOLD, not on the very first one. A missing,
+ * unreadable or malformed marker reads as 0 -- same fail-open default every
+ * other marker in this file already uses.
+ */
+function readUnreachableFailures(): number {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(UNREACHABLE_WARNED_PATH, 'utf8'))
+    const count = typeof parsed === 'object' && parsed !== null ? (parsed as { consecutiveFailures?: unknown }).consecutiveFailures : undefined
+    return typeof count === 'number' && Number.isInteger(count) && count >= 0 ? count : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeUnreachableFailures(consecutiveFailures: number): void {
+  try {
+    mkdirSync(dirname(UNREACHABLE_WARNED_PATH), { recursive: true })
+    writeFileSync(UNREACHABLE_WARNED_PATH, JSON.stringify({ consecutiveFailures, at: Date.now() }), 'utf8')
+  } catch {
+    // A mark that can't be written is never a reason to block anything;
+    // worst case, the notice fires on a different call than it should.
   }
 }
 
@@ -835,7 +873,19 @@ async function main(): Promise<void> {
   const outcome = await askJev(apiKey as string, command, context, cwd)
   const jevLatencyMs = Date.now() - jevStartedAt
 
-  if (outcome.kind === 'none') passThrough()
+  if (outcome.kind === 'none') {
+    // The decision is a truthful 'allow' (failing open is correct and must
+    // stay); 'none' as the SOURCE is the truthful record of who decided --
+    // nobody did. Without this, the log kept filling with 'cache' and
+    // 'local-rule' rows and looked healthy while this half of the gate was
+    // silently judging nothing. Best-effort, same as every other record.
+    appendGateRecord(cwd, command, 'none', 'allow', null)
+    const previousUnreachableFailures = readUnreachableFailures()
+    const unreachableNotice = decideUnreachableNotice(false, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD)
+    if (unreachableNotice.nextConsecutiveFailures !== previousUnreachableFailures) writeUnreachableFailures(unreachableNotice.nextConsecutiveFailures)
+    if (unreachableNotice.shouldWarn) passThroughWithNotice(t('jevUnreachable'))
+    passThrough()
+  }
 
   if (outcome.kind === 'auth-rejected') {
     if (!readAuthWarned()) {
@@ -849,6 +899,11 @@ async function main(): Promise<void> {
   // still standing, the key works again now, and the next rejection
   // deserves a fresh warning.
   if (readAuthWarned()) writeAuthWarned(false)
+  // Same reset for the unreachable-backend counter: a successful Jev
+  // answer means the backend was reached, so a later run of failures earns
+  // a fresh warning instead of a stale marker keeping the gate silent.
+  const previousUnreachableFailures = readUnreachableFailures()
+  if (previousUnreachableFailures !== 0) writeUnreachableFailures(decideUnreachableNotice(true, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD).nextConsecutiveFailures)
 
   const resolved = outcome as Extract<JevOutcome, { kind: 'verdict' }>
   if (key !== null) {

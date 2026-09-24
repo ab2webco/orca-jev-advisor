@@ -3,7 +3,7 @@
   "id": "orca-jev-advisor",
   "publisher": "ab2web",
   "name": "Jev Advisor",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Jev (TypeSafe)-backed decision layer for judging proposed actions and keeping a status board across Orca worktrees.",
   "author": {
     "name": "Ab2Web"

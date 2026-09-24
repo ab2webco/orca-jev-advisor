@@ -48,7 +48,7 @@ import {
 } from '../../src/core/decisions.ts'
 import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, shouldSeedPolicies } from '../../src/core/policy_seed.ts'
-import { mergePolicySeeds } from '../../src/core/policy_seed_import.ts'
+import { applyPolicySeedChoices, mergePolicySeeds } from '../../src/core/policy_seed_import.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
 import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
 import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
@@ -493,22 +493,31 @@ const POLICY_SEED_PATH = join(PLUGIN_ROOT, 'seed', 'policies.json')
  *  sidecar that writes to the actual machine's CONFIG_DIR regardless of
  *  which storageHost is passed to it -- tests MUST override this, never let
  *  it run against a fake host, or it silently overwrites this developer's
- *  own real catalog.json/policies.json on disk.) */
+ *  own real catalog.json/policies.json on disk.)
+ *
+ *  `options.acceptedIds` is the only way a shared id already on this machine
+ *  can be replaced by the seed's version -- see policy_seed_import.ts's
+ *  applyPolicySeedChoices. Omitting it (the default, and the only behaviour
+ *  when this runs with no arguments) never replaces anything; the `differing`
+ *  list in the result is how a panel finds out there is something to offer
+ *  the developer in the first place. */
 async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
   const seedPath = options.seedPath ?? POLICY_SEED_PATH
   const mirror = options.mirror ?? mirrorCatalogAndPolicies
+  const acceptedIds = Array.isArray(options.acceptedIds) ? options.acceptedIds : []
   try {
     const { readFile } = await import('node:fs/promises')
     const raw = await readFile(seedPath, 'utf8')
     const seeds = parseSeedPolicies(JSON.parse(raw))
     const existingRaw = await storageHost.get('policies')
     const existing = Array.isArray(existingRaw) ? existingRaw : []
-    const { merged, added, skipped } = mergePolicySeeds(existing, seeds)
-    if (added > 0) {
-      await storageHost.set('policies', merged)
+    const { merged, added, skipped, differing } = mergePolicySeeds(existing, seeds)
+    const { result: finalPolicies, replaced } = applyPolicySeedChoices(merged, seeds, acceptedIds)
+    if (added > 0 || replaced > 0) {
+      await storageHost.set('policies', finalPolicies)
       await mirror(orca, storageHost)
     }
-    return { ok: true, added, skipped }
+    return { ok: true, added, skipped, differing, replaced }
   } catch (error) {
     orca.log(`policy seed import failed: ${String(error?.message ?? error).slice(0, 200)}`)
     return { ok: false, reason: 'seed-unavailable', detail: String(error?.message ?? error).slice(0, 300) }
@@ -1109,7 +1118,12 @@ async function attendCatalogRefreshRequest (orca, storageHost) {
 const POLICY_SEED_IMPORT_REQUEST_KEY = 'policySeedImportRequest'
 const POLICY_SEED_IMPORT_RESULT_KEY = 'policySeedImportResult'
 
-/** Attends one pending policy-seed-import request from the panel, if any. */
+/** Attends one pending policy-seed-import request from the panel, if any.
+ *  `request.acceptedIds`, when present, is the developer's explicit choice of
+ *  which reported `differing` ids to actually replace -- see
+ *  cmdImportPolicySeeds and policy_seed_import.ts's applyPolicySeedChoices.
+ *  A request with no `acceptedIds` (or an old panel state that never sent
+ *  one) only adds new ids, exactly like calling the command with none. */
 async function attendPolicySeedImportRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(POLICY_SEED_IMPORT_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
@@ -1120,14 +1134,15 @@ async function attendPolicySeedImportRequest (orca, storageHost, options = {}) {
   const age = Date.now() - Date.parse(request.at)
   if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
     await storageHost.set(POLICY_SEED_IMPORT_RESULT_KEY, {
-      id: request.id, at: new Date().toISOString(), ok: false, added: null, skipped: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+      id: request.id, at: new Date().toISOString(), ok: false, added: null, skipped: null, differing: null, replaced: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
     }).catch((err) => orca.log(`policy seed import result publish failed: ${err.message}`))
     return
   }
 
-  const result = await cmdImportPolicySeeds(orca, storageHost, options)
+  const acceptedIds = Array.isArray(request.acceptedIds) ? request.acceptedIds : options.acceptedIds
+  const result = await cmdImportPolicySeeds(orca, storageHost, { ...options, acceptedIds })
   await storageHost.set(POLICY_SEED_IMPORT_RESULT_KEY, {
-    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, skipped: result.skipped ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, skipped: result.skipped ?? null, differing: result.differing ?? null, replaced: result.replaced ?? null, reason: result.reason ?? null, detail: result.detail ?? null
   }).catch((err) => orca.log(`policy seed import result publish failed: ${err.message}`))
 }
 
