@@ -34,6 +34,15 @@
  *          0600 -- for adapters/claude/gate-bash.ts to read directly.
  *   policies-save  same as catalog-save, but for the team policies array,
  *          written to policies.json.
+ *   mod-skills-config-save  reads `{active, activeTools}` as JSON from
+ *          stdin and atomically writes it, normalized through the same pure
+ *          parser adapters/claude/mod-skills reads back with
+ *          (src/core/mod_skills_config.ts's parseModSkillsConfig -- a
+ *          wrong-typed or missing field is written as `false`, never
+ *          passed through raw), to mod-skills-config.json. Not secret.
+ *   mod-skills-config-read  reports the mirror's current `{active,
+ *          activeTools}` (both `false` when the file has never been
+ *          written), for main.mjs's publishModSkillsStatus.
  *
  * Always prints exactly one JSON line to stdout and nothing else -- no
  * console.error, no stray output that would corrupt the parent's parse.
@@ -48,6 +57,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
+import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
 
 // `os.homedir()` already resolves HOME vs USERPROFILE correctly per
 // platform; resolveConfigDir only decides the `.config`/`%APPDATA%`/XDG
@@ -68,6 +78,12 @@ const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 // adapters/claude/gate-bash.ts reads these two files directly.
 const CATALOG_PATH = join(CONFIG_DIR, 'catalog.json')
 const POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
+// mod-skills' `active`/`activeTools` switches -- see
+// src/core/mod_skills_config.ts's module note (T10,
+// odd/tasks/panel-worker-wakeup.md). Neither is sensitive, so it gets
+// ordinary file permissions like the catalog/policies files above, not the
+// key's forced 0600.
+const MOD_SKILLS_CONFIG_PATH = join(CONFIG_DIR, 'mod-skills-config.json')
 
 async function readStdin () {
   const chunks = []
@@ -236,6 +252,30 @@ async function policiesSave (raw) {
   return { ok: true }
 }
 
+/** Normalizes the payload through the same pure parser the hooks sandbox
+ *  reads back with, so what lands on disk is never a raw, unvalidated echo
+ *  of whatever the panel sent -- a wrong-typed or missing field is written
+ *  as `false`, exactly like a malformed file already reads as. */
+async function modSkillsConfigSave (raw) {
+  const normalized = parseModSkillsConfig(raw)
+  await writeAtomic(`${JSON.stringify(normalized, null, 2)}\n`, MOD_SKILLS_CONFIG_PATH, null)
+  return { ok: true }
+}
+
+/** Reports the mirror's current switches, both `false` when the file has
+ *  never been written or is unreadable as JSON -- same best-effort contract
+ *  as parseModSkillsConfig itself, never thrown. */
+async function modSkillsConfigRead () {
+  let content
+  try {
+    content = await readFile(MOD_SKILLS_CONFIG_PATH, 'utf8')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+    content = ''
+  }
+  return { ok: true, value: parseModSkillsConfig(content) }
+}
+
 async function main () {
   const mode = process.argv[2]
   let result
@@ -256,6 +296,10 @@ async function main () {
       result = await catalogSave((await readStdin()).trim())
     } else if (mode === 'policies-save') {
       result = await policiesSave((await readStdin()).trim())
+    } else if (mode === 'mod-skills-config-save') {
+      result = await modSkillsConfigSave((await readStdin()).trim())
+    } else if (mode === 'mod-skills-config-read') {
+      result = await modSkillsConfigRead()
     } else {
       result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
     }

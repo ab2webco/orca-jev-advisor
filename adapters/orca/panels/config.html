@@ -168,6 +168,17 @@
          color of its own. */
       .hint.warn { color: var(--destructive, var(--fb-destructive)); }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+      /* The global `input { width: 100% }` rule above is meant for text/number
+         fields; a checkbox stretched to the row's full width renders as one
+         giant, unusable box. Scoped here instead of touching that rule, which
+         every other input in this panel still relies on. */
+      .checkbox-row { display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; }
+      .checkbox-row:first-of-type { margin-top: 0; }
+      .checkbox-row input[type="checkbox"] { width: auto; flex: 0 0 auto; margin-top: 3px; }
+      .checkbox-row .checkbox-text { display: flex; flex-direction: column; gap: 2px; }
+      .checkbox-row .checkbox-label { font-size: 12px; font-weight: 500;
+                                       color: var(--foreground, var(--fb-foreground)); }
+      .checkbox-row .hint { margin-top: 0; }
     </style>
   </head>
   <body>
@@ -246,6 +257,29 @@
           <span class="said" id="policy-import-said"></span>
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
+      </section>
+
+      <section id="mod-skills-section">
+        <h2 data-i18n="modSkills.heading"></h2>
+        <p class="hint" data-i18n="modSkills.hint"></p>
+        <div class="checkbox-row">
+          <input id="mod-skills-active" type="checkbox" />
+          <div class="checkbox-text">
+            <span class="checkbox-label" data-i18n="modSkills.activeLabel"></span>
+            <span class="hint" data-i18n="modSkills.activeHint"></span>
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input id="mod-skills-active-tools" type="checkbox" />
+          <div class="checkbox-text">
+            <span class="checkbox-label" data-i18n="modSkills.activeToolsLabel"></span>
+            <span class="hint" data-i18n="modSkills.activeToolsHint"></span>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="save-mod-skills" type="button" data-i18n="modSkills.save"></button>
+          <span class="said" id="mod-skills-said"></span>
+        </div>
       </section>
 
       <section id="save-section">
@@ -355,6 +389,15 @@
           'policies.importing': 'Importando…',
           'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
           'policies.importNone': 'No hay políticas nuevas para agregar.',
+          'modSkills.heading': 'Selección de skill y herramienta (experimental)',
+          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Umbrales, más arriba). Déjalos apagados hasta que exista una semana de datos en modo medición para calibrarlos.',
+          'modSkills.activeLabel': 'Dejar que Jev elija la skill (modo activo)',
+          'modSkills.activeHint': 'Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.',
+          'modSkills.activeToolsLabel': 'Dejar que Jev elija la herramienta (modo activo)',
+          'modSkills.activeToolsHint': 'Apagado (hoy): solo registra qué herramienta habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: le sugiere al modelo qué herramienta usar en este turno, sin quitarle ni bloquearle ninguna herramienta.',
+          'modSkills.save': 'Guardar selección',
+          'modSkills.saving': 'Guardando…',
+          'modSkills.saved': 'Guardado.',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
@@ -464,6 +507,15 @@
           'policies.importing': 'Importing…',
           'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
           'policies.importNone': 'No new policies to add.',
+          'modSkills.heading': 'Skill & tool selection (experimental)',
+          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Thresholds, above). Leave both off until a week of measurement-mode data exists to calibrate them from.",
+          'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
+          'modSkills.activeHint': "Off (today): only records which skill Jev would have picked, in a local log; nothing the model sees changes. On: withholds the skill listing from the model and injects the winning skill's own instructions instead.",
+          'modSkills.activeToolsLabel': 'Let Jev choose the tool (active mode)',
+          'modSkills.activeToolsHint': 'Off (today): only records which tool Jev would have picked, in a local log; nothing the model sees changes. On: advises the model which tool to use for this turn, without removing or blocking any tool.',
+          'modSkills.save': 'Save selection settings',
+          'modSkills.saving': 'Saving…',
+          'modSkills.saved': 'Saved.',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
@@ -868,6 +920,39 @@
         })
       }
 
+      // ---------- skill/tool selection switches: request/result ---------------
+      // Same request/result pattern as locale/catalog-refresh/policy-import
+      // above: these two switches must reach a real file outside `storage`
+      // (adapters/claude/mod-skills/hooks/runtime.ts reads it directly, the
+      // same way it reads the locale mirror), so the panel cannot just write
+      // to `storage` the way the Thresholds/catalog/policies "Save
+      // configuration" button does.
+      var MOD_SKILLS_CONFIG_REQUEST_KEY = 'modSkillsConfigRequest'
+      var MOD_SKILLS_CONFIG_RESULT_KEY = 'modSkillsConfigResult'
+      var MOD_SKILLS_STATUS_KEY = 'modSkillsStatus'
+
+      function waitForModSkillsConfigResult (requestId, deadline) {
+        return read(MOD_SKILLS_CONFIG_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForModSkillsConfigResult(requestId, deadline) })
+        })
+      }
+
+      function sendModSkillsConfigRequest (active, activeTools) {
+        var requestId = 'mod-skills-config-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), active: active, activeTools: activeTools }
+        signalPanelOpen()
+        return write(MOD_SKILLS_CONFIG_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForModSkillsConfigResult(requestId, Date.now() + 20000)
+        })
+      }
+
       // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
@@ -1229,6 +1314,30 @@
         })
       })
 
+      // ---------- skill/tool selection switches --------------------------------
+
+      /** Paints the two checkboxes from the worker's MOD_SKILLS_STATUS_KEY
+       *  mirror. `status` is `null`/`undefined` before the first real read
+       *  (or if the worker has never published it), which leaves both
+       *  checkboxes unchecked -- the same "off" the file itself defaults to
+       *  when it has never been written. */
+      function fillModSkillsStatus (status) {
+        el('mod-skills-active').checked = !!(status && status.active === true)
+        el('mod-skills-active-tools').checked = !!(status && status.activeTools === true)
+      }
+
+      var modSkillsSaidEl = el('mod-skills-said')
+      el('save-mod-skills').addEventListener('click', function () {
+        said(modSkillsSaidEl, t('modSkills.saving'))
+        var active = el('mod-skills-active').checked
+        var activeTools = el('mod-skills-active-tools').checked
+        sendModSkillsConfigRequest(active, activeTools).then(function () {
+          said(modSkillsSaidEl, t('modSkills.saved'))
+        }).catch(function (error) {
+          said(modSkillsSaidEl, errorText(error), true)
+        })
+      })
+
       // ---------- umbrales --------------------------------------------------
 
       // Mirrors main.mjs's GATE_DEFAULTS_KEY (see that file's own module
@@ -1505,6 +1614,7 @@
 
       function load () {
         fillThresholds({})
+        fillModSkillsStatus(null)
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
@@ -1518,6 +1628,7 @@
             read('catalog', false),
             read('policies', false),
             read(GATE_DEFAULTS_KEY, false),
+            read(MOD_SKILLS_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus()
           ])
@@ -1528,6 +1639,7 @@
           ;((results[1] && results[1].destinations) || []).forEach(addCatalogRow)
           policiesListEl.innerHTML = ''
           ;(results[2] || []).forEach(addPolicyRow)
+          fillModSkillsStatus(results[4])
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
         })

@@ -123,7 +123,7 @@ function sidecarEnv (extra = {}) {
   return env
 }
 
-const SECRET_MIRROR_READ_ONLY_MODES = new Set(['read', 'locale-read', 'stat'])
+const SECRET_MIRROR_READ_ONLY_MODES = new Set(['read', 'locale-read', 'stat', 'mod-skills-config-read'])
 
 function runSecretMirrorScript (mode, stdin, extraArgs = []) {
   return new Promise((resolve) => {
@@ -871,6 +871,79 @@ async function attendLocaleRequest (orca, storageHost) {
 }
 
 // ---------------------------------------------------------------------------
+// Skill/tool selection switches -- mod-skills' `active`/`activeTools`
+// (adapters/claude/mod-skills/hooks/index.ts) used to read only Claude
+// Code's `options`, which nothing in this repo populates (no `userConfig`
+// declared anywhere -- see src/core/mod_skills_config.ts's own module note),
+// so both switches were permanently unreachable (T10,
+// odd/tasks/panel-worker-wakeup.md). Same request/result/TTL shape and same
+// mirror sidecar as the locale channel above: the config panel cannot write
+// a file itself, so it leaves a request here and this worker mirrors it to
+// `<configDir>/mod-skills-config.json`, which the hooks sandbox reads
+// directly (it has no channel into `storage`, same reason as the locale and
+// secret-key files).
+// ---------------------------------------------------------------------------
+
+const MOD_SKILLS_CONFIG_REQUEST_KEY = 'modSkillsConfigRequest'
+const MOD_SKILLS_CONFIG_RESULT_KEY = 'modSkillsConfigResult'
+const MOD_SKILLS_STATUS_KEY = 'modSkillsStatus'
+
+/** Reads the mirror file's current switches, defaulting to both off on any
+ *  failure or malformed value -- never thrown, matching the file's own
+ *  best-effort contract (src/core/mod_skills_config.ts). `options.mirror`
+ *  lets tests substitute a fake in place of the real sidecar; production
+ *  passes none and gets the real runSecretMirrorScript. */
+async function readModSkillsConfigMirror (options = {}) {
+  const mirror = options.mirror ?? runSecretMirrorScript
+  return mirror('mod-skills-config-read')
+}
+
+/** Publishes the mirror's current switches for the panel to render on load
+ *  -- the panel has no way to read the file itself. Called at activation and
+ *  again after every successful save, same one-shot-plus-refresh shape as
+ *  publishLocaleStatus. */
+async function publishModSkillsStatus (orca, storageHost, options = {}) {
+  const result = await readModSkillsConfigMirror(options)
+  const value = result.ok && isRecord(result.value) &&
+    typeof result.value.active === 'boolean' && typeof result.value.activeTools === 'boolean'
+    ? { active: result.value.active, activeTools: result.value.activeTools }
+    : { active: false, activeTools: false }
+  await storageHost.set(MOD_SKILLS_STATUS_KEY, { ...value, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`mod-skills status publish failed: ${error.message}`))
+}
+
+/** Attends one pending switch-change request from the panel, if any. */
+async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(MOD_SKILLS_CONFIG_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(MOD_SKILLS_CONFIG_REQUEST_KEY).catch((error) =>
+    orca.log(`mod-skills config request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(MOD_SKILLS_CONFIG_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`mod-skills config result publish failed: ${err.message}`))
+    return
+  }
+
+  const active = request.active === true
+  const activeTools = request.activeTools === true
+  const mirror = options.mirror ?? runSecretMirrorScript
+  const result = await mirror('mod-skills-config-save', JSON.stringify({ active, activeTools }))
+  if (!result.ok) {
+    orca.log(`mod-skills config mirror (save) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+  }
+
+  await storageHost.set(MOD_SKILLS_CONFIG_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`mod-skills config result publish failed: ${err.message}`))
+
+  await publishModSkillsStatus(orca, storageHost, options)
+}
+
+// ---------------------------------------------------------------------------
 // Catalog/policies mirror trigger -- unlike the secret/Claude-integration/
 // locale channels above, nothing in the UI waits on this: the panel already
 // writes the catalog and policies straight to storage on save, so this is
@@ -1290,6 +1363,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`claude integration request handling failed: ${error.message}`))
       .then(() => attendLocaleRequest(orca, storageHost))
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
+      .then(() => attendModSkillsConfigRequest(orca, storageHost))
+      .catch((error) => orca.log(`mod-skills config request handling failed: ${error.message}`))
       .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => attendCatalogRefreshRequest(orca, storageHost))
@@ -1348,6 +1423,8 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial claude integration install failed: ${error.message}`))
   publishLocaleStatus(orca, storageHost)
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
+  publishModSkillsStatus(orca, storageHost)
+    .catch((error) => orca.log(`initial mod-skills status failed: ${error.message}`))
   publishWorkerHeartbeat(orca, storageHost)
   publishGateDefaults(orca, storageHost)
   runSecretPoll()
@@ -1395,6 +1472,7 @@ export {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendLocaleRequest,
+  attendModSkillsConfigRequest,
   attendPolicySeedImportRequest,
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
@@ -1405,8 +1483,11 @@ export {
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
+  MOD_SKILLS_CONFIG_RESULT_KEY,
+  MOD_SKILLS_STATUS_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
   publishGateDefaults,
+  publishModSkillsStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,

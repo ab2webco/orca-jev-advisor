@@ -11,6 +11,7 @@ import {
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendLocaleRequest,
+  attendModSkillsConfigRequest,
   attendPolicySeedImportRequest,
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
@@ -21,8 +22,11 @@ import {
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
   LOCALE_RESULT_KEY,
+  MOD_SKILLS_CONFIG_RESULT_KEY,
+  MOD_SKILLS_STATUS_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
   publishGateDefaults,
+  publishModSkillsStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
@@ -170,6 +174,112 @@ test('attendCatalogRefreshRequest: an expired request publishes reason "expired"
   assert.equal(result.id, 'cr-1')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+// ---------------------------------------------------------------------------
+// T10 -- the skills mod's `active`/`activeTools` switches were wired only to
+// Claude Code's `options`, which this repo never populates (no `userConfig`
+// declared anywhere), so both were permanently unreachable. This channel
+// mirrors them to the plugin's own config file, the same request/result/TTL
+// shape as locale/catalog-refresh/policy-import above. The real save/read
+// both go through write-secret-mirror.mjs, a real child process that writes
+// to the ACTUAL machine's CONFIG_DIR -- exactly the hazard T9 already hit --
+// so every test that can reach a successful save/read MUST inject a fake
+// `options.mirror`, never let the real sidecar run. See
+// odd/tasks/panel-worker-wakeup.md.
+// ---------------------------------------------------------------------------
+
+test('attendModSkillsConfigRequest: an expired request publishes reason "expired"', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modSkillsConfigRequest: { id: 'msc-1', at: TEN_MINUTES_AGO, active: true, activeTools: true }
+  })
+  await attendModSkillsConfigRequest(orca, storageHost)
+  const result = await storageHost.get(MOD_SKILLS_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'msc-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+  // Expiry must never reach the mirror -- no status republish either.
+  assert.equal(await storageHost.get(MOD_SKILLS_STATUS_KEY), null)
+})
+
+test('attendModSkillsConfigRequest: a fresh request saves through the mirror and publishes an ok result', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modSkillsConfigRequest: { id: 'msc-2', at: new Date().toISOString(), active: true, activeTools: false }
+  })
+  const saved = { current: null }
+  const mirror = async (mode, stdin) => {
+    if (mode === 'mod-skills-config-save') {
+      saved.current = JSON.parse(stdin)
+      return { ok: true }
+    }
+    if (mode === 'mod-skills-config-read') {
+      return { ok: true, value: saved.current }
+    }
+    throw new Error(`unexpected mode: ${mode}`)
+  }
+  await attendModSkillsConfigRequest(orca, storageHost, { mirror })
+  const result = await storageHost.get(MOD_SKILLS_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'msc-2')
+  assert.equal(result.ok, true)
+  assert.deepEqual(saved.current, { active: true, activeTools: false })
+  // The status mirror is republished from what was actually saved, so the
+  // panel's next read reflects it without a second round trip.
+  const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
+  assert.equal(status.active, true)
+  assert.equal(status.activeTools, false)
+  assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('attendModSkillsConfigRequest: a non-boolean field in the request is treated as false, never crashes', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modSkillsConfigRequest: { id: 'msc-3', at: new Date().toISOString(), active: 'yes', activeTools: 1 }
+  })
+  const saved = { current: null }
+  const mirror = async (mode, stdin) => {
+    if (mode === 'mod-skills-config-save') { saved.current = JSON.parse(stdin); return { ok: true } }
+    return { ok: true, value: saved.current }
+  }
+  await attendModSkillsConfigRequest(orca, storageHost, { mirror })
+  assert.deepEqual(saved.current, { active: false, activeTools: false })
+})
+
+test('attendModSkillsConfigRequest: a mirror failure is reported, not silently swallowed as success', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modSkillsConfigRequest: { id: 'msc-4', at: new Date().toISOString(), active: true, activeTools: true }
+  })
+  const mirror = async (mode) => {
+    if (mode === 'mod-skills-config-save') return { ok: false, reason: 'exception', detail: 'disk is full' }
+    return { ok: false, reason: 'exception', detail: 'disk is full' }
+  }
+  await attendModSkillsConfigRequest(orca, storageHost, { mirror })
+  const result = await storageHost.get(MOD_SKILLS_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'msc-4')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'exception')
+})
+
+test('publishModSkillsStatus: a failed mirror read normalizes to both switches off, never throws', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const mirror = async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' })
+  await publishModSkillsStatus(orca, storageHost, { mirror })
+  const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
+  assert.equal(status.active, false)
+  assert.equal(status.activeTools, false)
+})
+
+test('publishModSkillsStatus: a malformed mirror value (wrong types) normalizes to both switches off', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const mirror = async () => ({ ok: true, value: { active: 'yes', activeTools: null } })
+  await publishModSkillsStatus(orca, storageHost, { mirror })
+  const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
+  assert.equal(status.active, false)
+  assert.equal(status.activeTools, false)
 })
 
 // ---------------------------------------------------------------------------

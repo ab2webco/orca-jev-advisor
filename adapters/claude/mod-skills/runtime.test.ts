@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeHomePaths } from "./hooks/runtime.ts";
+import { computeHomePaths, resolveModSkillsSwitches } from "./hooks/runtime.ts";
 
 test("returns null when neither HOME nor USERPROFILE is set", () => {
   assert.equal(computeHomePaths({}), null);
@@ -123,4 +123,80 @@ test('agrees with src/core/paths.ts on every platform shape', async () => {
     assert.equal(mine?.configDir, theirs.configDir, `${c.name}: config dir diverged`);
     assert.equal(mine?.cacheDir, theirs.cacheDir, `${c.name}: cache dir diverged`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// resolveModSkillsSwitches -- T10 (odd/tasks/panel-worker-wakeup.md). Reads
+// <configDir>/mod-skills-config.json the same best-effort way resolveLocale
+// reads the locale mirror: missing file, unreachable home, or a read that
+// throws all fall back to both switches off, never a thrown error.
+//
+// EngineInterface is a large host-provided type; this fake only implements
+// the two namespaces resolveModSkillsSwitches (via resolveHomePaths) actually
+// touches (`env.get`, `fs.exists`, `fs.read`) and is cast through `unknown`,
+// same shape as main.test.mjs's fakeOrca/fakeStorageHost fakes elsewhere in
+// this project -- not `any`, an explicit narrow substitute for the one real
+// interface.
+// ---------------------------------------------------------------------------
+
+interface FakeEngine {
+  env: { get: (name: string) => Promise<string | undefined> };
+  fs: { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string> };
+}
+
+function fakeEngine(env: Readonly<Record<string, string>>, files: Readonly<Record<string, string>>): FakeEngine {
+  return {
+    env: { get: async (name: string) => env[name] },
+    fs: {
+      exists: async (path: string) => Object.prototype.hasOwnProperty.call(files, path),
+      read: async (path: string) => {
+        if (!Object.prototype.hasOwnProperty.call(files, path)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return files[path] as string;
+      },
+    },
+  };
+}
+
+test("resolveModSkillsSwitches: no home resolvable falls back to both off", async () => {
+  const engine = fakeEngine({}, {});
+  const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
+  assert.deepEqual(result, { active: false, activeTools: false });
+});
+
+test("resolveModSkillsSwitches: the file has never been written -- falls back to both off", async () => {
+  const engine = fakeEngine({ HOME: "/home/dev" }, {});
+  const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
+  assert.deepEqual(result, { active: false, activeTools: false });
+});
+
+test("resolveModSkillsSwitches: reads both switches from a real file", async () => {
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { "/home/dev/.config/orca-supervisor/mod-skills-config.json": '{"active":true,"activeTools":true}' },
+  );
+  const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
+  assert.deepEqual(result, { active: true, activeTools: true });
+});
+
+test("resolveModSkillsSwitches: malformed JSON on disk falls back to both off, never throws", async () => {
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { "/home/dev/.config/orca-supervisor/mod-skills-config.json": "{not json" },
+  );
+  const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
+  assert.deepEqual(result, { active: false, activeTools: false });
+});
+
+test("resolveModSkillsSwitches: a read that throws falls back to both off, never propagates", async () => {
+  const engine: FakeEngine = {
+    env: { get: async (name: string) => (name === "HOME" ? "/home/dev" : undefined) },
+    fs: {
+      exists: async () => true,
+      read: async () => {
+        throw new Error("disk on fire");
+      },
+    },
+  };
+  const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
+  assert.deepEqual(result, { active: false, activeTools: false });
 });

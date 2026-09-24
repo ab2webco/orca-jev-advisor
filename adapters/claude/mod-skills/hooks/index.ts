@@ -48,7 +48,7 @@
  * injects the winner as advice in a `<tool_relevance>` block -- it never
  * blocks, rewrites or removes a tool call, and fails open the same way.
  */
-import type { Register } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
 import { callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
 import type { OrcaContext } from '../../../../src/core/orca_context.ts'
@@ -92,7 +92,7 @@ import { MOD_SKILLS_CATALOG } from '../../../../src/core/i18n_mod_skills.ts'
 import type { ModSkillsKey } from '../../../../src/core/i18n_mod_skills.ts'
 import { TOOLS_CATALOG } from '../../../../src/core/i18n_tools.ts'
 import type { ToolsKey } from '../../../../src/core/i18n_tools.ts'
-import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, resolveApiKey, resolveHomeDir, resolveLocale } from './runtime.ts'
+import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsSwitches } from './runtime.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -114,7 +114,32 @@ export default ((on, options) => {
   // Off by default: see the feature document's acceptance criteria --
   // active mode does not turn on until a week of measurement-mode data
   // exists to set these thresholds from.
-  const activeMode = flag('active', false)
+  //
+  // `options.active`/`options.activeTools` only ever carry a value once a
+  // manifest declares `userConfig` (see claude-code.d.ts's own note on
+  // `options`) -- nothing in this repo does, so `options` is always `{}`
+  // and these two were permanently unreachable (T10,
+  // odd/tasks/panel-worker-wakeup.md). `resolveActiveMode`/
+  // `resolveActiveToolMode` below add a second, actually-reachable source:
+  // the plugin's own config file (src/core/mod_skills_config.ts), read
+  // once per session and cached in `modSkillsSwitchesCache`. `options`
+  // still wins whenever it genuinely carries a boolean, so nothing
+  // regresses the day `userConfig` starts being populated for real.
+  const optionActive = typeof options.active === 'boolean' ? (options.active as boolean) : null
+  const optionActiveTools = typeof options.activeTools === 'boolean' ? (options.activeTools as boolean) : null
+  let modSkillsSwitchesCache: { active: boolean; activeTools: boolean } | null = null
+
+  const resolveActiveMode = async ($: EngineInterface): Promise<boolean> => {
+    if (optionActive !== null) return optionActive
+    if (modSkillsSwitchesCache === null) modSkillsSwitchesCache = await resolveModSkillsSwitches($)
+    return modSkillsSwitchesCache.active
+  }
+  const resolveActiveToolMode = async ($: EngineInterface): Promise<boolean> => {
+    if (optionActiveTools !== null) return optionActiveTools
+    if (modSkillsSwitchesCache === null) modSkillsSwitchesCache = await resolveModSkillsSwitches($)
+    return modSkillsSwitchesCache.activeTools
+  }
+
   const budgetMs = number('budgetMs', DEFAULT_BUDGET_MS)
   const gateThreshold = number('gateThreshold', DEFAULT_GATE_THRESHOLD)
   const fitsThreshold = number('fitsThreshold', DEFAULT_FITS_THRESHOLD)
@@ -122,9 +147,9 @@ export default ((on, options) => {
   const excerptChars = Math.max(0, Math.round(number('excerptChars', DEFAULT_EXCERPT_CHARS)))
 
   // Tool selection's own options, independent of the skill ones above: a
-  // separate switch (`activeTools`, off by default, same reasoning), its
-  // own budget/thresholds, and its own shortlist/description caps.
-  const activeToolMode = flag('activeTools', false)
+  // separate switch (`activeTools`, off by default, same reasoning and same
+  // resolveActiveToolMode fallback above), its own budget/thresholds, and
+  // its own shortlist/description caps.
   const toolBudgetMs = number('toolBudgetMs', DEFAULT_BUDGET_MS)
   const toolGateThreshold = number('toolGateThreshold', TOOL_DEFAULT_GATE_THRESHOLD)
   const toolFitsThreshold = number('toolFitsThreshold', TOOL_DEFAULT_FITS_THRESHOLD)
@@ -159,7 +184,9 @@ export default ((on, options) => {
     // attachment. Active mode only withholds for the main conversation:
     // a subagent's own listing is left alone, since nothing here suggests
     // for a subagent (prompt.submit never fires for one).
-    if (!activeMode || e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined) return next(e)
+    const activeMode = await resolveActiveMode($)
+    if (!activeMode) return next(e)
     return { text: null }
   })
 
@@ -179,6 +206,7 @@ export default ((on, options) => {
     // too -- absent whenever the branch never reached a decision).
     const skillOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
+        const activeMode = await resolveActiveMode($)
         if (inventoryCache === null) {
           const cwd = await $.session.cwd()
           const home = await resolveHomeDir($)
@@ -302,6 +330,7 @@ export default ((on, options) => {
 
     const toolOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
+        const activeToolMode = await resolveActiveToolMode($)
         if (toolInventoryCache === null) {
           toolInventoryCache = await listToolInventory(makeToolLister($))
         }
