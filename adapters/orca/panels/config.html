@@ -350,6 +350,7 @@
           // sobre un mod que nunca corrió ni una sola vez (P6,
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Mod de skills: no instalado. Usa «Configurar», abajo, para instalarlo.',
+          'integration.modOnButMissing': 'Mod de skills: los interruptores de abajo están encendidos, pero el mod no está en el disco — ahora mismo no manda nada. Pulsa «Configurar», abajo, para reinstalarlo; si sigue igual, ejecuta «Advisor: Check configuration» desde la paleta de comandos de Orca una vez, que es lo que despierta al proceso del plugin.',
           'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code -- una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
           'integration.modRecording': 'Mod de skills: registrando. {{count}} prompts desde {{since}}, el más reciente {{last}}. Esto es modo medición: todavía nada de lo que ve el modelo cambia.',
           'integration.setup': 'Configurar',
@@ -503,6 +504,7 @@
           // mod that had never run a single time (P6,
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Skills mod: not installed. Use "Set up", below, to install it.',
+          'integration.modOnButMissing': 'Skills mod: the switches below are on, but the mod is not on disk — right now they command nothing. Press "Set up", below, to reinstall it; if it stays this way, run "Advisor: Check configuration" once from Orca\'s command palette, which is what wakes the plugin\'s process.',
           'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS -- an already-open session will not pick it up. Start a new one to begin recording.',
           'integration.modRecording': 'Skills mod: recording. {{count}} prompts since {{since}}, most recently {{last}}. This is measurement mode: nothing the model sees changes yet.',
           'integration.setup': 'Set up',
@@ -1756,8 +1758,19 @@
        *                             installed but never run.
        *   recording               -- N prompts, since when, most recent.
        */
-      function modSkillsLine (modCopy, measurements) {
-        if (!modCopy || !modCopy.exists) return t('integration.modNotInstalled')
+      function modSkillsLine (modCopy, measurements, modSkillsStatus) {
+        // The switches and the copy on disk are two separate truths, and
+        // until now nobody crossed them: after an update that did not
+        // reapply the copy, this panel would say "not installed" in one
+        // place while the switches above it sat ON in another -- switches
+        // commanding a mod that is not there. Observed in the field with
+        // `modCopy exists:false` across all four config roots while
+        // mod-skills-config.json read `active:true, activeTools:true`, and
+        // mod-skills-measurements.jsonl had never been created at all.
+        var switchedOn = !!(modSkillsStatus && (modSkillsStatus.active === true || modSkillsStatus.activeTools === true))
+        if (!modCopy || !modCopy.exists) {
+          return switchedOn ? t('integration.modOnButMissing') : t('integration.modNotInstalled')
+        }
         var mod = measurements && measurements.ok ? measurements.modSkills : null
         var count = mod ? mod.totalDecisions || 0 : 0
         if (!mod || count === 0) return t('integration.modNeverRun')
@@ -1780,7 +1793,7 @@
       // is running -- a fixed 20s guess used to stand in for this and could
       // say "not running" about a worker that was, in fact, running (see T4
       // in odd/tasks/panel-worker-wakeup.md).
-      function renderClaudeIntegrationStatus (status, heartbeat, measurements) {
+      function renderClaudeIntegrationStatus (status, heartbeat, measurements, modSkillsStatus) {
         lastClaudeIntegrationStatus = status
         claudeIntegrationStatusEl.innerHTML = ''
         if (status === null) {
@@ -1820,7 +1833,7 @@
           : t('integration.mirrorUnknown')
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
-        claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements)))
+        claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements, modSkillsStatus)))
       }
 
       var MEASUREMENTS_STATUS_KEY = 'measurementsSummary'
@@ -1829,9 +1842,10 @@
         return Promise.all([
           read(CLAUDE_INTEGRATION_STATUS_KEY, false),
           read(WORKER_HEARTBEAT_KEY, false),
-          read(MEASUREMENTS_STATUS_KEY, false)
+          read(MEASUREMENTS_STATUS_KEY, false),
+          read(MOD_SKILLS_STATUS_KEY, false)
         ]).then(function (results) {
-          renderClaudeIntegrationStatus(results[0], results[1], results[2])
+          renderClaudeIntegrationStatus(results[0], results[1], results[2], results[3])
         })
       }
 
