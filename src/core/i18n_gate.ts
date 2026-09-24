@@ -45,7 +45,9 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "verb.blocks": "bloquea",
     "verb.asks": "pregunta",
     localRule: "regla local — {{why}}",
-    localRuleDeny: "el agente tiene esto bloqueado — {{why}}. Vos no: podés correr el comando vos mismo en una terminal si de verdad querés hacerlo. Este interruptor se puede apagar (baja a preguntar, nunca a permitir) en el panel de ajustes del plugin en Orca.",
+    // Deliberately identical to the English entry: this string is read by the
+    // model, not by a person. See the note on the English one.
+    localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
@@ -73,7 +75,16 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "verb.blocks": "blocks",
     "verb.asks": "asks",
     localRule: "local rule — {{why}}",
-    localRuleDeny: "the agent has this blocked — {{why}}. You don't: you can still run the command yourself in a terminal if you really mean to. This switch can be turned off (it downgrades to asking, never to allowing) in the plugin's settings panel in Orca.",
+    // English in BOTH catalogs, on purpose. A `deny` reason is delivered to
+    // the model, not to a person -- Claude Code's contract: "Refuses the call;
+    // the model receives the text as the reason". Translating it makes the one
+    // reader it has understand it less well. Everything a PERSON reads stays
+    // translated; this does not.
+    //
+    // It is written as an instruction rather than an explanation, because a
+    // model that only learns "this was blocked" tends to try the same effect
+    // by another route, which is the outcome the rule exists to prevent.
+    localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "not judging: the key was rejected ({{status}})",
