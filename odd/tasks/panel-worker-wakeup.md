@@ -89,7 +89,7 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
       and no way to adopt the shared baseline. Add an import action, through
       the same request/poll path the other panel actions use.
 
-- [ ] T10 The skills mod's `active` and `activeTools` switches cannot be set by
+- [x] T10 The skills mod's `active` and `activeTools` switches cannot be set by
       anyone. `hooks/index.ts:117` reads them from the `options` object, and
       the contract (`claude-code.d.ts:6125-6135`) says `options` holds only the
       fields a manifest declares under `userConfig`, stored in
@@ -326,3 +326,97 @@ TDD: strict (from CLAUDE.md). Runner: `node --test --experimental-strip-types`.
   `mirrorCatalogAndPolicies`), and every test that can add a policy passes a
   `noopMirror`. Re-ran the full suite after the fix and confirmed both real
   files' mtimes are unchanged.
+
+- T10 done: `src/core/mod_skills_config.ts` (new, pure, 9 tests) is
+  `active`/`activeTools`'s new home -- `parseModSkillsConfig(content)`
+  reads `{active, activeTools}` from a JSON string, defaulting each field
+  to `false` independently on a missing file (`""`), malformed JSON, a
+  non-object payload, or a wrong-typed field; nothing about it ever throws.
+  `adapters/claude/mod-skills/hooks/runtime.ts` gained
+  `resolveModSkillsSwitches($)`, reading
+  `<configDir>/mod-skills-config.json` the same self-contained way
+  (no node:fs/node:path) `resolveLocale` already reads the locale mirror --
+  5 new tests in `adapters/claude/mod-skills/runtime.test.ts` against a
+  narrow fake `EngineInterface` (`env.get`/`fs.exists`/`fs.read` only, cast
+  through `unknown`, not `any`) cover: no resolvable home, file never
+  written, a real file, malformed JSON on disk, and a read that throws --
+  all five fall back to both switches off. `hooks/index.ts` replaced the
+  dead `flag('active', false)`/`flag('activeTools', false)` reads with
+  `resolveActiveMode($)`/`resolveActiveToolMode($)`: `options.active`/
+  `options.activeTools` still win whenever `typeof` is actually `'boolean'`
+  (so nothing regresses the day a manifest starts declaring `userConfig`
+  for real), otherwise they fall back to `resolveModSkillsSwitches($)`,
+  read once per session and cached in `modSkillsSwitchesCache` (mirrors
+  `inventoryCache`/`orcaContextCache`/`localeCache`'s existing shape).
+  Called from both `prompt.attachment` (skill_listing withhold) and each of
+  `prompt.submit`'s two isolated closures (skill decision, tool decision),
+  since each needed its own local `activeMode`/`activeToolMode` now that
+  resolving them is async.
+
+  The write side: `adapters/orca/write-secret-mirror.mjs` gained
+  `mod-skills-config-save`/`mod-skills-config-read` modes, both routed
+  through `parseModSkillsConfig` too (`save` normalizes whatever the panel
+  sent before writing -- a wrong-typed field is written as `false`, never
+  echoed raw; `read` returns `{active:false, activeTools:false}` on a
+  missing file, same as the pure parser's own default), writing
+  `mod-skills-config.json` next to `catalog.json`/`policies.json` with
+  ordinary permissions (not secret). `adapters/orca/main.mjs` gained the
+  same request/result/TTL channel shape as the locale channel:
+  `MOD_SKILLS_CONFIG_REQUEST_KEY`/`_RESULT_KEY`, `attendModSkillsConfigRequest`
+  (wired into the poll loop right after `attendLocaleRequest`), and
+  `MOD_SKILLS_STATUS_KEY`/`publishModSkillsStatus` (published at activation
+  and re-published after every successful save, mirroring
+  `publishLocaleStatus`'s shape) for the panel to read the current
+  switches on load without a round trip. Both `attendModSkillsConfigRequest`
+  and `publishModSkillsStatus` take an `options.mirror` override, same
+  reason and same idiom as T9's `cmdImportPolicySeeds` -- the real mirror
+  spawns a real child process against this developer's actual
+  `~/.config/orca-supervisor`, so every test that reaches the save/read
+  path injects a fake mirror. 6 new tests in `adapters/orca/main.test.mjs`:
+  expired request, a fresh request saving through an injected mirror and
+  republishing status, a non-boolean field in the request normalizing to
+  `false` rather than crashing, a mirror failure reported (not swallowed as
+  success), and two `publishModSkillsStatus` tests for a failed read and a
+  malformed value both normalizing to both-off.
+
+  The panel: `adapters/orca/panels/config.html` gained a "Skill & tool
+  selection (experimental)" section, alongside Thresholds/catalog/policies
+  as asked, with two checkboxes (`mod-skills-active`,
+  `mod-skills-active-tools`, both unchecked by default in the markup
+  itself) and its own "Save selection settings" button using the same
+  request/poll pattern as "Refresh from Orca"/"Import baseline policies"
+  (`sendModSkillsConfigRequest`/`waitForModSkillsConfigResult`). `load()`
+  now also reads `MOD_SKILLS_STATUS_KEY` and paints the checkboxes from it
+  (`fillModSkillsStatus`); a `null`/missing status (fresh install, worker
+  never ran) leaves both unchecked, same as the file's own default. Added a
+  small scoped `.checkbox-row` CSS block, because the panel's existing
+  `input { width: 100% }` rule would otherwise stretch a checkbox into a
+  full-width box -- no other input's styling was touched. Both ES and EN
+  catalogs got the same nine `modSkills.*` keys, including the honesty
+  requirement: the hint text says plainly that both switches stay off
+  until a week of measurement-mode data exists to calibrate their
+  thresholds from (naming the gate's consequenceCeiling, T7, as the
+  precedent for what happens when a threshold ships unmeasured), and each
+  switch's own hint states exactly what turning it on does today (nothing
+  observable, only a JSONL log line) versus once active (skill: withholds
+  the listing, injects the winner; tool: advises the model without
+  removing or blocking any tool) -- no new `ERROR_REASON_KEYS` entry was
+  needed since `mod-skills-config-save` never fails on bad input (it
+  normalizes instead) and every other failure mode it can hit
+  (`no-json`/`launch-failed`/`exception`) was already mapped.
+
+  `adapters/claude/gate-bash.ts` was not touched -- T10 never needed it.
+  Verified: full suite green (302 tests, up from 282: +9 in
+  `mod_skills_config.test.ts`, +5 in `runtime.test.ts`, +6 in
+  `main.test.mjs`), config.html's inline `<script>` extracted and
+  `node --check`'d clean, `write-secret-mirror.mjs` syntax-checked with
+  `node --check` (its two new modes were not exercised by spawning the
+  real sidecar -- deliberately, to keep this developer's real
+  `~/.config/orca-supervisor` untouched -- so they rest on code review,
+  the syntax check, and the already-tested shared `parseModSkillsConfig`
+  they both call through). `shasum`s of
+  `~/.config/orca-supervisor/{policies,catalog}.json` and
+  `~/.claude/settings.json` confirmed unchanged before and after every
+  test run. Not verified: the panel's visual rendering -- no screenshot was
+  taken for this task (T6/screenshots were a separate, already-closed
+  task), so the checkbox layout and copy have been reviewed in source only.

@@ -57,6 +57,10 @@ const READY = {
   // Mirrors GATE_CONSEQUENCE_CEILING; the panel must render this rather than a
   // literal of its own, which is the drift T7 fixed.
   gateDefaults: { consequenceCeiling: 1.78, checkedAt: iso },
+  // Both switches off, which is the state every install starts in and the one
+  // worth photographing: the copy has to explain a control that does nothing
+  // yet without reading as broken.
+  modSkillsStatus: { active: false, activeTools: false, checkedAt: iso },
   // These shapes are the worker's, not invented: publishSecretStatus writes
   // `configured` (NOT `isConfigured`), and the integration status is an `ok`
   // envelope around a `hook` record. A fixture that does not match what the
