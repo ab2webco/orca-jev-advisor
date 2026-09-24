@@ -442,6 +442,10 @@
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
+          'save.whichConfig': 'La configuración (umbrales)',
+          'save.whichCatalog': 'El catálogo de destinos',
+          'save.whichPolicies': 'Las políticas',
+          'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
           'common.timeout': 'Tiempo de espera agotado.',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
@@ -571,6 +575,10 @@
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
+          'save.whichConfig': 'The configuration (thresholds)',
+          'save.whichCatalog': 'The destination catalog',
+          'save.whichPolicies': 'The policies',
+          'save.rejectedWhich': 'The host rejected this: {{which}}.',
           'common.timeout': 'Timed out.',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
           'common.hostRejectedRequest': 'The host rejected the request.',
@@ -748,11 +756,17 @@
         return result.value.value === undefined ? null : result.value.value
       }
       function read (key, usuario) { return call('storage.get', { key: key }, usuario).then(stored) }
-      function write (key, value) { return call('storage.set', { key: key, value: value }, true) }
+      // Every value passed through here is deep-stripped of undefined-valued
+      // keys first (stripUndefinedValues, above) -- the one choke point
+      // every write goes through, so a future `field || undefined` spot
+      // anywhere in this panel is neutralized here even if it forgets to
+      // shape its own row the safe way, the way buildDestinationRow/
+      // buildPolicyRow now do at the source.
+      function write (key, value) { return call('storage.set', { key: key, value: stripUndefinedValues(value) }, true) }
       // Background write (not requested by a click): polling and the
       // heartbeat use this one, never the user lane, so a real click's
       // reserved quota is never spent by them.
-      function writeBackground (key, value) { return call('storage.set', { key: key, value: value }, false) }
+      function writeBackground (key, value) { return call('storage.set', { key: key, value: stripUndefinedValues(value) }, false) }
 
       // ---------- secret key: request/result ---------------------------------
       // A sandboxed panel cannot call `secrets.get`/`secrets.set`/
@@ -788,6 +802,50 @@
       // file's module comment.
       function buildSecretTombstone (id, atIso) {
         return { id: id, at: atIso, tombstone: true }
+      }
+
+      // ---------- shaping a value before it reaches storage.set ---------------
+      // Mirrors stripUndefinedValues/buildDestinationRow/buildPolicyRow in
+      // adapters/orca/panels/panel_values.mjs -- see that file's module
+      // comment for the defect this closes: this panel's postMessage bridge
+      // uses structured clone, not JSON.stringify, so a property explicitly
+      // set to `undefined` SURVIVES onto the wire and Orca's own
+      // `storage.set` (validated with `z.json()`) refuses it. Keep the two
+      // in sync; `grep -n stripUndefinedValues` across both files is how to
+      // check they still agree.
+      function stripUndefinedValues (value) {
+        if (Array.isArray(value)) return value.map(stripUndefinedValues)
+        if (value !== null && typeof value === 'object') {
+          var result = {}
+          Object.keys(value).forEach(function (key) {
+            var v = value[key]
+            if (v === undefined) return
+            result[key] = stripUndefinedValues(v)
+          })
+          return result
+        }
+        return value
+      }
+      function buildDestinationRow (fields) {
+        var row = {
+          id: fields.id,
+          label: fields.label,
+          kind: fields.kind,
+          worktreePath: fields.worktreePath,
+          autonomy: {
+            actThreshold: fields.actThreshold,
+            confirmThreshold: fields.confirmThreshold,
+            maxAutoDelicateness: fields.maxAutoDelicateness
+          }
+        }
+        if (fields.terminalTitleMatch) row.terminalTitleMatch = fields.terminalTitleMatch
+        return row
+      }
+      function buildPolicyRow (fields) {
+        var row = { id: fields.id, rule: fields.rule }
+        if (fields.kind) row.kind = fields.kind
+        if (fields.destinations.length > 0) row.destinations = fields.destinations
+        return row
       }
 
       function signalPanelOpen () {
@@ -1171,18 +1229,19 @@
         entry.appendChild(actions)
 
         entry._read = function () {
-          return {
+          // buildDestinationRow (above) omits terminalTitleMatch entirely
+          // when blank, rather than setting it to `undefined` -- see that
+          // function's own comment for why `|| undefined` broke every save.
+          return buildDestinationRow({
             id: idField.input.value.trim(),
             label: labelField.input.value.trim(),
             kind: kindSelect.value,
             worktreePath: pathField.input.value.trim(),
-            terminalTitleMatch: titleField.input.value.trim() || undefined,
-            autonomy: {
-              actThreshold: Number(actField.input.value),
-              confirmThreshold: Number(confirmField.input.value),
-              maxAutoDelicateness: Number(delicatenessField.input.value)
-            }
-          }
+            terminalTitleMatch: titleField.input.value.trim(),
+            actThreshold: Number(actField.input.value),
+            confirmThreshold: Number(confirmField.input.value),
+            maxAutoDelicateness: Number(delicatenessField.input.value)
+          })
         }
 
         catalogListEl.appendChild(entry)
@@ -1353,22 +1412,21 @@
         entry.appendChild(actions)
 
         entry._read = function () {
-          // kindSelect.value is '' when still unset: written back as
-          // `undefined` (dropped from the saved object, same as
-          // terminalTitleMatch above) rather than as an empty string or a
-          // guessed real kind, so store.ts's isPolicyRow still sees it as
-          // "no valid kind" next time and keeps excluding it from judgment
-          // -- without this panel ever deleting the row itself.
-          var destinations = parseDestinations()
-          return {
+          // kindSelect.value is '' when still unset: buildPolicyRow (above)
+          // omits `kind` from the saved object entirely in that case (never
+          // sets it to `undefined` -- see that function's own comment for
+          // why `|| undefined` broke every save), so store.ts's isPolicyRow
+          // still sees it as "no valid kind" next time and keeps excluding
+          // it from judgment -- without this panel ever deleting the row
+          // itself. Same "empty means unset" convention for `destinations`:
+          // an empty scope is omitted rather than written as `[]`, so a
+          // policy with no destinations still reads as "applies globally".
+          return buildPolicyRow({
             id: idField.input.value.trim(),
             rule: ruleField.input.value.trim(),
-            kind: kindSelect.value || undefined,
-            // Same "empty means unset" convention as kind/terminalTitleMatch:
-            // an empty scope is dropped rather than written as `[]`, so a
-            // policy with no destinations still reads as "applies globally".
-            destinations: destinations.length > 0 ? destinations : undefined
-          }
+            kind: kindSelect.value,
+            destinations: parseDestinations()
+          })
         }
 
         policiesListEl.appendChild(entry)
@@ -1712,13 +1770,22 @@
         }
         said(saveSaidEl, t('save.saving'))
         var config = readConfig(currentConfig)
-        Promise.all([
-          write('config', config),
-          write('catalog', readCatalog()),
-          write('policies', readPolicies())
-        ]).then(function (results) {
-          var failed = results.find(function (r) { return !r || !r.ok })
-          if (failed) throw shownError(t('common.hostRejectedWrite'))
+        // Named, not anonymous: a Promise.all that only asks "did any of
+        // these fail" loses which one -- the exact "something failed and
+        // the message did not say what" shape this whole release is fixing
+        // elsewhere. Each write keeps its own label so a refusal can name
+        // the actual write(s) that failed, not a single generic sentence.
+        var namedWrites = [
+          { label: t('save.whichConfig'), promise: write('config', config) },
+          { label: t('save.whichCatalog'), promise: write('catalog', readCatalog()) },
+          { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) }
+        ]
+        Promise.all(namedWrites.map(function (w) { return w.promise })).then(function (results) {
+          var failedLabels = []
+          results.forEach(function (result, index) {
+            if (!result || !result.ok) failedLabels.push(namedWrites[index].label)
+          })
+          if (failedLabels.length > 0) throw shownError(t('save.rejectedWhich', { which: failedLabels.join(', ') }))
           writeBackground(CATALOG_POLICY_MIRROR_REQUEST_KEY, new Date().toISOString())
           currentConfig = config
           said(saveSaidEl, t('save.saved'))
