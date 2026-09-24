@@ -5,14 +5,15 @@
 // odd/tasks/panel-worker-wakeup.md for the task list this backs.
 
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 
 import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
 import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
-import { POLICY_SEED_MARKER_KEY } from '../../src/core/policy_seed.ts'
+import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion } from '../../src/core/policy_seed.ts'
+import { decidePolicySeedNotice } from '../../src/core/policy_seed_notice.ts'
 
 // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute a
 // real path at all under node's test runner unless an explicit override is
@@ -34,7 +35,9 @@ const {
   attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModSkillsConfigRequest,
+  attendPolicySeedDismissRequest,
   attendPolicySeedImportRequest,
+  attendPolicySeedNoticeRefresh,
   attendSecretRequest,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
@@ -49,10 +52,14 @@ const {
   LOCALE_RESULT_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
+  POLICY_SEED_DISMISS_RESULT_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
+  POLICY_SEED_NOTICE_STATUS_KEY,
+  POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
   publishGateDefaults,
   publishModSkillsStatus,
+  publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
@@ -687,4 +694,189 @@ test('a storage that throws is survived rather than propagated, because this mus
   await seedPoliciesIfEmpty(orca, host)   // must not reject
 
   assert.ok(orca._logs.some((line) => line.includes('policy seeding failed')), 'the failure was not logged')
+})
+
+// ---------------------------------------------------------------------------
+// T2b -- telling an install the shipped baseline moved. See
+// odd/tasks/gate-destructive-restore-and-seed-refresh.md and
+// src/core/policy_seed_notice.ts for the design; every test below reads the
+// REAL shipped seed file, never a fake one, so a version bump or a row edit
+// there is exactly what these are meant to catch.
+// ---------------------------------------------------------------------------
+
+const REAL_SEED_RAW = JSON.parse(readFileSync(new URL('../../seed/policies.json', import.meta.url), 'utf8'))
+const REAL_SEED_ROWS = parseSeedPolicies(REAL_SEED_RAW)
+const REAL_SEED_VERSION = parseSeedVersion(REAL_SEED_RAW)
+
+test('seedPoliciesIfEmpty: fresh seeding also marks this install as offered the shipped version', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({})
+
+  await seedPoliciesIfEmpty(orca, host)
+
+  const offered = host._store[POLICY_SEED_OFFERED_VERSION_KEY]
+  assert.equal(typeof offered?.at, 'string', 'no offered-version marker was written')
+  assert.equal(offered.version, REAL_SEED_VERSION)
+})
+
+test('seedPoliciesIfEmpty: an install that already had its own policies is NOT marked offered', async () => {
+  // This is exactly the install policy_seed_notice.ts exists for: one that
+  // upgraded into this code holding its own rules. Marking it offered here
+  // would make parseOfferedVersion read it as already caught up, and the
+  // baseline notice would never tell it anything.
+  const orca = fakeOrca()
+  const mine = [{ id: 'mine', kind: 'prohibits', rule: 'my own rule' }]
+  const host = fakeStorageHost({ policies: mine })
+
+  await seedPoliciesIfEmpty(orca, host)
+
+  assert.equal(host._store[POLICY_SEED_OFFERED_VERSION_KEY], undefined,
+    'an install that already had policies was marked offered, so it will never be told about the baseline')
+})
+
+test('cmdImportPolicySeeds: a successful import marks this install as offered the shipped version', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.equal(result.ok, true)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION)
+})
+
+test('cmdImportPolicySeeds: marks this install as offered even when nothing was added or replaced', async () => {
+  // Importing with the full shipped seed already stored (added===0,
+  // replaced===0) is still a successful import: the install has seen this
+  // version, whatever it decided to do about it.
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ policies: REAL_SEED_ROWS })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 0)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION)
+})
+
+test('cmdImportPolicySeeds: a failed import (unreadable seed) never marks this install offered', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  await cmdImportPolicySeeds(orca, storageHost, { seedPath: '/nonexistent/policies.json' })
+  assert.equal(await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY), null)
+})
+
+test('cmdImportPolicySeeds: republishes the notice status, which now reads not-due', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, false, 'the notice is still due right after the person just ran the import')
+  assert.equal(status.shippedVersion, REAL_SEED_VERSION)
+})
+
+test('publishPolicySeedNoticeStatus: an install offered nothing before, with real added counts, is due', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  const expected = decidePolicySeedNotice({
+    shippedVersion: REAL_SEED_VERSION, offeredVersion: 0, existing: [], shipped: REAL_SEED_ROWS
+  })
+  assert.equal(status.due, expected.due)
+  assert.equal(status.added, expected.added)
+  assert.equal(status.differing, expected.differing)
+  assert.equal(status.shippedVersion, REAL_SEED_VERSION)
+  assert.ok(status.added > 0, 'the shipped seed is empty, so this proves nothing')
+  assert.equal(typeof status.at, 'string')
+})
+
+test('publishPolicySeedNoticeStatus: already offered the shipped version is never due, whatever the counts', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    [POLICY_SEED_OFFERED_VERSION_KEY]: { version: REAL_SEED_VERSION, at: new Date().toISOString() },
+    policies: [{ id: 'read_and_test', rule: 'edited long ago', kind: 'prohibits' }]
+  })
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, false)
+})
+
+test('publishPolicySeedNoticeStatus: nothing new for THIS install marks it offered even though it never asked', async () => {
+  // The shipped rows are already exactly what this install has -- a version
+  // bump with nothing to say to this particular machine.
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ policies: REAL_SEED_ROWS })
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, false)
+  assert.equal(status.added, 0)
+  assert.equal(status.differing, 0)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION, 'a no-op gap must still mark the install offered')
+})
+
+test('publishPolicySeedNoticeStatus: an unreadable seed leaves the previous status untouched rather than guessing', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [POLICY_SEED_NOTICE_STATUS_KEY]: { due: true, added: 1, differing: 0, shippedVersion: 1, at: 'before' } })
+  await publishPolicySeedNoticeStatus(orca, storageHost, { seedPath: '/nonexistent/policies.json' })
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.at, 'before', 'a failed computation overwrote the previous status instead of leaving it alone')
+})
+
+test('attendPolicySeedDismissRequest: an expired request publishes reason "expired" and marks nothing', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policySeedDismissRequest: { id: 'psd-1', at: TEN_MINUTES_AGO }
+  })
+  await attendPolicySeedDismissRequest(orca, storageHost)
+  const result = await storageHost.get(POLICY_SEED_DISMISS_RESULT_KEY)
+  assert.equal(result.id, 'psd-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+  assert.equal(await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY), null)
+})
+
+test('attendPolicySeedDismissRequest: a fresh request marks the shipped version offered and republishes a not-due status', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }],
+    policySeedDismissRequest: { id: 'psd-2', at: new Date().toISOString() }
+  })
+  await attendPolicySeedDismissRequest(orca, storageHost)
+  const result = await storageHost.get(POLICY_SEED_DISMISS_RESULT_KEY)
+  assert.equal(result.id, 'psd-2')
+  assert.equal(result.ok, true)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, false, 'dismissing did not clear the notice')
+  // Dismissing never touches stored policies -- only merge-by-id (via
+  // applyPolicySeedChoices, from an explicit accept) may ever do that.
+  const stored = await storageHost.get('policies')
+  assert.equal(stored[0].rule, 'my own edited rule')
+})
+
+test('attendPolicySeedNoticeRefresh: recomputes but only republishes when the decision actually changed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const lastPublished = { value: null }
+
+  await attendPolicySeedNoticeRefresh(orca, storageHost, lastPublished)
+  const first = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.ok(first, 'the first tick never published anything')
+
+  // Overwrite with a sentinel and tick again with nothing changed: an
+  // unconditional publisher would clobber the sentinel; the dedupe must not.
+  await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, { ...first, at: 'sentinel' })
+  await attendPolicySeedNoticeRefresh(orca, storageHost, lastPublished)
+  const second = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(second.at, 'sentinel', 'an unchanged decision was republished anyway')
+
+  // Now change the underlying data (an import happened) and tick again: the
+  // dedupe must let the new decision through.
+  await storageHost.set('policies', REAL_SEED_ROWS)
+  await attendPolicySeedNoticeRefresh(orca, storageHost, lastPublished)
+  const third = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.notEqual(third.at, 'sentinel', 'a genuinely changed decision was not republished')
+  assert.equal(third.added, 0)
 })

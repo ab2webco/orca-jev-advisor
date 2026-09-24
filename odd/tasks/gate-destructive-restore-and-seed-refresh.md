@@ -51,7 +51,7 @@ run `gentle-ai review assess --committed-only`.
     unit tests for the pure matcher and the family.
 - [x] **T2** Refresh `seed/policies.json`. Route: inline (one data file).
   Checks: `src/core/policy_seed*.test.ts` green.
-- [ ] **T2b** (scope addition from the coordinator, user requirement)
+- [x] **T2b** (scope addition from the coordinator, user requirement)
   Baseline policy updates must reach existing installs.
   1. Give `seed/policies.json` a baseline version. The schema change is allowed;
      keep row-by-row tolerance and a test for the old bare-array shape.
@@ -179,5 +179,49 @@ match.
   still hard-codes `skipped: 20`. That gets fixed in T2b, which re-renders the
   panel.
 
+### T2b -- baseline version notice
+- Route: delegated (one writer). Trigger: the change touches 5+ non-trivial
+  files (core, main.mjs, config.html, two harnesses, tests). The parent pinned
+  the design, then reviewed, corrected and verified the result.
+- Seed: `{ "version": 1, "policies": [...] }`. `parseSeedPolicies` reads both
+  shapes. `parseSeedVersion` returns 0 for a bare array or malformed input. A
+  test pins a digest of `policies` next to `version`, so editing a row without
+  bumping the version fails.
+- Core (pure): `src/core/policy_seed_notice.ts` has `parseOfferedVersion` and
+  `decidePolicySeedNotice`, built on `mergePolicySeeds`. `due` only when the
+  shipped version is newer AND added + differing > 0.
+- Storage (main.mjs): `policySeedOfferedVersion` `{version, at}` is written on
+  fresh seeding, on any successful import, on dismiss, and when a bump has
+  nothing for this install. `policySeedNoticeStatus`
+  `{due, added, differing, shippedVersion, at}` is published at activation,
+  after import or dismiss, and on the poll tick when it changes. Dismiss is
+  its own pair, `policySeedDismissRequest`/`Result`, with the same TTL pattern.
+  An install that declined first-run seeding (it already had policies) is NOT
+  marked offered, so it gets the notice.
+- Panel: the notice appears only when status is due with non-zero counts. "Review
+  the changes" runs the existing import/choose flow with no accepted ids; the
+  notice never writes `policies`. "Dismiss" marks the version as offered. A
+  panels spec asserts every `policies.*` key exists in both ES and EN.
+  `denyTier.resetCleanHint` now says "uncommitted changes and untracked files".
+- Parent corrections after review: the notice's buttons sat flush against
+  the policy list, so it now has a 14px bottom margin. The `seeds` screenshot
+  fixture showed "21 added" beside a 2-row list, a state the app cannot
+  produce; its install now holds every shipped row with two edited, so the
+  real merge reports 0 added / 2 differing.
+- TDD: core and main.mjs got tests first, with RED observed by the writer
+  (reported: bare-array seed -> 2 failures; missing module; 12 main.mjs
+  assertions). Panel HTML was written BEFORE its Playwright specs (writer-
+  reported deviation from strict order). The specs do run and pass against
+  the real page.
+- Checks: `npm test` -> 748/748; `npm run test:panels` -> 11/11;
+  `npm run shots` -> 80 screenshots, no horizontal overflow, no script errors.
+- Screenshots read by the parent: `baseline-config` Team policies area at
+  1440/768/390/320 in light and dark (all 8), plus the full page at 1440 light.
+  `seeds-config`: full page at 390 dark; the choose-flow area at 320 light,
+  768 light and 1440 dark. Not read: `board.html` shots (the board did not
+  change), and the `fresh`/`ready`/`degraded` config shots, which differ only
+  in the seed text of the first rows and in `resetCleanHint`. That hint was
+  read in the baseline 1440 full page.
+
 ## Next step
-T2b.
+Combined RDD review of fd0380f..HEAD, then push and PR.

@@ -1,20 +1,26 @@
 import { strict as assert } from "node:assert";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, shouldSeedPolicies } from "./policy_seed.ts";
+import { isRecord } from "../guards.ts";
+import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeedPolicies } from "./policy_seed.ts";
 
 const seedFile: unknown = JSON.parse(
   readFileSync(new URL("../../seed/policies.json", import.meta.url), "utf8"),
 );
 
-test("the shipped seed is readable, and every row in it survives validation", () => {
+test("the shipped seed is the versioned { version, policies } shape, and every row in it survives validation", () => {
   // The whole defect was a seed nobody read. If a row is ever added that the
   // validator rejects, it would be dropped in silence exactly the way the
   // entire file used to be -- so the count is asserted, not just the parse.
-  assert.ok(Array.isArray(seedFile), "seed/policies.json is not an array");
+  assert.ok(
+    isRecord(seedFile) && Array.isArray(seedFile.policies),
+    "seed/policies.json is not the versioned { version, policies } shape",
+  );
+  const rows = (seedFile as { policies: unknown[] }).policies;
   const parsed = parseSeedPolicies(seedFile);
-  assert.equal(parsed.length, (seedFile as unknown[]).length, "some shipped rows are not valid policies");
+  assert.equal(parsed.length, rows.length, "some shipped rows are not valid policies");
   assert.ok(parsed.length > 0, "the shipped seed is empty");
 });
 
@@ -41,9 +47,45 @@ test("malformed rows cost only themselves", () => {
   assert.deepEqual(parsed.map((row) => row.id), ["good"]);
 });
 
-test("anything that is not an array yields no rows rather than throwing", () => {
+test("anything that is neither a bare array nor a { policies } object yields no rows rather than throwing", () => {
   for (const bad of [null, undefined, {}, 7, "text", { rows: [] }]) {
     assert.deepEqual(parseSeedPolicies(bad), []);
+  }
+});
+
+test("the old bare-array shape this file has always shipped as still parses", () => {
+  // The schema change must not strand every seed ever hand-copied out of an
+  // older release, or shipped by a fork that has not picked up the version
+  // field yet.
+  const bareArray = [{ id: "old-shape", kind: "permits", rule: "written before the version wrapper existed" }];
+  const parsed = parseSeedPolicies(bareArray);
+  assert.deepEqual(parsed.map((row) => row.id), ["old-shape"]);
+  assert.equal(parseSeedVersion(bareArray), 0, "a bare array carries no version, and 0 must not be guessed higher");
+});
+
+test("the versioned { version, policies } object parses both halves", () => {
+  const versioned = {
+    version: 3,
+    policies: [{ id: "versioned-shape", kind: "prohibits", rule: "written after the version wrapper existed" }],
+  };
+  assert.deepEqual(parseSeedPolicies(versioned).map((row) => row.id), ["versioned-shape"]);
+  assert.equal(parseSeedVersion(versioned), 3);
+});
+
+test("parseSeedVersion reports 0 for anything malformed, rather than guessing", () => {
+  for (const bad of [
+    null,
+    undefined,
+    [],
+    7,
+    "text",
+    {},
+    { version: "1" },
+    { version: 1.5 },
+    { version: -1 },
+    { version: null },
+  ]) {
+    assert.equal(parseSeedVersion(bad), 0, `expected 0 for ${JSON.stringify(bad)}`);
   }
 });
 
@@ -112,4 +154,50 @@ test("the shipped seed carries ten prohibits, which is what the marker protects"
   assert.equal(kinds.prohibits, 10, "the prohibits count in this module's comments is now wrong");
   assert.equal(kinds.permits, 9);
   assert.equal(kinds.requires_human, 4);
+});
+
+/** Sorts every object's keys, recursively, so the digest below depends only
+ *  on the shipped rows' actual content -- never on the order the author
+ *  happened to type the fields in, or on whitespace JSON.parse already threw
+ *  away. */
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value !== null && typeof value === "object") {
+    return Object.keys(value as Record<string, unknown>)
+      .sort()
+      .reduce<Record<string, unknown>>((sorted, key) => {
+        sorted[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
+        return sorted;
+      }, {});
+  }
+  return value;
+}
+
+/** The rows' sha256, pinned so an edit that forgets to bump `version` fails
+ *  loudly here instead of silently reaching an install that will never know
+ *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
+ *  which decides `due` from `version` alone and never looks at content. */
+const PINNED_DIGEST = "163d37c060a538a502032a99c3359d5b42ca4201200b8420e81234da6bd80e82";
+
+test("editing a shipped policy row without bumping the seed version fails loudly", () => {
+  // Pinned together on purpose: a row edit changes the digest, and the
+  // failure message below is what tells the author to also bump `version`
+  // -- the one thing decidePolicySeedNotice actually compares. Bumping
+  // `version` alone (a genuine release) means this test's own pinned
+  // version must move too, which is the second assertion.
+  const digest = createHash("sha256")
+    .update(JSON.stringify(sortKeysDeep(parseSeedPolicies(seedFile))))
+    .digest("hex");
+  assert.equal(
+    digest,
+    PINNED_DIGEST,
+    `seed/policies.json's rows changed without bumping "version". Bump "version" in ` +
+      `seed/policies.json, then replace PINNED_DIGEST in this test with ${JSON.stringify(digest)}.`,
+  );
+  assert.equal(
+    parseSeedVersion(seedFile),
+    1,
+    'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
+      "PINNED_DIGEST once the rows for that release are final).",
+  );
 });
