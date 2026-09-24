@@ -148,7 +148,9 @@ function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null;
 }
 
-function isPolicyRow(value: unknown): value is PolicyRow {
+/** Exported so the seed reader validates rows against this exact shape rather
+ *  than a second, drifting copy of it. */
+export function isPolicyRow(value: unknown): value is PolicyRow {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false;
   if ("destinations" in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false;
   return true;
