@@ -126,3 +126,50 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
 export function serializeGateRecord(record: GateDecisionRecord): string {
   return `${JSON.stringify(record)}\n`;
 }
+
+function isGateSource(value: unknown): value is GateSource {
+  return value === "local-rule" || value === "cache" || value === "jev";
+}
+
+function isGateVerdict(value: unknown): value is GateVerdict {
+  return value === "allow" || value === "ask" || value === "deny";
+}
+
+function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
+  if (typeof value !== "object" || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.type === "gate-decision" &&
+    typeof record.id === "string" &&
+    typeof record.at === "string" &&
+    (record.project === null || typeof record.project === "string") &&
+    typeof record.commandFamily === "string" &&
+    isGateSource(record.source) &&
+    isGateVerdict(record.verdict) &&
+    (record.latencyMs === null || typeof record.latencyMs === "number")
+  );
+}
+
+/**
+ * Reads `gate-decisions.jsonl` back, tolerantly -- same discipline as
+ * approval_record.ts's parsePendingToolUseIds: a malformed or incomplete
+ * line is skipped, never thrown on. Added for the AB benchmark's own report
+ * (adapters/cli/ab_benchmark_cli.ts): counting this log's `source: "jev"`
+ * entries is how it reports "how many of Jev's real decisions the large
+ * model never had to see" -- a real measurement from the log this plugin
+ * already writes, never an estimate.
+ */
+export function parseGateDecisionRecords(raw: string): readonly GateDecisionRecord[] {
+  const records: GateDecisionRecord[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (isGateDecisionRecord(parsed)) records.push(parsed);
+  }
+  return records;
+}

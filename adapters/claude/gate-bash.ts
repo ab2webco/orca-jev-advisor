@@ -91,6 +91,9 @@ import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { DEFAULT_DENY_TIER_SWITCHES, parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
 import type { DenyTierSwitches, DenyToggleKey } from '../../src/core/deny_tier_config.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
+import { parseAbBenchmarkConfig } from '../../src/core/ab_benchmark_config.ts'
+import { parseSampleEntries, serializeSampleEntry, shouldSample } from '../../src/core/ab_benchmark.ts'
+import type { AbSampleEntry, GateLikeVerdict } from '../../src/core/ab_benchmark.ts'
 
 // `os.homedir()` is already HOME-vs-USERPROFILE correct per platform;
 // resolveCacheDir/resolveConfigDir only decide the `.cache`/`.config` vs
@@ -128,6 +131,14 @@ const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 // or unreadable read of THIS file must never lower protection: see
 // readDenyTierConfig below and src/core/deny_tier_config.ts's module note.
 const DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
+// No panel writes this today -- see src/core/ab_benchmark_config.ts's own
+// module note. Created/edited by hand or by adapters/cli/ab_benchmark_cli.ts's
+// `config` subcommand. Fails open to disabled, so a missing file behaves
+// exactly like an install that never turned this on.
+const AB_BENCHMARK_CONFIG_PATH = join(CONFIG_DIR, 'ab-benchmark-config.json')
+// Appended by appendAbBenchmarkSample below, out of band, with no network
+// call and no added latency; drained later by adapters/cli/ab_benchmark_cli.ts.
+const AB_BENCHMARK_QUEUE_PATH = join(CACHE_DIR, 'ab-benchmark-queue.jsonl')
 const BUDGET_MS = 1800
 
 /** Since the hook started, so it can say how long deciding cost. */
@@ -531,6 +542,68 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
   }
 }
 
+/** Best-effort read; a missing, unreadable or malformed config is read as "off" -- see src/core/ab_benchmark_config.ts's own fail-open contract. */
+function readAbBenchmarkConfig() {
+  try {
+    return parseAbBenchmarkConfig(readFileSync(AB_BENCHMARK_CONFIG_PATH, 'utf8'))
+  } catch {
+    return parseAbBenchmarkConfig('')
+  }
+}
+
+/** How many samples this queue already holds for `today` (UTC date), so the daily cap means "today", not "ever". */
+function samplesQueuedToday(today: string): number {
+  try {
+    const entries = parseSampleEntries(readFileSync(AB_BENCHMARK_QUEUE_PATH, 'utf8'))
+    return entries.filter((e) => e.at.startsWith(today)).length
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Samples this real Jev decision for the AB benchmark, out of band: a
+ * probabilistic, config-gated, best-effort append to a queue file, with NO
+ * network call and NO added latency -- see src/core/ab_benchmark.ts's own
+ * module note for the full design and adapters/cli/ab_benchmark_cli.ts for
+ * what later drains this queue and asks the large model the same
+ * family-level question.
+ *
+ * Never the raw command, same discipline as appendPendingApproval above:
+ * only commandFamily and the matched destination's coarse `kind` (never its
+ * label, id or path) are persisted, plus Jev's own verdict/latency/tokens --
+ * already known here, so this never triggers a second Jev call.
+ */
+function appendAbBenchmarkSample(
+  command: string,
+  verdict: GateLikeVerdict,
+  latencyMs: number,
+  usage: { readonly inputTokens: number; readonly outputTokens: number },
+  destinationKind: string | null,
+): void {
+  try {
+    const config = readAbBenchmarkConfig()
+    if (!config.enabled) return
+    const now = new Date()
+    const today = now.toISOString().slice(0, 10)
+    if (!shouldSample(config, samplesQueuedToday(today), Math.random())) return
+    const entry: AbSampleEntry = {
+      id: randomUUID(),
+      at: now.toISOString(),
+      commandFamily: commandFamily(command),
+      destinationKind,
+      jevVerdict: verdict,
+      jevLatencyMs: latencyMs,
+      jevInputTokens: usage.inputTokens,
+      jevOutputTokens: usage.outputTokens,
+    }
+    mkdirSync(dirname(AB_BENCHMARK_QUEUE_PATH), { recursive: true })
+    appendFileSync(AB_BENCHMARK_QUEUE_PATH, serializeSampleEntry(entry), 'utf8')
+  } catch {
+    // Best-effort sampling; never blocks or delays a verdict.
+  }
+}
+
 /**
  * What makes a feature branch different from a client's main. This string
  * is sent to Jev as model input (see askJev/buildActionGateState below) and
@@ -560,7 +633,17 @@ function repoContext(cwd: string): string {
 type GateAxes = { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null; readonly ceiling: number } | null
 
 type JevOutcome =
-  | { readonly kind: 'verdict'; readonly decision: Decision; readonly reason: string; readonly axes: GateAxes; readonly destinationId: string | null }
+  | {
+      readonly kind: 'verdict'
+      readonly decision: Decision
+      readonly reason: string
+      readonly axes: GateAxes
+      readonly destinationId: string | null
+      /** The matched destination's catalog `kind` (never its label, id or path) -- coarse enough for the AB benchmark to persist. Null when no destination matched. */
+      readonly destinationKind: string | null
+      /** Jev's own token usage for this call -- carried out so the AB benchmark can record it for free, with no second Jev call. */
+      readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
+    }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
 
@@ -598,7 +681,15 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       noDestinationMatched: matched === null,
     })
     const reason = gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
-    return { kind: 'verdict', decision: gate.verdict, reason, axes: gate.axes, destinationId: matched?.id ?? null }
+    return {
+      kind: 'verdict',
+      decision: gate.verdict,
+      reason,
+      axes: gate.axes,
+      destinationId: matched?.id ?? null,
+      destinationKind: matched?.kind ?? null,
+      usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+    }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
       return { kind: 'auth-rejected', status: error.status }
@@ -759,12 +850,20 @@ async function main(): Promise<void> {
   // deserves a fresh warning.
   if (readAuthWarned()) writeAuthWarned(false)
 
-  const resolved = outcome as { kind: 'verdict'; decision: Decision; reason: string }
+  const resolved = outcome as Extract<JevOutcome, { kind: 'verdict' }>
   if (key !== null) {
     cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
     writeCache(cache)
   }
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs)
+  // AB benchmark: 'deny' never reaches here -- decideGateAction's Jev-sourced
+  // verdict is always allow/ask (GateVerdict, decisions.ts) -- but the guard
+  // is kept explicit rather than trusting the cast, matching this file's own
+  // fail-open discipline: an unexpected value is skipped, never forced into
+  // the sample's narrower type.
+  if (resolved.decision === 'allow' || resolved.decision === 'ask') {
+    appendAbBenchmarkSample(command, resolved.decision, jevLatencyMs, resolved.usage, resolved.destinationKind)
+  }
   // Only a stop becomes a question worth an answer. A pass was never asked
   // about, so recording it would bury the handful of real decisions under
   // hundreds of non-events.

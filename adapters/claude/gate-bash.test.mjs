@@ -270,3 +270,32 @@ test('deny tier: an unreadable config file (a directory instead of a file) keeps
   const rmRf = JSON.parse(run(home, 'rm -rf /'))
   assert.equal(rmRf.hookSpecificOutput.permissionDecision, 'deny')
 })
+
+// ---------------------------------------------------------------------------
+// AB benchmark sampling (appendAbBenchmarkSample) -- only its NEGATIVE case
+// is testable here. The real 'jev' verdict path (the only source this
+// benchmark samples) needs a live network response from Jev's fixed
+// endpoint; this suite's harness has no fetch injection point for a
+// subprocess-spawned hook (see the module note above -- every test here
+// takes the no-key or deny-tier path specifically to avoid the network),
+// so it cannot exercise the append itself. That is covered instead by
+// src/core/ab_benchmark.test.ts's unit tests for shouldSample/
+// serializeSampleEntry/parseSampleEntries -- the exact functions
+// appendAbBenchmarkSample calls.
+// ---------------------------------------------------------------------------
+
+function abBenchmarkQueuePath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'ab-benchmark-queue.jsonl')
+}
+
+test('AB benchmark: no queue file is created on the no-key path -- sampling never runs before a real Jev decision exists', () => {
+  const home = makeHome()
+  run(home, MIDDLE_TIER_COMMAND)
+  assert.equal(existsSync(abBenchmarkQueuePath(home)), false)
+})
+
+test('AB benchmark: no queue file is created on a deny-tier local-rule verdict -- only source:"jev" decisions are ever sampled', () => {
+  const home = makeHome()
+  run(home, 'rm -rf /')
+  assert.equal(existsSync(abBenchmarkQueuePath(home)), false)
+})
