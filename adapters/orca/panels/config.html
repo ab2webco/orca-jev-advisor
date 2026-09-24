@@ -255,6 +255,7 @@
           <span class="said" id="policy-import-said"></span>
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
+        <div id="policy-diffs"></div>
       </section>
 
       <section id="mod-skills-section">
@@ -403,6 +404,13 @@
           'policies.unknownDestination': 'Estos ids no existen en el catálogo actual: {{ids}}',
           'policies.remove': 'Quitar',
           'policies.importSeeds': 'Importar políticas base',
+          'policies.diffHeading': 'La versión que trae el plugin difiere de la tuya en {{n}} política(s). Marca las que quieras adoptar; lo que no marques se queda como está.',
+          'policies.diffLabel': '{{id}} — difiere en: {{fields}}',
+          'policies.diffField': '{{field}} — tuya: «{{mine}}» · del plugin: «{{baseline}}»',
+          'policies.diffAllDestinations': '(todos los destinos)',
+          'policies.diffApply': 'Adoptar las marcadas',
+          'policies.diffNoneChosen': 'No marcaste ninguna, así que no se cambió nada.',
+          'policies.importReplaced': 'Listo: {{replaced}} reemplazada(s), {{added}} añadida(s).',
           'policies.importHint': 'Agrega las políticas base incluidas con el plugin que todavía no tienes; lo que ya agregaste o editaste queda intacto.',
           'policies.importing': 'Importando…',
           'policies.importDone': '{{added}} política(s) nueva(s) agregada(s); {{skipped}} ya existían.',
@@ -562,6 +570,13 @@
           'policies.unknownDestination': "These ids don't exist in the current catalog: {{ids}}",
           'policies.remove': 'Remove',
           'policies.importSeeds': 'Import baseline policies',
+          'policies.diffHeading': "The version shipped with the plugin differs from yours in {{n}} of the policies you already have. Tick the ones you want to adopt; anything you leave unticked stays as it is.",
+          'policies.diffLabel': '{{id}} -- differs in: {{fields}}',
+          'policies.diffField': '{{field}} -- yours: "{{mine}}" · the plugin\'s: "{{baseline}}"',
+          'policies.diffAllDestinations': '(every destination)',
+          'policies.diffApply': 'Adopt the ticked ones',
+          'policies.diffNoneChosen': 'Nothing was ticked, so nothing changed.',
+          'policies.importReplaced': 'Done: {{replaced}} replaced, {{added}} added.',
           'policies.importHint': "Adds the plugin's baseline policies you don't already have; anything you already added or edited is left untouched.",
           'policies.importing': 'Importing…',
           'policies.importDone': '{{added}} new policy row(s) added; {{skipped}} already present.',
@@ -1062,9 +1077,14 @@
         })
       }
 
-      function sendPolicySeedImportRequest () {
+      function sendPolicySeedImportRequest (acceptedIds) {
         var requestId = 'policy-seed-import-' + Date.now() + '-' + Math.random().toString(36).slice(2)
         var request = { id: requestId, at: new Date().toISOString() }
+        // Only sent when the person ticked something. An import with no
+        // acceptedIds still only ADDS, exactly as it always has -- there is
+        // no accept-all anywhere, because a blind overwrite would destroy a
+        // policy somebody edited, which is worse than never updating one.
+        if (acceptedIds && acceptedIds.length > 0) request.acceptedIds = acceptedIds
         signalPanelOpen()
         return write(POLICY_SEED_IMPORT_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
@@ -1485,12 +1505,85 @@
       }
 
       var policyImportSaidEl = el('policy-import-said')
-      el('import-policy-seeds').addEventListener('click', function () {
+      var policyDiffsEl = el('policy-diffs')
+
+      /** The baseline shipped a different wording for an id you already have.
+       *  Merge-by-id can never reach it -- that is the point, an edited policy
+       *  must survive -- so the only honest way through is to show both
+       *  versions and let the person pick, one row at a time. */
+      function renderPolicySeedDiffs (differing) {
+        policyDiffsEl.innerHTML = ''
+        if (!differing || differing.length === 0) return
+        var heading = document.createElement('p')
+        heading.className = 'hint'
+        heading.textContent = t('policies.diffHeading', { n: String(differing.length) })
+        policyDiffsEl.appendChild(heading)
+
+        differing.forEach(function (diff) {
+          var row = document.createElement('div')
+          row.className = 'checkbox-row'
+          var box = document.createElement('input')
+          box.type = 'checkbox'
+          box.setAttribute('data-policy-diff-id', diff.id)
+          var text = document.createElement('div')
+          text.className = 'checkbox-text'
+          var label = document.createElement('span')
+          label.className = 'checkbox-label'
+          label.textContent = t('policies.diffLabel', { id: diff.id, fields: (diff.fields || []).join(', ') })
+          text.appendChild(label)
+          ;(diff.fields || []).forEach(function (field) {
+            var line = document.createElement('span')
+            line.className = 'hint'
+            line.textContent = t('policies.diffField', {
+              field: field,
+              mine: policyFieldText(diff.existing, field),
+              baseline: policyFieldText(diff.seed, field)
+            })
+            text.appendChild(line)
+          })
+          row.appendChild(box)
+          row.appendChild(text)
+          policyDiffsEl.appendChild(row)
+        })
+
+        var actions = document.createElement('div')
+        actions.className = 'actions'
+        var apply = document.createElement('button')
+        apply.type = 'button'
+        apply.id = 'apply-policy-diffs'
+        apply.textContent = t('policies.diffApply')
+        apply.addEventListener('click', function () {
+          var accepted = []
+          policyDiffsEl.querySelectorAll('input[data-policy-diff-id]').forEach(function (box) {
+            if (box.checked) accepted.push(box.getAttribute('data-policy-diff-id'))
+          })
+          if (accepted.length === 0) { said(policyImportSaidEl, t('policies.diffNoneChosen')); return }
+          runPolicySeedImport(accepted)
+        })
+        actions.appendChild(apply)
+        policyDiffsEl.appendChild(actions)
+      }
+
+      /** One field of a policy as a person reads it. `destinations` is a list
+       *  and an absent one means "every destination", which is a different
+       *  sentence from an empty list nobody wrote. */
+      function policyFieldText (policy, field) {
+        if (!policy) return ''
+        if (field !== 'destinations') return String(policy[field] == null ? '' : policy[field])
+        var destinations = policy.destinations
+        if (!destinations || destinations.length === 0) return t('policies.diffAllDestinations')
+        return destinations.join(', ')
+      }
+
+      function runPolicySeedImport (acceptedIds) {
         said(policyImportSaidEl, t('policies.importing'))
-        sendPolicySeedImportRequest().then(function (result) {
+        return sendPolicySeedImportRequest(acceptedIds).then(function (result) {
           var added = (result && typeof result.added === 'number') ? result.added : 0
           var skipped = (result && typeof result.skipped === 'number') ? result.skipped : 0
-          said(policyImportSaidEl, added > 0 ? t('policies.importDone', { added: String(added), skipped: String(skipped) }) : t('policies.importNone'))
+          var replaced = (result && typeof result.replaced === 'number') ? result.replaced : 0
+          if (replaced > 0) said(policyImportSaidEl, t('policies.importReplaced', { replaced: String(replaced), added: String(added) }))
+          else said(policyImportSaidEl, added > 0 ? t('policies.importDone', { added: String(added), skipped: String(skipped) }) : t('policies.importNone'))
+          renderPolicySeedDiffs(result && result.differing)
           return read('policies', false)
         }).then(function (policies) {
           if (!policies) return
@@ -1499,7 +1592,9 @@
         }).catch(function (error) {
           said(policyImportSaidEl, errorText(error), true)
         })
-      })
+      }
+
+      el('import-policy-seeds').addEventListener('click', function () { runPolicySeedImport(null) })
 
       // ---------- skill/tool selection switches --------------------------------
 

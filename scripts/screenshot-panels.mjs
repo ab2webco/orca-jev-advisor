@@ -241,18 +241,76 @@ const DEGRADED = {
   },
 }
 
-const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED }
+/**
+ * The shipped baseline has been corrected since this install imported it.
+ * Merge-by-id can never reach those rows -- an edited policy must survive --
+ * so the panel shows both versions and the person picks. This scenario exists
+ * because that list only appears after a live request/result round-trip, and
+ * an interactive surface nobody has photographed is a surface nobody has
+ * checked. The two differing rows are real ids from seed/policies.json with
+ * the wording genuinely shipped in an earlier seed.
+ */
+const SEEDS = {
+  ...READY,
+  policySeedImportResult: {
+    ok: true,
+    added: 0,
+    skipped: 20,
+    replaced: 0,
+    differing: [
+      {
+        id: 'never_write_to_main',
+        fields: ['rule'],
+        existing: { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main.' },
+        seed: {
+          id: 'never_write_to_main',
+          kind: 'prohibits',
+          rule: 'Never write directly on main or develop, not even a one-line fix.',
+        },
+      },
+      {
+        id: 'own_branch',
+        fields: ['rule', 'destinations'],
+        existing: { id: 'own_branch', kind: 'permits', rule: 'Work on a branch.', destinations: ['app'] },
+        seed: {
+          id: 'own_branch',
+          kind: 'permits',
+          rule: 'All work goes on a feature branch. Work happens there without asking.',
+        },
+      },
+    ],
+  },
+}
+
+const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED, seeds: SEEDS }
+
+/** A scenario may need one click before the shot -- see SEEDS. */
+const SCENARIO_CLICKS = { seeds: { panel: 'config.html', selector: '#import-policy-seeds' } }
 
 /**
  * Impersonates the host bridge. Installed before the panel's own script runs,
  * because the panel starts calling immediately on load.
  */
 function hostBridge(storage) {
+  // The panel's request/result keys are a round-trip through the worker: it
+  // writes `<thing>Request` with a fresh random id and polls `<thing>Result`
+  // until one carries that same id back. A fixture cannot know the id in
+  // advance, so the fake host plays the worker's part -- it remembers the id
+  // that was just written and stamps it onto the canned result. Without this
+  // every interactive surface behind a request stays unphotographable, which
+  // is how the policy-difference list would have shipped unseen.
+  let lastRequestId = null
   window.addEventListener('message', (event) => {
     const msg = event.data
     if (!msg || msg.type !== 'orca-panel-action') return
     let value = null
+    if (msg.action === 'storage.set' && msg.params?.key === 'policySeedImportRequest') {
+      lastRequestId = msg.params?.value?.id ?? null
+    }
     if (msg.action === 'storage.get') value = storage[msg.params?.key] ?? null
+    if (msg.action === 'storage.get' && msg.params?.key === 'policySeedImportResult' && value && lastRequestId) {
+      value = { ...value, id: lastRequestId }
+    }
     if (value && value.at === 'now') value = { ...value, at: new Date().toISOString() }
     // storage.set and notifications.show simply succeed; nothing here persists.
     window.postMessage(
@@ -305,6 +363,11 @@ async function main() {
             page.on('pageerror', (error) => failures.push(String(error.message)))
             await page.goto(`file://${rendered[panel]}`)
             await page.waitForTimeout(SETTLE_MS)
+            const click = SCENARIO_CLICKS[scenario]
+            if (click && click.panel === panel) {
+              await page.click(click.selector)
+              await page.waitForTimeout(SETTLE_MS)
+            }
 
             const overflow = await page.evaluate(() => ({
               scrollWidth: document.documentElement.scrollWidth,
