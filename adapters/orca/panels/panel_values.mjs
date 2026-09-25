@@ -103,3 +103,73 @@ export function buildPolicyRow(fields) {
   if (fields.destinations.length > 0) row.destinations = fields.destinations;
   return row;
 }
+
+// ---------- board.html -------------------------------------------------------
+// odd/tasks/panel-interventions-and-mod-copy.md T11. Same hand-copy contract
+// as above, but into board.html: `grep -n defaultWindowKey` (or
+// relativeAge/liveEntryView) across both files is how to check they agree.
+
+/**
+ * Which window the board opens on. The current plugin version first, since
+ * an accumulated count mixes rule semantics across releases; the last 7 days
+ * while no record carries a version yet (read-measurements.mjs marks that
+ * window `available: false`); all time when the last 7 days are empty but
+ * older decisions exist. An empty log opens on all time, which is empty too
+ * and renders the board's empty state.
+ *
+ * @param {Record<string, { available: boolean, totalDecisions: number }> | null | undefined} windows
+ * @returns {'version' | 'week' | 'all'}
+ */
+export function defaultWindowKey(windows) {
+  if (!windows) return "all";
+  const order = ["version", "week", "all"];
+  for (const key of order) {
+    const w = windows[key];
+    if (w && w.available && w.totalDecisions > 0) return key;
+  }
+  return "all";
+}
+
+/**
+ * How long ago `iso` was, in whole units rounded down, for a "4 min ago"
+ * label. A timestamp up to a minute old -- or slightly in the future, which a
+ * skewed clock produces -- is "now". Null when there is nothing to parse, so
+ * the caller prints nothing rather than "NaN min ago".
+ *
+ * @param {string | null | undefined} iso
+ * @param {number} nowMs
+ * @returns {{ unit: 'now' | 'min' | 'h' | 'd', n: number } | null}
+ */
+export function relativeAge(iso, nowMs) {
+  if (typeof iso !== "string") return null;
+  const at = Date.parse(iso);
+  if (Number.isNaN(at)) return null;
+  const seconds = Math.floor((nowMs - at) / 1000);
+  if (seconds < 60) return { unit: "now", n: 0 };
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return { unit: "min", n: minutes };
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return { unit: "h", n: hours };
+  return { unit: "d", n: Math.floor(hours / 24) };
+}
+
+/**
+ * What a live-status row shows. A pane key is a pair of UUIDs
+ * (`1e1fff06-...:a62d09bd-...`) that tells a person nothing, so it is never a
+ * label: the project and branch are the chips, and the worktree and pane ids
+ * go only into the tooltip, for whoever is debugging. `name` is null when the
+ * worktree could not be resolved (main.mjs leaves project/branch null then);
+ * the board prints its own "unknown worktree" text for that.
+ *
+ * @param {{ worktreeId?: string | null, project?: string | null, rama?: string | null, paneKey?: string } | null | undefined} entry
+ * @returns {{ name: string | null, branch: string | null, title: string }}
+ */
+export function liveEntryView(entry) {
+  const e = entry || {};
+  const present = (value) => (typeof value === "string" && value.length > 0 ? value : null);
+  return {
+    name: present(e.project),
+    branch: present(e.rama),
+    title: [present(e.worktreeId), present(e.paneKey)].filter((part) => part !== null).join(" · "),
+  };
+}
