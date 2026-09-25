@@ -55,15 +55,18 @@ and no key at all. The key only buys judgement on the grey cases.
 ## What it writes outside itself
 
 A plugin that reaches outside its own directory should say so. This one
-writes four things, all listed in the settings panel, and **Revert
+writes seven things, all listed in the settings panel, and **Revert
 everything** puts them back:
 
 | What | Where | Why |
 |---|---|---|
-| A `PreToolUse` hook | every Claude Code config root, including Orca's own per-account ones | so the gate runs in Orca's agent panes, not only outside them |
+| Seven hook entries — four on the command gate (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`) plus three on model reclassification (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`) | `settings.json` in every Claude Code config root, including Orca's own per-account ones | so the gate and the model hooks run in Orca's agent panes, not only outside them |
 | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` | the same files | required by the skill and tool advisories |
 | The API key, plain text, mode `600` | `~/.config/orca-supervisor/env` | the gate runs outside Orca and cannot reach encrypted plugin storage |
-| A link to the skills mod | the same config roots | so Claude Code loads it |
+| A copy of the skills mod | `~/.claude/skills/orca-jev-mod-skills` | so Claude Code auto-loads it |
+| A human-readable mirror of the destination catalog (not secret) | `~/.config/orca-supervisor/catalog.json` | the gate reads it outside Orca, with no channel back into plugin storage |
+| A human-readable mirror of the team policies (not secret) | `~/.config/orca-supervisor/policies.json` | same reason |
+| A human-readable mirror of the model catalog (not secret) | `~/.config/orca-supervisor/models-catalog.json` | the model hook reads it outside Orca to rank a recommendation |
 
 Nothing is sent anywhere except the questions themselves, to
 `api.typesafe.ai`. Your commands are not stored: the measurement log keeps
@@ -133,6 +136,36 @@ A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
 exactly as a shell would read it.
 
+## Models
+
+Every subagent call (the `Agent` tool) gets a model recommendation before
+it starts: Jev reads the task and picks the best fit from your own model
+catalog's ladder — the same cheap-judgement trade the command gate makes,
+applied to model choice instead of command risk.
+
+**Measurement by default.** Same discipline as skill/tool advice below:
+this ships recording what Jev would have picked next to what the subagent
+actually ran on, changing nothing you can observe, until there is a real
+record to calibrate against.
+
+**Active mode is off by default**, and even once turned on a rewrite
+still needs all of the following, checked in order: the active switch
+itself; readiness (at least 1000 comparable decisions with a match rate
+of 70% or higher); the call's permission mode (only `bypassPermissions`
+lets a rewrite return an "allow" decision without overriding what the
+person's own permission rules would have produced); and Jev's own
+confidence in the recommendation (at least 0.7). Any one of these failing
+means the subagent runs on whatever model was already requested.
+
+**Revert.** The same **Revert everything** action (Settings → Jev
+Advisor, or the *Advisor: Revert the Claude Code side* command) removes
+the model hooks and the model catalog mirror along with everything else —
+there is nothing model-specific to undo separately.
+
+**Not yet proven end to end.** A live active rewrite — active mode
+actually swapping a subagent's model in an installed session — has not
+been run yet.
+
 ## What is measured, and what is not
 
 The command gate's thresholds were calibrated against a labelled corpus of
@@ -154,6 +187,8 @@ Two honest limits:
 ## Not ready yet
 
 - Active skill/tool advice is off by default, for the reason above.
+- Active model reclassification has not been proven end to end: a live
+  rewrite in an installed session has not been run yet (see Models above).
 
 ## Platform support
 

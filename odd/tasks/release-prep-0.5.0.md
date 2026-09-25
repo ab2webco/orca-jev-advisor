@@ -60,7 +60,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
   still inside the wait window are unlabeled and the percentages do not sum
   to 100. Add an `awaiting` count to `ApprovalSummary` and a fourth legend
   row (en and es).
-- [ ] **T7 README.** "What it writes outside itself" still says four things,
+- [x] **T7 README.** "What it writes outside itself" still says four things,
   while the plugin now writes seven (matches `config.html` in-app text). Add
   a Models section: measurement by default, active mode off by default,
   readiness 1000 decisions at 70%, a live active rewrite never run end to
@@ -276,6 +276,48 @@ touches 7+ non-trivial files, which fires the writer trigger.
   49/49 (fixture_shape.test.mjs's real-producer key check still passes with
   `awaiting` added on both sides). `npm run test:panels` and `npm run shots`
   results recorded in the final verification section below.
+- **T7 done.** Commit: (recorded after commit below). No RED (docs). Verified
+  every claim against code before writing, not against the task text alone:
+  - The "seven things" truth text lives in `adapters/orca/panels/
+    config.html`'s `integration.hint` (en/es) -- copied item-for-item into
+    the README table.
+  - Hook count/shape confirmed in `adapters/orca/install-claude-
+    integration.mjs`'s own module doc and `hookSpecs()`: 4 Bash-matcher
+    (PreToolUse/PostToolUse/PostToolUseFailure/PermissionDenied, gate-
+    bash.ts/gate-outcome.ts) + 3 Agent-matcher (PreToolUse/PostToolUse/
+    PostToolUseFailure, agent-model.ts) = 7, all in `settings.json` per
+    config root (`discoverTargets()` still returns the home target plus one
+    per Orca account) -- confirms the README's existing "every config root"
+    claim was already correct, only the hook count was stale.
+  - Caught and fixed a real factual error while verifying: the README said
+    "a link to the skills mod"; `install-claude-integration.mjs`'s own doc
+    says explicitly it is a copy, not a symlink (`installModCopy`). Changed
+    "link" to "copy" and named the real path
+    (`~/.claude/skills/orca-jev-mod-skills`).
+  - Mirror filenames confirmed in `adapters/orca/write-secret-mirror.mjs`
+    (`catalog.json`, `policies.json`, `models-catalog.json`).
+  - Readiness thresholds (1000 comparable, 0.70 match rate) confirmed in
+    `src/core/mod_skills_readiness.ts`'s `DEFAULT_MOD_SKILLS_READINESS_
+    THRESHOLDS`, reused by model readiness via `src/core/model_measurement.ts`.
+  - Gate order/conditions for an active rewrite confirmed in
+    `src/core/model_decisions.ts`'s `decideModelRewrite` (mode==="active"
+    -> ready -> permissionAllowsRewrite (`bypassPermissions` only) ->
+    confidence >= `DEFAULT_MODEL_REWRITE_CONFIDENCE` (0.7)) and its call
+    site in `agent-model-hook.ts:183-188`. Wrote this as "needs all of the
+    following" rather than the task text's "triple-gated" -- that phrase
+    undercounts by one against the code (four conditions, not three); the
+    task text names the same four conditions itself, so this is a wording
+    correction, not a scope change.
+  - "Off by default" confirmed: `agent-model-hook.ts:129`,
+    `mode = mirror.active ? "active" : "measurement"`, with
+    `parseModelsMirror` defaulting `active: false`.
+  - The revert action confirmed as the single existing "Revert everything"
+    button (`config.html`'s `integration.revert`) / `advisor.uninstallClaude`
+    command (`orca-plugin.json`, titled "Revert the Claude Code side") --
+    there is no separate models-only revert.
+  Added the "Models" section (between "Command gate" and "What is
+  measured") and one bullet under "Not ready yet", stating plainly that a
+  live end-to-end active rewrite has not been run in an installed session.
 
 ## Next step
 
