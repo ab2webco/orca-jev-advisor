@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
 import { commandShape } from '../../src/core/command_shape.ts'
+import { GATE_CACHE_TTL_MS } from '../../src/core/gate_cache.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCRIPT_PATH = join(__dirname, 'gate-bash.ts')
@@ -81,6 +82,37 @@ function verdictCachePath (home) {
   return join(home, '.cache', 'orca-supervisor', 'gate-bash.json')
 }
 
+function cacheResetMarkerPath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-bash.cache-reset.json')
+}
+
+/** A well-shaped v2 cache entry (see src/core/gate_cache.ts's GateCacheEntry), for writing fixture cache files directly to disk. */
+function v2CacheEntry (overrides = {}) {
+  const now = Date.now()
+  return {
+    decision: 'ask',
+    reason: 'stale test reason',
+    at: now - 1000,
+    expiresAt: now + GATE_CACHE_TTL_MS,
+    source: 'jev',
+    learnable: false,
+    score: null,
+    confidence: null,
+    shape: 'test-shape',
+    project: null,
+    destinationId: null,
+    worktreePath: '/repo',
+    learnedAt: null,
+    ...overrides,
+  }
+}
+
+function writeV2Cache (home, entries) {
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({ version: 2, entries }))
+}
+
 /** Computes the exact cache key gate-bash.ts would compute for `command`
  *  run from `cwd` under `home`, with no catalog mirror present (so
  *  destinationId/treeRoot are null) and `cwd` outside any git repository
@@ -129,11 +161,7 @@ test('a fresh cached verdict is honoured without a fresh Jev call', () => {
   const home = makeHome()
   const cwd = home
   const key = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
-  const cachePath = verdictCachePath(home)
-  mkdirSync(dirname(cachePath), { recursive: true })
-  writeFileSync(cachePath, JSON.stringify({
-    [key]: { decision: 'ask', reason: 'stale test reason', at: Date.now() - 1000 },
-  }))
+  writeV2Cache(home, { [key]: v2CacheEntry({ decision: 'ask', reason: 'stale test reason' }) })
 
   const stdout = run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
   const payload = JSON.parse(stdout)
@@ -146,19 +174,48 @@ test('an expired cached verdict is dropped from disk instead of being reused for
   const home = makeHome()
   const cwd = home
   const freshKey = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
-  const cachePath = verdictCachePath(home)
-  const thirtyOneDaysMs = 31 * 24 * 60 * 60 * 1000
-  mkdirSync(dirname(cachePath), { recursive: true })
-  writeFileSync(cachePath, JSON.stringify({
-    [freshKey]: { decision: 'ask', reason: 'still fresh', at: Date.now() - 1000 },
-    'unrelated-expired-key': { decision: 'allow', reason: 'months old', at: Date.now() - thirtyOneDaysMs },
-  }))
+  const now = Date.now()
+  writeV2Cache(home, {
+    [freshKey]: v2CacheEntry({ decision: 'ask', reason: 'still fresh', at: now - 1000, expiresAt: now + GATE_CACHE_TTL_MS }),
+    'unrelated-expired-key': v2CacheEntry({ decision: 'allow', reason: 'months old', at: now - GATE_CACHE_TTL_MS - 1000, expiresAt: now - 1000 }),
+  })
 
   run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
 
+  const persisted = JSON.parse(readFileSync(verdictCachePath(home), 'utf8'))
+  assert.equal(persisted.version, 2)
+  assert.ok(Object.hasOwn(persisted.entries, freshKey), 'a verdict cached seconds ago must survive a read')
+  assert.equal(Object.hasOwn(persisted.entries, 'unrelated-expired-key'), false, 'a verdict cached over 30 days ago must be dropped on read, not reused forever')
+})
+
+test('a legacy v1 cache file on disk triggers a whole-file reset and writes a visible marker', () => {
+  const home = makeHome()
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    'some-old-key': { decision: 'allow', reason: 'v1 shape', at: Date.now() - 1000 },
+  }))
+
+  run(home, MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-in-this-test' })
+
   const persisted = JSON.parse(readFileSync(cachePath, 'utf8'))
-  assert.ok(Object.hasOwn(persisted, freshKey), 'a verdict cached seconds ago must survive a read')
-  assert.equal(Object.hasOwn(persisted, 'unrelated-expired-key'), false, 'a verdict cached over 30 days ago must be dropped on read, not reused forever')
+  assert.equal(persisted.version, 2)
+  assert.deepEqual(persisted.entries, {}, 'the whole v1 file is discarded as one unit, not merged entry by entry')
+
+  const marker = JSON.parse(readFileSync(cacheResetMarkerPath(home), 'utf8'))
+  assert.equal(marker.reason, 'unversioned')
+  assert.equal(marker.foundVersion, null)
+})
+
+test('a v2 cache file with no reset needed never writes a reset marker', () => {
+  const home = makeHome()
+  const cwd = home
+  const key = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
+  writeV2Cache(home, { [key]: v2CacheEntry() })
+
+  run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+
+  assert.equal(existsSync(cacheResetMarkerPath(home)), false)
 })
 
 // ---------------------------------------------------------------------------

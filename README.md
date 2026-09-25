@@ -139,6 +139,38 @@ A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
 exactly as a shell would read it.
 
+## Command gate: versioned cache file
+
+The gate's per-command verdict cache (`gate-bash.json`, next to the other
+cache files) is an explicitly versioned file: `{"version": 2, "entries": {...}}`.
+A schema change is a deliberate, observable event, not something that looks
+like file corruption:
+
+- **A file with no `version` field** (the pre-2.0 flat shape) or a
+  **`version` that doesn't match** is discarded as a whole — every entry,
+  not one at a time — and a `gate-bash.cache-reset.json` marker is written
+  next to it: `{"at": ..., "reason": "unversioned" | "version-mismatch" | "unparseable" | "not-an-object", "foundVersion": number | null}`.
+  This lets anyone looking at the cache directory answer "did this install
+  just get a schema bump, or is something actually wrong" without guessing.
+- **One malformed entry inside an otherwise-current file** only drops that
+  entry — it is never treated as a reason to reset the whole cache.
+- **An expired entry** (past its 30-day `expiresAt`) is dropped on the next
+  read, same as before.
+
+Each entry also now carries the consequence score and the model's own
+confidence in that score (both `null` when a team policy settled the
+decision instead of Jev, or when there was nothing to be confident about),
+a human-readable display shape (`program flags classes` per command
+segment, joined by " · " — never the literal command, and never re-parsed
+back into one), and which worktree it was judged in. None of this is used
+to relax anything yet: it is the plumbing a later change uses to let one
+qualifying human approval teach the gate a 30-day allow, and to show a
+"Learned allows" list in the config panel.
+
+Every wall-clock read in this cache's own logic (`src/core/gate_cache.ts`)
+is injected by its caller — the module itself never calls `Date.now()` —
+so pruning and validation stay pure and independently testable.
+
 ## Models
 
 Every subagent call (the `Agent` tool) gets a model recommendation before

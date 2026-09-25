@@ -87,7 +87,7 @@ import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
-import { pruneGateCache } from '../../src/core/gate_cache.ts'
+import { GATE_CACHE_TTL_MS, loadGateCacheText, putVerdict, serializeGateCacheFile } from '../../src/core/gate_cache.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
@@ -114,6 +114,10 @@ const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
 const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 
 const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
+// Written once whenever loadGateCacheText resets the whole cache file (see
+// readCache below): a schema mismatch must be an OBSERVABLE event on disk,
+// not a silent "the cache is empty now and nobody knows why".
+const CACHE_RESET_MARKER_PATH = join(CACHE_DIR, 'gate-bash.cache-reset.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
 const NO_KEY_WARNED_PATH = join(CACHE_DIR, 'gate-bash.no-key-warned.json')
 const UNREACHABLE_WARNED_PATH = join(CACHE_DIR, 'gate-bash.unreachable-warned.json')
@@ -352,6 +356,12 @@ function passThroughWithNotice(message: string): void {
 
 type CacheEntry = GateCacheEntry
 
+/** The cache key material for a command, plus the raw shape text it was hashed from (needed later to build formatShapeForDisplay's human-readable form) -- or null when the command must not be cached at all. */
+interface CacheKeyed {
+  readonly key: string
+  readonly shape: string
+}
+
 /**
  * The cache key for a command, or null when it must not be cached.
  *
@@ -365,38 +375,82 @@ type CacheEntry = GateCacheEntry
  * Null means "ask every time": a command whose meaning cannot be known
  * without running it never borrows another command's answer.
  */
-function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null): string | null {
+function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null): CacheKeyed | null {
   const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
-  return shape === null ? null : createHash('sha256').update(shape).digest('hex').slice(0, 24)
+  if (shape === null) return null
+  return { key: createHash('sha256').update(shape).digest('hex').slice(0, 24), shape }
+}
+
+/** git's own toplevel for `cwd`, or `cwd` itself when this isn't a git repository (or git can't be run) -- populates a cache entry's `worktreePath` field. The cache KEY itself is not scoped to this yet; see gate_cache_key.ts for that (a later slice). */
+function worktreeRoot(cwd: string): string {
+  try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return top.length > 0 ? top : cwd
+  } catch {
+    return cwd
+  }
 }
 
 /**
- * Reads the cache, dropping expired and malformed entries (see
- * pruneGateCache, src/core/gate_cache.ts, for the TTL and its rationale).
- * When anything was dropped, the pruned set is persisted immediately so
- * this file doesn't quietly keep growing with verdicts nobody can use
- * anymore -- best-effort, same fail-open discipline as writeCache itself.
+ * Reads the cache file's raw text, or null when it doesn't exist -- distinct
+ * from an empty string, which loadGateCacheText would treat as unparseable.
  */
-function readCache(): Record<string, CacheEntry> {
-  let parsed: unknown
+function readCacheText(): string | null {
   try {
-    parsed = JSON.parse(readFileSync(CACHE_PATH, 'utf8'))
+    return readFileSync(CACHE_PATH, 'utf8')
   } catch {
-    return {}
+    return null
   }
-  if (typeof parsed !== 'object' || parsed === null) return {}
-  const { fresh, changed } = pruneGateCache(parsed as Record<string, unknown>)
-  if (changed) writeCache(fresh)
-  return fresh
 }
 
-function writeCache(cache: Record<string, CacheEntry>): void {
+/**
+ * Loads the v2 cache (see loadGateCacheText, src/core/gate_cache.ts):
+ * absent, loaded (possibly with malformed/expired entries dropped), or an
+ * explicit whole-file reset on a schema mismatch. A reset or a drop is
+ * persisted immediately so this file doesn't quietly keep growing with
+ * verdicts nobody can use anymore -- best-effort, same fail-open discipline
+ * as writeCacheFile itself. A reset also writes a visible marker file, so
+ * "the cache went from N entries to zero" is an observable event on disk,
+ * never a silent one.
+ */
+function readCache(now: number): Readonly<Record<string, CacheEntry>> {
+  const load = loadGateCacheText(readCacheText(), now)
+  if (load.kind === 'reset') {
+    writeCacheFile({})
+    try {
+      mkdirSync(CACHE_DIR, { recursive: true })
+      writeFileSync(CACHE_RESET_MARKER_PATH, JSON.stringify({ at: now, reason: load.reason, foundVersion: load.foundVersion }), 'utf8')
+    } catch {
+      // Best-effort marker; the reset itself already happened correctly
+      // above even if nobody can see why.
+    }
+    return {}
+  }
+  if (load.kind === 'loaded' && (load.droppedMalformed > 0 || load.droppedExpired > 0)) {
+    writeCacheFile(load.entries)
+  }
+  return load.entries
+}
+
+function writeCacheFile(entries: Readonly<Record<string, CacheEntry>>): void {
   try {
     mkdirSync(dirname(CACHE_PATH), { recursive: true })
-    writeFileSync(CACHE_PATH, JSON.stringify(cache), 'utf8')
+    writeFileSync(CACHE_PATH, serializeGateCacheFile(entries), 'utf8')
   } catch {
     // A cache that can't be written is never a reason to block anything.
   }
+}
+
+/**
+ * Single-key read-modify-write (ADR-9): re-reads the file immediately
+ * before writing, so a human approval recorded by gate-outcome.ts between
+ * this hook's own read and write is never clobbered by a lower-priority
+ * Jev/policy verdict -- see putVerdict, src/core/gate_cache.ts.
+ */
+function writeCacheEntry(key: string, entry: CacheEntry, now: number): void {
+  const load = loadGateCacheText(readCacheText(), now)
+  const current = load.kind === 'loaded' ? load.entries : {}
+  writeCacheFile(putVerdict(current, key, entry, now))
 }
 
 /**
@@ -916,15 +970,17 @@ async function main(): Promise<void> {
   // never share a verdict. Both reads hit the same small mirror file.
   const cachedCatalog = readCatalogMirror()
   const cachedMatch = cachedCatalog !== null ? matchDestination(cwd, cachedCatalog.destinations) : null
-  const key = cacheKey(command, context, cwd, cachedMatch?.id ?? null, cachedMatch?.worktreePath ?? null)
-  const cache = key === null ? {} : readCache()
+  const keyed = cacheKey(command, context, cwd, cachedMatch?.id ?? null, cachedMatch?.worktreePath ?? null)
+  const key = keyed?.key ?? null
+  const cache = key === null ? {} : readCache(Date.now())
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
     appendGateRecord(cwd, command, 'cache', hit.decision, null)
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
-      // recorded -- without scores, which the cache does not keep.
-      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
+      // recorded, carrying the hit entry's own score rather than inventing a
+      // new one -- the cache never stores reversible/external.
+      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.id ?? null, { reversible: null, external: null, consequence: hit.score }, GATE_CONSEQUENCE_CEILING)
     }
     emit(hit.decision, t('cached', { reason: hit.reason }))
     return
@@ -967,9 +1023,35 @@ async function main(): Promise<void> {
   if (previousUnreachableFailures !== 0) writeUnreachableFailures(decideUnreachableNotice(true, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD).nextConsecutiveFailures)
 
   const resolved = outcome as Extract<JevOutcome, { kind: 'verdict' }>
-  if (key !== null) {
-    cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
-    writeCache(cache)
+  if (key !== null && keyed !== null) {
+    const now = Date.now()
+    const entry: CacheEntry = {
+      decision: resolved.decision,
+      reason: resolved.reason,
+      at: now,
+      expiresAt: now + GATE_CACHE_TTL_MS,
+      // A policy match resolves with no axes at all (decideGateAction never
+      // ran the risk stage); everything else came from Jev's own judgment.
+      source: resolved.axes === null ? 'policy' : 'jev',
+      // B3a wires the real, explicitly-computed value; hardcoded false here
+      // means nothing written at this slice can ever be learned yet.
+      learnable: false,
+      score: resolved.axes?.consequence ?? null,
+      // A later slice threads the consequence answer's own confidence
+      // through decideAction/GateActionResult; until then the field exists
+      // on the schema (so nothing downstream has to migrate) but is always
+      // null.
+      confidence: null,
+      // A later slice adds formatShapeForDisplay to turn this into a human-
+      // readable string; the raw shape text is a valid string for the schema
+      // in the meantime, and nothing reads this field for display yet.
+      shape: keyed.shape,
+      project: projectName(cwd),
+      destinationId: resolved.destinationId,
+      worktreePath: worktreeRoot(cwd),
+      learnedAt: null,
+    }
+    writeCacheEntry(key, entry, now)
   }
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs)
   // AB benchmark: 'deny' never reaches here -- decideGateAction's Jev-sourced
