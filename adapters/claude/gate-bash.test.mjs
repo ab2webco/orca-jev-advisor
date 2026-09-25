@@ -470,6 +470,9 @@ const DISCARDING_COMMANDS = [
   // A bare `--` is what xargs leaves in the static text; the real
   // pathspecs only exist once xargs appends them at runtime.
   'find . | xargs git checkout --',
+  // Required STILL-refused case: a preceding, unrelated segment must not
+  // hide the discard in the one that follows it.
+  'x && git checkout -- file',
   // A command SUBSTITUTION really does run, even behind a mention-only
   // verb like `echo` -- see mentionsRatherThanRuns' hasCommandSubstitution
   // guard, without which these two broke the NEVER_SILENTLY loop before
