@@ -269,6 +269,7 @@ function approvalsSummary (pending, outcomes, now) {
     approved: summary.approved,
     rejected: summary.rejected,
     notRun: summary.notRun,
+    awaiting: summary.awaiting,
     ceiling: ceilingEvidence(summary.labelled),
   }
 }

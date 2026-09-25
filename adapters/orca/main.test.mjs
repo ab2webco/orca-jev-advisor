@@ -5,7 +5,7 @@
 // odd/tasks/panel-worker-wakeup.md for the task list this backs.
 
 import { strict as assert } from 'node:assert'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -63,6 +63,7 @@ const {
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
+  spawnSidecar,
   WORKER_HEARTBEAT_KEY
 } = await import('./main.mjs')
 
@@ -933,4 +934,34 @@ test('policySeedNoticeStatus carries only what the panel renders', async () => {
   await publishPolicySeedNoticeStatus(orca, storageHost)
   const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
   assert.deepEqual(Object.keys(status).sort(), ['added', 'at', 'differing', 'due', 'shippedVersion'])
+})
+
+// ---------------------------------------------------------------------------
+// spawnSidecar -- the generic helper every real sidecar call in this file
+// shares (runSecretMirrorScript, runReadModelMeasurementsScript). The defect
+// this closes: writing to a spawned child's stdin after it has already
+// exited (or never reads it) emits an unhandled 'error' (EPIPE, most often)
+// on the stream. With no listener, that is an uncaught exception that
+// crashes the whole background worker -- gate, board, mods and secrets all
+// share this one process.
+// ---------------------------------------------------------------------------
+
+const spawnSidecarTempDirs = []
+after(() => {
+  for (const dir of spawnSidecarTempDirs) rmSync(dir, { recursive: true, force: true })
+})
+
+test('spawnSidecar settles an ordinary failure, never an unhandled error, when the child exits before reading stdin', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'orca-jev-spawn-sidecar-epipe-test-'))
+  spawnSidecarTempDirs.push(dir)
+  const script = join(dir, 'exits-without-reading-stdin.mjs')
+  // Exits immediately, before Node ever drains stdin, so the write below is
+  // guaranteed to land on an already-closed pipe.
+  writeFileSync(script, 'process.exit(0)\n', 'utf8')
+  // Larger than any OS pipe buffer, so the write cannot complete in one
+  // syscall before the child's end of the pipe is gone -- deterministic
+  // EPIPE, not a timing-dependent flake.
+  const oversizedPayload = 'x'.repeat(2 * 1024 * 1024)
+  const result = await spawnSidecar([script], { timeout: 5000, maxBuffer: 64 * 1024 }, oversizedPayload)
+  assert.equal(result.ok, false)
 })

@@ -239,6 +239,37 @@ test('a force push denies by default, and drops to ask when its switch is off', 
 })
 
 // ---------------------------------------------------------------------------
+// pluginVersion stamping -- every written gate-decision record must carry
+// the shipped plugin's own version (see src/core/gate_measurement.ts's
+// GateDecisionRecord.pluginVersion doc comment). Uses the local-rule deny
+// path (tier 1b), which runs before the API key check, so this needs no
+// TYPESAFE_API_KEY and never reaches Jev.
+// ---------------------------------------------------------------------------
+
+function gateLogPath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-decisions.jsonl')
+}
+
+/** The real orca-plugin.json's own `version`, read the same way a developer
+ *  or the installer would -- never hardcoded, so this test fails loudly
+ *  (instead of silently going stale) if the manifest's version ever
+ *  changes. */
+function expectedPluginVersion () {
+  const manifestPath = join(__dirname, '..', '..', 'orca-plugin.json')
+  return JSON.parse(readFileSync(manifestPath, 'utf8')).version
+}
+
+test('a written gate-decision record carries the real plugin version', () => {
+  const home = makeHome()
+  run(home, 'rm -rf /')
+
+  const lines = readFileSync(gateLogPath(home), 'utf8').trim().split('\n')
+  assert.equal(lines.length, 1, 'the local-rule deny must write exactly one decision row')
+  const record = JSON.parse(lines[0])
+  assert.equal(record.pluginVersion, expectedPluginVersion(), 'the row must carry the shipped plugin version, not be missing the field')
+})
+
+// ---------------------------------------------------------------------------
 // Segment-scoped NEVER_SILENTLY (M4, ADR-1). forcePush and pushProtected
 // used `.*` spanning quantifiers that reached across a `&&`/`;`/`|`
 // separator under whole-string matching, so `git push origin --delete x &&

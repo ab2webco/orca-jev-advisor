@@ -164,7 +164,7 @@ const READY_DAY = {
     rest: { families: 4, total: 70, ask: 3, deny: 1, notRun: 1 },
     quiet: { families: 60, total: 935 },
   },
-  approvals: { asked: 89, approved: 71, rejected: 0, notRun: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 37, rejectedCount: 0 } },
+  approvals: { asked: 89, approved: 71, rejected: 0, notRun: 9, awaiting: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 37, rejectedCount: 0 } },
 }
 const READY_ALL = {
   key: 'all', available: true, pluginVersion: null, since: null,
@@ -193,7 +193,7 @@ const READY_ALL = {
     rest: { families: 18, total: 784, ask: 32, deny: 1, notRun: 5 },
     quiet: { families: 69, total: 779 },
   },
-  approvals: { asked: 106, approved: 81, rejected: 1, notRun: 15, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 43, rejectedCount: 0 } },
+  approvals: { asked: 106, approved: 81, rejected: 1, notRun: 15, awaiting: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 43, rejectedCount: 0 } },
 }
 const READY_WINDOWS = {
   version: { ...emptyWindow('version'), available: false },
@@ -212,7 +212,7 @@ function emptyWindow (key) {
     jevLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
     interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
     approvals: {
-      asked: 0, approved: 0, rejected: 0, notRun: 0,
+      asked: 0, approved: 0, rejected: 0, notRun: 0, awaiting: 0,
       ceiling: { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 },
     },
   }
@@ -399,6 +399,7 @@ const READY = {
       approved: 27,
       rejected: 1,
       notRun: 15,
+      awaiting: 0,
       corruptLines: 0,
       ceiling: {
         highestApproved: null,

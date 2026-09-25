@@ -414,6 +414,11 @@
           // de correr el comando deja el mismo rastro.
           'approvals.notRun': 'No corrió',
           'approvals.notRunHint': 'No corrió: sin respuesta cuando venció la espera. La mayoría son comandos que el gate rechazó directo y que nunca llegaron a ejecutarse -- el freno funcionó -- pero una sesión que se cerró justo después de correr el comando deja el mismo rastro. Es una clasificación, no un hecho confirmado.',
+          // Preguntado, todavía sin respuesta, pero dentro de la ventana de
+          // espera (UNRESOLVED_AFTER_MS) -- un aviso que sigue en pantalla en
+          // este momento. Sin este cuarto grupo, approved+rejected+notRun no
+          // sumaba `asked` mientras cualquier aviso siguiera pendiente.
+          'approvals.awaiting': 'Esperando respuesta',
           'approvals.highestApproved': 'Más alto aprobado',
           'approvals.lowestRejected': 'Más bajo rechazado',
           'approvals.suggestedCeiling': 'Techo sugerido',
@@ -521,6 +526,11 @@
           // same trace.
           'approvals.notRun': 'Did not run',
           'approvals.notRunHint': "Did not run: no answer by the time the wait expired. Most of these are commands the gate denied outright and that never ran at all -- the stop worked -- but a session that closed right after the command ran leaves the same trace. This is a classification, not a confirmed fact.",
+          // Asked, with no answer yet, but still inside the wait window
+          // (UNRESOLVED_AFTER_MS) -- a prompt genuinely still on screen right
+          // now. Without this fourth bucket, approved+rejected+notRun did
+          // not sum to `asked` for as long as any prompt stayed unanswered.
+          'approvals.awaiting': 'Awaiting',
           'approvals.highestApproved': 'Highest approved',
           'approvals.lowestRejected': 'Lowest rejected',
           'approvals.suggestedCeiling': 'Suggested ceiling',
@@ -973,7 +983,11 @@
         var segments = [
           { value: approvals.approved || 0, cls: 'v1', label: t('approvals.approved') },
           { value: approvals.rejected || 0, cls: 'vd', label: t('approvals.rejected') },
-          { value: approvals.notRun || 0, cls: 'v3', label: t('approvals.notRun') }
+          { value: approvals.notRun || 0, cls: 'v3', label: t('approvals.notRun') },
+          // The fourth bucket: asked, still inside the wait window, with no
+          // answer yet. Without it the bar/legend covered only part of
+          // `asked` for as long as any prompt was still pending.
+          { value: approvals.awaiting || 0, cls: 'v2', label: t('approvals.awaiting') }
         ]
         var parts = [stackedBar(segments, asked), legendList(segments, asked)]
         // P7: the uncertainty stays in the copy, and only when the count is

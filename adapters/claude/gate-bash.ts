@@ -64,6 +64,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy } from '../../src/core/decisions.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
@@ -124,6 +125,12 @@ const UNREACHABLE_WARN_THRESHOLD = 3
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
+// This file runs IN PLACE from `<pluginRoot>/adapters/claude/gate-bash.ts`
+// (see adapters/orca/install-claude-integration.mjs's hookSpecs, which
+// points Claude Code's hook entry straight at the installed copy rather
+// than copying it elsewhere), so two directories up from this module is
+// always the installed plugin's own root.
+const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // Written by adapters/orca/write-secret-mirror.mjs, refreshed on plugin
 // activation and on every config-panel save -- this hook has no channel
@@ -584,6 +591,32 @@ function appendPendingApproval(
   }
 }
 
+/**
+ * The shipped plugin's own version, read once from `orca-plugin.json` at
+ * PLUGIN_ROOT -- never from `package.json`, which carries the whole
+ * monorepo's own (private) version, not the manifest that is actually
+ * installed and versioned as this Claude Code plugin. This is the "which
+ * plugin build produced this decision" GateDecisionRecord.pluginVersion
+ * documents (src/core/gate_measurement.ts), read here at the adapter layer
+ * so that module stays free of I/O -- never in src/core.
+ *
+ * Read once at module load and cached, same reasoning as PLATFORM/HOME_
+ * PATHS above: it cannot change while this process is running. Best-effort,
+ * same fail-open discipline as every other read in this file: a missing or
+ * malformed manifest must never block or delay a verdict -- it simply
+ * leaves pluginVersion off the record, exactly like a record written before
+ * this field existed (see buildGateDecisionRecord's conditional spread).
+ */
+function readPluginVersion(): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(PLUGIN_ROOT, 'orca-plugin.json'), 'utf8')) as { readonly version?: unknown }
+    return typeof manifest.version === 'string' ? manifest.version : undefined
+  } catch {
+    return undefined
+  }
+}
+const PLUGIN_VERSION = readPluginVersion()
+
 /** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
 function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null): void {
   try {
@@ -596,6 +629,11 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       source,
       verdict,
       latencyMs,
+      // BuildGateDecisionRecordInput declares this required -- true for
+      // every caller that already knows its own build's version. This is
+      // the one caller that resolves it from disk, so it stays honest about
+      // the read possibly failing rather than forcing a fake version string.
+      pluginVersion: PLUGIN_VERSION,
     })
     appendFileSync(GATE_LOG_PATH, serializeGateRecord(record), 'utf8')
   } catch {
