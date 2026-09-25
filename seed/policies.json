@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "policies": [
     {
       "id": "read_and_test",
@@ -94,26 +94,31 @@
     {
       "id": "ticket_first",
       "kind": "permits",
+      "scope": "process",
       "rule": "Work that starts from a Linear or Plane ticket gets linked to the ticket before opening the PR, and the PR link gets pasted into the ticket when done. That happens without asking."
     },
     {
       "id": "model_by_difficulty",
       "kind": "permits",
+      "scope": "process",
       "rule": "A mechanical, localized task gets handled with the cheapest available model. Only a design decision with consequences, compatibility concerns, or several systems in play justifies the more expensive model."
     },
     {
       "id": "delegate_by_scope",
       "kind": "permits",
+      "scope": "process",
       "rule": "Understanding something that touches four or more files gets delegated to an exploration agent. Writing two or more non-trivial files gets delegated to a single writer agent. A mechanical one-file change happens inline."
     },
     {
       "id": "no_inventing_contracts",
       "kind": "permits",
+      "scope": "process",
       "rule": "Before writing against an API, a plugin or a format that already exists on the machine, its real implementation gets read. Assuming the shape of the contract isn't an option -- it's the cause of most bugs."
     },
     {
       "id": "visual_evidence",
       "kind": "prohibits",
+      "scope": "process",
       "rule": "Nothing with a screen is called done without a screenshot that was actually looked at. Building without looking doesn't count as verifying."
     }
   ]

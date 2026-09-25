@@ -105,7 +105,13 @@ main*, *anything touching a client's product is confirmed by a human*. A
 policy either permits, prohibits, or requires a person; when one covers
 what an agent is about to do, that settles it without judging risk at all.
 Policies are global by default, and a rule that genuinely belongs to one
-project can be scoped to it.
+project can be scoped to it. A policy also declares whether it governs a
+single command (the default) or describes how the agent works across many
+commands — *screenshots get looked at before being called done*, *the
+cheapest available model handles a mechanical task*. A command-gate stop
+never checks a command against one of those: it describes the workflow that
+produced the command, not the command itself, so no shell command can be
+"the concrete instance" of it either way.
 
 **Thresholds.** Sensible defaults, measured. Change them only with
 evidence.

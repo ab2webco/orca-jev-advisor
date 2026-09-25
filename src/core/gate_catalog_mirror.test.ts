@@ -96,3 +96,35 @@ test("policies: top-level value not an array at all resolves to null, not an emp
 test("policies: an empty array is valid -- distinct from the null case above", () => {
   assert.deepEqual(parseMirroredPolicies([]), []);
 });
+
+// ---------------------------------------------------------------------------
+// scope -- odd/tasks/release-0.5.1.md T2. Same row-by-row tolerance as
+// destinations above: a bad `scope` costs only that row.
+// ---------------------------------------------------------------------------
+
+test("policies: a valid 'command' or 'process' scope parses through", () => {
+  const raw = [
+    { id: "p1", rule: "screenshots get looked at", kind: "prohibits", scope: "process" },
+    { id: "p2", rule: "never force-push", kind: "prohibits", scope: "command" },
+  ];
+  const parsed = parseMirroredPolicies(raw);
+  assert.equal(parsed?.length, 2);
+  assert.equal(parsed?.[0]?.scope, "process");
+  assert.equal(parsed?.[1]?.scope, "command");
+});
+
+test("policies: a row with no scope field at all is still valid -- absent means 'resolve it later'", () => {
+  const raw = [{ id: "p1", rule: "ok", kind: "permits" }];
+  const parsed = parseMirroredPolicies(raw);
+  assert.equal(parsed?.length, 1);
+  assert.equal(parsed?.[0]?.scope, undefined);
+});
+
+test("policies: a row with an invalid scope value is dropped, siblings survive", () => {
+  const raw = [
+    { id: "p1", rule: "ok", kind: "permits", scope: "command" },
+    { id: "bad", rule: "bad scope", kind: "permits", scope: "sometimes" },
+  ];
+  const parsed = parseMirroredPolicies(raw);
+  assert.deepEqual(parsed?.map((p) => p.id), ["p1"]);
+});

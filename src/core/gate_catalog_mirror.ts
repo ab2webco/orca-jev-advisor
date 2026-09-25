@@ -23,7 +23,7 @@
 import { isArrayOf, isNumber, isRecord, isString } from '../guards.ts'
 import type { MatchableDestination } from './destination_match.ts'
 import { migratePolicyKind } from './decisions.ts'
-import type { Policy, PolicyKind } from './decisions.ts'
+import type { Policy, PolicyKind, PolicyScope } from './decisions.ts'
 
 /**
  * A catalog destination as read from the mirror, narrowed to only what
@@ -50,6 +50,11 @@ export interface MirroredCatalog {
  */
 function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null
+}
+
+/** Same row-by-row tolerance as `destinations`: a bad `scope` costs only that row, never the whole mirror. */
+function isPolicyScope(value: unknown): value is PolicyScope {
+  return value === 'command' || value === 'process'
 }
 
 function isAutonomyOverride(value: unknown): value is { readonly consequenceCeiling?: number } {
@@ -84,6 +89,7 @@ export function parseMirroredCatalog(value: unknown): MirroredCatalog | null {
 function isMirroredPolicy(value: unknown): value is Policy {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false
   if ('destinations' in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false
+  if ('scope' in value && value.scope !== undefined && !isPolicyScope(value.scope)) return false
   return true
 }
 

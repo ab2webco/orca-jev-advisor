@@ -269,6 +269,20 @@ test('a written gate-decision record carries the real plugin version', () => {
   assert.equal(record.pluginVersion, expectedPluginVersion(), 'the row must carry the shipped plugin version, not be missing the field')
 })
 
+// odd/tasks/release-0.5.1.md T1: end-to-end evidence (real hook process, no
+// Jev mocking needed since a local-rule deny never reaches the network)
+// that the hook itself -- not just buildGateDecisionRecord in isolation --
+// stamps stopReason on the record it actually writes.
+test('a local-rule stop is recorded with stopReason "local-rule"', () => {
+  const home = makeHome()
+  run(home, 'rm -rf /')
+
+  const lines = readFileSync(gateLogPath(home), 'utf8').trim().split('\n')
+  const record = JSON.parse(lines[0])
+  assert.equal(record.stopReason, 'local-rule')
+  assert.equal(record.policyId, undefined, 'a local-rule stop never carries a policyId')
+})
+
 // ---------------------------------------------------------------------------
 // Segment-scoped NEVER_SILENTLY (M4, ADR-1). forcePush and pushProtected
 // used `.*` spanning quantifiers that reached across a `&&`/`;`/`|`

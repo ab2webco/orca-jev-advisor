@@ -135,6 +135,41 @@ test("getPolicies: a row with a malformed destinations value (not an array of st
 });
 
 // ===========================================================================
+// PolicyRow.scope -- odd/tasks/release-0.5.1.md T2. Optional command-vs-
+// process scope; see decisions.ts's PolicyScope for what the two values mean.
+// ===========================================================================
+
+test("getPolicies: a row with no scope field at all is today's behavior, still valid", async () => {
+  const rows: PolicyRow[] = [{ id: "a", rule: "rule a", kind: "permits" }];
+  const host = fakeHost({ policies: rows });
+  assert.deepEqual(await getPolicies(host), rows);
+});
+
+test("getPolicies: a valid 'command' or 'process' scope is preserved", async () => {
+  const rows: PolicyRow[] = [
+    { id: "a", rule: "rule a", kind: "permits", scope: "command" },
+    { id: "b", rule: "rule b", kind: "prohibits", scope: "process" },
+  ];
+  const host = fakeHost({ policies: rows });
+  assert.deepEqual(await getPolicies(host), rows);
+});
+
+test("getPolicies: a row with an invalid scope value is excluded, siblings survive", async () => {
+  const host = fakeHost({
+    policies: [
+      { id: "a", rule: "rule a", kind: "permits", scope: "command" },
+      { id: "bad", rule: "bad scope", kind: "permits", scope: "sometimes" },
+      { id: "c", rule: "rule c", kind: "prohibits" },
+    ],
+  });
+  const policies = await getPolicies(host);
+  assert.deepEqual(policies, [
+    { id: "a", rule: "rule a", kind: "permits", scope: "command" },
+    { id: "c", rule: "rule c", kind: "prohibits" },
+  ]);
+});
+
+// ===========================================================================
 // AutonomyConfig.consequenceCeiling -- optional per-destination gate override
 // ===========================================================================
 

@@ -64,6 +64,18 @@ function describeNearestLevel(score: number, legend: Record<string, string>): st
  */
 export type PolicyKind = "permits" | "requires_human" | "prohibits";
 
+/**
+ * Whether a policy is something a single command's TEXT can honestly be
+ * judged against ("command"), or a claim about how the agent works across
+ * many commands, or what it later says about the work ("process") -- e.g.
+ * "screenshots get looked at before being called done" is a claim about the
+ * WORKFLOW that produced a bash command, not about the command itself, and
+ * no `same_kind` answer can honestly resolve it. See
+ * filterPoliciesForCommandScope below for where this stops a `"process"`
+ * policy from ever reaching the coverage question at all.
+ */
+export type PolicyScope = "command" | "process";
+
 export interface Policy {
   readonly id: string;
   readonly rule: string;
@@ -74,6 +86,14 @@ export interface Policy {
    * field existed. See filterPoliciesForDestination below.
    */
   readonly destinations?: readonly string[];
+  /**
+   * Optional command-vs-process scope (see PolicyScope above). Absent keeps
+   * today's behavior: resolvePolicyScope below falls back to what the
+   * shipped seed says for this same id, and to `"command"` when the seed
+   * doesn't know this id either -- a user-authored rule is never silently
+   * dropped just because it omits this field.
+   */
+  readonly scope?: PolicyScope;
 }
 
 export type DestinationOutcome = "act" | "do_not" | "ask";
@@ -266,6 +286,51 @@ export function filterPoliciesForDestination(policies: readonly Policy[], destin
     if (policy.destinations === undefined || policy.destinations.length === 0) return true;
     return destinationId !== null && policy.destinations.includes(destinationId);
   });
+}
+
+/**
+ * The effective scope a policy resolves to: its own explicit `scope` when it
+ * has one, otherwise the shipped seed's scope for that same id, otherwise
+ * `"command"`. This is the ONE rule every reader of a possibly-scopeless
+ * policy row must use -- see filterPoliciesForCommandScope (the gate) and
+ * policy_seed_import.ts's mergePolicySeeds (the seed notice), both of which
+ * call this instead of comparing `scope` fields directly, precisely so an
+ * omitted field is never mistaken for a real difference from the seed.
+ */
+export function resolvePolicyScope(policy: Pick<Policy, "id" | "scope">, seedScopeById: ReadonlyMap<string, PolicyScope>): PolicyScope {
+  if (policy.scope !== undefined) return policy.scope;
+  return seedScopeById.get(policy.id) ?? "command";
+}
+
+/**
+ * Narrows `policies` to the ones a single command's TEXT can honestly be
+ * judged against -- filters out every policy that resolves to `"process"`
+ * (see resolvePolicyScope above and PolicyScope's own doc). Called by
+ * gate-bash.ts BEFORE buildPolicyQuestions, so a process policy never enters
+ * the `coverage` criteria at all: it cannot be offered as an answer Jev
+ * picks, and it cannot be the policy `same_kind` is asked to match against.
+ * This is what stopped a command that WROTE or TOOK a screenshot from being
+ * asked about under `visual_evidence` ("nothing with a screen is called done
+ * without a screenshot") -- the exact action that policy demands was being
+ * judged as if it violated the policy that demands it.
+ */
+export function filterPoliciesForCommandScope(policies: readonly Policy[], seedScopeById: ReadonlyMap<string, PolicyScope>): readonly Policy[] {
+  return policies.filter((policy) => resolvePolicyScope(policy, seedScopeById) === "command");
+}
+
+/**
+ * Builds the id -> scope lookup resolvePolicyScope's own fallback needs,
+ * from the shipped seed's rows. Only a row that carries an EXPLICIT `scope`
+ * contributes an entry -- a seed row that omits it needs no entry at all,
+ * because resolvePolicyScope's own default (`"command"`) already produces
+ * the same answer an absent map entry would.
+ */
+export function buildSeedScopeIndex(seedPolicies: readonly Pick<Policy, "id" | "scope">[]): ReadonlyMap<string, PolicyScope> {
+  const byId = new Map<string, PolicyScope>();
+  for (const policy of seedPolicies) {
+    if (policy.scope !== undefined) byId.set(policy.id, policy.scope);
+  }
+  return byId;
 }
 
 /** Interprets the risk-stage answers. Always resolves (never returns null). */

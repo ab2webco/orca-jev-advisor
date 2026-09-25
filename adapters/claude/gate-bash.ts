@@ -65,8 +65,9 @@ import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, decideGateAction, filterPoliciesForDestination } from '../../src/core/decisions.ts'
-import type { GateActionReason, Policy } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
+import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
@@ -131,6 +132,13 @@ const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // than copying it elsewhere), so two directories up from this module is
 // always the installed plugin's own root.
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
+// The shipped baseline this plugin ships inside its own tree (see
+// src/core/policy_seed.ts's module note) -- read here only for the id ->
+// scope map filterPoliciesForCommandScope's fallback needs (see
+// readSeedScopeById below), never for the rows themselves: a developer's
+// OWN stored policies (readPoliciesMirror) are what the gate actually
+// judges against.
+const SEED_POLICIES_PATH = join(PLUGIN_ROOT, 'seed', 'policies.json')
 const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // Written by adapters/orca/write-secret-mirror.mjs, refreshed on plugin
 // activation and on every config-panel save -- this hook has no channel
@@ -621,6 +629,29 @@ function readPluginVersion(): string | undefined {
 }
 const PLUGIN_VERSION = readPluginVersion()
 
+/**
+ * Which of the SHIPPED policies are `"process"` scoped (see decisions.ts's
+ * PolicyScope), for resolvePolicyScope's fallback when a stored row omits
+ * its own `scope` -- see filterPoliciesForCommandScope below. Read once at
+ * module load, same reasoning and same fail-open discipline as
+ * readPluginVersion above: a missing or unreadable seed file yields an
+ * empty index, which makes every unscoped stored row resolve to `"command"`
+ * -- today's behavior, unchanged. This never lowers protection (no rule
+ * that used to ask starts allowing silently); the worst case is simply that
+ * the one bug T2 exists to fix (a process policy still gating an individual
+ * command) is not fixed on a machine whose own plugin install is broken in
+ * an unrelated way.
+ */
+function readSeedScopeById(): ReadonlyMap<string, PolicyScope> {
+  try {
+    const parsed = JSON.parse(readFileSync(SEED_POLICIES_PATH, 'utf8'))
+    return buildSeedScopeIndex(parseSeedPolicies(parsed))
+  } catch {
+    return new Map()
+  }
+}
+const SEED_SCOPE_BY_ID = readSeedScopeById()
+
 /** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
 function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null): void {
   try {
@@ -760,12 +791,17 @@ type JevOutcome =
  *
  * Also resolves the cwd against the (optional) catalog mirror, filters the
  * (optional) policies mirror down to whatever applies at the matched
- * destination, and -- when at least one policy applies -- folds the two
- * extra policy-stage questions into the SAME callJev call the gate already
- * makes (no second network round trip). decideGateAction then composes
- * "does a policy already resolve this" with the existing consequence-
- * ceiling risk rule, substituting the matched destination's own ceiling
- * override when its catalog entry carries one.
+ * destination, and then to whatever is `"command"` scoped (see
+ * filterPoliciesForCommandScope, decisions.ts) -- a `"process"` policy
+ * (e.g. "screenshots get looked at before being called done") describes how
+ * the agent works across many commands, not something a single command's
+ * text can honestly be judged against, so it must never reach the coverage
+ * question at all. When at least one policy survives both filters, its two
+ * extra policy-stage questions fold into the SAME callJev call the gate
+ * already makes (no second network round trip). decideGateAction then
+ * composes "does a policy already resolve this" with the existing
+ * consequence-ceiling risk rule, substituting the matched destination's own
+ * ceiling override when its catalog entry carries one.
  */
 async function askJev(apiKey: string, command: string, context: string, cwd: string): Promise<JevOutcome> {
   try {
@@ -773,16 +809,17 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
     const policies = readPoliciesMirror()
     const matched: MirroredDestination | null = catalog !== null ? matchDestination(cwd, catalog.destinations) : null
     const filteredPolicies = filterPoliciesForDestination(policies, matched?.id ?? null)
+    const commandScopedPolicies = filterPoliciesForCommandScope(filteredPolicies, SEED_SCOPE_BY_ID)
 
     const questions = {
       ...buildActionGateQuestions(),
-      ...(filteredPolicies.length > 0 ? buildPolicyQuestions(filteredPolicies) : {}),
+      ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies) : {}),
     }
     const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
     const response = await callJev(apiKey, buildActionGateState(command, context, destination), questions, { budgetMs: BUDGET_MS })
     const gate = decideGateAction({
       action: command,
-      policies: filteredPolicies,
+      policies: commandScopedPolicies,
       answers: response.answers,
       consequenceCeiling: matched?.autonomy?.consequenceCeiling,
       noDestinationMatched: matched === null,

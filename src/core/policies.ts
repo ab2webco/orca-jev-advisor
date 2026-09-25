@@ -8,7 +8,7 @@
 // share one implementation instead of three.
 
 import { readFile } from "node:fs/promises";
-import type { Policy, PolicyKind } from "./decisions.ts";
+import type { Policy, PolicyKind, PolicyScope } from "./decisions.ts";
 import { isRecord, isString } from "../guards.ts";
 
 /** Reserved: never usable as a real policy id, since Jev's coverage question uses it to mean "none of these apply". */
@@ -19,6 +19,13 @@ const POLICY_KINDS: readonly PolicyKind[] = ["permits", "requires_human", "prohi
 
 function isPolicyKind(value: unknown): value is PolicyKind {
   return isString(value) && (POLICY_KINDS as readonly string[]).includes(value);
+}
+
+/** The only valid values for a policy row's optional `scope` -- see PolicyScope in decisions.ts. */
+const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process"];
+
+function isPolicyScope(value: unknown): value is PolicyScope {
+  return isString(value) && (POLICY_SCOPES as readonly string[]).includes(value);
 }
 
 function isPolicyRow(value: unknown, index: number): Policy {
@@ -36,7 +43,19 @@ function isPolicyRow(value: unknown, index: number): Policy {
   if (!isPolicyKind(value.kind)) {
     throw new Error(`La politica en la posicion ${index} ('${value.id}') necesita 'kind' igual a uno de: ${POLICY_KINDS.join(", ")}`);
   }
-  return { id: value.id, rule: value.rule, kind: value.kind };
+  // Unlike `kind`, `scope` is genuinely optional: absent means "resolve it
+  // later" (resolvePolicyScope in decisions.ts), not a misconfiguration --
+  // but a PRESENT, invalid value is still a typo the operator needs to see,
+  // same discipline as `kind` above.
+  if ("scope" in value && value.scope !== undefined && !isPolicyScope(value.scope)) {
+    throw new Error(`La politica en la posicion ${index} ('${value.id}') tiene un 'scope' invalido; debe ser uno de: ${POLICY_SCOPES.join(", ")}`);
+  }
+  return {
+    id: value.id,
+    rule: value.rule,
+    kind: value.kind,
+    ...(isPolicyScope(value.scope) ? { scope: value.scope } : {}),
+  };
 }
 
 /**

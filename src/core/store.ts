@@ -15,7 +15,7 @@
 
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
 import { migratePolicyKind } from "./decisions.ts";
-import type { PolicyKind } from "./decisions.ts";
+import type { PolicyKind, PolicyScope } from "./decisions.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
 export interface StorageHost {
@@ -150,6 +150,14 @@ export interface PolicyRow {
    * interpreted -- this module only validates the raw shape.
    */
   readonly destinations?: readonly string[];
+  /**
+   * Optional command-vs-process scope -- see decisions.ts's PolicyScope for
+   * what the two values mean. Absent means "resolve it" (resolvePolicyScope
+   * in decisions.ts): the shipped seed's own scope for this same id, or
+   * `"command"` when the seed doesn't know this id either. This module only
+   * validates the raw shape.
+   */
+  readonly scope?: PolicyScope;
 }
 
 /** The runtime list of PolicyKind's members, same technique policies.ts already uses for its own isPolicyKind. */
@@ -162,11 +170,19 @@ function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null;
 }
 
+/** The runtime list of PolicyScope's members, same technique as isPolicyKind above. */
+const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process"];
+
+function isPolicyScope(value: unknown): value is PolicyScope {
+  return (POLICY_SCOPES as readonly unknown[]).includes(value);
+}
+
 /** Exported so the seed reader validates rows against this exact shape rather
  *  than a second, drifting copy of it. */
 export function isPolicyRow(value: unknown): value is PolicyRow {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false;
   if ("destinations" in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false;
+  if ("scope" in value && value.scope !== undefined && !isPolicyScope(value.scope)) return false;
   return true;
 }
 

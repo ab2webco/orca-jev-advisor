@@ -14,8 +14,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { decideAction, decideGateAction, filterPoliciesForDestination, interpretDestinationPolicy } from "./decisions.ts";
-import type { Policy } from "./decisions.ts";
+import { buildSeedScopeIndex, decideAction, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, interpretDestinationPolicy, resolvePolicyScope } from "./decisions.ts";
+import type { Policy, PolicyScope } from "./decisions.ts";
 import type { Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer } from "./jev.ts";
 
 const ACTION = "do something";
@@ -188,6 +188,70 @@ test("filterPoliciesForDestination: when destinationId is null, scoped policies 
   const global: Policy = { id: "global", rule: "applies everywhere", kind: "permits" };
   const scoped: Policy = { id: "scoped", rule: "only for site-a", kind: "prohibits", destinations: ["site-a"] };
   assert.deepEqual(filterPoliciesForDestination([global, scoped], null), [global]);
+});
+
+// ===========================================================================
+// resolvePolicyScope / filterPoliciesForCommandScope / buildSeedScopeIndex
+// -- odd/tasks/release-0.5.1.md T2. A "process" policy (e.g. "screenshots
+// get looked at before being called done") describes how the agent works
+// across many commands, not something a single command's text can be
+// judged against -- it must never reach the coverage question at all.
+// ===========================================================================
+
+function seedScope(entries: Readonly<Record<string, PolicyScope>>): ReadonlyMap<string, PolicyScope> {
+  return new Map(Object.entries(entries));
+}
+
+test("resolvePolicyScope: an explicit scope on the row always wins, regardless of the seed", () => {
+  assert.equal(resolvePolicyScope({ id: "visual_evidence", scope: "command" }, seedScope({ visual_evidence: "process" })), "command");
+  assert.equal(resolvePolicyScope({ id: "own_branch", scope: "process" }, seedScope({})), "process");
+});
+
+test("resolvePolicyScope: no explicit scope falls back to the seed's own scope for that same id", () => {
+  assert.equal(resolvePolicyScope({ id: "visual_evidence" }, seedScope({ visual_evidence: "process" })), "process");
+});
+
+test("resolvePolicyScope: no explicit scope and no seed entry for that id defaults to 'command' -- today's behavior, unchanged, a user rule is never silently dropped", () => {
+  assert.equal(resolvePolicyScope({ id: "own_branch" }, seedScope({ visual_evidence: "process" })), "command");
+  assert.equal(resolvePolicyScope({ id: "own_branch" }, seedScope({})), "command");
+});
+
+test("filterPoliciesForCommandScope: drops a policy that resolves to 'process', keeps the rest", () => {
+  const visualEvidence: Policy = { id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits" };
+  const ownBranch: Policy = { id: "own_branch", rule: "work goes on a feature branch", kind: "permits" };
+  const filtered = filterPoliciesForCommandScope([visualEvidence, ownBranch], seedScope({ visual_evidence: "process" }));
+  assert.deepEqual(
+    filtered.map((p) => p.id),
+    ["own_branch"],
+  );
+});
+
+test("filterPoliciesForCommandScope: an explicit 'command' scope keeps a policy even if the seed marks it 'process'", () => {
+  const visualEvidence: Policy = { id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "command" };
+  const filtered = filterPoliciesForCommandScope([visualEvidence], seedScope({ visual_evidence: "process" }));
+  assert.deepEqual(
+    filtered.map((p) => p.id),
+    ["visual_evidence"],
+  );
+});
+
+test("filterPoliciesForCommandScope: with no seed index and no explicit scope, every policy keeps today's behavior (all 'command')", () => {
+  const policies: Policy[] = [
+    { id: "a", rule: "rule a", kind: "permits" },
+    { id: "b", rule: "rule b", kind: "prohibits" },
+  ];
+  assert.deepEqual(filterPoliciesForCommandScope(policies, seedScope({})).map((p) => p.id), ["a", "b"]);
+});
+
+test("buildSeedScopeIndex: only rows with an explicit scope contribute an entry", () => {
+  const index = buildSeedScopeIndex([
+    { id: "visual_evidence", scope: "process" },
+    { id: "own_branch" },
+    { id: "unit_commits", scope: "command" },
+  ]);
+  assert.equal(index.get("visual_evidence"), "process");
+  assert.equal(index.get("unit_commits"), "command");
+  assert.equal(index.has("own_branch"), false);
 });
 
 // ===========================================================================
