@@ -78,16 +78,26 @@ function writeSettings (home, settings) {
   writeFileSync(settingsPathFor(home), `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
 }
 
-function bashGroup (settings, event) {
-  return (settings.hooks?.[event] ?? []).find((g) => g.matcher === 'Bash')
+function group (settings, event, matcher) {
+  return (settings.hooks?.[event] ?? []).find((g) => g.matcher === matcher)
 }
 
-function ownEntries (settings, event, marker) {
-  return (bashGroup(settings, event)?.hooks ?? []).filter((h) => h.statusMessage === marker)
+function bashGroup (settings, event) {
+  return group(settings, event, 'Bash')
+}
+
+function agentGroup (settings, event) {
+  return group(settings, event, 'Agent')
+}
+
+function ownEntries (settings, event, marker, matcher = 'Bash') {
+  return (group(settings, event, matcher)?.hooks ?? []).filter((h) => h.statusMessage === marker)
 }
 
 const GATE_MARKER = 'orca-jev-advisor: asking Jev before running this command'
 const OUTCOME_MARKER = 'orca-jev-advisor: recording what you decided'
+const AGENT_MODEL_MARKER = 'orca-jev-advisor: asking Jev which model this subagent needs'
+const AGENT_OUTCOME_MARKER = 'orca-jev-advisor: recording which model the subagent ran on'
 
 test('a fresh install registers all four events, each with its own hook', () => {
   const home = makeHome()
@@ -536,4 +546,148 @@ test('a skipped entry is reported as copy-incomplete, never as a clean copy', ()
   assert.equal(result.changes.modCopy, true)
   assert.equal(result.targets[0].modCopyWarning, 'copy-incomplete')
   assert.match(result.targets[0].modCopyDetail, /linked\.txt/)
+})
+
+// ---------------------------------------------------------------------------
+// Agent-matcher hooks (adapters/claude/agent-model.ts) -- PreToolUse,
+// PostToolUse and PostToolUseFailure, matcher 'Agent', never 'Bash'. Same
+// idempotency, surgical-uninstall and upgrade guarantees as the Bash-matcher
+// hooks above, exercised separately because they live in their OWN matcher
+// group, sharing only the per-event array with the Bash group on the same
+// event.
+// ---------------------------------------------------------------------------
+
+test('a fresh install registers the Agent-matcher hooks on PreToolUse, PostToolUse and PostToolUseFailure', () => {
+  const home = makeHome()
+  const result = run('install', home)
+  assert.equal(result.ok, true)
+  assert.equal(result.changes.agentModelHook, true)
+
+  const settings = readSettings(home)
+  const preEntries = ownEntries(settings, 'PreToolUse', AGENT_MODEL_MARKER, 'Agent')
+  assert.equal(preEntries.length, 1)
+  assert.deepEqual(preEntries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'agent-model.ts')])
+
+  const postEntries = ownEntries(settings, 'PostToolUse', AGENT_OUTCOME_MARKER, 'Agent')
+  assert.equal(postEntries.length, 1)
+  assert.deepEqual(postEntries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'agent-model.ts')])
+
+  const postFailureEntries = ownEntries(settings, 'PostToolUseFailure', AGENT_OUTCOME_MARKER, 'Agent')
+  assert.equal(postFailureEntries.length, 1)
+
+  // The Bash-matcher hooks on the SAME events are untouched: the two
+  // matcher groups coexist side by side in the same per-event array.
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUse', OUTCOME_MARKER).length, 1)
+  assert.equal(bashGroup(settings, 'PreToolUse').hooks.length, 1)
+  assert.equal(agentGroup(settings, 'PreToolUse').hooks.length, 1)
+
+  const status = run('status', home)
+  assert.equal(status.agentModelHook.installed, true)
+})
+
+test('re-running install is idempotent for the Agent-matcher hooks too -- no duplicate entries', () => {
+  const home = makeHome()
+  run('install', home)
+  run('install', home)
+  run('install', home)
+  const settings = readSettings(home)
+  assert.equal(ownEntries(settings, 'PreToolUse', AGENT_MODEL_MARKER, 'Agent').length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUse', AGENT_OUTCOME_MARKER, 'Agent').length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUseFailure', AGENT_OUTCOME_MARKER, 'Agent').length, 1)
+})
+
+test('uninstall after a fresh install restores the exact original (empty) settings, Agent hooks included', () => {
+  const home = makeHome()
+  run('install', home)
+  run('uninstall', home)
+  const raw = readFileSync(settingsPathFor(home), 'utf8')
+  assert.equal(raw, '{}\n')
+})
+
+test('uninstall leaves a third party\'s own Agent group and hooks alone -- only our own entry is removed, byte-for-byte', () => {
+  const home = makeHome()
+  const original = {
+    hooks: {
+      PreToolUse: [
+        { matcher: 'Agent', hooks: [{ type: 'command', command: 'other-tool', args: [], statusMessage: 'someone else entirely, on Agent' }] }
+      ]
+    }
+  }
+  writeSettings(home, original)
+  const before = readFileSync(settingsPathFor(home), 'utf8')
+
+  run('install', home)
+  const afterInstall = readSettings(home)
+  assert.equal(agentGroup(afterInstall, 'PreToolUse').hooks.length, 2, 'our entry joins the third party\'s in the same Agent group')
+
+  run('uninstall', home)
+  const afterUninstall = readSettings(home)
+  assert.equal(agentGroup(afterUninstall, 'PreToolUse').hooks.length, 1, 'only our own entry is removed')
+  assert.equal(agentGroup(afterUninstall, 'PreToolUse').hooks[0].statusMessage, 'someone else entirely, on Agent')
+  assert.equal(readFileSync(settingsPathFor(home), 'utf8'), before, 'byte-for-byte restoration of the third party\'s group')
+})
+
+test('an upgrade from a state file written before Agent bookkeeping existed still installs and cleanly uninstalls the Agent hooks', () => {
+  const home = makeHome()
+  // The exact shape a real machine has after a pre-Agent-hook install: four
+  // Bash-matcher events, no `groupExistedBefore` bookkeeping at all (it did
+  // not exist yet), and none of the Agent hooks in settings.json.
+  const preExisting = {
+    hooks: {
+      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-bash.ts')], timeout: 6, statusMessage: GATE_MARKER }] }],
+      PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')], timeout: 2, statusMessage: OUTCOME_MARKER }] }],
+      PermissionDenied: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')], timeout: 2, statusMessage: OUTCOME_MARKER }] }],
+      PostToolUseFailure: [{ matcher: 'Bash', hooks: [{ type: 'command', command: process.execPath, args: [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-outcome.ts')], timeout: 2, statusMessage: OUTCOME_MARKER }] }]
+    },
+    env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' }
+  }
+  writeSettings(home, preExisting)
+
+  const stateDir = join(home, '.config', 'orca-supervisor')
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(join(stateDir, 'claude-settings-install-state.json'), JSON.stringify({
+    version: 3,
+    targets: {
+      home: {
+        hooksObjectExistedBefore: false,
+        events: {
+          PreToolUse: { arrayExistedBefore: false, bashGroupExistedBefore: false },
+          PostToolUse: { arrayExistedBefore: false, bashGroupExistedBefore: false },
+          PermissionDenied: { arrayExistedBefore: false, bashGroupExistedBefore: false },
+          PostToolUseFailure: { arrayExistedBefore: false, bashGroupExistedBefore: false }
+        },
+        envObjectExistedBefore: false,
+        hadEnvVarBefore: false,
+        priorEnvValue: null
+      }
+    },
+    installedAt: new Date().toISOString()
+  }, null, 2), 'utf8')
+
+  const result = run('install', home)
+  assert.equal(result.ok, true)
+
+  const settings = readSettings(home)
+  assert.equal(ownEntries(settings, 'PreToolUse', AGENT_MODEL_MARKER, 'Agent').length, 1, 'the new Agent hook was added')
+  assert.equal(ownEntries(settings, 'PostToolUse', AGENT_OUTCOME_MARKER, 'Agent').length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUseFailure', AGENT_OUTCOME_MARKER, 'Agent').length, 1)
+  // The pre-existing Bash hooks are untouched, not duplicated.
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUse', OUTCOME_MARKER).length, 1)
+
+  run('install', home) // must not duplicate the Agent hooks on a second run
+  const settingsAgain = readSettings(home)
+  assert.equal(ownEntries(settingsAgain, 'PreToolUse', AGENT_MODEL_MARKER, 'Agent').length, 1)
+
+  run('uninstall', home)
+  const afterUninstall = readSettings(home)
+  // This fixture's captured bookkeeping says neither the PreToolUse array
+  // nor its Bash group existed before our very first install touched it
+  // (the same "arrayExistedBefore: false, bashGroupExistedBefore: false"
+  // shape the sibling PostToolUseFailure test above already relies on) --
+  // so once both the pre-existing Bash group and our freshly-added Agent
+  // group are emptied, the whole PreToolUse key is unwound, not left as an
+  // empty array or with either group dangling.
+  assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks ?? {}, 'PreToolUse'), false)
 })
