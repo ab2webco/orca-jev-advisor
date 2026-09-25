@@ -45,12 +45,6 @@ const ROOT = join(__dirname, '..')
 const CONFIG_PANEL = join(ROOT, 'adapters/orca/panels/config.html')
 const BOARD_PANEL = join(ROOT, 'adapters/orca/panels/board.html')
 
-// SCENARIOS.ready is screenshot-panels.mjs's own fixture, derived from the
-// same worker shapes this file already checks (see its own module doc and
-// scripts/fixture_shape.test.mjs) -- reused here rather than a second,
-// hand-typed board fixture that could drift from it unnoticed.
-const { SCENARIOS } = await import('./screenshot-panels.mjs')
-
 /** The panel throttles its own host calls; anything shorter observes a spinner. */
 const SETTLE_MS = 6000
 
@@ -59,6 +53,22 @@ try {
   ({ chromium } = await import('playwright'))
 } catch {
   chromium = null
+}
+
+// SCENARIOS.ready is screenshot-panels.mjs's own fixture, derived from the
+// same worker shapes this file already checks (see its own module doc and
+// scripts/fixture_shape.test.mjs) -- reused here rather than a second,
+// hand-typed board fixture that could drift from it unnoticed. That module
+// imports `playwright` itself, unguarded, at its own top -- so this import
+// is guarded the same way chromium's is above, or a machine with no
+// playwright (this file's own header: "a machine without it skips rather
+// than fails") would throw ERR_MODULE_NOT_FOUND here before a single test
+// even registers, instead of skipping.
+let SCENARIOS = null
+try {
+  ({ SCENARIOS } = await import('./screenshot-panels.mjs'))
+} catch {
+  SCENARIOS = null
 }
 
 const RAW_SEED = JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8'))
