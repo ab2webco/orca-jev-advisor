@@ -101,7 +101,7 @@ function extractSubstitutions(command: string): { readonly outer: string; readon
  * newline) and subshell parentheses -- but only outside quotes, so a
  * separator inside a commit message does not start a command.
  */
-function splitOutsideQuotes(command: string): string[] {
+export function splitOutsideQuotes(command: string): string[] {
   const parts: string[] = [];
   let current = "";
   let single = false;
@@ -267,4 +267,16 @@ export function discardsUncommittedWork(command: string): boolean {
  */
 export function startsWithGitDiscard(segment: string): boolean {
   return gitDiscardsFrom(tokenize(segment.trim()), 0);
+}
+
+/**
+ * True when `pattern` matches at least one of `command`'s quote-aware
+ * segments (`splitOutsideQuotes`), rather than the whole joined string. Used
+ * by gate-bash.ts's NEVER_SILENTLY loop for rules whose `scope` is
+ * `'segment'`: a `.*` inside `pattern` can then never span a separator
+ * (`&&`, `;`, `|`, newline, parens) and falsely implicate a segment its own
+ * match never touched.
+ */
+export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): boolean {
+  return splitOutsideQuotes(command).some((segment) => pattern.test(segment));
 }

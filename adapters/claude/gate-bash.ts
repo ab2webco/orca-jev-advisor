@@ -82,7 +82,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { discardsUncommittedWork } from '../../src/core/git_discard.ts'
+import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -224,16 +224,27 @@ type Decision = 'allow' | 'deny' | 'ask'
  * Only the agent is refused. The person can always run the command in a
  * terminal, which is what the deny message tells them.
  */
-const NEVER_SILENTLY: readonly { readonly pattern: { test(command: string): boolean }; readonly why: GateKey; readonly denyToggle: DenyToggleKey }[] = [
-  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush', denyToggle: 'denyForcePush' },
-  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
+const NEVER_SILENTLY: readonly {
+  readonly pattern: { test(command: string): boolean }
+  readonly why: GateKey
+  readonly denyToggle: DenyToggleKey
+  // 'segment' tests the pattern against each of the command's quote-aware
+  // segments (splitOutsideQuotes) independently, so a `.*` inside the
+  // pattern can never span a `&&`/`;`/`|`/newline/paren separator and
+  // falsely implicate an unrelated segment (ADR-1). 'command' keeps
+  // whole-string matching, for rules with no spanning quantifier and for
+  // curlPipeShell, which matches ACROSS a pipe by design.
+  readonly scope: 'segment' | 'command'
+}[] = [
+  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush', denyToggle: 'denyForcePush', scope: 'segment' },
+  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected', denyToggle: 'denyPushProtected', scope: 'segment' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root.
-  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf' },
+  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf', scope: 'command' },
   // `git clean -f` destroys untracked work with no reflog behind it; the
   // blast radius is one working tree, which is why this was the closest call
   // of the nine.
-  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
+  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command' },
   // The same loss through `git checkout -- <path>`, `git checkout .`,
   // `git checkout -f` or `git restore <path>`: the working tree is
   // overwritten and uncommitted changes are gone. This form discarded an
@@ -242,13 +253,19 @@ const NEVER_SILENTLY: readonly { readonly pattern: { test(command: string): bool
   // not matched -- see src/core/git_discard.ts for each reason. It shares
   // `rule.resetClean` on purpose: that text ("discards uncommitted work --
   // nothing to recover it from") names the effect, not the command.
-  { pattern: { test: discardsUncommittedWork }, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
+  // `command` scope: discardsUncommittedWork already segments on its own
+  // and extracts `$(...)`/backticks/`bash -c`/`eval` first; pre-splitting
+  // here would break its substitution extraction.
+  { pattern: { test: discardsUncommittedWork }, why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command' },
   // Irrecoverable without a backup nobody can assume exists.
-  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable' },
-  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
-  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
-  { pattern: /\b(terraform|tofu)\s+destroy\b/, why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
-  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
+  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable', scope: 'command' },
+  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete', scope: 'command' },
+  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply', denyToggle: 'denyTerraformApply', scope: 'command' },
+  { pattern: /\b(terraform|tofu)\s+destroy\b/, why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy', scope: 'command' },
+  // Mandatory 'command' scope: this rule matches ACROSS a pipe by design.
+  // splitOutsideQuotes splits on `|`, so segment scope would silently
+  // disable it; `[^|]*` already bounds the curl side of the match.
+  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell', scope: 'command' },
 ]
 
 type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null }
@@ -819,9 +836,9 @@ async function main(): Promise<void> {
   // read by a shell keeps its text, because there it really is commands.
   const inspected = withoutHeredocBodies(command)
   const mentionOnly = mentionsRatherThanRuns(inspected)
-  for (const { pattern, why, denyToggle } of NEVER_SILENTLY) {
+  for (const { pattern, why, denyToggle, scope } of NEVER_SILENTLY) {
     if (mentionOnly) break
-    if (pattern.test(inspected)) {
+    if (scope === 'segment' ? someSegmentMatches(inspected, pattern) : pattern.test(inspected)) {
       // Every rule denies unless its switch was deliberately turned off, in
       // which case it drops to 'ask' -- never to 'allow'. readDenyTierConfig()
       // fails CLOSED, so an unreadable config denies exactly as a fresh

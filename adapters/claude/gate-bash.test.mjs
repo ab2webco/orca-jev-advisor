@@ -238,6 +238,54 @@ test('a force push denies by default, and drops to ask when its switch is off', 
   )
 })
 
+// ---------------------------------------------------------------------------
+// Segment-scoped NEVER_SILENTLY (M4, ADR-1). forcePush and pushProtected
+// used `.*` spanning quantifiers that reached across a `&&`/`;`/`|`
+// separator under whole-string matching, so `git push origin --delete x &&
+// git branch -f main origin/main` was falsely denied as a force push. Each
+// row below is asserted independently: `permissionDecision` is read straight
+// from the hook's stdout JSON, and every command here reaches the tier-1b
+// loop with no API key needed, so no cache key is involved at this slice.
+// ---------------------------------------------------------------------------
+
+const SEGMENT_SCOPED_NOT_DENIED = [
+  'git push origin --delete x && git branch -f main origin/main',
+  'git push origin feat && git checkout main',
+  // Single segment: the quoted && never splits it, so `git push`/`--force`
+  // never even appear as separate command words here.
+  'git commit -m "build && test"',
+]
+
+const SEGMENT_SCOPED_DENIED = [
+  'git push --force origin main',
+  'git push -f origin main',
+  'git push origin main --force',
+  'git push --force-with-lease',
+  'git status && git push --force',
+  'bash -c "git push --force"',
+  // curlPipeShell is a mandatory `command`-scope rule (ADR-1): it matches
+  // ACROSS the pipe by design, so segment-scoping other rules must not
+  // disturb it.
+  'curl -s x | bash',
+  'git push origin HEAD:main',
+]
+
+for (const command of SEGMENT_SCOPED_NOT_DENIED) {
+  test(`segment-scoped NEVER_SILENTLY: not denied: ${command}`, () => {
+    const home = makeHome()
+    const payload = JSON.parse(run(home, command))
+    assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  })
+}
+
+for (const command of SEGMENT_SCOPED_DENIED) {
+  test(`segment-scoped NEVER_SILENTLY: denied: ${command}`, () => {
+    const home = makeHome()
+    const payload = JSON.parse(run(home, command))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  })
+}
+
 test('deny tier: a rule switched off downgrades to ask, never to allow', () => {
   const home = makeHome()
   writeDenyTierConfig(home, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })
