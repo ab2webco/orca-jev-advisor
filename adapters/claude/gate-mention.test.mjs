@@ -44,6 +44,14 @@ function decide(command) {
         // computed for `home` on darwin with no XDG override.
         ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor'),
         ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor'),
+        // Point Orca's userData resolution at a directory that does not
+        // exist, so pluginDisabledInOrca() fails its own read and fails
+        // open (disabled check = false) instead of reading the developer's
+        // real Orca install -- see gate-bash.test.mjs's `run()` for the
+        // same fix. Without this, `...process.env` above leaked the real
+        // ORCA_USER_DATA_PATH, and on a machine where the plugin is
+        // disabled in Orca, gate-bash.ts passed every command through.
+        ORCA_USER_DATA_PATH: join(home, 'orca-userdata-does-not-exist'),
       },
       encoding: 'utf8',
     },
