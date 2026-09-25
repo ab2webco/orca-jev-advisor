@@ -57,10 +57,9 @@ and no key at all. The key only buys judgement on the grey cases.
 A plugin that reaches outside its own directory should say so. This one
 writes seven things, all listed in the settings panel. **Revert
 everything** puts back the hook entries, the env var and the skills-mod
-copy — the key file and the three JSON mirrors below are never deleted by
-any action here; each is only ever overwritten by its own next save (the
-key has its own separate removal, from clearing it in the settings
-panel):
+copy. Clearing the key from the settings panel deletes the key file
+separately. The three JSON mirrors below are never deleted by any action
+here — each is only ever overwritten by its own next save:
 
 | What | Where | Why |
 |---|---|---|
