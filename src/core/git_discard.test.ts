@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { discardsUncommittedWork, someSegmentMatches, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
+import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
 
 // Each of these overwrites the working tree from the index or a commit, and
 // uncommitted changes to those paths are gone: no reflog, no stash, nothing
@@ -138,6 +138,32 @@ test("splitOutsideQuotes: unquoted parens split into segments", () => {
 test("someSegmentMatches: a pattern matching one segment does not match a command whose only match is in another segment", () => {
   const pattern = /git\s+push\b.*(--force|-f)\b/;
   assert.equal(someSegmentMatches("git push origin --delete x && git branch -f main origin/main", pattern), false);
+});
+
+test("splitOnCommandSeparators: a substitution stays inside the command it feeds", () => {
+  assert.deepEqual(splitOnCommandSeparators("git push $(echo x; echo y) origin && git status"), [
+    "git push $(echo x; echo y) origin",
+    "git status",
+  ]);
+  assert.deepEqual(splitOnCommandSeparators("git push `echo a | cat` origin; ls"), ["git push `echo a | cat` origin", "ls"]);
+});
+
+test("splitOnCommandSeparators: a quoted paren inside a substitution does not close it", () => {
+  assert.deepEqual(splitOnCommandSeparators('git push $(echo ")"; echo --force) origin'), ['git push $(echo ")"; echo --force) origin']);
+});
+
+test("splitOnCommandSeparators: parentheses never split", () => {
+  assert.deepEqual(splitOnCommandSeparators("(git status) && ls"), ["(git status)", "ls"]);
+});
+
+test("splitOnCommandSeparators: separators split outside quotes only", () => {
+  assert.deepEqual(splitOnCommandSeparators('git commit -m "a && b" || ls\nls'), ['git commit -m "a && b"', "ls", "ls"]);
+});
+
+test("someSegmentMatches: a flag produced by a substitution still matches its push", () => {
+  const pattern = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches("git push $(echo --force) origin", pattern), true);
+  assert.equal(someSegmentMatches("git push `echo -f` origin", pattern), true);
 });
 
 test("someSegmentMatches: true when a segment matches", () => {

@@ -268,6 +268,15 @@ const SEGMENT_SCOPED_DENIED = [
   // disturb it.
   'curl -s x | bash',
   'git push origin HEAD:main',
+  // Substitutions are part of the push's own arguments, never a separate
+  // command: a flag or branch produced by `$(...)` or backticks, even with a
+  // separator inside the substitution, still belongs to the push segment.
+  'git push $(echo --force) origin',
+  'git push origin $(echo main)',
+  'git push `echo -f` origin',
+  'git push origin `echo main`',
+  'git push $(echo x; echo --force) origin',
+  '(git push --force origin)',
 ]
 
 for (const command of SEGMENT_SCOPED_NOT_DENIED) {

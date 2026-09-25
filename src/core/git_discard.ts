@@ -270,13 +270,50 @@ export function startsWithGitDiscard(segment: string): boolean {
 }
 
 /**
- * True when `pattern` matches at least one of `command`'s quote-aware
- * segments (`splitOutsideQuotes`), rather than the whole joined string. Used
- * by gate-bash.ts's NEVER_SILENTLY loop for rules whose `scope` is
- * `'segment'`: a `.*` inside `pattern` can then never span a separator
- * (`&&`, `;`, `|`, newline, parens) and falsely implicate a segment its own
- * match never touched.
+ * Splits on the shell's command separators (`;`, `&&`, `||`, `|`, `&`,
+ * newline) outside quotes AND outside command substitutions (`$(...)`,
+ * backticks). Unlike `splitOutsideQuotes` it never splits on parentheses:
+ * a substitution is part of the arguments of the command it feeds, so
+ * `git push $(echo --force) origin` stays one segment.
+ */
+export function splitOnCommandSeparators(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let single = false;
+  let double = false;
+  let backtick = false;
+  let depth = 0;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (char === "\\" && !single) {
+      current += command.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (char === "`" && !single) backtick = !backtick;
+    else if (char === "(" && !single && !double) depth += 1;
+    else if (char === ")" && !single && !double && depth > 0) depth -= 1;
+    if (!single && !double && !backtick && depth === 0 && /[;&|\n]/.test(char)) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * True when `pattern` matches at least one of `command`'s segments
+ * (`splitOnCommandSeparators`), rather than the whole joined string. Used by
+ * gate-bash.ts's NEVER_SILENTLY loop for rules whose `scope` is `'segment'`:
+ * a `.*` inside `pattern` can then never span a separator (`&&`, `;`, `|`,
+ * newline) and falsely implicate a command its own match never touched,
+ * while a flag produced by a substitution still counts for its command.
  */
 export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): boolean {
-  return splitOutsideQuotes(command).some((segment) => pattern.test(segment));
+  return splitOnCommandSeparators(command).some((segment) => pattern.test(segment));
 }

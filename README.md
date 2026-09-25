@@ -109,8 +109,11 @@ evidence.
 A handful of `NEVER_SILENTLY` rules — the ones that never run unannounced,
 regardless of the API key or Jev — deny by default. Each rule is evaluated
 either against the whole command or against each of the command's segments
-(the parts a shell would run separately, split on `&&`, `;`, `|`, a newline
-or parentheses, with quoted text left untouched) independently:
+(the parts a shell would run separately, split on `&&`, `||`, `;`, `|`, `&`
+or a newline, with quoted text left untouched) independently. Parentheses
+never split a segment: a `$(...)` or backtick substitution is part of the
+arguments of the command it feeds, so a flag or branch it produces still
+counts for that command, and a plain subshell keeps its command whole:
 
 | Rule | Scope | Why |
 |------|-------|-----|
