@@ -52,7 +52,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
 - [x] **T4 readiness self-fulfilment.** `src/core/model_measurement.ts`
   readiness counts decisions that active mode applied as "matches". Exclude
   applied decisions from `comparable` and `matches`.
-- [ ] **T5 sidecar EPIPE.** `adapters/orca/main.mjs` writes to child stdin
+- [x] **T5 sidecar EPIPE.** `adapters/orca/main.mjs` writes to child stdin
   (around `:162` and `:799`) with no `'error'` listener. A child that exits
   early crashes the whole background worker. Handle it once, for both sites.
 - [ ] **T6 calibration card.** `board.html` "How is calibration going?"
@@ -197,6 +197,28 @@ touches 7+ non-trivial files, which fires the writer trigger.
   Fix: the `comparable`/`matches` loop now `continue`s when
   `decision.applied` is true, before joining the outcome.
   GREEN: same command, 25/25. Full suite: `npm test` 976/976 pass.
+- **T5 done.** Commit: (recorded after commit below). Extracted the shared
+  spawn logic from `runSecretMirrorScript` (`:162-163`, "generic sidecar
+  helper") into a new `spawnSidecar(argv, execOptions, stdin)`, as a pure
+  refactor first (same behavior, still no stdin error listener), and routed
+  `runReadModelMeasurementsScript` (`:799-800`) through it too, passing
+  `JSON.stringify(catalog)` as stdin -- it cleanly fit, same permission-flag
+  shape. Exported `spawnSidecar` for `node --test` only, following this
+  file's existing named-export convention.
+  RED: added "spawnSidecar settles an ordinary failure, never an unhandled
+  error, when the child exits before reading stdin" to
+  `adapters/orca/main.test.mjs` -- writes a throwaway script
+  (`process.exit(0)`) into the test's own temp dir, calls `spawnSidecar`
+  with a 2 MB stdin payload against it. Ran `node --test
+  --experimental-strip-types adapters/orca/main.test.mjs` -- failed 1/57
+  with an uncaught `Error: write EPIPE` (`code: 'EPIPE'`, `syscall:
+  'write'`) from `WriteWrap.onWriteComplete`, exactly the unhandled-error
+  shape the task described (the test runner attributed it to the test
+  rather than crashing the whole run).
+  Fix: added `child.stdin.on('error', ...)` to `spawnSidecar`, resolving
+  `{ ok: false, reason: 'stdin-write-failed', detail }` -- safe even if the
+  `execFile` callback also fires, since a Promise only ever settles once.
+  GREEN: same command, 57/57. Full suite: `npm test` 977/977 pass.
 
 ## Next step
 

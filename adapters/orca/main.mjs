@@ -135,18 +135,20 @@ function sidecarEnv (extra = {}) {
 
 const SECRET_MIRROR_READ_ONLY_MODES = new Set(['read', 'locale-read', 'stat', 'mod-skills-config-read', 'deny-tier-config-read'])
 
-function runSecretMirrorScript (mode, stdin, extraArgs = []) {
+/**
+ * Spawns `argv[0]` (always a script path, following `process.execPath`) as a
+ * clean sidecar child, writes `stdin` to it and closes the stream, and
+ * resolves with the JSON object the child printed to stdout -- or an
+ * ordinary `{ ok: false, reason, detail }` failure on a launch failure, a
+ * timeout/non-zero exit, or unparseable stdout. Never throws: every real
+ * sidecar call site in this file (`runSecretMirrorScript`,
+ * `runReadModelMeasurementsScript`) shares this one spawn, so a mistake
+ * here would take gate, board, mods and secrets down together.
+ */
+function spawnSidecar (argv, execOptions, stdin) {
   return new Promise((resolve) => {
     try {
-      const permissionArgs = ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CONFIG_DIR}`]
-      if (!SECRET_MIRROR_READ_ONLY_MODES.has(mode)) permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`)
-      const child = execFile(process.execPath, [...permissionArgs, SECRET_MIRROR_SCRIPT, mode, ...extraArgs], {
-        timeout: SECRET_MIRROR_TIMEOUT_MS,
-        maxBuffer: 64 * 1024,
-        // The worker may be Electron's helper binary acting as `process.execPath`;
-        // without this it would try to open a window instead of running Node.
-        env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
-      }, (error, stdout) => {
+      const child = execFile(process.execPath, argv, execOptions, (error, stdout) => {
         let result = null
         try {
           result = JSON.parse(stdout || 'null')
@@ -159,6 +161,16 @@ function runSecretMirrorScript (mode, stdin, extraArgs = []) {
         }
         resolve(result)
       })
+      // A child that exits (or simply never reads stdin) before this write
+      // lands emits 'error' on the stream -- EPIPE, most often -- instead of
+      // throwing synchronously. With no listener, Node treats that as an
+      // uncaught exception, which would crash this whole background worker.
+      // Resolving here is safe even if the execFile callback above also
+      // fires: a Promise only ever settles once, so whichever happens first
+      // wins, and the other is a no-op.
+      child.stdin.on('error', (error) => {
+        resolve({ ok: false, reason: 'stdin-write-failed', detail: String(error?.message ?? error).slice(0, 200) })
+      })
       if (typeof stdin === 'string') child.stdin.write(stdin)
       child.stdin.end()
     } catch (error) {
@@ -168,6 +180,22 @@ function runSecretMirrorScript (mode, stdin, extraArgs = []) {
       resolve({ ok: false, reason: 'launch-failed', detail: String(error?.message ?? error).slice(0, 200) })
     }
   })
+}
+
+function runSecretMirrorScript (mode, stdin, extraArgs = []) {
+  const permissionArgs = ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CONFIG_DIR}`]
+  if (!SECRET_MIRROR_READ_ONLY_MODES.has(mode)) permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`)
+  return spawnSidecar(
+    [...permissionArgs, SECRET_MIRROR_SCRIPT, mode, ...extraArgs],
+    {
+      timeout: SECRET_MIRROR_TIMEOUT_MS,
+      maxBuffer: 64 * 1024,
+      // The worker may be Electron's helper binary acting as `process.execPath`;
+      // without this it would try to open a window instead of running Node.
+      env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    },
+    stdin
+  )
 }
 
 /** Mirrors the current key (or its absence) to the fallback file. Logs a
@@ -777,31 +805,15 @@ async function publishMeasurementsSummary (orca, storageHost) {
 const MODEL_MEASUREMENTS_SCRIPT = join(__dirname, 'read-model-measurements.mjs')
 
 function runReadModelMeasurementsScript (catalog) {
-  return new Promise((resolve) => {
-    try {
-      const child = execFile(process.execPath, ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CACHE_DIR}`, MODEL_MEASUREMENTS_SCRIPT], {
-        timeout: MEASUREMENTS_TIMEOUT_MS,
-        maxBuffer: 4 * 1024 * 1024,
-        env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
-      }, (error, stdout) => {
-        let result = null
-        try {
-          result = JSON.parse(stdout || 'null')
-        } catch {
-          result = null
-        }
-        if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') {
-          resolve({ ok: false, reason: 'no-json', detail: String(error?.message ?? "the script didn't return JSON").slice(0, 200) })
-          return
-        }
-        resolve(result)
-      })
-      child.stdin.write(JSON.stringify(catalog))
-      child.stdin.end()
-    } catch (error) {
-      resolve({ ok: false, reason: 'launch-failed', detail: String(error?.message ?? error).slice(0, 200) })
-    }
-  })
+  return spawnSidecar(
+    ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CACHE_DIR}`, MODEL_MEASUREMENTS_SCRIPT],
+    {
+      timeout: MEASUREMENTS_TIMEOUT_MS,
+      maxBuffer: 4 * 1024 * 1024,
+      env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    },
+    JSON.stringify(catalog)
+  )
 }
 
 /** The real `options` every models-worker.mjs call in this file passes --
@@ -1894,6 +1906,7 @@ export {
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
+  spawnSidecar,
   WORKER_HEARTBEAT_KEY,
   WORKER_HEARTBEAT_STALE_MS
 }
