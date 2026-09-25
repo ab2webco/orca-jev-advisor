@@ -81,7 +81,7 @@ import type { GateKey } from '../../src/core/i18n_gate.ts'
 import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
-import type { GateSource, GateVerdict } from '../../src/core/gate_measurement.ts'
+import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
 import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -564,6 +564,8 @@ function appendPendingApproval(
   destinationId: string | null,
   axes: { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null },
   ceiling: number,
+  stopReason: GateStopReason,
+  policyId: string | null,
 ): void {
   if (toolUseId === null) return
   try {
@@ -582,6 +584,8 @@ function appendPendingApproval(
           external: axes.external,
           consequence: axes.consequence,
           ceiling,
+          stopReason,
+          policyId,
         }),
       ),
     )
@@ -618,7 +622,7 @@ function readPluginVersion(): string | undefined {
 const PLUGIN_VERSION = readPluginVersion()
 
 /** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
-function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null): void {
+function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null): void {
   try {
     mkdirSync(dirname(GATE_LOG_PATH), { recursive: true })
     const record = buildGateDecisionRecord({
@@ -629,6 +633,8 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       source,
       verdict,
       latencyMs,
+      stopReason,
+      ...(policyId !== null ? { policyId } : {}),
       // BuildGateDecisionRecordInput declares this required -- true for
       // every caller that already knows its own build's version. This is
       // the one caller that resolves it from disk, so it stays honest about
@@ -742,6 +748,8 @@ type JevOutcome =
       readonly destinationKind: string | null
       /** Jev's own token usage for this call -- carried out so the AB benchmark can record it for free, with no second Jev call. */
       readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
+      /** The policy that resolved this verdict, or null when the risk stage decided (or no policy matched). See decisions.ts's GateActionResult.policyId. */
+      readonly policyId: string | null
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
@@ -788,6 +796,7 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       destinationId: matched?.id ?? null,
       destinationKind: matched?.kind ?? null,
       usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
+      policyId: gate.policyId,
     }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
@@ -882,11 +891,11 @@ async function main(): Promise<void> {
       // fails CLOSED, so an unreadable config denies exactly as a fresh
       // install does.
       const decision: Decision = readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
-      appendGateRecord(cwd, command, 'local-rule', decision, null)
+      appendGateRecord(cwd, command, 'local-rule', decision, null, 'local-rule', null)
       // Recorded like any other stop, with no scores: a local rule needs no
       // model and no threshold, so there is nothing here to calibrate -- but
       // whether the person accepted the interruption is still worth knowing.
-      appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
+      appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
       // A refusal is read by the MODEL and an ask is read by a PERSON, so
       // they resolve in different languages on purpose: the ask follows the
       // developer's chosen locale, the refusal is always English, including
@@ -920,11 +929,15 @@ async function main(): Promise<void> {
   const cache = key === null ? {} : readCache()
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
-    appendGateRecord(cwd, command, 'cache', hit.decision, null)
+    appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null)
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
-      // recorded -- without scores, which the cache does not keep.
-      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING)
+      // recorded -- without scores, which the cache does not keep. The cache
+      // entry itself carries no policyId either (see GateCacheEntry): 'cache'
+      // is the honest, complete stopReason on its own -- it does not know,
+      // and does not claim to know, which sub-reason produced the original
+      // verdict it is replaying.
+      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
     }
     emit(hit.decision, t('cached', { reason: hit.reason }))
     return
@@ -940,7 +953,7 @@ async function main(): Promise<void> {
     // nobody did. Without this, the log kept filling with 'cache' and
     // 'local-rule' rows and looked healthy while this half of the gate was
     // silently judging nothing. Best-effort, same as every other record.
-    appendGateRecord(cwd, command, 'none', 'allow', null)
+    appendGateRecord(cwd, command, 'none', 'allow', null, 'unreachable', null)
     const previousUnreachableFailures = readUnreachableFailures()
     const unreachableNotice = decideUnreachableNotice(false, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD)
     if (unreachableNotice.nextConsecutiveFailures !== previousUnreachableFailures) writeUnreachableFailures(unreachableNotice.nextConsecutiveFailures)
@@ -971,7 +984,12 @@ async function main(): Promise<void> {
     cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
     writeCache(cache)
   }
-  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs)
+  // A jev-sourced verdict was decided by a policy when decideGateAction's
+  // own policyId is non-null (see decisions.ts's GateActionResult.policyId);
+  // otherwise the consequence-ceiling risk rule decided it, including a
+  // clean 'allow'.
+  const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : 'risk'
+  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId)
   // AB benchmark: 'deny' never reaches here -- decideGateAction's Jev-sourced
   // verdict is always allow/ask (GateVerdict, decisions.ts) -- but the guard
   // is kept explicit rather than trusting the cast, matching this file's own
@@ -988,6 +1006,7 @@ async function main(): Promise<void> {
       toolUseId, cwd, command, key, resolved.destinationId,
       { reversible: resolved.axes?.reversible ?? null, external: resolved.axes?.external ?? null, consequence: resolved.axes?.consequence ?? null },
       resolved.axes?.ceiling ?? GATE_CONSEQUENCE_CEILING,
+      jevStopReason, resolved.policyId,
     )
   }
   emit(resolved.decision, resolved.reason)

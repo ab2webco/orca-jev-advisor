@@ -22,6 +22,35 @@ import { startsWithGitDiscard } from "./git_discard.ts";
 export type GateSource = "local-rule" | "cache" | "jev" | "none";
 export type GateVerdict = "allow" | "ask" | "deny";
 
+/**
+ * WHY the gate produced this decision -- finer than `source` above, which
+ * only says which STAGE decided (a local pattern, the cache, Jev, or nobody)
+ * and, for `source: "jev"`, conflates two very different reasons: a team
+ * policy resolved it (`interpretDestinationPolicy` in decisions.ts) or the
+ * consequence-ceiling risk rule did (`decideAction`). Of 170 historical asks
+ * on one real machine, 82 carried no risk scores at all -- policy stops,
+ * local-rule asks and cache hits all look identical in that respect, and
+ * nothing could tell them apart. This field is that distinction, made
+ * explicit instead of inferred:
+ *
+ *   "policy"     -- a team policy's `prohibits`/`requires_human` matched
+ *                    (see GateDecisionRecord.policyId below for which one).
+ *   "local-rule"  -- one of gate-bash.ts's own NEVER_SILENTLY patterns.
+ *   "risk"        -- decideAction's reversible/external/consequence axes.
+ *   "unreachable" -- Jev was asked but never answered (source: "none");
+ *                    the verdict is still a truthful "allow" (failing open
+ *                    is correct), this only names why nobody actually judged.
+ *   "cache"       -- a prior verdict was replayed; the cache does not keep
+ *                    which of the reasons above produced the original one,
+ *                    so "cache" is the honest, complete answer on its own.
+ *
+ * Reuses GateSource's own vocabulary wherever the two line up exactly
+ * (local-rule, cache) rather than inventing parallel names for the same
+ * thing -- only the "jev" bucket needed splitting, into "policy" and "risk",
+ * and "none" is renamed to the reader-facing "unreachable".
+ */
+export type GateStopReason = "policy" | "local-rule" | "risk" | "unreachable" | "cache";
+
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
   readonly id: string;
@@ -46,6 +75,23 @@ export interface GateDecisionRecord {
    * corrupt -- see parseGateDecisionRecords below.
    */
   readonly pluginVersion?: string;
+  /**
+   * Optional ON READ, not on write: same discipline as `pluginVersion`
+   * above. Every record `buildGateDecisionRecord` writes from 0.5.1 on
+   * carries one -- a `gate-decision` record is always written at the exact
+   * moment the gate has just decided why, so this is never genuinely
+   * unknown at write time -- but a record already on disk from before this
+   * field existed simply lacks the key, and must parse back that way, never
+   * dropped and never treated as corrupt.
+   */
+  readonly stopReason?: GateStopReason;
+  /**
+   * The policy that resolved this decision -- present only when
+   * `stopReason` is `"policy"`. The id only, never the command or the
+   * policy's rule text: same privacy rule as every other field in this
+   * file.
+   */
+  readonly policyId?: string;
 }
 
 /** The family for discarding uncommitted work. Records written before checkout and restore joined it carry `LEGACY_DISCARD_FAMILY`. */
@@ -154,6 +200,10 @@ export interface BuildGateDecisionRecordInput {
   readonly latencyMs: number | null;
   /** Required at construction time: whoever builds a record today always knows the build producing it. */
   readonly pluginVersion: string;
+  /** Required at construction time: whoever builds a record today always knows why (see GateStopReason above). */
+  readonly stopReason: GateStopReason;
+  /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */
+  readonly policyId?: string;
 }
 
 export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): GateDecisionRecord {
@@ -173,6 +223,18 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     // this record must be indistinguishable from one parsed back off disk
     // where the key never existed at all.
     ...(input.pluginVersion !== undefined ? { pluginVersion: input.pluginVersion } : {}),
+    // Same conditional-spread reasoning as pluginVersion above, even though
+    // stopReason is declared required on the input: a caller (or an older
+    // test, or a future one) that leaves it out at runtime must not produce
+    // a `stopReason: undefined` key, which JSON.stringify drops but which
+    // an in-memory `assert.deepEqual` against a round-tripped record would
+    // still see as a shape mismatch.
+    ...(input.stopReason !== undefined ? { stopReason: input.stopReason } : {}),
+    // Same conditional-spread reasoning as pluginVersion above: a policyId
+    // key that is present-but-undefined is a different shape than a truly
+    // absent one, and every non-"policy" stop must produce a record
+    // byte-for-byte indistinguishable from one that never had this field.
+    ...(input.policyId !== undefined ? { policyId: input.policyId } : {}),
   };
 }
 
@@ -186,6 +248,10 @@ function isGateSource(value: unknown): value is GateSource {
 
 function isGateVerdict(value: unknown): value is GateVerdict {
   return value === "allow" || value === "ask" || value === "deny";
+}
+
+function isGateStopReason(value: unknown): value is GateStopReason {
+  return value === "policy" || value === "local-rule" || value === "risk" || value === "unreachable" || value === "cache";
 }
 
 function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
@@ -202,7 +268,9 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     (record.latencyMs === null || typeof record.latencyMs === "number") &&
     // Absent entirely (a record written before this field existed) is valid;
     // present-but-wrong-type is not, same discipline as every other field.
-    (record.pluginVersion === undefined || typeof record.pluginVersion === "string")
+    (record.pluginVersion === undefined || typeof record.pluginVersion === "string") &&
+    (record.stopReason === undefined || isGateStopReason(record.stopReason)) &&
+    (record.policyId === undefined || typeof record.policyId === "string")
   );
 }
 

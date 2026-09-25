@@ -564,6 +564,18 @@ export interface GateActionResult {
    * a threshold stops being somebody's guess.
    */
   readonly axes: { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null; readonly ceiling: number } | null;
+  /**
+   * The id of the policy that resolved this decision, null when the risk
+   * stage decided instead (or fail-open incompleteness resolved it). A raw
+   * field, not something a caller has to parse back out of `reasons`'
+   * rationale params -- those are text meant for a person to read
+   * (`policy.forbidden`'s `params.policyId` says the same id, but as an
+   * implementation detail of a localized message, not a stable contract).
+   * gate-bash.ts's own measurement log (gate_measurement.ts's
+   * GateDecisionRecord.policyId) is exactly why this exists as its own
+   * field: recording "why the gate stopped" needs the id directly.
+   */
+  readonly policyId: string | null;
 }
 
 export interface DecideGateActionInput {
@@ -616,7 +628,7 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
     if (policyDecision !== null && policyDecision.outcome !== "act") {
       // A policy settled it, so the risk stage never ran and there are no
       // scores to record against this stop.
-      return { verdict: "ask", reasons: policyDecision.rationale, axes: null };
+      return { verdict: "ask", reasons: policyDecision.rationale, axes: null, policyId: policyDecision.policyId };
     }
   }
 
@@ -634,6 +646,7 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
       consequence: riskDecision.consequence,
       ceiling: input.consequenceCeiling ?? GATE_CONSEQUENCE_CEILING,
     },
+    policyId: null,
   };
 }
 

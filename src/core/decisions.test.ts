@@ -283,6 +283,25 @@ test("decideGateAction: noDestinationMatched appends a fallback reason only when
   assert.ok(result.reasons.some((r) => r.key === "reason.noDestinationMatched"));
 });
 
+// odd/tasks/release-0.5.1.md T1: the gate's own measurement log needs to
+// record WHICH policy resolved a stop, not just that one did -- previously
+// that id was only reachable by parsing GateActionResult.reasons' rationale
+// params, which is text meant for a person to read, not a stable field for
+// a caller to key off.
+test("decideGateAction: a policy stop carries the policy's id on the result, not just inside the rationale text", () => {
+  const prohibits: Policy = { id: "client_always_asks", rule: "a forbidding rule", kind: "prohibits" };
+  const safe = combinedAnswers({ choice: "client_always_asks", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const result = decideGateAction({ action: ACTION, policies: [prohibits], answers: safe });
+  assert.equal(result.policyId, "client_always_asks");
+});
+
+test("decideGateAction: a risk-resolved stop carries policyId: null -- no policy settled it", () => {
+  const highRisk = riskAnswers(0.1, 0.9, 2.5);
+  const result = decideGateAction({ action: ACTION, policies: [], answers: highRisk });
+  assert.equal(result.verdict, "ask");
+  assert.equal(result.policyId, null);
+});
+
 test("decideGateAction: noDestinationMatched is NOT added when a policy resolved the decision", () => {
   // Only a policy that STOPS resolves the decision now; a permissive one
   // falls through to risk, so this is checked with a prohibiting rule.

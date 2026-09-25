@@ -177,6 +177,135 @@ test("a record written before pluginVersion existed parses back with the field s
   assert.equal(parsed[0]?.pluginVersion, undefined);
 });
 
+// ---------------------------------------------------------------------------
+// stopReason / policyId -- odd/tasks/release-0.5.1.md T1. `source` alone
+// mixed policy stops, local-rule asks and uncacheable commands into one
+// indistinguishable "jev" bucket; stopReason splits it finer, and a policy
+// stop also carries which policy resolved it.
+// ---------------------------------------------------------------------------
+
+test("a record carries the stopReason it was built with", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-1",
+    at: "2026-09-25T00:00:00.000Z",
+    project: "orca-supervisor",
+    command: "rm -rf dist",
+    source: "jev",
+    verdict: "ask",
+    latencyMs: 300,
+    pluginVersion: "0.5.1",
+    stopReason: "risk",
+  });
+  assert.equal(record.stopReason, "risk");
+});
+
+test("stopReason round-trips through serialize/parse", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-2",
+    at: "2026-09-25T00:00:01.000Z",
+    project: null,
+    command: "git push --force",
+    source: "local-rule",
+    verdict: "deny",
+    latencyMs: null,
+    pluginVersion: "0.5.1",
+    stopReason: "local-rule",
+  });
+  const raw = serializeGateRecord(record);
+  assert.deepEqual(parseGateDecisionRecords(raw), [record]);
+});
+
+test("a record written before stopReason existed parses back with the field simply absent -- never dropped, never treated as corrupt", () => {
+  const legacyLine = `${JSON.stringify({
+    type: "gate-decision",
+    id: "legacy-sr",
+    at: "2026-01-01T00:00:00.000Z",
+    project: "orca-supervisor",
+    commandFamily: "rm -rf",
+    source: "jev",
+    verdict: "ask",
+    latencyMs: 300,
+  })}\n`;
+  const parsed = parseGateDecisionRecords(legacyLine);
+  assert.equal(parsed.length, 1, "the pre-existing record must survive, not be skipped as malformed");
+  assert.equal(parsed[0]?.stopReason, undefined);
+});
+
+test("policyId is present only for a policy stop -- a risk stop carries no policyId key at all, not policyId:null", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-3",
+    at: "2026-09-25T00:00:02.000Z",
+    project: null,
+    command: "npm run deploy",
+    source: "jev",
+    verdict: "ask",
+    latencyMs: 320,
+    pluginVersion: "0.5.1",
+    stopReason: "risk",
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(record, "policyId"), false);
+});
+
+test("a policy stop carries the policy's id, ids only -- never the command", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-4",
+    at: "2026-09-25T00:00:03.000Z",
+    project: null,
+    command: "echo 'client site work'",
+    source: "jev",
+    verdict: "ask",
+    latencyMs: 280,
+    pluginVersion: "0.5.1",
+    stopReason: "policy",
+    policyId: "client_always_asks",
+  });
+  assert.equal(record.policyId, "client_always_asks");
+  const raw = serializeGateRecord(record);
+  assert.deepEqual(parseGateDecisionRecords(raw), [record]);
+});
+
+test("a source:'none' record carries stopReason 'unreachable' -- Jev was asked but never answered", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-5",
+    at: "2026-09-25T00:00:04.000Z",
+    project: null,
+    command: "npm test",
+    source: "none",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.5.1",
+    stopReason: "unreachable",
+  });
+  assert.equal(record.stopReason, "unreachable");
+});
+
+test("parseGateDecisionRecords: a line with an invalid stopReason value is skipped, siblings survive", () => {
+  const good = buildGateDecisionRecord({
+    id: "sr-6",
+    at: "2026-01-01T00:00:00.000Z",
+    project: null,
+    command: "npm test",
+    source: "cache",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.5.1",
+    stopReason: "cache",
+  });
+  const badLine = `${JSON.stringify({
+    type: "gate-decision",
+    id: "sr-bad",
+    at: "2026-01-01T00:00:00.000Z",
+    project: null,
+    commandFamily: "npm",
+    source: "cache",
+    verdict: "allow",
+    latencyMs: null,
+    stopReason: "not-a-real-reason",
+  })}\n`;
+  const raw = serializeGateRecord(good) + badLine;
+  assert.deepEqual(parseGateDecisionRecords(raw), [good]);
+});
+
 test("discarding uncommitted work groups with reset/clean, a branch switch does not", () => {
   assert.equal(commandFamily("git reset --hard"), "git discard");
   assert.equal(commandFamily("git clean -fd"), "git discard");
