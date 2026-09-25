@@ -79,6 +79,16 @@ Slices (revised after the first slicing pass; one PR per work unit):
 - Active mode needs `permissionDecision: "allow"` for `updatedInput` to apply,
   so an active rewrite also auto-allows that one Agent call. Measurement mode
   emits nothing on stdout, so permissions are untouched.
+- Coordinator direction (after slice 1+2 consent): an active rewrite is only
+  offered when the call would have been allowed anyway. Only
+  `bypassPermissions` qualifies: per the permission-modes table it is the one
+  mode that runs "Everything" without asking (`acceptEdits` covers edits, and
+  `auto` classifies a subagent task before it starts). Any other mode measures
+  only, with reason `permission-mode`.
+- Coordinator decision B: decisions.ts's unwired four-tier complexity
+  question is asked in the same Jev call and recorded (`complexity`) as a
+  measurement-only, model-agnostic effort reading. The ladder question still
+  decides (U5). decisions.ts is imported, never edited (PR 2 owns it).
 - A request that names no model counts as "different" in active mode: Jev
   decides independently of what was requested (U1).
 - `DEFAULT_MODEL_REWRITE_CONFIDENCE = 0.7`: our starting threshold, not a
@@ -103,12 +113,12 @@ Slices (revised after the first slicing pass; one PR per work unit):
   `applyModelSeedChoices` (only accepted ids replace user rows). Mirrors
   policy_seed_notice / policy_seed_import. Route: inline.
   Checks: `src/core/model_seed_notice.test.ts`.
-- [ ] **T3** `src/core/model_decisions.ts`: Jev ChoiceQuestion built from the
+- [x] **T3** `src/core/model_decisions.ts`: Jev ChoiceQuestion built from the
   available ladder (criteria = entry labels + legend), state from the Agent
   input, `interpretModelChoice`, `decideModelRewrite` (active + ready +
   confidence >= threshold + differs), `buildUpdatedAgentInput` (echo all
   fields). Route: delegated writer (2 non-trivial files with T4).
-- [ ] **T4** `src/core/model_measurement.ts` + readiness (reuse
+- [x] **T4** `src/core/model_measurement.ts` + readiness (reuse
   `evaluateModSkillsReadiness`): decision/outcome records, join by
   tool_use_id, readout (up / down / agreement, counts only). Route: same writer.
 - [ ] **T5** `adapters/claude/agent-model.ts` (PreToolUse + PostToolUse on
@@ -127,3 +137,5 @@ Slices (revised after the first slicing pass; one PR per work unit):
   acknowledged (lineage review-333bd5b5c55fbf0d), 3 advisory findings above.
 - T3/T4: delegated writer (writer trigger: 2 non-trivial modules). RED observed
   as ERR_MODULE_NOT_FOUND for each module before implementation.
+- T3: commit e443024 (delegated writer).
+- T4: see the commit that adds src/core/model_measurement.ts (delegated writer).
