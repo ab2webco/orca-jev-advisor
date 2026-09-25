@@ -124,6 +124,63 @@ test("mergePolicySeeds does not report destinations as differing when only reord
   assert.deepEqual(result.differing, []);
 });
 
+// ===========================================================================
+// T6 -- odd/tasks/release-0.5.1.md. mergePolicySeeds must normalize `kind`
+// with migratePolicyKind before comparing, and compare `scope` by its
+// EFFECTIVE (resolved) value, not its raw presence, so an install that only
+// carries the legacy Spanish kind or an unscoped row is not reported as
+// differing from a seed that already means the same thing.
+// ===========================================================================
+
+test("mergePolicySeeds: a stored legacy Spanish kind equal in meaning to the seed's English kind is NOT reported as differing", () => {
+  // The exact false positive this task exists to fix: every install still
+  // carrying the pre-rename enum saw '20 differing' when most were
+  // functionally identical, because the old comparison was a raw string
+  // equality that never normalized either side.
+  const existing = [{ id: "a", rule: "same rule", kind: "prohibe" }];
+  const seeds = [{ id: "a", rule: "same rule", kind: "prohibits" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing, []);
+});
+
+test("mergePolicySeeds: a stored kind that genuinely differs from the seed's (after normalization) is still reported", () => {
+  const existing = [{ id: "a", rule: "same rule", kind: "permite" }];
+  const seeds = [{ id: "a", rule: "same rule", kind: "prohibits" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing.map((d) => d.fields), [["kind"]]);
+});
+
+test("mergePolicySeeds: a stored kind that fails to normalize (blank/invalid) against a valid seed kind is reported as differing", () => {
+  const existing = [{ id: "a", rule: "same rule", kind: "" }];
+  const seeds = [{ id: "a", rule: "same rule", kind: "permits" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing.map((d) => d.fields), [["kind"]]);
+});
+
+test("mergePolicySeeds: a stored row missing scope next to a seed that declares one is NOT reported as differing -- it already resolves to the seed's own value under the T2 default rule", () => {
+  const existing = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits" }];
+  const seeds = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "process" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing, []);
+});
+
+test("mergePolicySeeds: an explicit scope that disagrees with the seed's resolved scope IS a real, reportable difference", () => {
+  // Unlike the omitted-scope case above, this row has genuinely opted out --
+  // a person set scope: 'command' on purpose, and the seed now says
+  // 'process'. That changes what the gate does with it, so it must surface.
+  const existing = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "command" }];
+  const seeds = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "process" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing.map((d) => d.fields), [["scope"]]);
+});
+
+test("mergePolicySeeds: two rows that both omit scope never report a scope difference, seed scope notwithstanding", () => {
+  const existing = [{ id: "own_branch", rule: "same rule", kind: "permits" }];
+  const seeds = [{ id: "own_branch", rule: "same rule", kind: "permits" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing, []);
+});
+
 test("mergePolicySeeds sorts several differing ids by id", () => {
   const existing = [
     { id: "z", rule: "old z", kind: "permits" },
