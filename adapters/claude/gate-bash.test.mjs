@@ -344,6 +344,18 @@ const SEGMENT_SCOPED_DENIED = [
   // A single quoted WORD is still a real argument, not descriptive prose:
   // quoting a bare branch name is ordinary shell usage.
   'git push origin "main"',
+  // odd/tasks/release-0.5.1.md T10 (JEVADV-28), R1-001/R3/R4: a command run
+  // by ANOTHER program -- a remote shell, a login shell, an interpreter --
+  // must stay exactly as visible as it was in 0.5.0. T8's blanket quoted-data
+  // opacity hid these; the allowlist inversion only hides KNOWN data
+  // positions (printf/echo text, commit -m, gh --body, a grep/jq argument).
+  'ssh host "git push --force origin main"',
+  'su -c "git push -f origin main"',
+  `python3 -c "import os; os.system('git push --force origin main')"`,
+  'watch "git push -f"',
+  'script -c "git push -f"',
+  // The push-protected rule's own wrapper example named in the task.
+  'ssh host "git push origin main"',
 ]
 
 for (const command of SEGMENT_SCOPED_NOT_DENIED) {
@@ -473,6 +485,11 @@ const DISCARDING_COMMANDS = [
   // Required STILL-refused case: a preceding, unrelated segment must not
   // hide the discard in the one that follows it.
   'x && git checkout -- file',
+  // odd/tasks/release-0.5.1.md T10 (JEVADV-28), R1-002: reset/clean must
+  // stay caught through ssh's remote command and `su -c`, the same way it
+  // already is through `bash -c`/`eval`.
+  'ssh host "git reset --hard"',
+  'su -c "git reset --hard"',
   // A command SUBSTITUTION really does run, even behind a mention-only
   // verb like `echo` -- see mentionsRatherThanRuns' hasCommandSubstitution
   // guard, without which these two broke the NEVER_SILENTLY loop before
@@ -495,6 +512,10 @@ const NON_DISCARDING_COMMANDS = [
   'git commit -m "note: use git restore src/app.ts to undo"',
   'git reset --soft HEAD~1',
   'git clean -n',
+  // odd/tasks/release-0.5.1.md T10 (JEVADV-28), R3-checkout-trailing-dashdash:
+  // a bare `--` after a real branch name is a harmless branch switch, not a
+  // path-form checkout -- only xargs feeding the paths at runtime makes it one.
+  'git checkout main --',
 ]
 
 for (const command of DISCARDING_COMMANDS) {
@@ -547,6 +568,45 @@ test('resetClean fails CLOSED on a command its tokenizer cannot parse: an unterm
   // waved through by an earlier tier.
   const payload = JSON.parse(run(home, 'git commit -m "git reset --hard'))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T10 (JEVADV-28), R1-002: reset/clean run by
+// another program must stay caught. `su -c`/ssh are real shells, caught by
+// discardsUncommittedWork's own recursion (git_discard.ts); python3 is not
+// shell syntax at all, so this is caught by the resetClean rule's own raw
+// pattern over the SAME scanned (visible-by-default) text forcePush/
+// pushProtected already use -- see gate-bash.ts's NEVER_SILENTLY entry.
+// ---------------------------------------------------------------------------
+
+test('real subprocess, refused: `su -c "git reset --hard"` -- a real shell, not descriptive text', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'su -c "git reset --hard"'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('real subprocess, refused: a python3 -c string that runs a hard reset is not descriptive text either', () => {
+  const home = makeHome()
+  const command = `python3 -c "import os; os.system('git reset --hard')"`
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T10 (JEVADV-28): the exact command refused live
+// on 2026-09-25 (odd/tasks/release-0.5.1.md's "Progress" section references
+// this session) must stay allowed after the allowlist inversion. Its
+// printf's double-quoted arguments -- one of which spells out
+// "git reset --hard origin/main" -- are DATA (printf's own arguments), and
+// its final `orca plane create --title "..."` argument is VISIBLE (orca is
+// not an allowlisted program) but names nothing this file denies.
+// ---------------------------------------------------------------------------
+
+test('real subprocess, not refused: the exact command refused live on 2026-09-25', () => {
+  const home = makeHome()
+  const command = readFileSync(join(__dirname, 'fixtures', 'jevadv-28-live-command.txt'), 'utf8').trim()
+  const decision = decisionFor(home, command)
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path (no destructive command actually runs here), got ${decision}`)
 })
 
 // ---------------------------------------------------------------------------

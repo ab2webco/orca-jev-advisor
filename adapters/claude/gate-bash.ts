@@ -84,7 +84,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { discardsUncommittedWork, hasUnbalancedQuoting, someSegmentMatches } from '../../src/core/git_discard.ts'
+import { cannotScanWithConfidence, discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -227,12 +227,29 @@ type Decision = 'allow' | 'deny' | 'ask'
 
 /**
  * resetClean's own fail-CLOSED fallback -- see its NEVER_SILENTLY entry
- * below and hasUnbalancedQuoting's doc comment (src/core/git_discard.ts).
+ * below and cannotScanWithConfidence's doc comment (src/core/git_discard.ts).
  * Quote-blind on purpose: it exists ONLY for the one input
  * discardsUncommittedWork's tokenizer cannot parse with confidence, so
  * matching more freely there is the safe direction to err in.
  */
 const RESET_CLEAN_FALLBACK_PATTERN = /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/
+
+/**
+ * resetClean's raw-text-over-SCANNED-segment check (T10, JEVADV-28): read
+ * through someSegmentMatches, so it only ever sees a segment reduced to the
+ * text a shell -- or the program that segment names -- would actually treat
+ * as a run (see git_discard.ts's module note on the allowlist inversion).
+ * Unlike RESET_CLEAN_FALLBACK_PATTERN this is not quote-blind and is not
+ * gated on unparseable input: it exists for a command that IS parseable but
+ * is not shell syntax at all, e.g. `python3 -c "...os.system('git reset
+ * --hard')..."` -- discardsUncommittedWork's tokenizer only understands
+ * shell grammar, so it cannot look inside a Python string, but the string's
+ * own text is visible (python3's `-c` argument is not a known DATA
+ * position) and this pattern only needs to find it there. Allows a flag or
+ * two between `reset` and `--hard` (`git reset --quiet --hard`), same as
+ * discardsUncommittedWork's own args-not-order reading of --hard.
+ */
+const RESET_CLEAN_RAW_PATTERN = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/
 
 /**
  * Tier 1b: the rules that never run unannounced. `why` is a catalog key,
@@ -291,9 +308,27 @@ const NEVER_SILENTLY: readonly {
   // token instead of raising, which would hide a real `git reset --hard`
   // sitting after it. RESET_CLEAN_FALLBACK_PATTERN is the OLD regex, kept
   // as this rule's own fail-CLOSED fallback for exactly that one case --
-  // see hasUnbalancedQuoting's doc comment.
+  // see cannotScanWithConfidence's doc comment.
+  //
+  // T10 (odd/tasks/release-0.5.1.md, JEVADV-28) added a second disjunct:
+  // someSegmentMatches(command, RESET_CLEAN_RAW_PATTERN) reads each segment
+  // through the SAME visibility rules forcePush/pushProtected already use
+  // (see git_discard.ts's module note on the allowlist inversion), so a
+  // command spelled out through a non-shell interpreter -- `python3 -c
+  // "...os.system('git reset --hard')..."` -- is still caught even though
+  // discardsUncommittedWork's tokenizer, which only understands real shell
+  // syntax, cannot see into it. It also subsumes the old
+  // cannotScanWithConfidence-gated fallback below (someSegmentMatches falls
+  // back to the raw segment text on the same null), which stays as an
+  // explicit, cheap second guarantee for the one case this rule can least
+  // afford to get wrong -- see RESET_CLEAN_FALLBACK_PATTERN's own comment.
   {
-    pattern: { test: (command) => discardsUncommittedWork(command) || (hasUnbalancedQuoting(command) && RESET_CLEAN_FALLBACK_PATTERN.test(command)) },
+    pattern: {
+      test: (command) =>
+        discardsUncommittedWork(command) ||
+        someSegmentMatches(command, RESET_CLEAN_RAW_PATTERN) ||
+        (cannotScanWithConfidence(command) && RESET_CLEAN_FALLBACK_PATTERN.test(command)),
+    },
     why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command',
   },
   // Irrecoverable without a backup nobody can assume exists.
@@ -654,17 +689,18 @@ function readPluginVersion(): string | undefined {
 const PLUGIN_VERSION = readPluginVersion()
 
 /**
- * Which of the SHIPPED policies are `"process"` scoped (see decisions.ts's
- * PolicyScope), for resolvePolicyScope's fallback when a stored row omits
- * its own `scope` -- see filterPoliciesForCommandScope below. Read once at
- * module load, same reasoning and same fail-open discipline as
- * readPluginVersion above: a missing or unreadable seed file yields an
- * empty index, which makes every unscoped stored row resolve to `"command"`
- * -- today's behavior, unchanged. This never lowers protection (no rule
- * that used to ask starts allowing silently); the worst case is simply that
- * the one bug T2 exists to fix (a process policy still gating an individual
- * command) is not fixed on a machine whose own plugin install is broken in
- * an unrelated way.
+ * Which of the SHIPPED policies are `"process"` or `"local-rule"` scoped
+ * (see decisions.ts's PolicyScope), for resolvePolicyScope's fallback when a
+ * stored row omits its own `scope` -- see filterPoliciesForCommandScope
+ * below. Read once at module load, same reasoning and same fail-open
+ * discipline as readPluginVersion above: a missing or unreadable seed file
+ * yields an empty index, which makes every unscoped stored row resolve to
+ * `"command"` -- today's behavior, unchanged. This never lowers protection
+ * (no rule that used to ask starts allowing silently); the worst case is
+ * simply that the bugs T2 (a process policy gating an individual command)
+ * and T10/JEVADV-28 (a local-rule policy asked about instead of being
+ * refused by the deny tier that already covers it) are not fixed on a
+ * machine whose own plugin install is broken in an unrelated way.
  */
 function readSeedScopeById(): ReadonlyMap<string, PolicyScope> {
   try {
@@ -820,11 +856,13 @@ type JevOutcome =
  * (JEVADV-3) -- then filters the (optional) policies mirror down to
  * whatever applies at the matched destination, and then to whatever is
  * `"command"` scoped (see filterPoliciesForCommandScope, decisions.ts) -- a
- * `"process"` policy
- * (e.g. "screenshots get looked at before being called done") describes how
- * the agent works across many commands, not something a single command's
- * text can honestly be judged against, so it must never reach the coverage
- * question at all. When at least one policy survives both filters, its two
+ * `"process"` policy (e.g. "screenshots get looked at before being called
+ * done") describes how the agent works across many commands, not something a
+ * single command's text can honestly be judged against, and a `"local-rule"`
+ * policy (no_force_push, discard_uncommitted_work) is already enforced by
+ * one of this file's own NEVER_SILENTLY rules before this function ever
+ * runs, so a real instance never reaches here at all -- neither must ever
+ * reach the coverage question. When at least one policy survives both, its two
  * extra policy-stage questions fold into the SAME callJev call the gate
  * already makes (no second network round trip). decideGateAction then
  * composes "does a policy already resolve this" with the existing

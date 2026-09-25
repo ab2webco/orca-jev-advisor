@@ -15,10 +15,11 @@
 // commit message that merely names the command, so this reads the line the
 // way a shell would: quotes respected, and `git` only counted where a shell
 // would actually run it -- the start of a command, after wrappers like
-// `sudo`/`env`, inside `bash -c` / `eval`, and inside `$(...)` / backticks.
-// Text inside an argument (`git commit -m "use git restore x"`) is never a
-// run. This matters because this rule DENIES: a false match refuses an
-// agent's commit, not just asks about it.
+// `sudo`/`env`, inside `bash -c` / `eval` / `ssh`'s remote command / `su -c`
+// / `watch` / `script -c`, and inside `$(...)` / backticks. Text inside an
+// argument (`git commit -m "use git restore x"`) is never a run. This
+// matters because this rule DENIES: a false match refuses an agent's
+// commit, not just asks about it.
 //
 // Deliberately NOT recognised:
 //   - `git checkout <name>` with one positional and no `--`: git resolves a
@@ -53,6 +54,28 @@ const WRAPPERS = new Set([
 
 /** Shells whose `-c` argument is itself a command line. */
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
+
+/** Programs that, like a shell, take a WHOLE command line as their `-c`
+ *  argument's value -- `su -c '...'` (optionally `su USER -c '...'`) and
+ *  `script -c '...'` read exactly like `bash -c`, just under a different
+ *  name. */
+const DASH_C_COMMAND_PROGRAMS = new Set(["su", "script"]);
+
+/** ssh options that take a separate value, so the token right after one is
+ *  never mistaken for the host, or for the start of the remote command. */
+const SSH_OPTIONS_WITH_VALUE = new Set([
+  "-p", "-l", "-i", "-F", "-o", "-L", "-R", "-D", "-W", "-B", "-c", "-e", "-J", "-Q", "-S", "-O", "-w", "-b",
+]);
+
+/** `watch`'s own options that take a separate value. */
+const WATCH_OPTIONS_WITH_VALUE = new Set(["-n", "--interval"]);
+
+/** Every program name this module ever recurses into as a command line in
+ *  its own right -- `git` itself, plus every wrapper that runs one whole
+ *  line found further down the same token list. Used to jump PAST a
+ *  wrapper's own option that this walk cannot know the value-grammar of
+ *  (`sudo -u root`, `nice -n 10`) to the program it actually wraps. */
+const RECURSIVE_COMMAND_PROGRAMS = new Set(["git", "eval", "ssh", "watch", ...SHELLS, ...DASH_C_COMMAND_PROGRAMS]);
 
 /**
  * Pulls every `$(...)` and backtick substitution out of `command`: they run
@@ -167,18 +190,36 @@ function programName(token: string): string {
   return token.split("/").pop() ?? token;
 }
 
+/** A subshell wrapping a real command must not hide it: `(bash -c '...')`
+ *  still runs `bash -c`, and `(git commit -m "...")` still runs `git`.
+ *  Stripped only for a program-name check, never for the token's own text
+ *  in a reconstructed/joined output. Shared by resolveProgram (which
+ *  program a wrapped command line runs) and scanSegment (the same check for
+ *  `-c`/eval/ssh/watch recognition). */
+function stripLeadingGroupers(token: string): string {
+  return token.replace(/^[({]+/, "");
+}
+
 function isShortCluster(token: string): boolean {
   return /^-[a-zA-Z]+$/.test(token);
 }
 
-function checkoutDiscards(args: readonly string[]): boolean {
+function checkoutDiscards(args: readonly string[], viaXargs: boolean): boolean {
   const separator = args.indexOf("--");
-  // A bare `--` with nothing after it is not a meaningful invocation on its
-  // own; the one place it appears in real use is `xargs ... git checkout
-  // --`, where xargs appends the actual pathspecs after this static text
-  // ends. Denying it costs nothing -- no legitimate, non-destructive command
-  // is spelled this way.
-  if (separator !== -1) return true;
+  if (separator !== -1) {
+    // A `--` followed by a real pathspec is always the path form:
+    // `git checkout -- src/app.ts`, `git checkout main -- src/app.ts`.
+    if (separator < args.length - 1) return true;
+    // A BARE trailing `--`, with nothing after it, is not itself a
+    // meaningful invocation -- UNLESS xargs is about to append the real
+    // pathspecs after it at runtime (`find . | xargs git checkout --`,
+    // odd/tasks/release-0.5.1.md T10, JEVADV-28, R3-checkout-trailing-dashdash).
+    // `git checkout main --` alone is an ordinary, non-destructive branch
+    // switch that merely signals "no more flags"; falling through lets the
+    // positional-count check below decide it on `args` with `--` excluded
+    // (it starts with `-`, so the filter already drops it).
+    if (viaXargs) return true;
+  }
   if (
     args.some(
       (arg) =>
@@ -217,8 +258,11 @@ function cleanDiscards(args: readonly string[]): boolean {
   return args.some((arg) => arg === "--force" || (isShortCluster(arg) && arg.includes("f")));
 }
 
-/** True when `tokens[start]` is git and the invocation it begins discards uncommitted work. */
-function gitDiscardsFrom(tokens: readonly string[], start: number): boolean {
+/** True when `tokens[start]` is git and the invocation it begins discards
+ *  uncommitted work. `viaXargs` is whether this invocation is fed its
+ *  arguments by an `xargs` further back in the same segment -- see
+ *  checkoutDiscards' bare trailing `--` case. */
+function gitDiscardsFrom(tokens: readonly string[], start: number, viaXargs = false): boolean {
   if (programName(tokens[start] ?? "") !== "git") return false;
   let index = start + 1;
   while (index < tokens.length && (tokens[index] ?? "").startsWith("-")) {
@@ -226,52 +270,90 @@ function gitDiscardsFrom(tokens: readonly string[], start: number): boolean {
   }
   const subcommand = tokens[index];
   const args = tokens.slice(index + 1);
-  if (subcommand === "checkout") return checkoutDiscards(args);
+  if (subcommand === "checkout") return checkoutDiscards(args, viaXargs);
   if (subcommand === "restore") return restoreDiscards(args);
   if (subcommand === "reset") return resetDiscards(args);
   if (subcommand === "clean") return cleanDiscards(args);
   return false;
 }
 
-/** Whether the command a segment runs -- looking through wrappers, `sh -c` and `eval` -- discards work. */
-function segmentDiscards(segment: string): boolean {
-  const tokens = tokenize(segment);
+/** Index of the first token at or after `start` that is not one of a
+ *  program's own flags -- skipping a flag's separate value when
+ *  `optionsWithValue` says it takes one. Used to walk past `ssh`'s and
+ *  `watch`'s own options to find the host / the command they run. */
+function afterOwnOptions(tokens: readonly string[], start: number, optionsWithValue: ReadonlySet<string>): number {
+  let index = start;
+  while (index < tokens.length && (tokens[index] ?? "").startsWith("-")) {
+    index += optionsWithValue.has(tokens[index] ?? "") ? 2 : 1;
+  }
+  return index;
+}
+
+/**
+ * The program name a shell would actually run for `tokens`, and its index --
+ * skipping leading `NAME=value` assignments and wrapper words (WRAPPERS)
+ * together with their own flags, then -- because a wrapper's own option can
+ * take a separate value this walk cannot know the grammar of (`sudo -u
+ * root`, `nice -n 10`) -- jumping forward to the first token naming one of
+ * `recognized`'s programs. Shared by segmentDiscards (which program
+ * discards) and scanSegment's dataPositionIndexes (which argument of that
+ * program is data), so both read a wrapped command line the same way.
+ * `viaXargs` reports whether `xargs` itself was one of the skipped wrappers.
+ */
+function resolveProgram(
+  tokens: readonly string[],
+  recognized: ReadonlySet<string>,
+): { readonly name: string; readonly index: number; readonly viaXargs: boolean } {
   let index = 0;
   let wrapped = false;
+  let viaXargs = false;
   while (index < tokens.length) {
     const token = tokens[index] ?? "";
+    const name = programName(stripLeadingGroupers(token));
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
       index += 1;
-    } else if (WRAPPERS.has(programName(token))) {
+    } else if (WRAPPERS.has(name)) {
       wrapped = true;
+      if (name === "xargs") viaXargs = true;
       index += 1;
       while (index < tokens.length && (tokens[index] ?? "").startsWith("-")) index += 1;
     } else {
       break;
     }
   }
-  // A wrapper's options can take a separate value (`sudo -u root`,
-  // `nice -n 10`, `timeout 60`), and that value is not the program. Rather
-  // than learn every wrapper's option grammar, jump to the first word after
-  // the wrapper that IS one of the programs this rule reads. The walk stays
-  // limited to wrapped segments, so an argument of an ordinary program (a
-  // commit message, a search pattern) is still never read as a run.
   if (wrapped) {
-    const runs = tokens.findIndex((token, at) => {
-      if (at < index) return false;
-      const name = programName(token);
-      return name === "git" || name === "eval" || SHELLS.has(name);
-    });
+    const runs = tokens.findIndex((token, at) => at >= index && recognized.has(programName(stripLeadingGroupers(token))));
     if (runs !== -1) index = runs;
   }
-  const program = programName(tokens[index] ?? "");
-  if (SHELLS.has(program)) {
+  return { name: programName(stripLeadingGroupers(tokens[index] ?? "")), index, viaXargs };
+}
+
+/** Whether the command a segment runs -- looking through wrappers, `sh -c`,
+ *  `eval`, `su -c`/`script -c`, `ssh`'s remote command and `watch` --
+ *  discards work. */
+function segmentDiscards(segment: string): boolean {
+  const tokens = tokenize(segment);
+  const { name: program, index, viaXargs } = resolveProgram(tokens, RECURSIVE_COMMAND_PROGRAMS);
+  if (SHELLS.has(program) || DASH_C_COMMAND_PROGRAMS.has(program)) {
     const flag = tokens.findIndex((token, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(token));
     const script = flag === -1 ? undefined : tokens[flag + 1];
     return script !== undefined && discardsUncommittedWork(script);
   }
   if (program === "eval") return discardsUncommittedWork(tokens.slice(index + 1).join(" "));
-  return gitDiscardsFrom(tokens, index);
+  // ssh joins every argument after the host into ONE line and hands it to
+  // the remote shell -- the same thing `bash -c`'s argument already is,
+  // just assembled from several local shell words instead of one.
+  if (program === "ssh") {
+    const afterHost = afterOwnOptions(tokens, index + 1, SSH_OPTIONS_WITH_VALUE) + 1;
+    return afterHost < tokens.length && discardsUncommittedWork(tokens.slice(afterHost).join(" "));
+  }
+  // `watch CMD` reruns CMD on an interval; everything after watch's own
+  // options is that command line, with no `-c` flag to mark it.
+  if (program === "watch") {
+    const commandStart = afterOwnOptions(tokens, index + 1, WATCH_OPTIONS_WITH_VALUE);
+    return commandStart < tokens.length && discardsUncommittedWork(tokens.slice(commandStart).join(" "));
+  }
+  return gitDiscardsFrom(tokens, index, viaXargs);
 }
 
 /**
@@ -356,15 +438,22 @@ function isRedirection(command: string, index: number): boolean {
 // refused as if that command had run.
 //
 // scanSegment below reduces a segment to the text a shell would actually
-// EXECUTE: a quoted, multi-word argument goes opaque, while `$(...)`,
-// backticks (even inside double quotes) and the script argument of
-// `bash -c`/`sh -c`/`zsh -c`/`dash -c`/`ksh -c`/`eval` stay exactly as
-// visible as before, because a shell really does run those. A single quoted
-// WORD (`"main"`, `"-f"`) also stays visible on purpose: it is ordinary
-// shell usage for a bare value, not descriptive prose, and no `\s`-spanning
-// pattern can ever be spelled with one word alone -- so keeping it visible
-// only ever adds a true match, never reopens the false positive this exists
-// to close.
+// EXECUTE: `$(...)`, backticks (even inside double quotes) and the script
+// argument of `bash -c`/`sh -c`/`zsh -c`/`dash -c`/`ksh -c`/`eval` stay
+// exactly as visible as before, because a shell really does run those. A
+// single quoted WORD (`"main"`, `"-f"`) also stays visible on purpose: it is
+// ordinary shell usage for a bare value, not descriptive prose, and no
+// `\s`-spanning pattern can ever be spelled with one word alone -- so
+// keeping it visible only ever adds a true match, never reopens the false
+// positive this exists to close.
+//
+// T8 made every OTHER quoted, multi-word argument opaque, everywhere. T10
+// (JEVADV-28) narrows that to the KNOWN DATA POSITIONS block further down
+// this file: opaque only where the program reading it is known to treat
+// that argument as data, never as something to run -- see that block's own
+// note for why (a command run by ANOTHER program, e.g. `ssh host "git push
+// --force origin main"`, looked identical to a shell running something
+// quoted, and T8's blanket rule hid it).
 // ---------------------------------------------------------------------------
 
 /** One shell word of a scanned segment: its dequoted text, and whether ANY
@@ -485,19 +574,150 @@ function extractSubstitutionsForScan(text: string): { readonly outer: string; re
   return { outer, bodies };
 }
 
-/** A subshell wrapping a real command must not hide it: `(bash -c '...')`
- *  still runs `bash -c`. Stripped only for the SHELLS/eval name check below,
- *  never for the token's own text in the reconstructed output. */
-function stripLeadingGroupers(token: string): string {
-  return token.replace(/^[({]+/, "");
-}
 
 const SCAN_MAX_DEPTH = 8;
-/** Stands in for one quoted, multi-word argument in scanSegment's output. */
+/** Stands in for one quoted, multi-word argument in a known DATA position in scanSegment's output. */
 const SCAN_DATA_PLACEHOLDER = "‹data›";
 
-function scanToken(token: ScanToken): string {
-  return token.quoted && /\s/.test(token.text) ? SCAN_DATA_PLACEHOLDER : token.text;
+// ---------------------------------------------------------------------------
+// KNOWN DATA POSITIONS (odd/tasks/release-0.5.1.md T10, JEVADV-28).
+//
+// T8 made EVERY quoted multi-word argument opaque, everywhere -- which also
+// hid a real command run by another program (`ssh host "git push --force
+// origin main"`, `su -c "git push -f origin main"`), because a shell running
+// something quoted looks identical, character for character, to a program
+// merely printing or matching text. T10 inverts this into an ALLOWLIST: a
+// quoted multi-word argument goes opaque ONLY when the program reading it is
+// known to treat that argument as DATA rather than as something to run.
+// Everywhere else -- an unrecognised program included -- it stays VISIBLE,
+// which is exactly 0.5.0's behaviour: fail closed for the unknown case,
+// rather than assume the best.
+//
+// dataPositionIndexes below names the token indexes, within one already-
+// resolved command's tokens, that this allowlist covers. Only a QUOTED
+// MULTI-WORD token is ever a candidate in the first place (see scanToken):
+// this only decides which of THOSE tokens is data, not whether a plain,
+// unquoted word is ever hidden -- it never is.
+// ---------------------------------------------------------------------------
+
+/** Programs whose data-position rules this file knows, used as
+ *  resolveProgram's `recognized` set so a wrapper (`sudo`, `env`, ...) does
+ *  not hide which program's argument is actually being judged. */
+const DATA_MARKING_PROGRAMS = new Set(["printf", "echo", "git", "gh", "grep", "egrep", "fgrep", "rg", "ag", "jq"]);
+
+/** git commit's own message flags; `-F`/`--message`/`-m` all name a file or
+ *  literal text to use VERBATIM as the commit message -- never a command. */
+const GIT_COMMIT_MESSAGE_FLAGS = new Set(["-m", "--message", "-F"]);
+/** `git tag -m` / `git notes add -m` only ever take the short form. */
+const GIT_SINGLE_M_FLAG = new Set(["-m"]);
+
+/** gh's text flags: a PR/issue body, title, subject or comment message,
+ *  across every gh subcommand -- gh never runs this text, it posts it. */
+const GH_TEXT_FLAGS = new Set(["--body", "-b", "--title", "-t", "--subject", "--message", "-m"]);
+
+const GREP_FAMILY = new Set(["grep", "egrep", "fgrep", "rg", "ag"]);
+/** grep-family flags whose OWN value is the pattern, wherever it appears. */
+const GREP_PATTERN_FLAGS = new Set(["-e", "--regexp"]);
+/** grep-family flags that consume a separate value that is NOT the pattern,
+ *  so the search for "the first non-flag argument" does not stop on one of
+ *  these values by mistake -- including ripgrep's own
+ *  `-t/-T/-g/-r/-M/-j/-E`, so `rg -t ts "pattern"` still finds "pattern",
+ *  not "ts". */
+const GREP_OTHER_VALUE_FLAGS = new Set([
+  "-f", "--file", "-m", "--max-count", "-A", "--after-context", "-B", "--before-context", "-C", "--context",
+  "-t", "--type", "-T", "--type-not", "-g", "--glob", "-r", "--replace", "-M", "--max-columns", "-j", "--threads", "-E", "--encoding",
+]);
+
+/** jq flags that consume one, or two, separate values that are not the filter. */
+const JQ_ONE_VALUE_FLAGS = new Set(["-f", "--from-file", "--slurpfile", "--rawfile"]);
+const JQ_TWO_VALUE_FLAGS = new Set(["--arg", "--argjson"]);
+
+/** The index, within `plain` starting at `from`, of the first token that is
+ *  not one of `program`'s own flags and not a value one of `valueFlags`
+ *  consumes -- i.e. `program`'s first true positional argument. Shared by
+ *  the grep-family and jq cases below, whose "the filter/pattern is the
+ *  first positional" shape is otherwise identical. */
+function firstPositionalIndex(plain: readonly string[], from: number, valueFlags: ReadonlyMap<string, number>): number {
+  let index = from;
+  while (index < plain.length) {
+    const token = plain[index] ?? "";
+    if (!token.startsWith("-")) return index;
+    index += valueFlags.get(token) ?? 1;
+  }
+  return -1;
+}
+
+/**
+ * The token indexes in `tokens` that are a known DATA position -- see the
+ * module note above. `tokens` is always ONE already-resolved command's
+ * tokens (scanSegment's recursion into `-c`/eval/ssh/su/watch has already
+ * peeled away any wrapper's own command-line argument by the time this
+ * runs), so only ONE program's rules ever apply here.
+ */
+function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> {
+  const plain = tokens.map((token) => token.text);
+  const { name: program, index: programIndex } = resolveProgram(plain, DATA_MARKING_PROGRAMS);
+  const data = new Set<number>();
+
+  if (program === "printf" || program === "echo") {
+    for (let i = programIndex + 1; i < tokens.length; i += 1) data.add(i);
+    return data;
+  }
+
+  if (program === "git") {
+    let i = programIndex + 1;
+    while (i < plain.length && (plain[i] ?? "").startsWith("-")) {
+      i += GLOBAL_OPTIONS_WITH_VALUE.has(plain[i] ?? "") ? 2 : 1;
+    }
+    const subcommand = plain[i];
+    const messageFlags =
+      subcommand === "commit" ? GIT_COMMIT_MESSAGE_FLAGS :
+      subcommand === "tag" ? GIT_SINGLE_M_FLAG :
+      subcommand === "notes" && plain[i + 1] === "add" ? GIT_SINGLE_M_FLAG :
+      null;
+    if (messageFlags !== null) {
+      for (let j = i + 1; j < plain.length; j += 1) {
+        if (messageFlags.has(plain[j] ?? "") && j + 1 < tokens.length) data.add(j + 1);
+      }
+    }
+    return data;
+  }
+
+  if (program === "gh") {
+    for (let j = programIndex + 1; j < plain.length; j += 1) {
+      if (GH_TEXT_FLAGS.has(plain[j] ?? "") && j + 1 < tokens.length) data.add(j + 1);
+    }
+    return data;
+  }
+
+  if (GREP_FAMILY.has(program)) {
+    for (let j = programIndex + 1; j < plain.length; j += 1) {
+      if (GREP_PATTERN_FLAGS.has(plain[j] ?? "") && j + 1 < tokens.length) {
+        data.add(j + 1);
+        return data;
+      }
+    }
+    const valueFlags = new Map<string, number>([...GREP_OTHER_VALUE_FLAGS].map((flag): [string, number] => [flag, 2]));
+    const pattern = firstPositionalIndex(plain, programIndex + 1, valueFlags);
+    if (pattern !== -1) data.add(pattern);
+    return data;
+  }
+
+  if (program === "jq") {
+    const valueFlags = new Map<string, number>([
+      ...[...JQ_ONE_VALUE_FLAGS].map((flag): [string, number] => [flag, 2]),
+      ...[...JQ_TWO_VALUE_FLAGS].map((flag): [string, number] => [flag, 3]),
+    ]);
+    const filter = firstPositionalIndex(plain, programIndex + 1, valueFlags);
+    if (filter !== -1) data.add(filter);
+    return data;
+  }
+
+  return data;
+}
+
+function scanToken(token: ScanToken, isDataPosition: boolean): string {
+  return isDataPosition && token.quoted && /\s/.test(token.text) ? SCAN_DATA_PLACEHOLDER : token.text;
 }
 
 /**
@@ -507,13 +727,22 @@ function scanToken(token: ScanToken): string {
  * placeholder swallow it (review finding R3). Only the literal text around
  * the markers is judged as data; every body is always emitted.
  */
-function scanTokenWithBodies(token: ScanToken, nextBody: () => string): string {
-  if (!token.text.includes(SCAN_SUBSTITUTION_MARKER)) return scanToken(token);
+function scanTokenWithBodies(token: ScanToken, nextBody: () => string, isDataPosition: boolean): string {
+  if (!token.text.includes(SCAN_SUBSTITUTION_MARKER)) return scanToken(token, isDataPosition);
   const parts = token.text.split(SCAN_SUBSTITUTION_MARKER);
   const bodies = parts.slice(1).map(() => nextBody());
   const literal = parts.join("");
-  if (token.quoted && /\s/.test(literal)) return [SCAN_DATA_PLACEHOLDER, ...bodies].join(" ");
+  if (isDataPosition && token.quoted && /\s/.test(literal)) return [SCAN_DATA_PLACEHOLDER, ...bodies].join(" ");
   return parts.reduce((out, part, at) => (at === 0 ? part : `${out} ${bodies[at - 1] ?? ""} ${part}`), "");
+}
+
+/** Maps every token in `tokens` through scanTokenWithBodies, resolving DATA
+ *  positions once for the whole list rather than per token -- a position is
+ *  always decided by where a token sits relative to the OTHERS in the same
+ *  command, never in isolation. */
+function scanTokens(tokens: readonly ScanToken[], nextBody: () => string): string {
+  const data = dataPositionIndexes(tokens);
+  return tokens.map((token, i) => scanTokenWithBodies(token, nextBody, data.has(i))).join(" ");
 }
 
 /**
@@ -545,16 +774,28 @@ function scanSegment(segment: string, depth: number): string | null {
   let bodyIndex = 0;
   const nextScannedBody = (): string => scannedBodies[bodyIndex++] ?? "";
 
+  const plainTexts = tokens.map((token) => token.text);
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] as ScanToken;
     const name = programName(stripLeadingGroupers(token.text));
     const isEval = name === "eval";
-    const flagIndex = SHELLS.has(name)
+    const takesDashC = SHELLS.has(name) || DASH_C_COMMAND_PROGRAMS.has(name);
+    const flagIndex = takesDashC
       ? tokens.findIndex((candidate, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(candidate.text))
       : -1;
-    const scriptStart = isEval ? index + 1 : flagIndex + 1;
-    if ((isEval || flagIndex !== -1) && tokens[scriptStart] !== undefined) {
-      const before = tokens.slice(0, scriptStart).map((candidate) => scanTokenWithBodies(candidate, nextScannedBody));
+    const isSsh = name === "ssh";
+    const isWatch = name === "watch";
+    const scriptStart = isEval
+      ? index + 1
+      : flagIndex !== -1
+        ? flagIndex + 1
+        : isSsh
+          ? afterOwnOptions(plainTexts, index + 1, SSH_OPTIONS_WITH_VALUE) + 1
+          : isWatch
+            ? afterOwnOptions(plainTexts, index + 1, WATCH_OPTIONS_WITH_VALUE)
+            : -1;
+    if (scriptStart !== -1 && tokens[scriptStart] !== undefined) {
+      const before = scanTokens(tokens.slice(0, scriptStart), nextScannedBody);
       // The script is scanned again as a whole, so its substitutions go back
       // in as their ORIGINAL `$(...)` text, in the same order, for that
       // recursive scan to extract and read on its own.
@@ -564,24 +805,30 @@ function scanSegment(segment: string, depth: number): string | null {
         .join(" ");
       const scanned = scanSegment(script, depth + 1);
       if (scanned === null) return null;
-      return [...before, scanned].join(" ");
+      return [before, scanned].join(" ");
     }
   }
 
-  return tokens.map((token) => scanTokenWithBodies(token, nextScannedBody)).join(" ");
+  return scanTokens(tokens, nextScannedBody);
 }
 
 /**
- * True when `command` cannot be read the way a shell would -- an unclosed
- * single or double quote, or a `$(...)`/backtick that never closes. Used by
- * gate-bash.ts's resetClean rule: discardsUncommittedWork's own tokenizer
- * silently absorbs the rest of an unterminated quote into one token instead
- * of failing, which would hide a `git reset --hard` sitting after it --
- * exactly the case the resetClean rule's old, quote-blind regex never
- * missed. That regex is kept as this rule's own fail-CLOSED fallback for
- * exactly this one case; see NEVER_SILENTLY in gate-bash.ts.
+ * True when `command` cannot be scanned with confidence: scanSegment
+ * returned null. Three distinct causes, all folded into one boolean because
+ * every one of them means the same thing to a caller -- "don't trust what
+ * you can read here, fall back to the raw text":
+ *   - an unclosed single or double quote;
+ *   - a `$(...)`/backtick substitution that never closes;
+ *   - nesting deep enough (SCAN_MAX_DEPTH) to suggest either of the above
+ *     rather than a real, deeply-nested command.
+ * Used by gate-bash.ts's resetClean rule: discardsUncommittedWork's own
+ * tokenizer silently absorbs the rest of an unterminated quote into one
+ * token instead of failing, which would hide a `git reset --hard` sitting
+ * after it -- exactly the case the resetClean rule's old, quote-blind regex
+ * never missed. That regex is kept as this rule's own fail-CLOSED fallback
+ * for exactly this one case; see NEVER_SILENTLY in gate-bash.ts.
  */
-export function hasUnbalancedQuoting(command: string): boolean {
+export function cannotScanWithConfidence(command: string): boolean {
   return scanSegment(command, 0) === null;
 }
 

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { discardsUncommittedWork, hasUnbalancedQuoting, someSegmentMatches, splitOnCommandSeparators, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
+import { cannotScanWithConfidence, discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
 
 // Each of these overwrites the working tree from the index or a commit, and
 // uncommitted changes to those paths are gone: no reflog, no stash, nothing
@@ -70,10 +70,17 @@ const DISCARDS: readonly string[] = [
   "git -C ../repo reset --hard",
   // A bare `--` with nothing after it is what `xargs` leaves in the static
   // text -- the real pathspecs only exist once xargs appends them at
-  // runtime, so this is the one place the old checkoutDiscards' "needs a
-  // pathspec after --" requirement had to give: nothing legitimate is
-  // spelled this way.
+  // runtime, so a command that is actually fed by xargs still discards.
   "find . | xargs git checkout --",
+  // odd/tasks/release-0.5.1.md T10 (JEVADV-28), R1-002: reset/clean must
+  // stay caught through ssh's remote command and `su -c`, the same way
+  // `bash -c`/`eval` already were -- these run a real shell on the far end
+  // (ssh) or right here (su), not descriptive text.
+  'ssh host "git reset --hard"',
+  'su -c "git reset --hard"',
+  'su root -c "git clean -fd"',
+  'script -c "git reset --hard"',
+  'watch "git reset --hard"',
 ];
 
 // None of these touches uncommitted work in the working tree.
@@ -118,6 +125,12 @@ const KEEPS: readonly string[] = [
   "git reset --mixed",
   "git clean -n",
   "git clean --dry-run",
+  // odd/tasks/release-0.5.1.md T10 (JEVADV-28), R3-checkout-trailing-dashdash:
+  // a bare `--` with a real branch before it is an ordinary, non-destructive
+  // branch switch that merely signals "no more flags" -- it only means a
+  // discard when xargs is about to append the actual pathspecs after it
+  // (see "find . | xargs git checkout --" above).
+  "git checkout main --",
 ];
 
 for (const command of DISCARDS) {
@@ -258,12 +271,12 @@ test("someSegmentMatches: the script argument of bash -c / sh -c / eval still ma
   assert.equal(someSegmentMatches("(bash -c 'git push --force')", forcePush), true);
 });
 
-test("someSegmentMatches: an unbalanced quote fails CLOSED onto the raw segment text", () => {
+test("cannotScanWithConfidence: an unbalanced quote fails CLOSED onto the raw segment text", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(hasUnbalancedQuoting('git commit -m "git push --force'), true);
+  assert.equal(cannotScanWithConfidence('git commit -m "git push --force'), true);
   // Today's (quote-blind) behaviour: the raw text still matches.
   assert.equal(someSegmentMatches('git commit -m "git push --force', forcePush), true);
-  assert.equal(hasUnbalancedQuoting("git push --force origin main"), false);
+  assert.equal(cannotScanWithConfidence("git push --force origin main"), false);
 });
 
 test("someSegmentMatches: a DOUBLE-QUOTED substitution still runs, so it stays visible", () => {
@@ -286,4 +299,71 @@ test("someSegmentMatches: substitution and redirection tests above still hold wi
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
   assert.equal(someSegmentMatches("git push $(echo x; echo --force) origin", forcePush), true);
   assert.equal(someSegmentMatches("git push 2>&1 --force origin", forcePush), true);
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T10 (JEVADV-28): opacity is now an ALLOWLIST of
+// known DATA positions, not every quoted multi-word argument. A command run
+// by ANOTHER program -- a remote shell, a login shell, an interpreter -- must
+// stay exactly as visible as it was in 0.5.0; only the specific arguments
+// listed in git_discard.ts's module note (printf/echo text, git's own commit
+// message flags, gh's text flags, a grep-family PATTERN, jq's filter) go
+// opaque. Review findings R1-001/R3-wrapper-remote-command-opaque/
+// R4-quoted-remote-command-opaque.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: a quoted command run by another program stays visible, not opaque", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
+  assert.equal(someSegmentMatches('ssh host "git push --force origin main"', forcePush), true);
+  assert.equal(someSegmentMatches('ssh host "git push origin main"', pushProtected), true);
+  assert.equal(someSegmentMatches('su -c "git push -f origin main"', forcePush), true);
+  assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git push --force origin main')"`, forcePush), true);
+  assert.equal(someSegmentMatches('watch "git push -f"', forcePush), true);
+  assert.equal(someSegmentMatches('script -c "git push -f"', forcePush), true);
+  assert.equal(someSegmentMatches(`node -e "require('child_process').execSync('git push --force origin main')"`, forcePush), true);
+});
+
+test("someSegmentMatches: a DATA position nested inside a real remote/login command still goes opaque", () => {
+  // The recursive scan into ssh's remote command / su's -c argument must
+  // still apply the same allowlist to what THAT command runs -- otherwise
+  // making the outer wrapper visible would newly refuse an innocent commit
+  // whose message happens to name this rule.
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('ssh host \'git commit -m "git push --force"\'', forcePush), false);
+  assert.equal(someSegmentMatches('su -c \'git commit -m "git push --force"\'', forcePush), false);
+});
+
+test("someSegmentMatches: printf/echo text stays opaque (unchanged from T8)", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('printf \'%s\' "we should never git push --force"', forcePush), false);
+  assert.equal(someSegmentMatches("echo 'git push --force is not allowed here'", forcePush), false);
+});
+
+test("someSegmentMatches: a grep-family PATTERN argument stays opaque", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('grep -n "git push --force" README.md', forcePush), false);
+  assert.equal(someSegmentMatches('rg "git push --force" src', forcePush), false);
+  assert.equal(someSegmentMatches('grep -e "git push --force" README.md', forcePush), false);
+  // The FILE argument of grep is not a data position, but it is never
+  // quoted-multiword in practice, so this never matters in the other
+  // direction; a grep MENTION with no match still stands.
+  assert.equal(someSegmentMatches('grep -rn "restore" "git push --force src"', forcePush), true);
+});
+
+test("someSegmentMatches: a data position is still recognised behind a leading subshell paren", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('(git commit -m "git push --force")', forcePush), false);
+});
+
+test("someSegmentMatches: ripgrep's own -t/-g/etc. value flags do not swallow the real pattern", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('rg -t ts "git push --force" src', forcePush), false);
+});
+
+test("someSegmentMatches: an unrecognised program's quoted argument fails CLOSED (visible), matching 0.5.0", () => {
+  // The whole point of the allowlist inversion: an unknown program gets NO
+  // benefit of the doubt, exactly like 0.5.0.
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('some-unknown-tool "please never git push --force"', forcePush), true);
 });
