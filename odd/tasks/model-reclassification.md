@@ -57,20 +57,48 @@ authored lines per PR; coordinator brief). RDD on (global): after each
 work-unit commit run `gentle-ai review assess --committed-only`; consent is
 relayed through `orca orchestration ask`.
 
-Slices:
-- PR A: T1-T2 (catalog core + seed)
-- PR B: T3-T4 (decision + measurement core)
-- PR C: T5-T6 (hooks + installer + worker mirror)
-- PR D: T7 (panel Models section + readout + screenshots)
+Slices (revised after the first slicing pass; one PR per work unit):
+- PR 1 (#19): T1 catalog + seed. Base main.
+- PR 2 (#20): T2 seed-once + notice. Base PR 1.
+- PR 3: T3 Jev question + rewrite decision. Base PR 2.
+- PR 4: T4 measurement records + readout + readiness. Base PR 3.
+- PR 5: T5-T6a Agent hooks + installer entries. Base PR 4.
+- PR 6: T6b worker mirror/seed/notice/readout sidecars. Base PR 5.
+- PR 7: T7 config panel Models section + screenshots. Base PR 6.
+
+## Decisions
+- Question shape: an ordinal ScoreQuestion whose levels are the available
+  ladder, smallest first (index 0 = smallest). The score rounds to a level,
+  so "up / down" in the readout is a rank delta. Built from the catalog at
+  call time; adding or reordering entries needs no code change.
+- `agentModel` ships as the aliases `fable/opus/sonnet/haiku`: the Agent tool's
+  own input schema enumerates aliases, and model-config documents what each
+  resolves to per provider. Editable per entry.
+- Fable ships `available: false`: model-config says the `fable` alias applies
+  only "where Fable is available to you".
+- Active mode needs `permissionDecision: "allow"` for `updatedInput` to apply,
+  so an active rewrite also auto-allows that one Agent call. Measurement mode
+  emits nothing on stdout, so permissions are untouched.
+- A request that names no model counts as "different" in active mode: Jev
+  decides independently of what was requested (U1).
+- `DEFAULT_MODEL_REWRITE_CONFIDENCE = 0.7`: our starting threshold, not a
+  measurement; readiness reuses mod-skills' 1000 comparable / 0.7 match rate.
+- Records never store the prompt or description, only `subagentType` and
+  `promptChars` (same discipline as gate_measurement.ts).
+
+## Follow-ups (advisory review findings, not new commits)
+- R3-001: `applyModelSeedChoices` appends a repeated shipped id twice.
+- R3-002: the notice does not compute ids removed from a newer baseline.
+- R3-003: the offered-version marker must be stored as `{ version }` (slice 6).
 
 ## Tasks
 
-- [ ] **T1** `seed/models.json` v1 + `src/core/model_catalog.ts`: entry shape
+- [x] **T1** `seed/models.json` v1 + `src/core/model_catalog.ts`: entry shape
   `{id, provider, label, rank|null, agentModel, source, available}`, tolerant
   row parsing, `parseModelSeedVersion`, ordered ladder (ranked by rank, then
   unranked), `availableLadder`. Route: inline (one module + data, understood).
   Checks: `src/core/model_catalog.test.ts`.
-- [ ] **T2** `src/core/model_seed_notice.ts`: seed-once marker, offered
+- [x] **T2** `src/core/model_seed_notice.ts`: seed-once marker, offered
   version, computed notice (added / changed / removed ids) and
   `applyModelSeedChoices` (only accepted ids replace user rows). Mirrors
   policy_seed_notice / policy_seed_import. Route: inline.
@@ -94,4 +122,8 @@ Slices:
   Route: delegated writer; screenshots read by the parent.
 
 ## Progress
-(none yet)
+- T1: commit d3d7937 (inline). PR #19.
+- T2: commit 928d3ab (inline). PR #20. Review of T1+T2: granted, approved,
+  acknowledged (lineage review-333bd5b5c55fbf0d), 3 advisory findings above.
+- T3/T4: delegated writer (writer trigger: 2 non-trivial modules). RED observed
+  as ERR_MODULE_NOT_FOUND for each module before implementation.
