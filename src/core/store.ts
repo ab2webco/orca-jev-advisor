@@ -151,11 +151,11 @@ export interface PolicyRow {
    */
   readonly destinations?: readonly string[];
   /**
-   * Optional command-vs-process scope -- see decisions.ts's PolicyScope for
-   * what the two values mean. Absent means "resolve it" (resolvePolicyScope
-   * in decisions.ts): the shipped seed's own scope for this same id, or
-   * `"command"` when the seed doesn't know this id either. This module only
-   * validates the raw shape.
+   * Optional command/process/local-rule scope -- see decisions.ts's
+   * PolicyScope for what the three values mean. Absent means "resolve it"
+   * (resolvePolicyScope in decisions.ts): the shipped seed's own scope for
+   * this same id, or `"command"` when the seed doesn't know this id either.
+   * This module only validates the raw shape.
    */
   readonly scope?: PolicyScope;
 }
@@ -171,19 +171,43 @@ function isPolicyKind(value: unknown): value is PolicyKind {
 }
 
 /** The runtime list of PolicyScope's members, same technique as isPolicyKind above. */
-const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process"];
+const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process", "local-rule"];
 
 function isPolicyScope(value: unknown): value is PolicyScope {
   return (POLICY_SCOPES as readonly unknown[]).includes(value);
 }
 
-/** Exported so the seed reader validates rows against this exact shape rather
- *  than a second, drifting copy of it. */
+/**
+ * Exported so the seed reader validates rows against this exact shape rather
+ * than a second, drifting copy of it.
+ *
+ * Deliberately silent on `scope`'s VALUE (only its presence matters here) --
+ * see withNormalizedScope below for why. Before T10 (odd/tasks/release-
+ * 0.5.1.md, JEVADV-28, R4) this rejected the whole row on an unrecognised
+ * `scope`, which is MORE permissive on what is probably just a typo or a
+ * value this build predates: a policy that should still cover its rule
+ * silently vanished instead of resolving to its seed's scope, or `command`.
+ */
 export function isPolicyRow(value: unknown): value is PolicyRow {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false;
   if ("destinations" in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false;
-  if ("scope" in value && value.scope !== undefined && !isPolicyScope(value.scope)) return false;
   return true;
+}
+
+/**
+ * A row already known to satisfy isPolicyRow, with an unrecognised `scope`
+ * resolved to ABSENT instead of costing the whole row -- see isPolicyRow's
+ * own comment. Absent is what resolvePolicyScope (decisions.ts) already
+ * knows how to fall back from: the shipped seed's own scope for this id, or
+ * `"command"`. `isPolicyRow`'s type predicate already declares `scope` as
+ * `PolicyScope | undefined`; this is the one place that actually makes that
+ * true, the same way `kind`'s Spanish/English resolution is deferred to
+ * migratePolicyKind rather than settled at the shape check above.
+ */
+function withNormalizedScope(row: PolicyRow): PolicyRow {
+  if (row.scope === undefined || isPolicyScope(row.scope)) return row;
+  const { id, rule, kind, destinations } = row;
+  return destinations !== undefined ? { id, rule, kind, destinations } : { id, rule, kind };
 }
 
 const DEFAULT_POLICIES: readonly PolicyRow[] = [];
@@ -216,7 +240,7 @@ export async function getPolicies(host: StorageHost): Promise<readonly PolicyRow
     return [...DEFAULT_POLICIES];
   }
   if (raw === undefined || raw === null || !Array.isArray(raw)) return [...DEFAULT_POLICIES];
-  return raw.filter(isPolicyRow);
+  return raw.filter(isPolicyRow).map(withNormalizedScope);
 }
 
 export async function setPolicies(host: StorageHost, policies: readonly PolicyRow[]): Promise<void> {

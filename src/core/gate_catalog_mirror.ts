@@ -52,9 +52,9 @@ function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null
 }
 
-/** Same row-by-row tolerance as `destinations`: a bad `scope` costs only that row, never the whole mirror. */
+/** Same technique as isPolicyKind above. */
 function isPolicyScope(value: unknown): value is PolicyScope {
-  return value === 'command' || value === 'process'
+  return value === 'command' || value === 'process' || value === 'local-rule'
 }
 
 function isAutonomyOverride(value: unknown): value is { readonly consequenceCeiling?: number } {
@@ -86,11 +86,23 @@ export function parseMirroredCatalog(value: unknown): MirroredCatalog | null {
   return isMirroredCatalog(value) ? value : null
 }
 
+/** Shape check for everything except `scope`'s VALUE -- see
+ *  withNormalizedScope below (T10, JEVADV-28, R4): an unrecognised `scope`
+ *  used to drop the whole row, which is MORE permissive on what is probably
+ *  just a typo (including a stopping `prohibits` policy silently vanishing
+ *  instead of resolving to its seed's scope, or `"command"`). */
 function isMirroredPolicy(value: unknown): value is Policy {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false
   if ('destinations' in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false
-  if ('scope' in value && value.scope !== undefined && !isPolicyScope(value.scope)) return false
   return true
+}
+
+/** A row already known to satisfy isMirroredPolicy, with an unrecognised
+ *  `scope` resolved to ABSENT instead of costing the whole row. */
+function withNormalizedScope(policy: Policy): Policy {
+  if (policy.scope === undefined || isPolicyScope(policy.scope)) return policy
+  const { id, rule, kind, destinations } = policy
+  return destinations !== undefined ? { id, rule, kind, destinations } : { id, rule, kind }
 }
 
 /**
@@ -103,5 +115,5 @@ function isMirroredPolicy(value: unknown): value is Policy {
  */
 export function parseMirroredPolicies(value: unknown): readonly Policy[] | null {
   if (!Array.isArray(value)) return null
-  return value.filter(isMirroredPolicy)
+  return value.filter(isMirroredPolicy).map(withNormalizedScope)
 }

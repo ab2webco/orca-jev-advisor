@@ -145,16 +145,22 @@ test("getPolicies: a row with no scope field at all is today's behavior, still v
   assert.deepEqual(await getPolicies(host), rows);
 });
 
-test("getPolicies: a valid 'command' or 'process' scope is preserved", async () => {
+test("getPolicies: a valid 'command', 'process' or 'local-rule' scope is preserved", async () => {
   const rows: PolicyRow[] = [
     { id: "a", rule: "rule a", kind: "permits", scope: "command" },
     { id: "b", rule: "rule b", kind: "prohibits", scope: "process" },
+    { id: "d", rule: "rule d", kind: "prohibits", scope: "local-rule" },
   ];
   const host = fakeHost({ policies: rows });
   assert.deepEqual(await getPolicies(host), rows);
 });
 
-test("getPolicies: a row with an invalid scope value is excluded, siblings survive", async () => {
+// odd/tasks/release-0.5.1.md T10 (JEVADV-28), R4: an invalid `scope` used to
+// drop the WHOLE row, which is MORE permissive on what is probably just a
+// typo -- a `prohibits` policy vanishing is a worse outcome than it merely
+// resolving to `"command"` (or its seed's own scope). The row must survive
+// with `scope` normalized to absent instead.
+test("getPolicies: a row with an invalid scope value keeps the row, with scope resolved to absent", async () => {
   const host = fakeHost({
     policies: [
       { id: "a", rule: "rule a", kind: "permits", scope: "command" },
@@ -165,8 +171,16 @@ test("getPolicies: a row with an invalid scope value is excluded, siblings survi
   const policies = await getPolicies(host);
   assert.deepEqual(policies, [
     { id: "a", rule: "rule a", kind: "permits", scope: "command" },
+    { id: "bad", rule: "bad scope", kind: "permits" },
     { id: "c", rule: "rule c", kind: "prohibits" },
   ]);
+});
+
+test("getPolicies: an invalid scope is dropped even when the row also carries destinations", async () => {
+  const host = fakeHost({
+    policies: [{ id: "a", rule: "rule a", kind: "permits", destinations: ["site-a"], scope: "sometimes" }],
+  });
+  assert.deepEqual(await getPolicies(host), [{ id: "a", rule: "rule a", kind: "permits", destinations: ["site-a"] }]);
 });
 
 // ===========================================================================

@@ -22,7 +22,7 @@ function isPolicyKind(value: unknown): value is PolicyKind {
 }
 
 /** The only valid values for a policy row's optional `scope` -- see PolicyScope in decisions.ts. */
-const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process"];
+const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process", "local-rule"];
 
 function isPolicyScope(value: unknown): value is PolicyScope {
   return isString(value) && (POLICY_SCOPES as readonly string[]).includes(value);

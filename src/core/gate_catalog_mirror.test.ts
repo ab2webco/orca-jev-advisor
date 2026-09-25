@@ -99,18 +99,21 @@ test("policies: an empty array is valid -- distinct from the null case above", (
 
 // ---------------------------------------------------------------------------
 // scope -- odd/tasks/release-0.5.1.md T2. Same row-by-row tolerance as
-// destinations above: a bad `scope` costs only that row.
+// destinations above: a bad `scope` costs only that FIELD (T10, JEVADV-28,
+// R4), never the whole row.
 // ---------------------------------------------------------------------------
 
-test("policies: a valid 'command' or 'process' scope parses through", () => {
+test("policies: a valid 'command', 'process' or 'local-rule' scope parses through", () => {
   const raw = [
     { id: "p1", rule: "screenshots get looked at", kind: "prohibits", scope: "process" },
     { id: "p2", rule: "never force-push", kind: "prohibits", scope: "command" },
+    { id: "p3", rule: "already denied locally", kind: "prohibits", scope: "local-rule" },
   ];
   const parsed = parseMirroredPolicies(raw);
-  assert.equal(parsed?.length, 2);
+  assert.equal(parsed?.length, 3);
   assert.equal(parsed?.[0]?.scope, "process");
   assert.equal(parsed?.[1]?.scope, "command");
+  assert.equal(parsed?.[2]?.scope, "local-rule");
 });
 
 test("policies: a row with no scope field at all is still valid -- absent means 'resolve it later'", () => {
@@ -120,11 +123,16 @@ test("policies: a row with no scope field at all is still valid -- absent means 
   assert.equal(parsed?.[0]?.scope, undefined);
 });
 
-test("policies: a row with an invalid scope value is dropped, siblings survive", () => {
+// R4: an invalid `scope` used to drop the whole row -- MORE permissive on
+// what is probably a typo (a `prohibits` row silently stopped applying at
+// all, instead of resolving to `"command"` or its seed's own scope). The row
+// must survive, with `scope` resolved to absent.
+test("policies: a row with an invalid scope value keeps the row, with scope resolved to absent", () => {
   const raw = [
     { id: "p1", rule: "ok", kind: "permits", scope: "command" },
     { id: "bad", rule: "bad scope", kind: "permits", scope: "sometimes" },
   ];
   const parsed = parseMirroredPolicies(raw);
-  assert.deepEqual(parsed?.map((p) => p.id), ["p1"]);
+  assert.deepEqual(parsed?.map((p) => p.id), ["p1", "bad"]);
+  assert.equal(parsed?.find((p) => p.id === "bad")?.scope, undefined);
 });

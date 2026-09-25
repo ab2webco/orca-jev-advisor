@@ -66,15 +66,21 @@ export type PolicyKind = "permits" | "requires_human" | "prohibits";
 
 /**
  * Whether a policy is something a single command's TEXT can honestly be
- * judged against ("command"), or a claim about how the agent works across
- * many commands, or what it later says about the work ("process") -- e.g.
- * "screenshots get looked at before being called done" is a claim about the
- * WORKFLOW that produced a bash command, not about the command itself, and
- * no `same_kind` answer can honestly resolve it. See
- * filterPoliciesForCommandScope below for where this stops a `"process"`
- * policy from ever reaching the coverage question at all.
+ * judged against ("command"), a claim about how the agent works across many
+ * commands or what it later says about the work ("process"), or already
+ * enforced by a local deny/ask rule before Jev ever runs ("local-rule") --
+ * e.g. "screenshots get looked at before being called done" is a claim about
+ * the WORKFLOW that produced a bash command, not about the command itself,
+ * and no `same_kind` answer can honestly resolve it; "no force push" is
+ * already refused by gate-bash.ts's own force-push rule, so a real instance
+ * never reaches this stage at all -- only a command that merely MENTIONS it
+ * in quoted data does, and asking Jev whether that mention is "a concrete
+ * instance" of the policy is not a question Jev can honestly answer either
+ * (odd/tasks/release-0.5.1.md, JEVADV-34). See filterPoliciesForCommandScope
+ * below for where this stops a `"process"` or `"local-rule"` policy from
+ * ever reaching the coverage question at all.
  */
-export type PolicyScope = "command" | "process";
+export type PolicyScope = "command" | "process" | "local-rule";
 
 export interface Policy {
   readonly id: string;
@@ -288,31 +294,45 @@ export function filterPoliciesForDestination(policies: readonly Policy[], destin
   });
 }
 
+/** The real members of PolicyScope, checked at runtime so an unrecognised
+ *  value -- one this build predates, or one a validation gap upstream let
+ *  through untouched -- resolves exactly like an absent field, never like a
+ *  real, if unfamiliar, scope. */
+const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule"]);
+
 /**
  * The effective scope a policy resolves to: its own explicit `scope` when it
- * has one, otherwise the shipped seed's scope for that same id, otherwise
- * `"command"`. This is the ONE rule every reader of a possibly-scopeless
- * policy row must use -- see filterPoliciesForCommandScope (the gate) and
+ * is a real PolicyScope value, otherwise the shipped seed's scope for that
+ * same id, otherwise `"command"`. This is the ONE rule every reader of a
+ * possibly-scopeless (or, upstream of validation, possibly-mistyped) policy
+ * row must use -- see filterPoliciesForCommandScope (the gate) and
  * policy_seed_import.ts's mergePolicySeeds (the seed notice), both of which
  * call this instead of comparing `scope` fields directly, precisely so an
- * omitted field is never mistaken for a real difference from the seed.
+ * omitted (or invalid) field is never mistaken for a real difference from
+ * the seed.
  */
 export function resolvePolicyScope(policy: Pick<Policy, "id" | "scope">, seedScopeById: ReadonlyMap<string, PolicyScope>): PolicyScope {
-  if (policy.scope !== undefined) return policy.scope;
+  if (policy.scope !== undefined && POLICY_SCOPE_VALUES.has(policy.scope)) return policy.scope;
   return seedScopeById.get(policy.id) ?? "command";
 }
 
 /**
  * Narrows `policies` to the ones a single command's TEXT can honestly be
  * judged against -- filters out every policy that resolves to `"process"`
- * (see resolvePolicyScope above and PolicyScope's own doc). Called by
- * gate-bash.ts BEFORE buildPolicyQuestions, so a process policy never enters
+ * (a claim about the workflow, not the command) or `"local-rule"` (already
+ * enforced by a local deny/ask rule before Jev ever runs; see PolicyScope's
+ * own doc and resolvePolicyScope above). Called by gate-bash.ts BEFORE
+ * buildPolicyQuestions, so neither kind of non-command policy ever enters
  * the `coverage` criteria at all: it cannot be offered as an answer Jev
  * picks, and it cannot be the policy `same_kind` is asked to match against.
  * This is what stopped a command that WROTE or TOOK a screenshot from being
  * asked about under `visual_evidence` ("nothing with a screen is called done
  * without a screenshot") -- the exact action that policy demands was being
- * judged as if it violated the policy that demands it.
+ * judged as if it violated the policy that demands it -- and, separately,
+ * what stops a command that only MENTIONS `git push --force` or `git reset
+ * --hard` in quoted data from being asked "forbidden by no_force_push" when
+ * a REAL instance is already refused by gate-bash.ts's own deny tier before
+ * this stage ever runs (odd/tasks/release-0.5.1.md, JEVADV-34).
  */
 export function filterPoliciesForCommandScope(policies: readonly Policy[], seedScopeById: ReadonlyMap<string, PolicyScope>): readonly Policy[] {
   return policies.filter((policy) => resolvePolicyScope(policy, seedScopeById) === "command");

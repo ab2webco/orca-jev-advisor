@@ -265,6 +265,50 @@ test("buildSeedScopeIndex: only rows with an explicit scope contribute an entry"
 });
 
 // ===========================================================================
+// PolicyScope's third member -- odd/tasks/release-0.5.1.md T10 (JEVADV-34).
+// A policy already enforced by a local deny/ask rule (no_force_push,
+// discard_uncommitted_work) is never judged by Jev: a real instance never
+// reaches the policy stage at all (gate-bash.ts's NEVER_SILENTLY already
+// refused or asked about it), so only a command that merely MENTIONS the
+// rule in quoted data would ever reach `coverage`, and Jev cannot honestly
+// answer whether that mention is "a concrete instance" of a rule that never
+// ran.
+// ===========================================================================
+
+test("resolvePolicyScope: an explicit 'local-rule' scope on the row wins, regardless of the seed", () => {
+  assert.equal(resolvePolicyScope({ id: "no_force_push", scope: "local-rule" }, seedScope({})), "local-rule");
+});
+
+test("resolvePolicyScope: an unrecognised scope value resolves as absent, not as itself", () => {
+  // Simulates data that crossed an untyped boundary (JSON.parse) without
+  // this module's own validation -- store.ts/gate_catalog_mirror.ts already
+  // normalize this at read time (R4), but resolvePolicyScope must not trust
+  // a caller that didn't.
+  const policy = { id: "own_branch", scope: "sometimes" } as unknown as Pick<Policy, "id" | "scope">;
+  assert.equal(resolvePolicyScope(policy, seedScope({})), "command");
+  assert.equal(resolvePolicyScope(policy, seedScope({ own_branch: "process" })), "process");
+});
+
+test("filterPoliciesForCommandScope: drops a policy that resolves to 'local-rule', keeps the rest", () => {
+  const noForcePush: Policy = { id: "no_force_push", rule: "never rewrite remote history", kind: "prohibits" };
+  const ownBranch: Policy = { id: "own_branch", rule: "work goes on a feature branch", kind: "permits" };
+  const filtered = filterPoliciesForCommandScope([noForcePush, ownBranch], seedScope({ no_force_push: "local-rule" }));
+  assert.deepEqual(
+    filtered.map((p) => p.id),
+    ["own_branch"],
+  );
+});
+
+test("filterPoliciesForCommandScope: an explicit 'command' scope keeps a policy even if the seed marks it 'local-rule'", () => {
+  const noForcePush: Policy = { id: "no_force_push", rule: "never rewrite remote history", kind: "prohibits", scope: "command" };
+  const filtered = filterPoliciesForCommandScope([noForcePush], seedScope({ no_force_push: "local-rule" }));
+  assert.deepEqual(
+    filtered.map((p) => p.id),
+    ["no_force_push"],
+  );
+});
+
+// ===========================================================================
 // decideAction: options.consequenceCeiling override (backward compatible)
 // ===========================================================================
 

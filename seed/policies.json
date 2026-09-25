@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "policies": [
     {
       "id": "read_and_test",
@@ -24,11 +24,13 @@
     {
       "id": "discard_uncommitted_work",
       "kind": "prohibits",
+      "scope": "local-rule",
       "rule": "The agent never discards uncommitted work: no git checkout -- <path>, git checkout ., git checkout <ref> <path>, git checkout -f, git restore <path> or git restore . (without --staged), git reset --hard, or git clean -f. Changes that were never committed have no reflog behind them; once they are gone nothing brings them back. If files need to go back to their committed state, the agent commits or stashes the work first, or says so and lets the person decide. Unstaging with git restore --staged only touches the index and is fine, and so is switching branches with git checkout <branch> or git switch."
     },
     {
       "id": "no_force_push",
       "kind": "prohibits",
+      "scope": "local-rule",
       "rule": "The agent never rewrites history on a remote: no git push --force, --force-with-lease or -f, on any branch. Rewriting what other people may already have pulled is decided by a person. A normal push of the feature branch is fine (see unit_commits)."
     },
     {

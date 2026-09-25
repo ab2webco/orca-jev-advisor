@@ -174,6 +174,28 @@ test("mergePolicySeeds: an explicit scope that disagrees with the seed's resolve
   assert.deepEqual(result.differing.map((d) => d.fields), [["scope"]]);
 });
 
+// odd/tasks/release-0.5.1.md T10 (JEVADV-34): no_force_push and
+// discard_uncommitted_work move from resolving to "command" (seed v2, no
+// explicit scope) to the new "local-rule" scope (seed v3) -- the same shape
+// of change T2 made for the five process policies, now for a THIRD scope
+// value. A stored row that already carries the OLD, explicit resolution
+// ("command") is a real, adoptable difference a caller must be able to
+// offer; a row that simply never mentioned scope silently follows the seed,
+// exactly like T2's own "missing scope" case above.
+test("mergePolicySeeds: a stored row with the OLD explicit 'command' scope next to a seed newly marking it 'local-rule' IS a real, reportable difference", () => {
+  const existing = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "command" }];
+  const seeds = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "local-rule" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing.map((d) => d.fields), [["scope"]]);
+});
+
+test("mergePolicySeeds: a stored row missing scope next to a seed newly marking it 'local-rule' is NOT reported -- it already resolves to the seed's value", () => {
+  const existing = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits" }];
+  const seeds = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "local-rule" }];
+  const result = mergePolicySeeds(existing, seeds);
+  assert.deepEqual(result.differing, []);
+});
+
 test("mergePolicySeeds: two rows that both omit scope never report a scope difference, seed scope notwithstanding", () => {
   const existing = [{ id: "own_branch", rule: "same rule", kind: "permits" }];
   const seeds = [{ id: "own_branch", rule: "same rule", kind: "permits" }];

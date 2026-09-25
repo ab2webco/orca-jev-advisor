@@ -144,6 +144,20 @@ test("the seed prohibits discarding uncommitted work, in the same forms the gate
   assert.ok(row.rule.includes("--staged"), "the rule does not carve out git restore --staged");
 });
 
+test("the shipped seed marks exactly the two local-rule policies -- odd/tasks/release-0.5.1.md T10 (JEVADV-34)", () => {
+  // Both are already enforced by a local deny rule (gate-bash.ts's
+  // NEVER_SILENTLY) before Jev's policy stage ever runs, so a real instance
+  // never reaches it -- only a command that merely MENTIONS one in quoted
+  // data does, and that stage cannot honestly answer "forbidden by
+  // no_force_push" about text that never ran. A row silently losing this
+  // scope would let that false ask back in without any test noticing.
+  const localRuleScoped = parseSeedPolicies(seedFile)
+    .filter((row) => row.scope === "local-rule")
+    .map((row) => row.id)
+    .sort();
+  assert.deepEqual(localRuleScoped, ["discard_uncommitted_work", "no_force_push"]);
+});
+
 test("the shipped seed marks exactly the five process policies -- odd/tasks/release-0.5.1.md T2", () => {
   // Pinned by name, same loud-failure discipline as the prohibits count
   // below: these five describe how the agent works or what it claims, not
@@ -197,7 +211,7 @@ function sortKeysDeep(value: unknown): unknown {
  *  loudly here instead of silently reaching an install that will never know
  *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
  *  which decides `due` from `version` alone and never looks at content. */
-const PINNED_DIGEST = "0558dc65f698427bb7242f6d6306565df59e9fe7d677b9d9f99d517b305f5327";
+const PINNED_DIGEST = "4bf63a78101f82546fd55f82f3e1404a154e20ce21333b3c4084f1d10a88a6f1";
 
 test("editing a shipped policy row without bumping the seed version fails loudly", () => {
   // Pinned together on purpose: a row edit changes the digest, and the
@@ -216,7 +230,7 @@ test("editing a shipped policy row without bumping the seed version fails loudly
   );
   assert.equal(
     parseSeedVersion(seedFile),
-    2,
+    3,
     'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
       "PINNED_DIGEST once the rows for that release are final).",
   );

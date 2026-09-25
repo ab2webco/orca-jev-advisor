@@ -115,13 +115,20 @@ main*, *anything touching a client's product is confirmed by a human*. A
 policy either permits, prohibits, or requires a person; when one covers
 what an agent is about to do, that settles it without judging risk at all.
 Policies are global by default, and a rule that genuinely belongs to one
-project can be scoped to it. A policy also declares whether it governs a
-single command (the default) or describes how the agent works across many
-commands — *screenshots get looked at before being called done*, *the
-cheapest available model handles a mechanical task*. A command-gate stop
-never checks a command against one of those: it describes the workflow that
-produced the command, not the command itself, so no shell command can be
-"the concrete instance" of it either way.
+project can be scoped to it. A policy also declares its scope: a single
+command (the default), how the agent works across many commands — process
+scope, e.g. *screenshots get looked at before being called done*, *the
+cheapest available model handles a mechanical task* — or already enforced by
+a local deny/ask rule before Jev ever runs, e.g. *never rewrite history on a
+remote* and *never discard uncommitted work* — local-rule scope. A
+command-gate stop never checks a command against a process or local-rule
+policy: a process policy describes the workflow that produced the command,
+not the command itself, so no shell command can be "the concrete instance"
+of it either way; a local-rule policy's real instances are already refused
+or asked about by the command gate's own deny-tier rules before the policy
+stage runs, so a command that reaches the policy stage naming one only
+*mentions* it in quoted data, and Jev cannot honestly answer whether a
+mention is "a concrete instance" of a rule that never ran.
 
 **Thresholds.** Sensible defaults, measured. Change them only with
 evidence.
