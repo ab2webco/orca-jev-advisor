@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "models": [
+    {
+      "id": "claude-fable-5-1",
+      "provider": "anthropic",
+      "label": "Claude Fable 5.1",
+      "rank": 1,
+      "agentModel": "fable",
+      "summary": "For demanding reasoning and long-horizon agentic work",
+      "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "available": false
+    },
+    {
+      "id": "claude-opus-5-5",
+      "provider": "anthropic",
+      "label": "Claude Opus 5.5",
+      "rank": 2,
+      "agentModel": "opus",
+      "summary": "For long-running agentic coding and knowledge work",
+      "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "available": true
+    },
+    {
+      "id": "claude-sonnet-5",
+      "provider": "anthropic",
+      "label": "Claude Sonnet 5",
+      "rank": 3,
+      "agentModel": "sonnet",
+      "summary": "The best combination of speed and intelligence",
+      "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "available": true
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "provider": "anthropic",
+      "label": "Claude Haiku 4.5",
+      "rank": 4,
+      "agentModel": "haiku",
+      "summary": "The fastest model with near-frontier intelligence",
+      "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "available": true
+    }
+  ]
+}
