@@ -123,13 +123,25 @@ evolution" holds JEVADV-12..23.
   skips cleanly when `playwright` is absent. Route: inline (one file).
 - [x] **T6 — Seed notice compares normalized kinds.** Done in `648e508`
   (delegated writer). Compares the migrated kind and the resolved scope.
-- [ ] **T8 — Deny tier ignores quoted data (JEVADV-24).** Observed live:
+- [x] **T8a — Review correction R3 (inline, 45ad820).** A double-quoted
+  `$(…)`/backtick was opaque to the force-push rule, which is a deny-tier
+  bypass introduced by T8. Bodies are now spliced back in per token, after
+  tokenizing. RED/GREEN, 2063/2063.
+- [ ] **T10 — Quoted text opaque only in known data positions (JEVADV-28).**
+  Review follow-ups: ssh/su -c/python -c/watch/script -c commands must stay
+  visible; `git checkout main --` allowed; an unknown policy scope resolves
+  as command instead of dropping the row; fix the misleading comment and
+  the function name. Blocks the release.
+- [ ] **T11 — Pending baseline policy updates stay visible (JEVADV-27).**
+  Worker/panel side, so it needs a plugin reload to verify.
+- [x] **T8 — Deny tier ignores quoted data (JEVADV-24).** Done in
+  eab080a, dd7975f and 44862a3; reopened by T10. Observed live:
   a `printf` whose double-quoted text spelled out a hard reset was refused
   as "discards uncommitted work". Quoted strings and heredoc bodies must be
   opaque to the deny rules; `$(…)`, `bash -c` and `sh -c` stay scanned.
   Route: delegated writer.
-- [ ] **T9 — Leading env assignment leaks into commandFamily (JEVADV-25).**
-  Route: fold into T8's writer (same parsing module) if it lives there.
+- [x] **T9 — Leading env assignment leaks into commandFamily (JEVADV-25).**
+  Done in 37b972f.
 - [ ] **T7 — Release.** Version 0.5.1, README and changelog, `npm run
   check` with screenshots at 1440/768/390/320 in both themes, then the
   real-machine verification below.
@@ -189,6 +201,22 @@ evolution" holds JEVADV-12..23.
   from the risk stage and 16 from policies (client_always_asks 6,
   others_pr 5, large_pr 3, visual_evidence 2).
 
+- 2026-09-25: native review (RDD on, consent granted by the user). Lineage
+  `review-035d390361bfd3ef` covers `19e9873..45ad820` with 4 lenses. One
+  CRITICAL finding (R3) was fixed in one bounded correction and passed the
+  targeted validator; the review was approved and acknowledged, authority
+  burned. The advisory findings became T10. The dev plugin runs at `45ad820`.
+- Replay after T8: 17 deny-tier verdict changes, each reviewed by hand. 12
+  quoted-data false positives are gone, and 5 real `git reset -q --hard`
+  cases that 0.5.0 missed are now refused.
+- JEVADV-26 measured: consequence noise σ = 0.039. A 3σ margin (0.12)
+  catches 22/22 flip-allows at a cost of 10/105 stable allows in a
+  risky-family sample. It is being implemented in the isolated worktree
+  `../orca-supervisor-next` together with T5 and T3.
+- Worker-side changes take effect only after the plugin reloads. Hook-side
+  changes take effect on the next command.
+
 ## Next step
 
-Advance the dev worktree to `648e508`, replay the same sample, compare, then T8.
+Merge the `-next` writer's commits (T5, JEVADV-26, T3) after verification,
+then T10.
