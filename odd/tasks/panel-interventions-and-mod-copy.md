@@ -84,25 +84,25 @@ full during reconciliation (no mapping or writer trigger left to delegate).
       interventions. **Already shipped**: `GateCommandFamilyStat.interventions`,
       `familiesWithNoInterventions`, `gate.notRunByCommandFamily` (tests at
       `read-measurements.test.mjs:187,243`).
-- [ ] T10 reader: per-window gate aggregates (`version` / `day` / `week` /
+- [x] T10 reader: per-window gate aggregates (`version` / `day` / `week` /
       `all`), each with its interventions table (<=15 rows sorted by
       interventions, a `rest` aggregate, a `quiet` "no interventions"
       aggregate, notRun joined per family) and its own approvals summary;
       plus `gate.health` (last successful Jev call, consecutive failures).
       Slice 3a.
-- [ ] T11 `panel_values.mjs`: board helpers (default window, relative age,
+- [x] T11 `panel_values.mjs`: board helpers (default window, relative age,
       live-entry label) with tests, hand-copied into `board.html`. Slice 3b.
-- [ ] T5 board: interventions table (<=15 rows, sorted by interventions, plus
+- [x] T5 board: interventions table (<=15 rows, sorted by interventions, plus
       a "N families with no interventions" row and a "rest" row, notRun
       column). Slice 3b.
-- [ ] T6 board: live status with name/branch chips and the UUID only in a
+- [x] T6 board: live status with name/branch chips and the UUID only in a
       tooltip. Slice 3b.
-- [ ] T7 board: a status strip -- last successful Jev call, consecutive
+- [x] T7 board: a status strip -- last successful Jev call, consecutive
       failures, unjudged (`source: "none"`) count, p50/p95. Slice 3b.
-- [ ] T8 board: a window selector (current version / 24h / 7d / all), and
+- [x] T8 board: a window selector (current version / 24h / 7d / all), and
       the four-question order (status -> toll -> interventions ->
       calibration, recents/live below). Slice 3b.
-- [ ] T9 empty-log state verified and photographed (new `empty` harness
+- [x] T9 empty-log state verified and photographed (new `empty` harness
       scenario: the worker ran, every log is empty). Slice 3b.
 
 ## Scope added by this PR
@@ -113,6 +113,22 @@ full during reconciliation (no mapping or writer trigger left to delegate).
   necessary out-of-list write.
 
 ## Follow-ups (found, not fixed here)
+- Review R3-001 (3a, advisory): the interventions tie-break uses
+  `localeCompare`, which is host-locale dependent; a code-point comparison
+  would be deterministic everywhere, and no test pins the name tie-break.
+- Review R3-002 (3a, advisory): `gate-approvals.jsonl` is now read up to
+  three times per reader run (`aggregateGate`, `aggregateApprovals`,
+  `aggregateNotRunByCommandFamily`); one read shared by all three would make
+  them consistent under a concurrent append.
+- Review R3-001 (3b+3c, advisory): the board decides "has data" from
+  `gate.windows.all` only, so a summary published by an older aggregator
+  (no `windows`) shows the empty card until the worker republishes. A
+  fallback to `gate.totalDecisions` or a distinct message would cover it.
+- Review R3-002 (3b+3c, advisory): the ES5 copies of the board helpers in
+  `board.html` are checked only by grep; a parity test would prove the
+  running copy.
+- The Spanish catalog is complete (every key checked in both languages)
+  but the harness renders English only; no ES screenshot was taken.
 - `commandFamily()` still yields filename families for an env-assignment
   first token: `L=~/.cache/x/gate-decisions.jsonl; wc -l $L` is recorded
   under family `gate-decisions.jsonl` (seen in the real log). The P0 fix
@@ -135,10 +151,30 @@ Strict TDD (source: user CLAUDE.md, odd/CHECKPOINT.md). Runner `npm test`
 `ask-on-risk`; forecast ~1,100 authored lines, so the coordinator chose
 **stacked-to-main**:
 - **3a** (targets `main`): T10 -- reader + tests + this document.
-- **3b** (targets 3a's branch): T11, T5-T9 -- helpers, board, fixtures. If
-  3b is still well over ~400 lines, fixtures/screenshot scripts get their
-  own slice.
+- **3b** (targets 3a's branch): T11 helpers + fixtures, ~360 lines
+  (`bf4e59b`, `1e78da4`).
+- **3c** (targets 3b's branch): T5-T9, the board, ~790 lines (`a83ac17`)
+  plus this document. Over the ~400 heuristic because `board.html` is one
+  cohesive rewrite: the four cards, the picker and the live rows share the
+  same render path and catalog, and splitting them would ship a board with
+  half its questions.
 
 ## Progress
 | Task | Route | Commit | Checks | Review |
 | --- | --- | --- | --- | --- |
+| T1 | reconcile only | `7be24c3` (in `7be810a`) | read | -- |
+| T2 | reconcile only | -- (writer in PR 2's file) | 0/3,602 rows stamped | -- |
+| T3, T4 | reconcile only | already shipped | existing tests | -- |
+| T10 | inline | `642d815`, `b539813`, squashed as `ce20de1` (#16) | RED 11 fail -> GREEN 27/27; `npm test` 773/773 | medium, granted, approved (2 advisory) |
+| T11 | inline | `bf4e59b` | RED import error -> GREEN 25/25 | under budget, carried into the 3b+3c range |
+| fixtures | inline | `1e78da4` | fixture_shape 6/6 (new empty-log guard) | 3b+3c range |
+| T5-T9 | inline | `a83ac17` | `npm run check`: 784/784 + panels 11/11, 96 shots, no overflow, no script errors | medium, granted, approved (2 advisory) |
+
+## Verification evidence (screenshots read)
+`npm run check`, run twice (the second after fixing a grid gap between toll
+and calibration and a wrapping "Didn't run" header, both seen in the first
+run's 1440 shot). Read: `ready` 1440 light+dark, 768 light, 390 light,
+320 light+dark; `degraded` 768 dark; `empty` 1440 light, 320 dark;
+`fresh` 390 light. At 1440x900 the four questions end around 620px, so
+all four are visible without scrolling. No UUID is visible in live status.
+The empty log renders one card, with no empty sections and no "undefined".
