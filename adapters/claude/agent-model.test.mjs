@@ -99,7 +99,7 @@ test('an Agent PostToolUse appends one model-outcome row', () => {
     hook_event_name: 'PostToolUse',
     tool_name: 'Agent',
     tool_use_id: 'agent-tool-use-2',
-    tool_response: { resolvedModel: 'claude-sonnet-5', status: 'ok', durationMs: 1234, usage: { input_tokens: 10, output_tokens: 20 } }
+    tool_response: { resolvedModel: 'claude-sonnet-5', status: 'ok', totalDurationMs: 1234, usage: { input_tokens: 10, output_tokens: 20 } }
   })
   assert.equal(stdout, '')
 

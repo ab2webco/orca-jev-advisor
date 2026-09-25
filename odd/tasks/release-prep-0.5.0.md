@@ -44,7 +44,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
   decision records, so the board's "This version" filter can never enable.
   Cherry-pick `e399240` (already reviewed and approved in B1b), with RED
   observed first.
-- [ ] **T3 Agent duration field.** `src/core/model_measurement.ts:118` reads
+- [x] **T3 Agent duration field.** `src/core/model_measurement.ts:118` reads
   `durationMs`/`duration_ms`. Neither exists in the Agent `tool_response`;
   the documented field is `totalDurationMs`
   (https://code.claude.com/docs/en/hooks, Agent section). Read the
@@ -147,6 +147,40 @@ touches 7+ non-trivial files, which fires the writer trigger.
   every appended gate-decision record.
   GREEN: same command, 58/58 pass. `grep -c pluginVersion
   adapters/claude/gate-bash.ts` -> 3. Full suite: `npm test` 975/975 pass.
+- **T3 done.** Commit: (recorded after commit below). Verified the doc
+  claim two ways before touching code: fetched
+  https://code.claude.com/docs/en/hooks and confirmed the Agent
+  tool_response table (`status`, `agentId`, `content`, `resolvedModel`,
+  `modelsUsed`, `totalTokens`, `totalDurationMs` -- "Wall-clock duration of
+  the subagent run", `totalToolUseCount`, `usage`); `durationMs` and
+  `duration_ms` do not appear on that table at all (the `duration_ms` hits
+  elsewhere in the page belong to unrelated hook fields). Cross-checked
+  against this repo's own bundled type defs
+  (`adapters/claude/mod-skills/claude-code.d.ts:12420-12489`), whose Agent
+  tool_response union has `totalDurationMs: number` on the `"completed"`
+  variant and no duration field at all on `"async_launched"` /
+  `"remote_launched"`.
+  RED: edited `src/core/model_measurement.test.ts` to feed a doc-shaped
+  input (`totalDurationMs: 4321`, no `durationMs`), plus a new "never reads
+  the invented durationMs or duration_ms fields" test and a new
+  async_launched-shaped test; also switched the fixture in
+  `adapters/claude/agent-model.test.mjs` and
+  `adapters/claude/agent-model-hook.test.ts` from `durationMs` to
+  `totalDurationMs`. Ran `node --test --experimental-strip-types
+  src/core/model_measurement.test.ts` -- failed 2/24: "buildModelOutcomeRecord
+  reads resolvedModel, status, usage tokens and totalDurationMs (as
+  durationMs) defensively" (`actual.durationMs: null` vs `expected: 4321`)
+  and "buildModelOutcomeRecord never reads the invented durationMs or
+  duration_ms fields" (`111 !== null`, i.e. the old fallback still read the
+  invented field).
+  Fix: `buildModelOutcomeRecord` now reads only `response.totalDurationMs`
+  (`isNumber` guarded), dropping both invented fallbacks; comment cites the
+  docs URL.
+  GREEN: `model_measurement.test.ts` 24/24,
+  `adapters/claude/agent-model.test.mjs` 4/4,
+  `adapters/claude/agent-model-hook.test.ts` 18/18. Full suite: `npm test`
+  975/975 pass (net test count unchanged: 4 old duration tests replaced by
+  4 new ones).
 
 ## Next step
 

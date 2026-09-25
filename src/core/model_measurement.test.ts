@@ -98,18 +98,18 @@ test("MODEL_MEASUREMENT_FILE names the jsonl file", () => {
 // buildModelOutcomeRecord
 // ---------------------------------------------------------------------------
 
-test("buildModelOutcomeRecord reads resolvedModel, status, usage tokens and durationMs defensively", () => {
+test("buildModelOutcomeRecord reads resolvedModel, status, usage tokens and totalDurationMs (as durationMs) defensively", () => {
   const record = buildModelOutcomeRecord("tool-1", "2026-09-24T00:00:02.000Z", {
     resolvedModel: "claude-sonnet-5-20260101",
-    status: "success",
+    status: "completed",
     usage: { input_tokens: 1000, output_tokens: 200 },
-    durationMs: 4321,
+    totalDurationMs: 4321,
   });
   assert.deepEqual(record, {
     type: "model-outcome",
     id: "tool-1",
     at: "2026-09-24T00:00:02.000Z",
-    status: "success",
+    status: "completed",
     resolvedModel: "claude-sonnet-5-20260101",
     inputTokens: 1000,
     outputTokens: 200,
@@ -117,14 +117,33 @@ test("buildModelOutcomeRecord reads resolvedModel, status, usage tokens and dura
   });
 });
 
-test("buildModelOutcomeRecord falls back from durationMs to duration_ms", () => {
-  const record = buildModelOutcomeRecord("tool-1", "at", { duration_ms: 999 });
-  assert.equal(record.durationMs, 999);
+test("buildModelOutcomeRecord never reads the invented durationMs or duration_ms fields -- only the documented totalDurationMs", () => {
+  const record = buildModelOutcomeRecord("tool-1", "at", { durationMs: 111, duration_ms: 999 });
+  assert.equal(record.durationMs, null);
 });
 
-test("buildModelOutcomeRecord prefers durationMs over duration_ms when both are present", () => {
-  const record = buildModelOutcomeRecord("tool-1", "at", { durationMs: 111, duration_ms: 999 });
-  assert.equal(record.durationMs, 111);
+test("buildModelOutcomeRecord reads a null durationMs for an async_launched response, which carries no totalDurationMs or usage", () => {
+  // Shaped exactly like https://code.claude.com/docs/en/hooks#agent's
+  // async_launched variant: a background launch returns before either
+  // totalDurationMs or usage exists.
+  const record = buildModelOutcomeRecord("tool-1", "at", {
+    status: "async_launched",
+    agentId: "a1",
+    resolvedModel: "claude-sonnet-5",
+    description: "explore the repo",
+    prompt: "find X",
+    outputFile: "/tmp/out.txt",
+  });
+  assert.deepEqual(record, {
+    type: "model-outcome",
+    id: "tool-1",
+    at: "at",
+    status: "async_launched",
+    resolvedModel: "claude-sonnet-5",
+    inputTokens: null,
+    outputTokens: null,
+    durationMs: null,
+  });
 });
 
 test("buildModelOutcomeRecord never invents a value: missing or wrongly typed fields read null", () => {
@@ -132,7 +151,7 @@ test("buildModelOutcomeRecord never invents a value: missing or wrongly typed fi
     resolvedModel: 42,
     status: null,
     usage: { input_tokens: "a lot" },
-    durationMs: "fast",
+    totalDurationMs: "fast",
   });
   assert.deepEqual(record, {
     type: "model-outcome",
