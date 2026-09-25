@@ -43,6 +43,7 @@ test("joins the two halves by tool_use_id, exactly", () => {
   assert.equal(s.approved, 1);
   assert.equal(s.rejected, 1);
   assert.equal(s.notRun, 0);
+  assert.equal(s.awaiting, 0, "both were answered, nothing is still waiting");
   assert.equal(s.labelled.length, 2);
 });
 
@@ -65,13 +66,34 @@ test("a pending with no outcome past the TTL is classified notRun, counted along
   assert.equal(s.approved, 0);
   assert.equal(s.rejected, 0);
   assert.equal(s.notRun, 1);
+  assert.equal(s.awaiting, 0, "past the TTL, it is notRun, not still awaiting");
   assert.equal(s.asked, 1, "asked still counts every gate-pending, notRun included");
 });
 
-test("a prompt still on screen is neither answered nor written off", () => {
+// The calibration card's legend (board.html renderApprovals) draws
+// approved/rejected/notRun as a percentage of `asked` -- before `awaiting`
+// existed, a pending prompt still inside UNRESOLVED_AFTER_MS fell into none
+// of those three buckets, so the legend never summed to 100%.
+test("a prompt still on screen is neither answered nor written off -- it is awaiting", () => {
   const s = summarizeApprovals([pending("a", 1.9)], [], NOW);
   assert.equal(s.notRun, 0, "still within the window");
   assert.equal(s.approved + s.rejected, 0);
+  assert.equal(s.awaiting, 1);
+});
+
+test("awaiting, together with approved/rejected/notRun, always sums to asked", () => {
+  const old = new Date(NOW - UNRESOLVED_AFTER_MS - 1000).toISOString();
+  const s = summarizeApprovals(
+    [pending("a", 1.9), pending("b", 2.4), pending("c", 1.1, old), pending("d", 0.5)],
+    [outcome("a", "approved"), outcome("b", "rejected")],
+    NOW,
+  );
+  assert.equal(s.asked, 4);
+  assert.equal(s.approved, 1);
+  assert.equal(s.rejected, 1);
+  assert.equal(s.notRun, 1);
+  assert.equal(s.awaiting, 1);
+  assert.equal(s.approved + s.rejected + s.notRun + s.awaiting, s.asked);
 });
 
 test("notRun is a classification, not a fact -- a labelled outcome always wins even after the TTL has passed", () => {

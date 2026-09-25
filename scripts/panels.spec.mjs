@@ -43,6 +43,7 @@ const { seedPoliciesIfEmpty } = await import('../adapters/orca/main.mjs')
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(__dirname, '..')
 const CONFIG_PANEL = join(ROOT, 'adapters/orca/panels/config.html')
+const BOARD_PANEL = join(ROOT, 'adapters/orca/panels/board.html')
 
 /** The panel throttles its own host calls; anything shorter observes a spinner. */
 const SETTLE_MS = 6000
@@ -52,6 +53,22 @@ try {
   ({ chromium } = await import('playwright'))
 } catch {
   chromium = null
+}
+
+// SCENARIOS.ready is screenshot-panels.mjs's own fixture, derived from the
+// same worker shapes this file already checks (see its own module doc and
+// scripts/fixture_shape.test.mjs) -- reused here rather than a second,
+// hand-typed board fixture that could drift from it unnoticed. That module
+// imports `playwright` itself, unguarded, at its own top -- so this import
+// is guarded the same way chromium's is above, or a machine with no
+// playwright (this file's own header: "a machine without it skips rather
+// than fails") would throw ERR_MODULE_NOT_FOUND here before a single test
+// even registers, instead of skipping.
+let SCENARIOS = null
+try {
+  ({ SCENARIOS } = await import('./screenshot-panels.mjs'))
+} catch {
+  SCENARIOS = null
 }
 
 const RAW_SEED = JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8'))
@@ -160,6 +177,32 @@ function hostBridge (storage) {
       '*'
     )
   })
+}
+
+/** Copies board.html out with a language tag -- same discipline as renderPanel above. */
+async function renderBoardPanel (locale) {
+  const dir = await mkdtemp(join(tmpdir(), 'advisor-board-panel-'))
+  temps.push(dir)
+  const html = await readFile(BOARD_PANEL, 'utf8')
+  const path = join(dir, 'board.html')
+  await writeFile(path, html.replace('<html>', `<html lang="${locale}">`))
+  return path
+}
+
+/** Same host-simulation shape as openPanel, against board.html instead of
+ *  config.html -- hostBridge needs no board-specific branch: board.html only
+ *  ever calls storage.get, never storage.set, so every read falls through to
+ *  the plain `storage[key] ?? null` branch already there. */
+async function openBoardPanel (storage, locale = 'en', colorScheme = 'light') {
+  const browser = await chromium.launch()
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme })
+  const page = await context.newPage()
+  const errors = []
+  page.on('pageerror', (error) => errors.push(String(error.message)))
+  await page.addInitScript(hostBridge, storage)
+  await page.goto(`file://${await renderBoardPanel(locale)}`)
+  await page.waitForTimeout(SETTLE_MS)
+  return { browser, page, errors }
 }
 
 async function openPanel (storage, locale = 'en', colorScheme = 'light') {
@@ -967,5 +1010,49 @@ test('the Agent model hooks line renders only when the field exists, and never a
     assert.deepEqual(withoutField.errors, [])
   } finally {
     await withoutField.browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// board.html -- the calibration card ("How is calibration going?").
+// odd/tasks/release-prep-0.5.0.md T6: approved/rejected/notRun's legend never
+// summed to `asked` while any pending prompt was still inside the wait
+// window -- src/core/approval_record.ts's summarizeApprovals had no bucket
+// for it. This asserts the rendered legend, not just the underlying summary,
+// because the summary already had the right total; only the DOM was short a
+// row.
+// ---------------------------------------------------------------------------
+
+test('the calibration card\'s legend rows sum to asked, with no bucket left uncounted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    const legendValues = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#approvals-body .legend .lv')).map((li) => li.textContent))
+    assert.ok(legendValues.length > 0, 'the calibration card rendered no legend rows at all')
+    const sum = legendValues.reduce((total, text) => total + Number(String(text).replace(/,/g, '')), 0)
+    // 'week' is defaultWindowKey's pick for SCENARIOS.ready (the first
+    // available window with decisions in it, per board.html) -- read from
+    // the fixture itself, never typed here, so this cannot drift from
+    // whichever window the panel actually renders.
+    const activeApprovals = SCENARIOS.ready.measurementsSummary.gate.windows.week.approvals
+    assert.equal(sum, activeApprovals.asked, `legend rows ${JSON.stringify(legendValues)} do not sum to asked (${activeApprovals.asked})`)
+    assert.deepEqual(errors, [], 'the board threw while rendering the calibration card')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the calibration card renders a real label for every legend row, never a raw i18n key', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    const labels = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#approvals-body .legend .ll')).map((li) => li.textContent))
+    assert.ok(labels.length > 0, 'the calibration card rendered no legend rows at all')
+    for (const label of labels) {
+      assert.ok(!/^approvals\./.test(String(label)), `a legend row rendered its raw i18n key: ${label}`)
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
   }
 })

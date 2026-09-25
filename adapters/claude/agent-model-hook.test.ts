@@ -241,7 +241,7 @@ test("PostToolUse on Agent records an outcome row, never stdout", async () => {
       hook_event_name: "PostToolUse",
       tool_name: "Agent",
       tool_use_id: "tool-1",
-      tool_response: { resolvedModel: "claude-opus-5-5", status: "ok", durationMs: 4200, usage: { input_tokens: 100, output_tokens: 50 } },
+      tool_response: { resolvedModel: "claude-opus-5-5", status: "ok", totalDurationMs: 4200, usage: { input_tokens: 100, output_tokens: 50 } },
     },
     baseDeps(),
   );

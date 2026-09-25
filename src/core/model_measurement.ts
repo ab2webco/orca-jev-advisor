@@ -107,15 +107,20 @@ export type ModelMeasurementRecord = ModelDecisionRecord | ModelOutcomeRecord;
  * Reads a PostToolUse `tool_response` for the Agent tool
  * (https://code.claude.com/docs/en/hooks#agent) into an outcome record,
  * defensively: every field is read from where the docs say it lives, and
- * anything missing or the wrong type reads null -- never invented, and
- * never converted from another unit (a `duration_ms` in some other unit
- * would be a silent lie the moment it disagreed with a `durationMs`
- * reading from elsewhere).
+ * anything missing or the wrong type reads null -- never invented.
+ *
+ * The docs' "completed" variant carries `totalDurationMs` ("Wall-clock
+ * duration of the subagent run") -- neither `durationMs` nor `duration_ms`
+ * exists on the real payload, so those two names are never read. The
+ * "async_launched" variant (a backgrounded subagent) carries no duration
+ * or usage fields at all, since it returns before either exists; that
+ * reads null here, exactly like a record written before this field
+ * existed.
  */
 export function buildModelOutcomeRecord(id: string, at: string, toolResponse: unknown): ModelOutcomeRecord {
   const response = isRecord(toolResponse) ? toolResponse : {};
   const usage = isRecord(response.usage) ? response.usage : {};
-  const durationMs = isNumber(response.durationMs) ? response.durationMs : isNumber(response.duration_ms) ? response.duration_ms : null;
+  const durationMs = isNumber(response.totalDurationMs) ? response.totalDurationMs : null;
   return {
     type: "model-outcome",
     id,
@@ -317,6 +322,12 @@ export function summarizeModelMeasurements(
   let comparable = 0;
   let matches = 0;
   for (const decision of judged) {
+    // An applied decision means active mode already rewrote the request to
+    // the recommendation, so the outcome's resolvedModel matching it proves
+    // nothing about Jev's prediction -- it is circular, not a comparison.
+    // Only a decision Jev merely measured (never applied) tells readiness
+    // anything about match rate.
+    if (decision.applied) continue;
     const outcome = joinedOutcomeById.get(decision.id);
     if (outcome === undefined || outcome.resolvedModel === null) continue;
     comparable += 1;
