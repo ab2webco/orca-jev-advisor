@@ -65,7 +65,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
   a Models section: measurement by default, active mode off by default,
   readiness 1000 decisions at 70%, a live active rewrite never run end to
   end.
-- [ ] **T8 version bump.** `chore(release): 0.5.0` in `package.json` and
+- [x] **T8 version bump.** `chore(release): 0.5.0` in `package.json` and
   `orca-plugin.json` (and `package-lock.json` if it carries the version).
 
 ## Acceptance criteria
@@ -318,6 +318,23 @@ touches 7+ non-trivial files, which fires the writer trigger.
   Added the "Models" section (between "Command gate" and "What is
   measured") and one bullet under "Not ready yet", stating plainly that a
   live end-to-end active rewrite has not been run in an installed session.
+- **T8 done.** Commit: (recorded after commit below). No RED (version
+  bump). Bumped `package.json` and `orca-plugin.json` (0.4.0 -> 0.5.0).
+  `package-lock.json` carries the root package's own version twice (top-
+  level `version` and `packages[""].version`); bumped both locally, left
+  every dependency entry (e.g. playwright 1.63.0) untouched -- but
+  `package-lock.json` is itself `.gitignore`d (`.gitignore:11`, "Orca
+  clones this repo onto every user's machine and never installs anything,
+  so a lockfile for a dev-only screenshot tool is weight every user
+  carries for a tool no user runs"), so this file is not part of this or
+  any commit; the bump only keeps this worktree's own local file
+  consistent. Re-ran the T2 test
+  (`node --test --experimental-strip-types adapters/claude/gate-bash.test.mjs`)
+  -- 58/58, including "a written gate-decision record carries the real
+  plugin version", which reads the manifest dynamically via
+  `expectedPluginVersion()` rather than a hardcoded literal, so it stayed
+  green across the bump with no test edit needed. Full suite: `npm test`
+  979/979 pass.
 
 ## Next step
 
