@@ -123,7 +123,7 @@ Slices (revised after the first slicing pass; one PR per work unit):
   tool_use_id, readout (up / down / agreement, counts only). Route: same writer.
 - [x] **T5** `adapters/claude/agent-model.ts` (PreToolUse + PostToolUse on
   Agent), fail-open with a logged reason. Route: delegated writer.
-- [ ] **T6** Installer entries (matcher `Agent`), integration list text,
+- [x] **T6** Installer entries (matcher `Agent`), integration list text,
   revert; worker mirror of the catalog to `<configDir>/models-catalog.json`,
   seed-once + notice in main.mjs. Route: same writer as T5.
 - [ ] **T7** config.html Models section (ladder editor, availability,
@@ -153,3 +153,56 @@ Slices (revised after the first slicing pass; one PR per work unit):
   `resolvedModel` spelling (follow-up R3-003) is still unobserved.
 - T6a: installer entries (matcher Agent on PreToolUse, PostToolUse,
   PostToolUseFailure), same writer.
+- T6b: worker mirror/seed/notice/readout sidecars (bounded writer, worktree
+  fabolivark/models-07-worker). New files: adapters/orca/models-worker.mjs
+  (+ .test.mjs, 15 tests), adapters/orca/read-model-measurements.mjs
+  (+ .test.mjs, 4 tests). Edited: write-secret-mirror.mjs (new `models-save`
+  mode, validated `{active, ready, models}` shape, written to
+  models-catalog.json with ordinary permissions like catalog-save/
+  policies-save) and its write-guard test (+3 tests, mirroring the
+  catalog-save refuse/sanity pair plus one shape-rejection test); main.mjs
+  (imports, a new runReadModelMeasurementsScript sidecar-spawn function +
+  MODELS_WORKER_OPTIONS constant, activation chain
+  seedModelsIfEmpty->mirrorModels->publishModelsSeedNotice after the policy
+  chain, runSecretPoll steps attendModelsMirrorRequest/
+  attendModelsSeedRequest, publishModelMeasurements at activation and on the
+  measurements interval, and one added `agentModelHook` check in
+  checkClaudeIntegration since install-claude-integration.mjs's status()
+  already reports that field). Storage keys: `models`, `modelsConfig`,
+  `modelsMirrorRequest`, `modelsSeedNotice`, `modelsSeedRequest`,
+  `modelsSeedResult`, `modelMeasurements` (all exported from
+  models-worker.mjs), plus MODEL_SEED_MARKER_KEY/MODEL_SEED_OFFERED_VERSION_KEY
+  re-exported from model_seed_notice.ts. R3-003 satisfied: the offered
+  version is stored as exactly `{ version }`. `npm test`: 903/903 (baseline
+  was already above 762 from T3-T6a; this slice added 22 new tests: 15 + 4 +
+  3). Not committed by this writer (bounded-writer instruction: no commit/
+  push) -- changes are uncommitted in the worktree, ready for the
+  coordinator's own commit/PR step.
+  Decisions made while implementing (not previously specified):
+  - `options.mirror`/`options.readSummary` have no default inside
+    models-worker.mjs (unlike `options.seedPayload`/`options.now`, which do):
+    both must cross the permission sandbox via a spawned sidecar, and that
+    plumbing (PLUGIN_ROOT/CACHE_DIR/sidecarEnv/execFile) already lives in
+    main.mjs; duplicating it in models-worker.mjs would be a second,
+    driftable copy, and importing main.mjs from models-worker.mjs would be
+    circular (main.mjs imports models-worker.mjs to wire it into
+    activation/runSecretPoll). main.mjs now defines MODELS_WORKER_OPTIONS
+    once and passes it at every call site instead.
+  - `mirrorModels`'s `ready`: derived from the last published
+    `modelMeasurements.summary.readiness.ready` unless the caller passes an
+    explicit `options.ready` override (publishModelMeasurements uses the
+    override to avoid reading back its own just-published value).
+  - `seedModelsIfEmpty`'s "otherwise untouched" branch (marker not true, but
+    the stored catalog is already non-empty) does not write a decline
+    marker the way seedPoliciesIfEmpty does for the analogous case -- the
+    spec text said "otherwise untouched" and the required test list only
+    covers "never touches an existing catalog", so this was implemented
+    literally. Edge case worth flagging for T7 or a follow-up: if that
+    branch is hit (an install with its own catalog, never marked) and the
+    person later empties the catalog entirely, shouldSeedModels would seed
+    it again, since the marker was never set to `true` in that branch.
+  - `publishModelsSeedNotice`'s `items` are always computed from the diff
+    (even when `due` is false), so `items.length` always matches
+    `added + differing`; the panel is expected to only render them when
+    `due` is true. An added item's `fields` is always `[]` (nothing to
+    compare against); a changed item's `label` is the SHIPPED entry's label.
