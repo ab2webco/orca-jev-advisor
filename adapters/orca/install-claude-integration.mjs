@@ -10,43 +10,54 @@
  *
  * Usage: node install-claude-integration.mjs <install|uninstall|status> <pluginRoot>
  *
- * Four hook entries are managed, one per Claude Code event, each in that
- * event's own `Bash`-matcher group:
+ * Seven hook entries are managed in total: four in each event's own
+ * `Bash`-matcher group (the command gate), and three more in a separate
+ * `Agent`-matcher group on the events the Agent tool actually fires
+ * (Claude Code's Agent tool is not Bash, so it needs its own matcher
+ * group, coexisting with -- never replacing -- the Bash one on the same
+ * event):
  *
- *   PreToolUse         adapters/claude/gate-bash.ts     asks Jev before running
- *   PostToolUse        adapters/claude/gate-outcome.ts  the command ran and succeeded -> approved
- *   PostToolUseFailure adapters/claude/gate-outcome.ts  the command ran and failed -> still approved
- *   PermissionDenied   adapters/claude/gate-outcome.ts  it did not run -> rejected
+ *   PreToolUse         adapters/claude/gate-bash.ts     asks Jev before running       (matcher Bash)
+ *   PostToolUse        adapters/claude/gate-outcome.ts  the command ran and succeeded -> approved (matcher Bash)
+ *   PostToolUseFailure adapters/claude/gate-outcome.ts  the command ran and failed -> still approved (matcher Bash)
+ *   PermissionDenied   adapters/claude/gate-outcome.ts  it did not run -> rejected     (matcher Bash)
+ *   PreToolUse         adapters/claude/agent-model.ts   asks Jev which model a subagent needs (matcher Agent)
+ *   PostToolUse        adapters/claude/agent-model.ts   records the model the subagent ran on (matcher Agent)
+ *   PostToolUseFailure adapters/claude/agent-model.ts   records the model, run status "failed" (matcher Agent)
  *
- * install     Idempotent. Adds our entry to the `Bash`-matcher group of
- *             each of the four event arrays above (creating the array
- *             and the group when none exists), merging into whatever
- *             hooks other owners already put there -- never replacing a
- *             group, never touching another entry. Sets
+ * install     Idempotent. Adds our entry to the right matcher group (`Bash`
+ *             for the command gate, `Agent` for the model-reclassification
+ *             hooks) of each event array above (creating the array and the
+ *             group when none exists), merging into whatever hooks other
+ *             owners already put there, under EITHER matcher -- never
+ *             replacing a group, never touching another entry. Sets
  *             CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 in `env`, remembering
  *             (once, on the FIRST install only) whether that key already
  *             existed and what it held, so uninstall can put it back
  *             exactly -- the same "captured once, never recomputed" rule
- *             applies per event to whether its array and its `Bash` group
- *             already existed. Copies <pluginRoot>/adapters/claude/
- *             mod-skills into ~/.claude/skills/orca-jev-mod-skills, which
- *             Claude Code auto-loads from (the "skills-dir" mechanism) --
- *             see the module note above `installModCopy` for why this is a
- *             copy and not a symlink. Every settings.json write is atomic
- *             (temp file + rename) and preceded, on the very first
- *             install, by a full backup.
+ *             applies per event to whether its array, its `Bash` group and
+ *             its `Agent` group already existed. Copies <pluginRoot>/
+ *             adapters/claude/mod-skills into
+ *             ~/.claude/skills/orca-jev-mod-skills, which Claude Code
+ *             auto-loads from (the "skills-dir" mechanism) -- see the
+ *             module note above `installModCopy` for why this is a copy
+ *             and not a symlink. Every settings.json write is atomic (temp
+ *             file + rename) and preceded, on the very first install, by a
+ *             full backup.
  * uninstall   Surgical: removes only the hook entry each event's own
- *             `statusMessage` marks (dropping that event's `Bash` group
- *             entirely if that was its only entry, and the event's own
- *             array if that was its only group), restores the env var to
- *             whatever it held before we ever touched it (or removes it,
- *             if it was never there), and removes the mod-skills copy --
- *             but only if its marker still names OUR pluginRoot (a
- *             pre-fix symlink install, which never wrote a marker, is
- *             recognized by its target instead). Every other hook, and
- *             anything the user changed in between, is left exactly as
- *             found.
- * status      Read-only: reports whether each of the four is in place
+ *             `statusMessage` marks, from whichever matcher group (`Bash`
+ *             or `Agent`) it lives in (dropping that group entirely if that
+ *             was its only entry, and the event's own array if that was its
+ *             only group -- across both matchers independently), restores
+ *             the env var to whatever it held before we ever touched it (or
+ *             removes it, if it was never there), and removes the
+ *             mod-skills copy -- but only if its marker still names OUR
+ *             pluginRoot (a pre-fix symlink install, which never wrote a
+ *             marker, is recognized by its target instead). Every other
+ *             hook -- a third party's own `Bash` OR `Agent` group included
+ *             -- and anything the user changed in between, is left exactly
+ *             as found.
+ * status      Read-only: reports whether each of the seven is in place
  *             right now, for the config panel and advisor.doctor.
  *
  * Always prints exactly one JSON line to stdout, nothing else. Never
@@ -178,25 +189,48 @@ const HOOK_TIMEOUT_SECONDS = 6
 const OUTCOME_HOOK_STATUS_MESSAGE = 'orca-jev-advisor: recording what you decided'
 const OUTCOME_HOOK_TIMEOUT_SECONDS = 2
 
-/** One `Bash`-matcher hook entry per Claude Code event this installer
- *  manages. `marker` is the `statusMessage` `findOwnHookIndex` looks for --
- *  distinct per hook, so the gate and the outcome recorder are never
- *  confused with each other or with a third party's hook. */
+// The Agent-matcher hooks (adapters/claude/agent-model.ts) -- distinct
+// markers from the Bash-matcher ones above, so the two families are never
+// confused with each other or with a third party's own Agent hook.
+// PreToolUse gets the gate's own timeout budget (it makes a real Jev call,
+// same tradeoff as HOOK_TIMEOUT_SECONDS above); PostToolUse/
+// PostToolUseFailure only append a log line, so they share the outcome
+// hook's short timeout -- see agent-model.ts's own module note.
+const AGENT_MODEL_STATUS_MESSAGE = 'orca-jev-advisor: asking Jev which model this subagent needs'
+const AGENT_OUTCOME_STATUS_MESSAGE = 'orca-jev-advisor: recording which model the subagent ran on'
+
+/** Every hook entry this installer manages, across BOTH matcher groups
+ *  (`Bash` for the command gate, `Agent` for the model-reclassification
+ *  hooks). `marker` is the `statusMessage` `findOwnHookIndex` looks for --
+ *  distinct per hook, so no two of ours, and no hook of ours and one a
+ *  third party owns, are ever confused with each other. `matcher` says
+ *  which matcher GROUP an entry's own `Bash`/`Agent` hooks live inside;
+ *  installHookEntry/uninstallHookEntry are generalized over it (see their
+ *  own doc comments) so a third party's own group under either matcher is
+ *  never mistaken for ours. */
 function hookSpecs (pluginRoot) {
   const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
   const outcomePath = join(pluginRoot, 'adapters', 'claude', 'gate-outcome.ts')
+  const agentModelPath = join(pluginRoot, 'adapters', 'claude', 'agent-model.ts')
   const node = resolveNodeCommand()
   return {
     node,
     specs: [
-      { event: 'PreToolUse', marker: HOOK_STATUS_MESSAGE, path: gatePath, entry: gateHookEntry(node.command, gatePath) },
-      { event: 'PostToolUse', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
-      { event: 'PermissionDenied', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      { event: 'PreToolUse', matcher: 'Bash', marker: HOOK_STATUS_MESSAGE, path: gatePath, entry: gateHookEntry(node.command, gatePath) },
+      { event: 'PostToolUse', matcher: 'Bash', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      { event: 'PermissionDenied', matcher: 'Bash', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
       // Appended, never inserted before PermissionDenied: every other spot in
       // this file addresses specs[0..2] by their original positional index,
       // and a new entry at the end keeps every one of those indices meaning
       // exactly what it always meant.
-      { event: 'PostToolUseFailure', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) }
+      { event: 'PostToolUseFailure', matcher: 'Bash', marker: OUTCOME_HOOK_STATUS_MESSAGE, path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      // Agent-matcher hooks, appended after the four Bash ones for the same
+      // reason: install()/uninstall()/status() below address specs[0..3] by
+      // their original positional index, and these three land at [4..6]
+      // without disturbing any of that.
+      { event: 'PreToolUse', matcher: 'Agent', marker: AGENT_MODEL_STATUS_MESSAGE, path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, HOOK_TIMEOUT_SECONDS, AGENT_MODEL_STATUS_MESSAGE) },
+      { event: 'PostToolUse', matcher: 'Agent', marker: AGENT_OUTCOME_STATUS_MESSAGE, path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
+      { event: 'PostToolUseFailure', matcher: 'Agent', marker: AGENT_OUTCOME_STATUS_MESSAGE, path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) }
     ]
   }
 }
@@ -237,6 +271,15 @@ function gateHookEntry (nodeCommand, gatePath) {
  *  decides anything, so it must never be why a command's result is late. */
 function outcomeHookEntry (nodeCommand, outcomePath) {
   return { type: 'command', command: nodeCommand, args: [outcomePath], timeout: OUTCOME_HOOK_TIMEOUT_SECONDS, statusMessage: OUTCOME_HOOK_STATUS_MESSAGE }
+}
+
+/** Same shape as {@link gateHookEntry}/{@link outcomeHookEntry}, generalized
+ *  over the timeout and marker: the Agent-matcher hooks share one script
+ *  (agent-model.ts) across three events with two different timeout budgets
+ *  and two different markers, so a single fixed-marker builder does not fit
+ *  the way the two hardcoded ones above do. */
+function agentModelHookEntry (nodeCommand, agentModelPath, timeoutSeconds, marker) {
+  return { type: 'command', command: nodeCommand, args: [agentModelPath], timeout: timeoutSeconds, statusMessage: marker }
 }
 
 /**
@@ -392,7 +435,33 @@ function eventState (state, event) {
   return state.events[event]
 }
 
-function installHookEntry (settings, event, marker, entry, state) {
+/**
+ * Whether `event`'s own `matcher` group already existed before we ever
+ * touched it -- captured once, the same "never recomputed" rule every other
+ * flag in this section follows (see the module note above). `Bash` keeps
+ * its original flat field name (`bashGroupExistedBefore`) so an existing
+ * install-state file, written before any other matcher existed, keeps
+ * meaning exactly what it always meant; every OTHER matcher (today: only
+ * `Agent`) is tracked in a keyed sibling, `groupExistedBefore`, which an
+ * upgrade from an older state file simply does not have yet -- reading it
+ * as `undefined` is exactly right, since it means "not captured yet", not
+ * "did not exist".
+ */
+function groupExistedBefore (es, matcher) {
+  if (matcher === 'Bash') return es.bashGroupExistedBefore
+  return isRecord(es.groupExistedBefore) ? es.groupExistedBefore[matcher] : undefined
+}
+
+function setGroupExistedBefore (es, matcher, value) {
+  if (matcher === 'Bash') {
+    es.bashGroupExistedBefore = value
+    return
+  }
+  if (!isRecord(es.groupExistedBefore)) es.groupExistedBefore = {}
+  es.groupExistedBefore[matcher] = value
+}
+
+function installHookEntry (settings, event, matcher, marker, entry, state) {
   if (state.hooksObjectExistedBefore === undefined) state.hooksObjectExistedBefore = isRecord(settings.hooks)
   if (!isRecord(settings.hooks)) settings.hooks = {}
 
@@ -400,10 +469,10 @@ function installHookEntry (settings, event, marker, entry, state) {
   if (es.arrayExistedBefore === undefined) es.arrayExistedBefore = Array.isArray(settings.hooks[event])
   if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = []
 
-  let group = settings.hooks[event].find((g) => isRecord(g) && g.matcher === 'Bash')
-  if (es.bashGroupExistedBefore === undefined) es.bashGroupExistedBefore = group !== undefined
+  let group = settings.hooks[event].find((g) => isRecord(g) && g.matcher === matcher)
+  if (groupExistedBefore(es, matcher) === undefined) setGroupExistedBefore(es, matcher, group !== undefined)
   if (!group) {
-    group = { matcher: 'Bash', hooks: [] }
+    group = { matcher, hooks: [] }
     settings.hooks[event].push(group)
   }
   if (!Array.isArray(group.hooks)) group.hooks = []
@@ -415,13 +484,13 @@ function installHookEntry (settings, event, marker, entry, state) {
   return changed
 }
 
-/** Removes only our own entry for `event`, then unwinds exactly the
- *  containers install created for that event (never one that pre-existed,
- *  however empty it now is) -- see the note above. */
-function uninstallHookEntry (settings, event, marker, state) {
+/** Removes only our own entry for `event`'s `matcher` group, then unwinds
+ *  exactly the containers install created for that event/matcher (never one
+ *  that pre-existed, however empty it now is) -- see the note above. */
+function uninstallHookEntry (settings, event, matcher, marker, state) {
   if (!isRecord(settings.hooks) || !Array.isArray(settings.hooks[event])) return false
   const eventHooks = settings.hooks[event]
-  const groupIndex = eventHooks.findIndex((g) => isRecord(g) && g.matcher === 'Bash')
+  const groupIndex = eventHooks.findIndex((g) => isRecord(g) && g.matcher === matcher)
   if (groupIndex === -1) return false
   const group = eventHooks[groupIndex]
   if (!Array.isArray(group.hooks)) return false
@@ -430,7 +499,7 @@ function uninstallHookEntry (settings, event, marker, state) {
 
   const es = eventState(state, event)
   group.hooks.splice(hookIndex, 1)
-  if (group.hooks.length === 0 && !es.bashGroupExistedBefore) eventHooks.splice(groupIndex, 1)
+  if (group.hooks.length === 0 && !groupExistedBefore(es, matcher)) eventHooks.splice(groupIndex, 1)
   if (eventHooks.length === 0 && !es.arrayExistedBefore) delete settings.hooks[event]
   if (Object.keys(settings.hooks).length === 0 && !state.hooksObjectExistedBefore) delete settings.hooks
   return true
@@ -693,10 +762,13 @@ async function install (pluginRoot) {
       await backupSettingsOnce(backupPathFor(target), rawBefore)
 
       const settings = await readSettings(settingsPath)
-      const hookChanged = installHookEntry(settings, specs[0].event, specs[0].marker, specs[0].entry, state)
-      const postChanged = installHookEntry(settings, specs[1].event, specs[1].marker, specs[1].entry, state)
-      const deniedChanged = installHookEntry(settings, specs[2].event, specs[2].marker, specs[2].entry, state)
-      const postFailureChanged = installHookEntry(settings, specs[3].event, specs[3].marker, specs[3].entry, state)
+      const hookChanged = installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].marker, specs[0].entry, state)
+      const postChanged = installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].marker, specs[1].entry, state)
+      const deniedChanged = installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].marker, specs[2].entry, state)
+      const postFailureChanged = installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].marker, specs[3].entry, state)
+      const agentPreChanged = installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].marker, specs[4].entry, state)
+      const agentPostChanged = installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].marker, specs[5].entry, state)
+      const agentPostFailureChanged = installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].marker, specs[6].entry, state)
       const envChanged = installEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
       states[target.id] = state
@@ -708,7 +780,13 @@ async function install (pluginRoot) {
         label: target.label,
         orcaManaged: target.orcaManaged,
         ok: true,
-        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modCopy: modResult.changed },
+        changes: {
+          hook: hookChanged,
+          outcomeHook: postChanged || deniedChanged || postFailureChanged,
+          agentModelHook: agentPreChanged || agentPostChanged || agentPostFailureChanged,
+          env: envChanged,
+          modCopy: modResult.changed
+        },
         // modCopyWarning stays the stable machine-readable reason code exactly
         // as it always has -- panels key off it and must not break.
         // modCopyDetail carries the underlying diagnosis (e.g. the real
@@ -750,6 +828,7 @@ async function install (pluginRoot) {
     changes: {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
       outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
+      agentModelHook: perTarget.some((t) => t.ok && t.changes.agentModelHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
       modCopy: perTarget.some((t) => t.ok && t.changes.modCopy)
     },
@@ -762,9 +841,10 @@ async function install (pluginRoot) {
 /** The safe fallback per-event bookkeeping used when a target has no
  *  install-state record at all: every "existed before" flag defaults to
  *  true, so an absent record only ever under-cleans (see the note above
- *  `uninstall`'s own state fallback). */
+ *  `uninstall`'s own state fallback). `groupExistedBefore` covers every
+ *  non-`Bash` matcher this installer manages (today: `Agent`) the same way. */
 function defaultEventState () {
-  return { arrayExistedBefore: true, bashGroupExistedBefore: true }
+  return { arrayExistedBefore: true, bashGroupExistedBefore: true, groupExistedBefore: { Agent: true } }
 }
 
 async function uninstall (pluginRoot) {
@@ -796,10 +876,13 @@ async function uninstall (pluginRoot) {
     migrateLegacyPreToolUseFlags(state)
     try {
       const settings = await readSettings(settingsPath)
-      const hookChanged = uninstallHookEntry(settings, specs[0].event, specs[0].marker, state)
-      const postChanged = uninstallHookEntry(settings, specs[1].event, specs[1].marker, state)
-      const deniedChanged = uninstallHookEntry(settings, specs[2].event, specs[2].marker, state)
-      const postFailureChanged = uninstallHookEntry(settings, specs[3].event, specs[3].marker, state)
+      const hookChanged = uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].marker, state)
+      const postChanged = uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].marker, state)
+      const deniedChanged = uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].marker, state)
+      const postFailureChanged = uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].marker, state)
+      const agentPreChanged = uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].marker, state)
+      const agentPostChanged = uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].marker, state)
+      const agentPostFailureChanged = uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].marker, state)
       const envChanged = uninstallEnvVar(settings, state)
       await writeSettingsAtomic(settingsPath, settings)
       const modCopyPath = modCopyPathFor(target)
@@ -807,7 +890,13 @@ async function uninstall (pluginRoot) {
       await rm(backupPathFor(target), { force: true })
       perTarget.push({
         id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: true,
-        changes: { hook: hookChanged, outcomeHook: postChanged || deniedChanged || postFailureChanged, env: envChanged, modCopy: modResult.changed },
+        changes: {
+          hook: hookChanged,
+          outcomeHook: postChanged || deniedChanged || postFailureChanged,
+          agentModelHook: agentPreChanged || agentPostChanged || agentPostFailureChanged,
+          env: envChanged,
+          modCopy: modResult.changed
+        },
         modCopyWarning: modResult.skipped ? 'foreign-mod-copy' : null
       })
     } catch (error) {
@@ -822,6 +911,7 @@ async function uninstall (pluginRoot) {
     changes: {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
       outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
+      agentModelHook: perTarget.some((t) => t.ok && t.changes.agentModelHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
       modCopy: perTarget.some((t) => t.ok && t.changes.modCopy)
     },
@@ -830,11 +920,11 @@ async function uninstall (pluginRoot) {
   }
 }
 
-/** Read-only lookup of `event`'s own `Bash`-matcher group, or undefined when
- *  the event has no hooks array, or no such group, at all. */
-function findBashGroup (settings, event) {
+/** Read-only lookup of `event`'s own `matcher` group, or undefined when the
+ *  event has no hooks array, or no such group, at all. */
+function findGroup (settings, event, matcher) {
   return isRecord(settings.hooks) && Array.isArray(settings.hooks[event])
-    ? settings.hooks[event].find((g) => isRecord(g) && g.matcher === 'Bash')
+    ? settings.hooks[event].find((g) => isRecord(g) && g.matcher === matcher)
     : undefined
 }
 
@@ -844,7 +934,7 @@ function findMarkedHook (group, marker) {
 
 async function status (pluginRoot) {
   const { specs } = hookSpecs(pluginRoot)
-  const [gateSpec, postSpec, deniedSpec, postFailureSpec] = specs
+  const [gateSpec, postSpec, deniedSpec, postFailureSpec, agentPreSpec, agentPostSpec, agentPostFailureSpec] = specs
   const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
   const discovery = await discoverTargets()
 
@@ -858,10 +948,13 @@ async function status (pluginRoot) {
     } catch (error) {
       readError = String(error?.message ?? error).slice(0, 200)
     }
-    const ownGateHook = findMarkedHook(findBashGroup(settings, gateSpec.event), gateSpec.marker)
-    const ownPostHook = findMarkedHook(findBashGroup(settings, postSpec.event), postSpec.marker)
-    const ownDeniedHook = findMarkedHook(findBashGroup(settings, deniedSpec.event), deniedSpec.marker)
-    const ownPostFailureHook = findMarkedHook(findBashGroup(settings, postFailureSpec.event), postFailureSpec.marker)
+    const ownGateHook = findMarkedHook(findGroup(settings, gateSpec.event, gateSpec.matcher), gateSpec.marker)
+    const ownPostHook = findMarkedHook(findGroup(settings, postSpec.event, postSpec.matcher), postSpec.marker)
+    const ownDeniedHook = findMarkedHook(findGroup(settings, deniedSpec.event, deniedSpec.matcher), deniedSpec.marker)
+    const ownPostFailureHook = findMarkedHook(findGroup(settings, postFailureSpec.event, postFailureSpec.matcher), postFailureSpec.marker)
+    const ownAgentPreHook = findMarkedHook(findGroup(settings, agentPreSpec.event, agentPreSpec.matcher), agentPreSpec.marker)
+    const ownAgentPostHook = findMarkedHook(findGroup(settings, agentPostSpec.event, agentPostSpec.matcher), agentPostSpec.marker)
+    const ownAgentPostFailureHook = findMarkedHook(findGroup(settings, agentPostFailureSpec.event, agentPostFailureSpec.matcher), agentPostFailureSpec.marker)
     const modCopyPath = modCopyPathFor(target)
     const modCopy = await modCopyState(modCopyPath, modCopyMarkerPathFor(modCopyPath), modSource).catch(() => ({ exists: false, current: false }))
     perTarget.push({
@@ -876,6 +969,16 @@ async function status (pluginRoot) {
         pathMatches: ownPostHook !== undefined && Array.isArray(ownPostHook.args) && ownPostHook.args.includes(postSpec.path) &&
           ownDeniedHook !== undefined && Array.isArray(ownDeniedHook.args) && ownDeniedHook.args.includes(deniedSpec.path) &&
           ownPostFailureHook !== undefined && Array.isArray(ownPostFailureHook.args) && ownPostFailureHook.args.includes(postFailureSpec.path)
+      },
+      // The Agent-matcher hooks (agent-model.ts): asks Jev which model a
+      // subagent task needs (PreToolUse) and records which model it
+      // actually ran on (PostToolUse + PostToolUseFailure) -- same
+      // "installed only once every half is in place" rule as outcomeHook.
+      agentModelHook: {
+        installed: ownAgentPreHook !== undefined && ownAgentPostHook !== undefined && ownAgentPostFailureHook !== undefined,
+        pathMatches: ownAgentPreHook !== undefined && Array.isArray(ownAgentPreHook.args) && ownAgentPreHook.args.includes(agentPreSpec.path) &&
+          ownAgentPostHook !== undefined && Array.isArray(ownAgentPostHook.args) && ownAgentPostHook.args.includes(agentPostSpec.path) &&
+          ownAgentPostFailureHook !== undefined && Array.isArray(ownAgentPostFailureHook.args) && ownAgentPostFailureHook.args.includes(agentPostFailureSpec.path)
       },
       env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
       // `installed` keeps its old meaning (this exact plugin root's copy is
@@ -908,6 +1011,13 @@ async function status (pluginRoot) {
       installedCount: perTarget.filter((t) => t.outcomeHook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.outcomeHook.installed),
+      orcaPaneCount: orcaTargets.length
+    },
+    agentModelHook: {
+      installed: perTarget.every((t) => t.agentModelHook.installed),
+      installedCount: perTarget.filter((t) => t.agentModelHook.installed).length,
+      totalCount: perTarget.length,
+      orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.agentModelHook.installed),
       orcaPaneCount: orcaTargets.length
     },
     env: { installed: perTarget.every((t) => t.env.installed), name: ENV_VAR_NAME },
