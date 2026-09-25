@@ -1,0 +1,194 @@
+# Release 0.5.1: stop asking about harmless commands, judge client work as client work
+
+## Objective
+
+Ship 0.5.1 so that a plugin user in `bypassPermissions` is no longer
+interrupted for commands that harm nothing, while every command the gate
+exists to catch still stops. Everything below is evidence from one real
+machine running 0.5.0 on 2026-09-25, not a hypothesis.
+
+## Problem (observed on 0.5.0, real machine)
+
+- **Policy-stage false positives.** The policy stage asks Jev which policy
+  covers the action and whether the action is "a concrete instance of what
+  the policy covers, without judging whether it is allowed, forbidden or
+  needs someone" (`src/core/decisions.ts:141`). A `prohibits` match is then
+  treated as a violation (`interpretDestinationPolicy`). Commands that take
+  a screenshot or write a heredoc match `visual_evidence` ("Nothing with a
+  screen is called done without a screenshot…"), so the gate asks
+  "Forbidden by visual_evidence" about the exact action that policy
+  demands. Seen three times in one hour, once on the supervisor's own
+  session. Five seeded policies describe how an agent works or what it
+  claims, not anything a single shell command can violate:
+  `visual_evidence`, `model_by_difficulty`, `delegate_by_scope`,
+  `no_inventing_contracts`, `ticket_first`.
+- **The stop reason is not recorded.** `gate-decision` records carry
+  `type,id,at,project,commandFamily,source,verdict,latencyMs,pluginVersion`,
+  and `gate-pending` records carry no policy id. Of 170 historical asks, 82
+  have no risk scores. That set mixes policy stops, local-rule asks
+  (`git push`, `curl | shell`, `git reset/clean`, `terraform`, `rm -rf`)
+  and uncacheable commands, and today nothing can tell them apart. A fix to
+  the policy stage cannot be measured without this.
+- **Client work in sibling worktrees is not judged as client work.**
+  Destination matching is a longest-prefix match on `worktreePath`
+  (`src/core/destination_match.ts`). Orca worktrees live next to the main
+  checkout, not inside it (`~/Projects/cineco-frontend-cin-985` next to
+  `~/Projects/cineco-frontend`), so they never match their `client-site`
+  destination. `client_always_asks` and the destination's context do not
+  apply to real client work. This is the direction that matters: the gate
+  is loosest where it should be tightest.
+- **mod-skills can run active with zero calibration.** The hook reads the
+  raw `active`/`activeTools` booleans (`adapters/claude/mod-skills/hooks/index.ts:133-142`)
+  and never consults readiness. With `active:true` the real skill listing
+  is withheld on every main-loop prompt, and when Jev picks nothing the
+  model gets neither the listing nor a skill for that turn (`:183-192`,
+  `:332-341`). The panel warns against it and the code does not enforce
+  it. It was on, with 0 measurements, on this machine. Separately, the
+  tool-relevance path calls Jev on every prompt with no sampling (`:350-457`).
+- **Suite breaks without dev dependencies.** `scripts/fixture_shape.test.mjs:31`
+  imports `screenshot-panels.mjs`, which imports `playwright` at top
+  level, with no guard.
+- **Policy seed notice reports noise.** `mergePolicySeeds` compares raw
+  `kind` strings, so every install still carrying the legacy Spanish enum
+  (`permite/prohibe/pregunta`) sees "20 differing" when 17 are functionally
+  identical (`migratePolicyKind` already maps them at decision time).
+
+## Why
+
+The user asked for the next release to be tuned so that "this cannot
+happen to plugin users" (2026-09-25), after being asked about harmless
+commands several times in one session.
+
+## Scope
+
+In: tasks T1–T7 below. Out, documented for 0.6: the gate-approval-learning
+chain (#29, B1b..C2), per-account model availability, mapping gateway
+`resolvedModel` (`glm-*`) back to aliases for the match rate, widening
+`REWRITE_PERMISSION_MODES` to `default`/`acceptEdits` (docs confirm Agent
+never prompts and hook `allow` does not bypass deny/ask rules), readiness
+reachability (E1) and per-direction confidence (E2).
+
+## Constraints
+
+- Local rules stay the floor. Nothing in this release may make a deny-tier
+  rule, a `requires_human` policy or the risk stage more permissive.
+- A policy without the new field keeps today's behaviour (`command`). A user
+  rule is never silently dropped.
+- Privacy rule of `gate_measurement.ts` holds: record ids and families,
+  never the command.
+- Artifacts in English. No `any`, no `console.log`/`debugger`, no mocks in
+  production code. Tests and docs travel with each fix.
+- Branch `fabolivark/release-0.5.1` from `main` at `19e9873` (v0.5.0).
+
+## TDD
+
+- Mode: strict TDD **on**. Source: `~/.claude/CLAUDE.md` ("Strict TDD Mode: enabled").
+- Runner: `npm test` (`node --test --experimental-strip-types`), full
+  gate `npm run check` (suite + panels spec + screenshots).
+- Each task starts with an observed RED.
+
+## Tasks
+
+Tracked on Plane, private project `JEVADV` (workspace ab2web), module
+"0.5.1 — release hardening". Mapping: T1=JEVADV-2, T2=JEVADV-1,
+T3=JEVADV-3, T4=JEVADV-4, T5=JEVADV-5, T6=JEVADV-6, T7=JEVADV-9, with
+JEVADV-7 (replay bench), JEVADV-8 (naive-agent scenario), JEVADV-10
+(locale) and JEVADV-11 (catalog gaps) in the same module. Module "0.6 —
+evolution" holds JEVADV-12..23.
+
+- [x] **T1 — Record why the gate stopped.** Done in `49d249d` (delegated
+  writer). Vocabulary: `local-rule`, `cache`, `policy`, `risk`, `unreachable`.
+  Split on `GateActionResult.policyId`. Add a `stopReason`
+  (`policy` | `local-rule` | `risk` | `unreachable` | `cache`) and, for
+  policy stops, the `policyId` to `gate-decision` and `gate-pending`
+  records. Ids only. Route: delegated writer (2+ non-trivial files).
+- [x] **T2 — Process policies never gate a command.** Done in `60dab61`
+  (delegated writer). Seed version 2. `cmdDecide` in `main.mjs`, which
+  judges free-text task actions rather than shell commands, keeps every
+  policy on purpose. `Policy.scope?:
+  "command" | "process"`. Filter `process` before `buildPolicyQuestions` so
+  those rules never enter the coverage criteria. Mark the five process
+  policies in `seed/policies.json` and bump the seed version. For a stored
+  row without the field: use the seed's scope for that id, else `command`.
+  Route: delegated writer.
+- [ ] **T3 — Sibling worktrees match their repository's destination.**
+  When the cwd's worktree is a linked worktree, resolve its main checkout
+  (`.git` file → `gitdir:` → `<main>/.git/worktrees/<name>`) and match the
+  catalog against the main checkout too. A nested path match still wins
+  over a sibling match. Route: delegated writer.
+- [ ] **T4 — mod-skills never hides skills it did not replace.** Keep the
+  real listing whenever no skill is injected, and sample the tool path the
+  same way as the skill path. Route: delegated writer.
+- [ ] **T5 — Suite runs without playwright.** `fixture_shape.test.mjs`
+  skips cleanly when `playwright` is absent. Route: inline (one file).
+- [x] **T6 — Seed notice compares normalized kinds.** Done in `648e508`
+  (delegated writer). Compares the migrated kind and the resolved scope.
+- [ ] **T8 — Deny tier ignores quoted data (JEVADV-24).** Observed live:
+  a `printf` whose double-quoted text spelled out a hard reset was refused
+  as "discards uncommitted work". Quoted strings and heredoc bodies must be
+  opaque to the deny rules; `$(…)`, `bash -c` and `sh -c` stay scanned.
+  Route: delegated writer.
+- [ ] **T9 — Leading env assignment leaks into commandFamily (JEVADV-25).**
+  Route: fold into T8's writer (same parsing module) if it lives there.
+- [ ] **T7 — Release.** Version 0.5.1, README and changelog, `npm run
+  check` with screenshots at 1440/768/390/320 in both themes, then the
+  real-machine verification below.
+
+## Acceptance criteria
+
+- A command that writes or takes a screenshot, run in any catalogued
+  destination, is no longer stopped by `visual_evidence` or any other
+  `process` policy.
+- Every stop recorded after 0.5.1 carries a `stopReason`. Policy stops
+  carry the `policyId`.
+- A command run in `~/Projects/cineco-frontend-cin-985` resolves to the
+  `cineco-frontend` destination.
+- With `active:true` and a Jev pick of none, the model still receives the
+  full skill listing.
+- `npm test` passes with `playwright` moved out of `node_modules`.
+- Deny-tier matrix unchanged: `git reset --hard`, `git checkout -- <file>`,
+  force push, `rm -rf` of `/` or `$HOME`, `DROP TABLE`, `curl | bash`,
+  `terraform apply/destroy`, `kubectl delete` are refused exactly as in 0.5.0.
+
+## Real-machine verification (before tagging)
+
+1. Load the branch through Orca's plugin **Desarrollo** section, then run
+   `node adapters/orca/install-claude-integration.mjs status <root>`: 5/5
+   targets with hook, outcomeHook, agentModelHook, env, modCopy.
+2. Replay bench: a local-only corpus of realistic developer commands, drawn
+   from this machine's own agent transcripts and never committed, run
+   through the real hook before (0.5.0) and after (branch). Compare the ask
+   rate per `stopReason`.
+3. A fresh supervised agent with no context runs a realistic developer
+   scenario in a sandbox project with a local bare remote (npm, TypeScript,
+   tests, git flow, subagents, plus the deny-tier commands confined to the
+   sandbox). Every prompt it hits gets recorded verbatim.
+4. Evidence in `~/Downloads/jev-advisor-verificacion-0.5.0/`.
+
+## Delivery
+
+- Forecast: about 800 authored lines across T1–T7, over the 400 budget.
+  Strategy: `ask-on-risk`. Chain strategy: pending the user's choice.
+
+## Progress
+
+- 2026-09-25: branch created at `19e9873`. Config on the real machine
+  corrected: mod-skills switched off (`~/.config/orca-supervisor/mod-skills-config.json`,
+  the only writer is the panel request path, activation only reads it).
+  Models catalog verified correct for the four accounts: fable
+  `available:false` (one account without Fable quota, z.ai maps no fable
+  alias), opus/sonnet/haiku `true` (z.ai maps them to glm-*), `active:false`.
+
+- 2026-09-25: T1, T2 and T6 committed. Parent spot check with
+  `env -u ORCA_USER_DATA_PATH npm test`: 2012 tests, 2012 pass, 0 fail.
+  Dev plugin loaded in Orca from `~/Projects/orca-jev-advisor-dev`, a
+  detached worktree advanced only to verified commits. `status`: 5/5
+  targets pointing to it.
+- Replay baseline on 0.5.0 over a 300-command stratified sample of real
+  local traffic: allow 182, pass 11, ask 65, deny 42. About 49 asks come
+  from the risk stage and 16 from policies (client_always_asks 6,
+  others_pr 5, large_pr 3, visual_evidence 2).
+
+## Next step
+
+Advance the dev worktree to `648e508`, replay the same sample, compare, then T8.
