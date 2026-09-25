@@ -198,6 +198,13 @@ const MENTION_ONLY_VERBS =
   /^(grep|rg|ag|ack|echo|printf|cat|bat|head|tail|less|more|wc|nl|comm|diff|sort|uniq|column|jq|yq|fgrep|egrep|sed\s+-n|awk)\b/;
 
 export function mentionsRatherThanRuns(command: string): boolean {
+  // odd/tasks/release-0.5.1.md T8 (JEVADV-24): `echo "$(git reset --hard)"`
+  // leads with a read/print verb, but its argument carries a REAL command
+  // substitution -- the exact reasoning isSafeSegment already applies via
+  // hasCommandSubstitution. Without this, this function broke the
+  // NEVER_SILENTLY loop before the deny tier ever got a chance to look at
+  // the substitution's body, waving a genuine `git reset --hard` through.
+  if (hasCommandSubstitution(command)) return false;
   // Reuses the gate's own splitter rather than a second, drifting copy.
   const segments = splitSegments(command).map((segment) => segment.trim()).filter((s) => s.length > 0);
   if (segments.length === 0) return false;

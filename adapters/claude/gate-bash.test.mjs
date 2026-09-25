@@ -467,6 +467,15 @@ const DISCARDING_COMMANDS = [
   'bash -c "git reset --hard"',
   'env A=1 git reset --hard',
   'git -C ../repo reset --hard',
+  // A bare `--` is what xargs leaves in the static text; the real
+  // pathspecs only exist once xargs appends them at runtime.
+  'find . | xargs git checkout --',
+  // A command SUBSTITUTION really does run, even behind a mention-only
+  // verb like `echo` -- see mentionsRatherThanRuns' hasCommandSubstitution
+  // guard, without which these two broke the NEVER_SILENTLY loop before
+  // the deny tier ever got a look at the substitution's body.
+  'echo "$(git reset --hard)"',
+  'echo `git reset --hard`',
 ]
 
 const NON_DISCARDING_COMMANDS = [
@@ -536,3 +545,40 @@ test('resetClean fails CLOSED on a command its tokenizer cannot parse: an unterm
   const payload = JSON.parse(run(home, 'git commit -m "git reset --hard'))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24)'s full required NOT-refused
+// list, locked in here for regression even though every one of these five
+// was ALREADY not refused before this task's changes -- each is saved by a
+// DIFFERENT, pre-existing guard, not by scanSegment/discardsUncommittedWork's
+// new reset/clean dispatch:
+//   - printf/echo/grep: mentionsRatherThanRuns' MENTION_ONLY_VERBS already
+//     breaks the NEVER_SILENTLY loop for a single safe-verb segment with no
+//     command substitution.
+//   - the git commit case: `checkout` was already recognised only through
+//     discardsUncommittedWork's own tokenizer (never the old raw regex,
+//     which only ever matched reset/clean), and that tokenizer already
+//     required `git` in COMMAND position -- correct before this task too.
+//   - the heredoc: withoutHeredocBodies already strips the body before any
+//     rule (or mentionsRatherThanRuns) ever sees it.
+// `gh pr comment` above is the one genuine false positive this task fixes
+// (`gh` leads none of those guards); these five prove the fix does not
+// depend on them, and would keep them true even if a future change removed
+// one of the pre-existing guards.
+// ---------------------------------------------------------------------------
+
+const ALREADY_NOT_DENIED_BEFORE_T8 = [
+  "printf '%s' \"text mentioning git reset --hard origin/main\"",
+  "echo 'git clean -fd'",
+  'git commit -m "revert the git checkout -- change"',
+  "cat > notes.md <<'EOF'\ngit reset --hard\nEOF",
+  'grep -n "git reset --hard" README.md',
+]
+
+for (const command of ALREADY_NOT_DENIED_BEFORE_T8) {
+  test(`not refused (already true before T8): ${JSON.stringify(command)}`, () => {
+    const home = makeHome()
+    const decision = decisionFor(home, command)
+    assert.notEqual(decision, 'deny')
+  })
+}

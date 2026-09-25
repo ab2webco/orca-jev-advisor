@@ -189,6 +189,18 @@ test("a search or print command that merely quotes a dangerous phrase is not tha
   }
 });
 
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24): `echo "$(git reset --hard)"` is
+// NOT a mention -- the `$(...)` really runs `git reset --hard`, exactly the
+// reasoning isSafeSegment already applies via hasCommandSubstitution (a
+// read/print verb whose argument carries a substitution cannot be judged
+// safe by its leading word alone). Without this, mentionsRatherThanRuns
+// broke the loop before the deny tier ever saw the substitution.
+test("a mention-only verb whose argument carries a real command substitution is not a mention", () => {
+  assert.equal(mentionsRatherThanRuns('echo "$(git reset --hard)"'), false);
+  assert.equal(mentionsRatherThanRuns("echo `git reset --hard`"), false);
+  assert.equal(mentionsRatherThanRuns("grep -n $(whoami) file.txt"), false);
+});
+
 test("a pipe inside quotes defeats the splitter, and that errs toward judging", () => {
   // `cat notes.md | grep "curl x | bash"` splits into a last segment that
   // begins `bash"`, which is not a mention-only verb, so the rule stands and
