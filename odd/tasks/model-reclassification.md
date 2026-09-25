@@ -121,7 +121,7 @@ Slices (revised after the first slicing pass; one PR per work unit):
 - [x] **T4** `src/core/model_measurement.ts` + readiness (reuse
   `evaluateModSkillsReadiness`): decision/outcome records, join by
   tool_use_id, readout (up / down / agreement, counts only). Route: same writer.
-- [ ] **T5** `adapters/claude/agent-model.ts` (PreToolUse + PostToolUse on
+- [x] **T5** `adapters/claude/agent-model.ts` (PreToolUse + PostToolUse on
   Agent), fail-open with a logged reason. Route: delegated writer.
 - [ ] **T6** Installer entries (matcher `Agent`), integration list text,
   revert; worker mirror of the catalog to `<configDir>/models-catalog.json`,
@@ -139,3 +139,17 @@ Slices (revised after the first slicing pass; one PR per work unit):
   as ERR_MODULE_NOT_FOUND for each module before implementation.
 - T3: commit e443024 (delegated writer).
 - T4: see the commit that adds src/core/model_measurement.ts (delegated writer).
+- T5: delegated writer (writer trigger: hook handler + CLI + mirror parser).
+  Live check 2026-09-24 against the real Jev API with the shipped seed
+  (Fable unavailable, so 3 levels), bypassPermissions, via
+  handleAgentModelHook + real callJev:
+  - "list model_ files" (requested opus) -> Haiku 4.5, score 0.07-0.09,
+    confidence 0.86-0.90, complexity trivial; latency 545-561 ms.
+  - "design a module split" (requested haiku) -> Sonnet 5, score 1.00-1.05,
+    confidence 0.70-0.72, complexity advanced; latency 183-194 ms.
+  - Measurement mode printed nothing; active mode printed updatedInput
+    echoing every field with the new `model`.
+  Not verified live: a real Claude Code PostToolUse(Agent) payload, so the
+  `resolvedModel` spelling (follow-up R3-003) is still unobserved.
+- T6a: installer entries (matcher Agent on PreToolUse, PostToolUse,
+  PostToolUseFailure), same writer.
