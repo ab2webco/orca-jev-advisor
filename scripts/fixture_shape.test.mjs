@@ -59,10 +59,21 @@ async function realMeasurementsSummary () {
     // exactly where the third drift (byFamily vs byCommandFamily) hid.
     const cache = join(home, '.cache', 'orca-supervisor')
     mkdirSync(cache, { recursive: true })
-    writeFileSync(join(cache, 'gate-decisions.jsonl'), `${JSON.stringify({
-      type: 'gate-decision', id: 'r1', at: '2026-09-24T10:00:00.000Z', project: 'p',
+    // Sixteen intervening families an hour ago, so every time window gets
+    // its interventions rows AND a rest row, and the fixture's keys under
+    // both are compared rather than skipped as an empty array or a null.
+    const recentAt = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+    const gateRows = [{
+      type: 'gate-decision', id: 'r1', at: recentAt, project: 'p',
       commandFamily: 'git', source: 'jev', verdict: 'allow', latencyMs: 400,
-    })}\n`)
+    }]
+    for (let i = 0; i < 16; i += 1) {
+      gateRows.push({
+        type: 'gate-decision', id: `ask-${i}`, at: recentAt, project: 'p',
+        commandFamily: `family-${i}`, source: 'local-rule', verdict: 'ask', latencyMs: null,
+      })
+    }
+    writeFileSync(join(cache, 'gate-decisions.jsonl'), gateRows.map((row) => `${JSON.stringify(row)}\n`).join(''))
     writeFileSync(join(cache, 'ab-benchmark-results.jsonl'), `${JSON.stringify({
       id: 'a1', at: '2026-09-24T10:00:00.000Z', commandFamily: 'cd', destinationKind: null,
       jev: { verdict: 'allow', latencyMs: 200, inputTokens: 10, outputTokens: 2 },
@@ -113,4 +124,28 @@ test('the ready fixture uses the secret-status field the worker writes, not the 
 test('the heartbeat is resolved per page, never pinned at module load', () => {
   assert.equal(READY.workerHeartbeat.at, 'now',
     "a literal timestamp goes stale mid-run; hostBridge resolves the sentinel 'now' when the page asks")
+})
+
+test('the empty fixture is exactly what read-measurements.mjs publishes for an empty home, apart from the clock-derived window bounds', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'orca-fixture-empty-'))
+  try {
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--experimental-strip-types', join(ROOT, 'adapters', 'orca', 'read-measurements.mjs')],
+      { env: { ...process.env, HOME: home, USERPROFILE: home, NODE_TEST_CONTEXT: undefined }, cwd: ROOT }
+    )
+    const real = JSON.parse(stdout)
+    // `since` on the day and week windows is now minus 24h / 7d: it moves
+    // with the clock, so it is the one field a literal cannot match.
+    const withoutBounds = (summary) => ({
+      ...summary,
+      gate: {
+        ...summary.gate,
+        windows: Object.fromEntries(Object.entries(summary.gate.windows).map(([key, w]) => [key, { ...w, since: null }])),
+      },
+    })
+    assert.deepEqual(withoutBounds(SCENARIOS.empty.measurementsSummary), withoutBounds(real))
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
 })
