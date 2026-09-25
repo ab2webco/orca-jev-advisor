@@ -99,6 +99,16 @@ the settings panel. Orca already knows your worktrees, and building the
 catalog from them at install is the obvious next step; it is not built
 yet.
 
+A command run inside a *linked* git worktree — the shape Orca itself
+creates, next to the main checkout rather than inside it
+(`~/Projects/cineco-frontend-cin-985` beside `~/Projects/cineco-frontend`)
+— matches its repository's destination too. When the cwd itself has no
+catalog entry, the gate reads the worktree's own `.git` file from disk to
+find its main checkout and matches that instead (`src/core/linked_worktree.ts`);
+a nested, direct match on the cwd always wins over this fallback, and a
+plain sibling directory that is not actually a worktree of the catalogued
+repository never matches by name alone.
+
 **Policies.** Standing decisions the team has already made, so nobody is
 asked twice — *work goes on a feature branch*, *never write directly to
 main*, *anything touching a client's product is confirmed by a human*. A

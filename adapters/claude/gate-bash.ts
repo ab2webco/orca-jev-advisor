@@ -72,7 +72,7 @@ import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/c
 import { commandShape } from '../../src/core/command_shape.ts'
 import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
-import { matchDestination } from '../../src/core/destination_match.ts'
+import { matchDestinationForCwd } from '../../src/core/linked_worktree.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -813,10 +813,14 @@ type JevOutcome =
  * Calls Jev (src/core) and translates the verdict into the hook's decision.
  * Never throws.
  *
- * Also resolves the cwd against the (optional) catalog mirror, filters the
- * (optional) policies mirror down to whatever applies at the matched
- * destination, and then to whatever is `"command"` scoped (see
- * filterPoliciesForCommandScope, decisions.ts) -- a `"process"` policy
+ * Also resolves the cwd against the (optional) catalog mirror --
+ * matchDestinationForCwd (linked_worktree.ts) tries cwd directly first, then
+ * falls back to its linked git worktree's main checkout when cwd itself has
+ * no match, because Orca creates a worktree NEXT TO its main checkout
+ * (JEVADV-3) -- then filters the (optional) policies mirror down to
+ * whatever applies at the matched destination, and then to whatever is
+ * `"command"` scoped (see filterPoliciesForCommandScope, decisions.ts) -- a
+ * `"process"` policy
  * (e.g. "screenshots get looked at before being called done") describes how
  * the agent works across many commands, not something a single command's
  * text can honestly be judged against, so it must never reach the coverage
@@ -831,7 +835,10 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
   try {
     const catalog = readCatalogMirror()
     const policies = readPoliciesMirror()
-    const matched: MirroredDestination | null = catalog !== null ? matchDestination(cwd, catalog.destinations) : null
+    // Only `.destination` (whose rules apply) is needed here -- `.treeRoot`
+    // is for command_shape.ts's cache key, computed once in main() below.
+    const catalogMatch = catalog !== null ? matchDestinationForCwd(cwd, catalog.destinations) : null
+    const matched: MirroredDestination | null = catalogMatch?.destination ?? null
     const filteredPolicies = filterPoliciesForDestination(policies, matched?.id ?? null)
     const commandScopedPolicies = filterPoliciesForCommandScope(filteredPolicies, SEED_SCOPE_BY_ID)
 
@@ -984,9 +991,19 @@ async function main(): Promise<void> {
   // The destination is resolved here as well as inside askJev: it is part of
   // the cache key, because two repositories with different thresholds must
   // never share a verdict. Both reads hit the same small mirror file.
+  //
+  // `.treeRoot`, not `.destination.worktreePath`, is what commandShape needs
+  // as its in-tree/out-of-tree boundary: for a linked worktree resolved
+  // through its main checkout (JEVADV-3), those two differ on purpose --
+  // `.destination` is the main checkout, whose policies and ceiling apply,
+  // but the main checkout is a SIBLING of cwd's own worktree, never an
+  // ancestor of it. Using it as treeRoot would classify an ordinary in-tree
+  // target as out-of-tree (see MatchedDestinationForCwd's own comment,
+  // linked_worktree.ts) -- the exact class of bug this project's Windows
+  // path audit already fixed once, for a different cause.
   const cachedCatalog = readCatalogMirror()
-  const cachedMatch = cachedCatalog !== null ? matchDestination(cwd, cachedCatalog.destinations) : null
-  const key = cacheKey(command, context, cwd, cachedMatch?.id ?? null, cachedMatch?.worktreePath ?? null)
+  const cachedMatch = cachedCatalog !== null ? matchDestinationForCwd(cwd, cachedCatalog.destinations) : null
+  const key = cacheKey(command, context, cwd, cachedMatch?.destination.id ?? null, cachedMatch?.treeRoot ?? null)
   const cache = key === null ? {} : readCache()
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
@@ -998,7 +1015,7 @@ async function main(): Promise<void> {
       // is the honest, complete stopReason on its own -- it does not know,
       // and does not claim to know, which sub-reason produced the original
       // verdict it is replaying.
-      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
+      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.destination.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
     }
     emit(hit.decision, t('cached', { reason: hit.reason }))
     return
