@@ -163,9 +163,13 @@ async function aggregateGate () {
   // last few actual records, kept readable (project/family/source/
   // verdict/latency), never the raw `id`.
   const summary = foldGateDecisions(decisions)
+  const { pending, outcomes } = await readApprovalRecords()
+  const now = Date.now()
 
   return {
     ...summary,
+    windows: buildGateWindows(decisions, pending, outcomes, now),
+    health: gateHealth(decisions),
     corruptLines: corrupt + malformed,
     cacheHitRate: summary.totalDecisions > 0 ? summary.bySource.cache / summary.totalDecisions : null,
     recent: decisions
@@ -183,6 +187,195 @@ async function aggregateGate () {
   }
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000
+/** The board's interventions table stops here; everything past it is one "rest" row. */
+const INTERVENTION_ROWS = 15
+
+/** Milliseconds for an ISO timestamp, or null when it does not parse -- a
+ *  record with an unreadable time still counts in `all`, but no time-bounded
+ *  window can honestly claim it. */
+function atMs (iso) {
+  const ms = Date.parse(iso)
+  return Number.isNaN(ms) ? null : ms
+}
+
+function isAtOrAfter (iso, sinceMs) {
+  const ms = atMs(iso)
+  return ms !== null && ms >= sinceMs
+}
+
+/** summarizeApprovals per family, keyed by the family each pending record
+ *  already carries -- same fold as aggregateNotRunByCommandFamily. */
+function notRunPerFamily (pending, outcomes, now) {
+  const byFamily = new Map()
+  for (const record of pending) {
+    const forFamily = byFamily.get(record.commandFamily) ?? []
+    forFamily.push(record)
+    byFamily.set(record.commandFamily, forFamily)
+  }
+  const notRun = new Map()
+  for (const [family, familyPending] of byFamily) {
+    notRun.set(family, summarizeApprovals(familyPending, outcomes, now).notRun)
+  }
+  return notRun
+}
+
+/**
+ * The board's "where does it intervene" table. Only families that were ever
+ * asked about or blocked take a row: a family the gate always allowed is
+ * noise there however often it ran (91 families on the author's log, 61 of
+ * them 100% allowed, and sorting by total buried `terraform` at 17 asks out
+ * of 18 under `grep` at 216 and none). Rows past INTERVENTION_ROWS fold into
+ * `rest`; the always-allowed families fold into `quiet`. `rest` is null, not
+ * a zero row, when nothing was left over. A family that only appears in the
+ * approvals log (no decision in this window) takes no row: notRun is a
+ * column of a decision row, never a row of its own.
+ */
+function interventionsTable (summary, pending, outcomes, now) {
+  const notRun = notRunPerFamily(pending, outcomes, now)
+  const intervening = summary.byCommandFamily
+    .filter((f) => f.interventions > 0)
+    .map((f) => ({
+      commandFamily: f.commandFamily,
+      total: f.total,
+      ask: f.byVerdict.ask,
+      deny: f.byVerdict.deny,
+      notRun: notRun.get(f.commandFamily) ?? 0,
+    }))
+    // Ties broken by total, then by name, so the same log always renders
+    // the same table.
+    .sort((a, b) => (b.ask + b.deny) - (a.ask + a.deny) || b.total - a.total || a.commandFamily.localeCompare(b.commandFamily))
+  const leftover = intervening.slice(INTERVENTION_ROWS)
+  const quietFamilies = summary.byCommandFamily.filter((f) => f.interventions === 0)
+  return {
+    rows: intervening.slice(0, INTERVENTION_ROWS),
+    rest: leftover.length === 0
+      ? null
+      : leftover.reduce((acc, row) => ({
+        families: acc.families + 1,
+        total: acc.total + row.total,
+        ask: acc.ask + row.ask,
+        deny: acc.deny + row.deny,
+        notRun: acc.notRun + row.notRun,
+      }), { families: 0, total: 0, ask: 0, deny: 0, notRun: 0 }),
+    quiet: { families: quietFamilies.length, total: quietFamilies.reduce((sum, f) => sum + f.total, 0) },
+  }
+}
+
+function approvalsSummary (pending, outcomes, now) {
+  const summary = summarizeApprovals(pending, outcomes, now)
+  return {
+    asked: summary.asked,
+    approved: summary.approved,
+    rejected: summary.rejected,
+    notRun: summary.notRun,
+    ceiling: ceilingEvidence(summary.labelled),
+  }
+}
+
+function gateWindow (fields, decisions, pending, outcomes, now) {
+  const summary = foldGateDecisions(decisions)
+  return {
+    ...fields,
+    totalDecisions: summary.totalDecisions,
+    byVerdict: summary.byVerdict,
+    bySource: summary.bySource,
+    jevLatency: summary.jevLatency,
+    interventions: interventionsTable(summary, pending, outcomes, now),
+    approvals: approvalsSummary(pending, outcomes, now),
+  }
+}
+
+/**
+ * The build that wrote the most recent stamped record. Records carry no
+ * version until the writer stamps one (see gate_measurement.ts's doc on
+ * `pluginVersion`), so this can honestly be null.
+ */
+function currentPluginVersion (decisions) {
+  let best = null
+  for (const d of decisions) {
+    if (d.pluginVersion === undefined) continue
+    const ms = atMs(d.at) ?? -Infinity
+    if (best === null || ms >= best.ms) best = { ms, version: d.pluginVersion }
+  }
+  return best === null ? null : best.version
+}
+
+/**
+ * odd/tasks/panel-interventions-and-mod-copy.md T10 -- the same aggregate for
+ * each window the board lets a person pick. A time window cannot separate
+ * rule semantics across releases (five pipe-to-shell asks from before the
+ * deny tier existed look like the deny tier failing), which is why `version`
+ * exists: it counts only the records the current build wrote. Pending asks
+ * carry no build, so its approvals are bounded by the first decision that
+ * build wrote -- `since` says exactly which bound was applied.
+ */
+function buildGateWindows (decisions, pending, outcomes, now) {
+  const timeWindow = (key, spanMs) => {
+    const sinceMs = now - spanMs
+    return gateWindow(
+      { key, available: true, pluginVersion: null, since: new Date(sinceMs).toISOString() },
+      decisions.filter((d) => isAtOrAfter(d.at, sinceMs)),
+      pending.filter((p) => isAtOrAfter(p.at, sinceMs)),
+      outcomes, now)
+  }
+
+  const version = currentPluginVersion(decisions)
+  let versionWindow
+  if (version === null) {
+    versionWindow = gateWindow({ key: 'version', available: false, pluginVersion: null, since: null }, [], [], outcomes, now)
+  } else {
+    const ofVersion = decisions.filter((d) => d.pluginVersion === version)
+    const firstMs = ofVersion.reduce((min, d) => {
+      const ms = atMs(d.at)
+      return ms !== null && (min === null || ms < min) ? ms : min
+    }, null)
+    versionWindow = gateWindow(
+      { key: 'version', available: true, pluginVersion: version, since: firstMs === null ? null : new Date(firstMs).toISOString() },
+      ofVersion,
+      firstMs === null ? [] : pending.filter((p) => isAtOrAfter(p.at, firstMs)),
+      outcomes, now)
+  }
+
+  return {
+    version: versionWindow,
+    day: timeWindow('day', DAY_MS),
+    week: timeWindow('week', 7 * DAY_MS),
+    all: gateWindow({ key: 'all', available: true, pluginVersion: null, since: null }, decisions, pending, outcomes, now),
+  }
+}
+
+/**
+ * Is Jev answering right now -- which is about the present, so it belongs to
+ * no window. Only `jev` and `none` records ever asked Jev; local-rule and
+ * cache decisions in between neither break nor extend a failure streak.
+ * Ordered by timestamp, not by file position: two sessions append to the same
+ * log. A record whose time does not parse cannot be placed and is left out.
+ */
+function gateHealth (decisions) {
+  let lastJevMs = null
+  let lastJevAt = null
+  let lastFailureMs = null
+  let lastFailureAt = null
+  const failureTimes = []
+  for (const d of decisions) {
+    if (d.source !== 'jev' && d.source !== 'none') continue
+    const ms = atMs(d.at)
+    if (ms === null) continue
+    if (d.source === 'jev') {
+      if (lastJevMs === null || ms > lastJevMs) { lastJevMs = ms; lastJevAt = d.at }
+    } else {
+      failureTimes.push(ms)
+      if (lastFailureMs === null || ms > lastFailureMs) { lastFailureMs = ms; lastFailureAt = d.at }
+    }
+  }
+  return {
+    lastJevAt,
+    consecutiveFailures: failureTimes.filter((ms) => lastJevMs === null || ms > lastJevMs).length,
+    lastFailureAt,
+  }
+}
+
 /**
  * odd/tasks/panel-interventions-and-mod-copy.md T4 -- a per-family notRun
  * count, sitting on the `gate` aggregate as a sibling to `byCommandFamily`
@@ -197,22 +390,11 @@ async function aggregateGate () {
  */
 async function aggregateNotRunByCommandFamily () {
   const { pending, outcomes } = await readApprovalRecords()
-  const pendingByFamily = new Map()
-  for (const record of pending) {
-    const forFamily = pendingByFamily.get(record.commandFamily) ?? []
-    forFamily.push(record)
-    pendingByFamily.set(record.commandFamily, forFamily)
-  }
-
-  // summarizeApprovals (src/core/approval_record.ts) is the same tested
-  // fold aggregateApprovals() uses for the plugin-wide total -- reused here
-  // per family instead of reimplemented, so the TTL and outcome-join logic
-  // can never drift between the two call sites.
-  return [...pendingByFamily.entries()]
-    .map(([commandFamily, familyPending]) => ({
-      commandFamily,
-      notRun: summarizeApprovals(familyPending, outcomes).notRun,
-    }))
+  // notRunPerFamily reuses summarizeApprovals (src/core/approval_record.ts),
+  // the same tested fold aggregateApprovals() uses for the plugin-wide
+  // total, so the TTL and outcome-join logic can never drift between them.
+  return [...notRunPerFamily(pending, outcomes, Date.now()).entries()]
+    .map(([commandFamily, notRun]) => ({ commandFamily, notRun }))
     .sort((a, b) => b.notRun - a.notRun)
 }
 
@@ -395,21 +577,13 @@ async function readApprovalRecords () {
 async function aggregateApprovals () {
   const { pending, outcomes, corruptLines } = await readApprovalRecords()
 
-  const summary = summarizeApprovals(pending, outcomes)
-  return {
-    asked: summary.asked,
-    approved: summary.approved,
-    rejected: summary.rejected,
-    // odd/tasks/production-honesty-pass.md P7: renamed from `unresolved`.
-    // See src/core/approval_record.ts's own doc comment on
-    // ApprovalSummary.notRun -- classified, not known: most of these are a
-    // command the gate denied outright (which can never receive an
-    // outcome), but a crashed session after a real run leaves the same
-    // trace, so this is never folded into `ceiling`'s evidence either way.
-    notRun: summary.notRun,
-    corruptLines,
-    ceiling: ceilingEvidence(summary.labelled),
-  }
+  // odd/tasks/production-honesty-pass.md P7: `notRun` was `unresolved`.
+  // See src/core/approval_record.ts's own doc comment on
+  // ApprovalSummary.notRun -- classified, not known: most of these are a
+  // command the gate denied outright (which can never receive an outcome),
+  // but a crashed session after a real run leaves the same trace, so this is
+  // never folded into `ceiling`'s evidence either way.
+  return { ...approvalsSummary(pending, outcomes, Date.now()), corruptLines }
 }
 
 /**
