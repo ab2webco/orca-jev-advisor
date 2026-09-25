@@ -501,6 +501,22 @@ function scanToken(token: ScanToken): string {
 }
 
 /**
+ * scanToken for a token that may carry substitution markers. The bodies are
+ * spliced in AFTER tokenizing, never before: a `$(...)` inside double quotes
+ * still runs, and splicing it into the quoted text first let the data
+ * placeholder swallow it (review finding R3). Only the literal text around
+ * the markers is judged as data; every body is always emitted.
+ */
+function scanTokenWithBodies(token: ScanToken, nextBody: () => string): string {
+  if (!token.text.includes(SCAN_SUBSTITUTION_MARKER)) return scanToken(token);
+  const parts = token.text.split(SCAN_SUBSTITUTION_MARKER);
+  const bodies = parts.slice(1).map(() => nextBody());
+  const literal = parts.join("");
+  if (token.quoted && /\s/.test(literal)) return [SCAN_DATA_PLACEHOLDER, ...bodies].join(" ");
+  return parts.reduce((out, part, at) => (at === 0 ? part : `${out} ${bodies[at - 1] ?? ""} ${part}`), "");
+}
+
+/**
  * `segment` reduced to the text someSegmentMatches' patterns are allowed to
  * read -- see the module note above for the rule and why it exists. Returns
  * null when `segment` cannot be read with confidence: an unbalanced quote,
@@ -522,11 +538,12 @@ function scanSegment(segment: string, depth: number): string | null {
   // Substitution bodies are flattened back in, not hidden: a flag or branch
   // produced by `$(...)`/backticks is still part of the enclosing command's
   // own arguments at runtime (see someSegmentMatches' substitution tests).
-  let flattened = extracted.outer;
-  for (const body of scannedBodies) flattened = flattened.replace(SCAN_SUBSTITUTION_MARKER, ` ${body} `);
-
-  const tokens = tokenizeForScan(flattened);
+  // They go back in per token, after tokenizing the outer text, so the
+  // quotes a substitution sat in can never hide it (scanTokenWithBodies).
+  const tokens = tokenizeForScan(extracted.outer);
   if (tokens === null) return null;
+  let bodyIndex = 0;
+  const nextScannedBody = (): string => scannedBodies[bodyIndex++] ?? "";
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index] as ScanToken;
@@ -537,15 +554,21 @@ function scanSegment(segment: string, depth: number): string | null {
       : -1;
     const scriptStart = isEval ? index + 1 : flagIndex + 1;
     if ((isEval || flagIndex !== -1) && tokens[scriptStart] !== undefined) {
-      const script = tokens.slice(scriptStart).map((candidate) => candidate.text).join(" ");
+      const before = tokens.slice(0, scriptStart).map((candidate) => scanTokenWithBodies(candidate, nextScannedBody));
+      // The script is scanned again as a whole, so its substitutions go back
+      // in as their ORIGINAL `$(...)` text, in the same order, for that
+      // recursive scan to extract and read on its own.
+      const script = tokens
+        .slice(scriptStart)
+        .map((candidate) => candidate.text.split(SCAN_SUBSTITUTION_MARKER).reduce((out, part, at) => (at === 0 ? part : `${out}$(${extracted.bodies[bodyIndex++] ?? ""})${part}`), ""))
+        .join(" ");
       const scanned = scanSegment(script, depth + 1);
       if (scanned === null) return null;
-      const before = tokens.slice(0, scriptStart).map(scanToken);
       return [...before, scanned].join(" ");
     }
   }
 
-  return tokens.map(scanToken).join(" ");
+  return tokens.map((token) => scanTokenWithBodies(token, nextScannedBody)).join(" ");
 }
 
 /**

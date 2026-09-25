@@ -266,6 +266,22 @@ test("someSegmentMatches: an unbalanced quote fails CLOSED onto the raw segment 
   assert.equal(hasUnbalancedQuoting("git push --force origin main"), false);
 });
 
+test("someSegmentMatches: a DOUBLE-QUOTED substitution still runs, so it stays visible", () => {
+  // Review finding R3: splicing the scanned body back in BEFORE tokenizing
+  // left it inside the surrounding quotes, where the data placeholder
+  // swallowed it -- a deny-tier bypass the old raw match never had.
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  const pushProtected = /git\s+push\b.*\b(main|master|develop)\b/;
+  assert.equal(someSegmentMatches('git push origin "$(echo --force)"', forcePush), true);
+  assert.equal(someSegmentMatches('echo "$(git push --force origin main)"', forcePush), true);
+  assert.equal(someSegmentMatches('echo "`git push --force origin main`"', forcePush), true);
+  assert.equal(someSegmentMatches('echo "now: $(git push --force origin main) done"', forcePush), true);
+  assert.equal(someSegmentMatches('git push origin "$(printf main)"', pushProtected), true);
+  assert.equal(someSegmentMatches('bash -c "echo \\"$(git push --force)\\""', forcePush), true);
+  // The sentence around a substitution is still data; only the body is a run.
+  assert.equal(someSegmentMatches('gh pr comment 1 --body "we avoided git push --force on $(date)"', forcePush), false);
+});
+
 test("someSegmentMatches: substitution and redirection tests above still hold with the new sanitizer", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
   assert.equal(someSegmentMatches("git push $(echo x; echo --force) origin", forcePush), true);
