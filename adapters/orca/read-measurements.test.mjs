@@ -409,3 +409,183 @@ test("a source:'none' record survives the guard instead of being dropped as malf
   assert.equal(result.gate.totalDecisions, 1)
   assert.equal(result.gate.bySource.none, 1)
 })
+
+// ---------------------------------------------------------------------------
+// odd/tasks/panel-interventions-and-mod-copy.md T10 -- the board asks four
+// questions of one time window at a time, so the reader publishes every
+// window already folded: `gate.windows.{version,day,week,all}`, each with
+// its own interventions table and approvals summary, plus `gate.health`,
+// which is about right now and so belongs to no window.
+// ---------------------------------------------------------------------------
+
+const HOUR_MS = 60 * 60 * 1000
+function hoursAgo (hours) {
+  return new Date(Date.now() - hours * HOUR_MS).toISOString()
+}
+
+test('gate.windows: day, week and all each count only the decisions inside their own time bound', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('recent', { at: hoursAgo(2) }),
+    gateDecisionRow('days', { at: hoursAgo(72) }),
+    gateDecisionRow('month', { at: hoursAgo(24 * 30) }),
+  ])
+  const { windows } = run(home).gate
+  assert.equal(windows.day.totalDecisions, 1)
+  assert.equal(windows.week.totalDecisions, 2)
+  assert.equal(windows.all.totalDecisions, 3)
+  assert.equal(windows.all.since, null, 'the all window has no lower bound')
+  assert.equal(typeof windows.day.since, 'string')
+})
+
+test('gate.windows: a record whose timestamp does not parse still counts in all, never in a time-bounded window', () => {
+  const home = makeHome()
+  writeGateLog(home, [gateDecisionRow('bad', { at: 'not a date' })])
+  const { windows } = run(home).gate
+  assert.equal(windows.all.totalDecisions, 1)
+  assert.equal(windows.day.totalDecisions, 0)
+  assert.equal(windows.week.totalDecisions, 0)
+})
+
+test('gate.windows.*.interventions: at most 15 rows, sorted by interventions, the leftovers folded into rest and the zero-intervention families into quiet', () => {
+  const home = makeHome()
+  const rows = []
+  // 18 intervening families: family-k gets k asks, so family-18 must lead.
+  for (let k = 1; k <= 18; k += 1) {
+    for (let i = 0; i < k; i += 1) rows.push(gateDecisionRow(`f${k}-${i}`, { commandFamily: `family-${k}`, verdict: 'ask', at: hoursAgo(1) }))
+  }
+  // A family that runs far more often but never intervenes must not take a row.
+  for (let i = 0; i < 200; i += 1) rows.push(gateDecisionRow(`grep-${i}`, { commandFamily: 'grep', verdict: 'allow', source: 'cache', at: hoursAgo(1) }))
+  rows.push(gateDecisionRow('ls-1', { commandFamily: 'ls', verdict: 'allow', source: 'cache', at: hoursAgo(1) }))
+  rows.push(gateDecisionRow('deny-1', { commandFamily: 'family-1', verdict: 'deny', at: hoursAgo(1) }))
+  writeGateLog(home, rows)
+
+  const { interventions } = run(home).gate.windows.all
+  assert.equal(interventions.rows.length, 15)
+  assert.equal(interventions.rows[0].commandFamily, 'family-18')
+  assert.equal(interventions.rows[0].ask, 18)
+  assert.equal(interventions.rows.some((r) => r.commandFamily === 'grep'), false)
+  for (let i = 1; i < interventions.rows.length; i += 1) {
+    const prev = interventions.rows[i - 1]
+    const cur = interventions.rows[i]
+    assert.ok(prev.ask + prev.deny >= cur.ask + cur.deny, 'rows must be sorted by interventions')
+  }
+  // family-1 (1 ask + 1 deny = 2), family-2 (2) and family-3 (3) are left over.
+  assert.deepEqual(interventions.rest, { families: 3, total: 1 + 1 + 2 + 3, ask: 1 + 2 + 3, deny: 1, notRun: 0 })
+  assert.deepEqual(interventions.quiet, { families: 2, total: 201 })
+})
+
+test('gate.windows.*.interventions: fewer than 16 intervening families leaves rest null, not a zero row', () => {
+  const home = makeHome()
+  writeGateLog(home, [gateDecisionRow('a', { commandFamily: 'terraform', verdict: 'ask' })])
+  const { interventions } = run(home).gate.windows.all
+  assert.equal(interventions.rows.length, 1)
+  assert.equal(interventions.rest, null)
+  assert.deepEqual(interventions.quiet, { families: 0, total: 0 })
+})
+
+test('gate.windows.*.interventions: notRun is joined onto each row from gate-approvals.jsonl, by the family the pending record already carries', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('a', { commandFamily: 'terraform', verdict: 'ask', at: hoursAgo(8) }),
+    gateDecisionRow('b', { commandFamily: 'terraform', verdict: 'ask', at: hoursAgo(8) }),
+  ])
+  writeApprovalsLog(home, [
+    { ...pendingRow('p1', hoursAgo(8)), commandFamily: 'terraform' },
+    { ...pendingRow('p2', hoursAgo(8)), commandFamily: 'terraform' },
+    { type: 'gate-outcome', toolUseId: 'p2', at: hoursAgo(8), outcome: 'approved' },
+  ])
+  const row = run(home).gate.windows.all.interventions.rows[0]
+  assert.deepEqual(row, { commandFamily: 'terraform', total: 2, ask: 2, deny: 0, notRun: 1 })
+})
+
+test('gate.windows.*.approvals: each window summarizes only the pending asks inside its own bound', () => {
+  const home = makeHome()
+  writeApprovalsLog(home, [
+    pendingRow('recent', hoursAgo(8)),
+    pendingRow('old', hoursAgo(24 * 10)),
+    { type: 'gate-outcome', toolUseId: 'old', at: hoursAgo(24 * 10), outcome: 'approved' },
+  ])
+  const { windows } = run(home).gate
+  assert.equal(windows.week.approvals.asked, 1)
+  assert.equal(windows.week.approvals.notRun, 1)
+  assert.equal(windows.week.approvals.approved, 0)
+  assert.equal(windows.all.approvals.asked, 2)
+  assert.equal(windows.all.approvals.approved, 1)
+  assert.ok('ceiling' in windows.all.approvals, 'the calibration card reads the ceiling evidence per window')
+})
+
+test('gate.windows.version: unavailable when no record carries a pluginVersion, never an empty window passed off as real', () => {
+  const home = makeHome()
+  writeGateLog(home, [gateDecisionRow('a'), gateDecisionRow('b')])
+  const { version } = run(home).gate.windows
+  assert.equal(version.available, false)
+  assert.equal(version.pluginVersion, null)
+  assert.equal(version.totalDecisions, 0)
+})
+
+test('gate.windows.version: the build of the most recent stamped record, counting only its records, bounded from its first one', () => {
+  const home = makeHome()
+  const firstNewAt = hoursAgo(20)
+  writeGateLog(home, [
+    gateDecisionRow('old-build', { at: hoursAgo(50), pluginVersion: '0.3.1', verdict: 'ask' }),
+    gateDecisionRow('first-new', { at: firstNewAt, pluginVersion: '0.4.0', verdict: 'deny' }),
+    gateDecisionRow('legacy', { at: hoursAgo(10) }),
+    gateDecisionRow('last-new', { at: hoursAgo(1), pluginVersion: '0.4.0', verdict: 'allow' }),
+  ])
+  writeApprovalsLog(home, [
+    pendingRow('before', hoursAgo(30)),
+    pendingRow('after', hoursAgo(15)),
+  ])
+  const { version } = run(home).gate.windows
+  assert.equal(version.available, true)
+  assert.equal(version.pluginVersion, '0.4.0')
+  assert.equal(version.totalDecisions, 2)
+  assert.deepEqual(version.byVerdict, { allow: 1, ask: 0, deny: 1 })
+  assert.equal(version.since, firstNewAt)
+  // Pending asks carry no build, so they are bounded by the first decision the build wrote.
+  assert.equal(version.approvals.asked, 1)
+})
+
+test('gate.health: the last successful Jev call and the unanswered calls since it, ignoring local-rule and cache decisions in between', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('j1', { source: 'jev', verdict: 'allow', latencyMs: 400, at: '2026-09-24T10:00:00.000Z' }),
+    gateDecisionRow('j2', { source: 'jev', verdict: 'allow', latencyMs: 410, at: '2026-09-24T11:00:00.000Z' }),
+    gateDecisionRow('n1', { source: 'none', verdict: 'allow', at: '2026-09-24T11:05:00.000Z' }),
+    gateDecisionRow('c1', { source: 'cache', verdict: 'allow', at: '2026-09-24T11:06:00.000Z' }),
+    gateDecisionRow('n2', { source: 'none', verdict: 'allow', at: '2026-09-24T11:07:00.000Z' }),
+  ])
+  const { health } = run(home).gate
+  assert.deepEqual(health, {
+    lastJevAt: '2026-09-24T11:00:00.000Z',
+    consecutiveFailures: 2,
+    lastFailureAt: '2026-09-24T11:07:00.000Z',
+  })
+})
+
+test('gate.health: by timestamp, not file order -- a Jev answer written out of order still ends the failure streak', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('n1', { source: 'none', verdict: 'allow', at: '2026-09-24T11:05:00.000Z' }),
+    gateDecisionRow('j1', { source: 'jev', verdict: 'allow', latencyMs: 400, at: '2026-09-24T11:10:00.000Z' }),
+    gateDecisionRow('n0', { source: 'none', verdict: 'allow', at: '2026-09-24T11:00:00.000Z' }),
+  ])
+  const { health } = run(home).gate
+  assert.equal(health.lastJevAt, '2026-09-24T11:10:00.000Z')
+  assert.equal(health.consecutiveFailures, 0)
+  assert.equal(health.lastFailureAt, '2026-09-24T11:05:00.000Z')
+})
+
+test('gate.windows and gate.health on an empty log: every window present and zeroed, nothing undefined for the board to print', () => {
+  const home = makeHome()
+  const { gate } = run(home)
+  for (const key of ['version', 'day', 'week', 'all']) {
+    const w = gate.windows[key]
+    assert.equal(w.totalDecisions, 0, key)
+    assert.deepEqual(w.interventions, { rows: [], rest: null, quiet: { families: 0, total: 0 } }, key)
+    assert.equal(w.approvals.asked, 0, key)
+    assert.equal(w.jevLatency.medianMs, null, key)
+  }
+  assert.deepEqual(gate.health, { lastJevAt: null, consecutiveFailures: 0, lastFailureAt: null })
+})

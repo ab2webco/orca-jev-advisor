@@ -55,25 +55,90 @@ record does not carry one.
 - Both themes, 1440/768/390/320, every image read.
 
 ## Tasks
-- [ ] T1 manual recursive copy replacing `fs.cp`, with the real error detail
-      carried through to the panel.
-- [ ] T2 `pluginVersion` on each gate decision record.
-- [ ] T3 p95 beside the median in the latency fold.
-- [ ] T4 per-family `ask`/`deny`/`notRun`, and a count of families with no
-      interventions.
+
+Reconciled against the code on 2026-09-24 (base `69e525e`) before any
+source write. Route per task: **inline** unless noted; the work is one
+writer on a sequential set of files, and every file was already read in
+full during reconciliation (no mapping or writer trigger left to delegate).
+
+- [x] T1 manual recursive copy replacing `fs.cp`, with the real error detail
+      carried through to the panel. **Already shipped** in `7be24c3`, squashed
+      into `7be810a` (#14): `adapters/orca/install-claude-integration.mjs:549`
+      is the manual walk; no `fs.cp`/`symlink` call remains in that file;
+      `modCopyDetail` at `:719`. Not redone.
+- [~] T2 `pluginVersion` on each gate decision record. **Half shipped.**
+      `GateDecisionRecord.pluginVersion` (`src/core/gate_measurement.ts:48`),
+      the reader guard (`read-measurements.mjs:123`) and the fold
+      (`gate_stats.ts` `byPluginVersion`) exist, but the writer never stamps
+      it: `adapters/claude/gate-bash.ts:574` calls `buildGateDecisionRecord`
+      without `pluginVersion`, and 0 of 3,602 rows in the author's real
+      `gate-decisions.jsonl` carry the key. `gate-bash.ts` belongs to PR 2
+      (gate-approval-learning); coordinator notified (`msg_3479f1f617d3`).
+      This PR does not touch it and does not change `GateDecisionRecord`.
+      Until the writer stamps, the board's "current version" window is
+      rendered as unavailable with the reason, never as an empty window.
+- [x] T3 p95 beside the median. **Data already shipped** (`gate_stats.ts`
+      `jevLatency.p95Ms`, test at `read-measurements.test.mjs:216`). The
+      board never rendered it; rendering is part of T7.
+- [x] T4 per-family `ask`/`deny`/`notRun`, and a count of families with no
+      interventions. **Already shipped**: `GateCommandFamilyStat.interventions`,
+      `familiesWithNoInterventions`, `gate.notRunByCommandFamily` (tests at
+      `read-measurements.test.mjs:187,243`).
+- [ ] T10 reader: per-window gate aggregates (`version` / `day` / `week` /
+      `all`), each with its interventions table (<=15 rows sorted by
+      interventions, a `rest` aggregate, a `quiet` "no interventions"
+      aggregate, notRun joined per family) and its own approvals summary;
+      plus `gate.health` (last successful Jev call, consecutive failures).
+      Slice 3a.
+- [ ] T11 `panel_values.mjs`: board helpers (default window, relative age,
+      live-entry label) with tests, hand-copied into `board.html`. Slice 3b.
 - [ ] T5 board: interventions table (<=15 rows, sorted by interventions, plus
-      a "N families with no interventions" row).
-- [ ] T6 board: live status with name/branch and the UUID only in a tooltip.
-- [ ] T7 board: a status strip — last successful Jev call, consecutive
-      failures, unjudged count.
-- [ ] T8 board: a window selector (current version / 24h / 7d / all).
-- [ ] T9 empty-log state verified and photographed.
+      a "N families with no interventions" row and a "rest" row, notRun
+      column). Slice 3b.
+- [ ] T6 board: live status with name/branch chips and the UUID only in a
+      tooltip. Slice 3b.
+- [ ] T7 board: a status strip -- last successful Jev call, consecutive
+      failures, unjudged (`source: "none"`) count, p50/p95. Slice 3b.
+- [ ] T8 board: a window selector (current version / 24h / 7d / all), and
+      the four-question order (status -> toll -> interventions ->
+      calibration, recents/live below). Slice 3b.
+- [ ] T9 empty-log state verified and photographed (new `empty` harness
+      scenario: the worker ran, every log is empty). Slice 3b.
+
+## Scope added by this PR
+- `scripts/screenshot-panels.mjs`, `scripts/fixture_shape.test.mjs` -- the
+  fixtures must carry the new `windows`/`health` shape or every board
+  screenshot photographs a panel nobody will see (the fixture has drifted
+  four times already). Not in the dispatch's file list; recorded as a
+  necessary out-of-list write.
+
+## Follow-ups (found, not fixed here)
+- `commandFamily()` still yields filename families for an env-assignment
+  first token: `L=~/.cache/x/gate-decisions.jsonl; wc -l $L` is recorded
+  under family `gate-decisions.jsonl` (seen in the real log). The P0 fix
+  takes the basename of any token with a `/`; a `NAME=value` token should
+  be skipped or fold to `other`. `src/core/gate_measurement.ts`.
+- The brief's status strip also names "gate active" and "key present";
+  both live in storage keys `config.html` already reads
+  (`claudeIntegrationStatus`, `secretStatus`). Not in this dispatch.
 
 ## Checks
-`npm run check`, plus reading every screenshot.
+`npm test` (baseline 762), `npm run check` (tests + panel spec + shots),
+plus reading every board screenshot: 1440/768/390/320, both themes, and the
+empty-log scenario.
 
 ## TDD
-Strict TDD (source: user CLAUDE.md). Runner `node --test --experimental-strip-types`.
+Strict TDD (source: user CLAUDE.md, odd/CHECKPOINT.md). Runner `npm test`
+(`node --test --experimental-strip-types`).
 
 ## Delivery
-`ask-on-risk`. T1-T4 delegated writers; T5-T9 inline.
+`ask-on-risk`; forecast ~1,100 authored lines, so the coordinator chose
+**stacked-to-main**:
+- **3a** (targets `main`): T10 -- reader + tests + this document.
+- **3b** (targets 3a's branch): T11, T5-T9 -- helpers, board, fixtures. If
+  3b is still well over ~400 lines, fixtures/screenshot scripts get their
+  own slice.
+
+## Progress
+| Task | Route | Commit | Checks | Review |
+| --- | --- | --- | --- | --- |
