@@ -142,6 +142,14 @@ function hostBridge (storage) {
         }
       } else if (key === 'policySeedDismissResult' && window.__written.policySeedDismissRequest) {
         value = { ok: true, ...storage.__policySeedDismissResult, id: window.__written.policySeedDismissRequest.id }
+      } else if (key === 'modelsSeedResult' && window.__written.modelsSeedRequest) {
+        // odd/tasks/model-reclassification.md T7: models-worker.mjs answers
+        // one request/result channel for both apply and dismiss (unlike the
+        // two separate policy channels above), so this needs only one branch.
+        value = {
+          ok: true, replaced: 0, added: 0, reason: null, detail: null,
+          ...storage.__modelsSeedResult, id: window.__written.modelsSeedRequest.id
+        }
       } else {
         value = storage[key] ?? null
       }
@@ -435,3 +443,529 @@ for (const locale of ['en', 'es']) {
     })
   }
 }
+
+// ---------------------------------------------------------------------------
+// odd/tasks/model-reclassification.md T7 -- the Models section: the ladder
+// editor, the empty-catalog state, the baseline notice and the measurement
+// readout. Same style as the Team policies checks above: this asserts what
+// the page SAYS, not just that storage holds the right rows.
+// ---------------------------------------------------------------------------
+
+function modelRow (overrides) {
+  return {
+    id: 'm-x', provider: 'anthropic', label: 'Model X', rank: null,
+    agentModel: 'sonnet', source: '', available: false, ...overrides
+  }
+}
+
+test('the Models ladder renders ranked entries before unranked ones, in rank order', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'b', label: 'B', rank: 2, available: true }),
+    modelRow({ id: 'u', label: 'U', rank: null }),
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true, source: 'https://example.test/a' }),
+  ]
+  const { browser, page, errors } = await openPanel({ models, modelsConfig: { active: false } })
+  try {
+    const names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['A (a)', 'B (b)', 'U (u)'])
+    const linkHref = await page.evaluate(() => {
+      const link = document.querySelector('#models-ladder-list a[href]')
+      return link ? { href: link.getAttribute('href'), target: link.target, rel: link.rel } : null
+    })
+    assert.deepEqual(linkHref, { href: 'https://example.test/a', target: '_blank', rel: 'noopener' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an empty model catalog says so in words and still offers the add form', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ models: [] })
+  try {
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('models-empty-catalog-hint')).display !== 'none')
+    assert.ok(visible, 'the empty-catalog hint did not render for an empty catalog')
+    const hasAddForm = await page.evaluate(() => !!document.getElementById('models-add-row'))
+    assert.ok(hasAddForm, 'the add-model form must stay available even with an empty catalog')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('adding a model with a duplicate id is refused, and a valid one lands unranked and unavailable', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'existing', label: 'Existing', rank: 1, available: true })]
+  const { browser, page } = await openPanel({ models })
+  try {
+    await page.fill('#models-add-id', 'existing')
+    await page.fill('#models-add-label', 'Existing again')
+    await page.fill('#models-add-provider', 'anthropic')
+    await page.fill('#models-add-agentmodel', 'sonnet')
+    await page.click('#models-add-row')
+    const dupSaid = await page.evaluate(() => document.getElementById('models-add-said').innerText)
+    assert.match(dupSaid, /already exists|Ya existe/i)
+
+    await page.fill('#models-add-id', 'new-model')
+    await page.fill('#models-add-label', 'New Model')
+    await page.fill('#models-add-provider', 'anthropic')
+    await page.fill('#models-add-agentmodel', 'haiku')
+    await page.click('#models-add-row')
+    const names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.ok(names.includes('New Model (new-model)'), `new model not rendered: ${JSON.stringify(names)}`)
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.ok(badges.some((b) => /unranked|sin clasificar/i.test(b)), 'a newly added model must render as unranked')
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// "Rank this" is the only way an unranked entry enters the ranked
+// ladder, appended at the bottom without demoting anyone; every rank-
+// changing action renumbers 1..n with no gaps. See
+// config_html_models.test.mjs for the pure-function coverage of
+// modelsReorder/modelsRankThis/modelsMarkUnranked/modelsRemove/
+// modelsRenumber -- these check the same behavior through the real buttons.
+// ---------------------------------------------------------------------------
+
+test('the "Rank this" action grows the ladder without demoting anyone, and renumbers 1..n', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+    modelRow({ id: 'b', label: 'B', rank: 2, available: true }),
+    modelRow({ id: 'u', label: 'U', rank: null }),
+  ]
+  const { browser, page, errors } = await openPanel({ models })
+  try {
+    const entries = page.locator('#models-ladder-list .entry')
+    await entries.nth(2).getByRole('button', { name: /rank this|clasificar/i }).click()
+    const names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.deepEqual(names, ['A (a)', 'B (b)', 'U (u)'], '"Rank this" must not reorder the display')
+    assert.ok(badges[0].includes('1') && badges[1].includes('2') && badges[2].includes('3'),
+      `ranks after "Rank this" are not 1..3: ${JSON.stringify(badges)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('adding a model then ranking it grows the ladder from N to N+1 with ranks 1..N+1', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'a', label: 'A', rank: 1, available: true })]
+  const { browser, page } = await openPanel({ models })
+  try {
+    await page.fill('#models-add-id', 'new-model')
+    await page.fill('#models-add-label', 'New Model')
+    await page.fill('#models-add-provider', 'anthropic')
+    await page.fill('#models-add-agentmodel', 'haiku')
+    await page.click('#models-add-row')
+    const entries = page.locator('#models-ladder-list .entry')
+    await entries.nth(1).getByRole('button', { name: /rank this|clasificar/i }).click()
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.equal(badges.length, 2)
+    assert.ok(badges[0].includes('1') && badges[1].includes('2'), `ranks not 1..2: ${JSON.stringify(badges)}`)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an unranked entry has no move up/down of its own -- only "Rank this" gets it into the ladder', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+    modelRow({ id: 'u', label: 'U', rank: null }),
+  ]
+  const { browser, page } = await openPanel({ models })
+  try {
+    const unrankedEntry = page.locator('#models-ladder-list .entry').nth(1)
+    const upDisabled = await unrankedEntry.getByRole('button', { name: /move up|subir/i }).isDisabled()
+    const downDisabled = await unrankedEntry.getByRole('button', { name: /move down|bajar/i }).isDisabled()
+    assert.ok(upDisabled, 'an unranked row\'s move-up button must be disabled')
+    assert.ok(downDisabled, 'an unranked row\'s move-down button must be disabled')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('move down swaps two ranked rows, and mark-unranked/remove renumber the rest with no gaps', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+    modelRow({ id: 'b', label: 'B', rank: 2, available: true }),
+    modelRow({ id: 'c', label: 'C', rank: 3, available: true }),
+  ]
+  const { browser, page } = await openPanel({ models })
+  try {
+    const entries = () => page.locator('#models-ladder-list .entry')
+    await entries().nth(0).getByRole('button', { name: /move down|bajar/i }).click()
+    let names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['B (b)', 'A (a)', 'C (c)'])
+
+    await entries().nth(0).getByRole('button', { name: /mark unranked|marcar sin clasificar/i }).click()
+    let badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['A (a)', 'C (c)', 'B (b)'], 'marking unranked must not renumber the entries around it out of order')
+    assert.ok(badges[0].includes('1') && badges[1].includes('2'), `remaining ranks not renumbered: ${JSON.stringify(badges)}`)
+
+    await entries().nth(0).getByRole('button', { name: /^remove$|^quitar$/i }).click()
+    badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['C (c)', 'B (b)'])
+    assert.ok(badges[0].includes('1'), `remaining rank not renumbered after remove: ${JSON.stringify(badges)}`)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the model baseline notice stays hidden with no status, and shows the real counts when due', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const hidden = await openPanel({ models: [] })
+  try {
+    const visible = await hidden.page.evaluate(() => getComputedStyle(document.getElementById('models-seed-notice')).display !== 'none')
+    assert.equal(visible, false)
+  } finally {
+    await hidden.browser.close()
+  }
+
+  const status = {
+    due: true, added: 1, differing: 1, shippedVersion: 2,
+    items: [
+      { id: 'new-id', label: 'New Model', kind: 'added', fields: [] },
+      { id: 'changed-id', label: 'Changed Model', kind: 'changed', fields: ['label', 'rank'] },
+    ],
+    checkedAt: new Date().toISOString(),
+  }
+  const shown = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    const visible = await shown.page.evaluate(() => getComputedStyle(document.getElementById('models-seed-notice')).display !== 'none')
+    assert.ok(visible, 'a due status with real counts must render the notice')
+    const text = await shown.page.evaluate(() => document.getElementById('models-seed-notice-text').innerText)
+    assert.ok(text.includes('1'), `notice text is missing the real counts: ${text}`)
+    assert.ok(text.includes('2'), `notice text is missing the shipped version: ${text}`)
+    const itemLabels = await shown.page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-seed-notice-items .checkbox-label')).map((el) => el.textContent))
+    assert.ok(itemLabels.some((l) => l.includes('new-id')))
+    assert.ok(itemLabels.some((l) => l.includes('changed-id') && l.includes('label')))
+    assert.deepEqual(shown.errors, [])
+  } finally {
+    await shown.browser.close()
+  }
+})
+
+test('clicking the model notice\'s apply button sends only the ticked ids, none preselected', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    const preTicked = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-seed-notice-items input[type=checkbox]')).map((b) => b.checked))
+    assert.deepEqual(preTicked, [false], 'the notice preselected an item nobody ticked')
+
+    await page.click('#models-seed-notice-apply')
+    const noneSaid = await page.evaluate(() => document.getElementById('models-seed-notice-said').innerText)
+    assert.match(noneSaid, /nothing was ticked|no marcaste ninguno/i)
+
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelsSeedRequest)
+    assert.equal(request.action, 'apply')
+    assert.deepEqual(request.acceptedIds, ['new-id'])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('clicking the model notice\'s dismiss button sends a dismiss request with no accepted ids', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    await page.click('#models-seed-notice-dismiss')
+    await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelsSeedRequest)
+    assert.equal(request.action, 'dismiss')
+    assert.deepEqual(request.acceptedIds, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Apply/Dismiss stay disabled from the click until the matching
+// result (or the timeout) arrives, so a second click can never replace an
+// in-flight request. The bridge answers `modelsSeedResult` synchronously
+// inside the same tick `modelsSeedRequest` is written, so a plain click+
+// assert would pass by luck; these hold the request with a property
+// override on `window.__written` until the assertion has run, then release
+// it so the panel's own poll picks it up.
+// ---------------------------------------------------------------------------
+
+async function holdSeedRequest (page) {
+  await page.evaluate(() => {
+    window.__heldSeedRequest = undefined
+    Object.defineProperty(window.__written, 'modelsSeedRequest', {
+      configurable: true,
+      set (v) { window.__heldSeedRequest = v },
+      get () { return undefined }
+    })
+  })
+}
+
+async function releaseSeedRequest (page) {
+  await page.evaluate(() => {
+    delete window.__written.modelsSeedRequest
+    window.__written.modelsSeedRequest = window.__heldSeedRequest
+  })
+}
+
+test('Apply and Dismiss are both disabled while an apply request is in flight, then re-enabled', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    await holdSeedRequest(page)
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => window.__heldSeedRequest !== undefined, undefined, { timeout: 25000 })
+
+    const disabledInFlight = await page.evaluate(() => ({
+      apply: document.getElementById('models-seed-notice-apply').disabled,
+      dismiss: document.getElementById('models-seed-notice-dismiss').disabled
+    }))
+    assert.deepEqual(disabledInFlight, { apply: true, dismiss: true },
+      'both buttons must be disabled while the apply request is in flight')
+
+    await releaseSeedRequest(page)
+    await page.waitForFunction(() => {
+      const applyBtn = document.getElementById('models-seed-notice-apply')
+      const dismissBtn = document.getElementById('models-seed-notice-dismiss')
+      return !applyBtn.disabled && !dismissBtn.disabled
+    }, undefined, { timeout: 25000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+test('Apply and Dismiss are both disabled while a dismiss request is in flight, then re-enabled', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    await holdSeedRequest(page)
+    await page.click('#models-seed-notice-dismiss')
+    await page.waitForFunction(() => window.__heldSeedRequest !== undefined, undefined, { timeout: 25000 })
+
+    const disabledInFlight = await page.evaluate(() => ({
+      apply: document.getElementById('models-seed-notice-apply').disabled,
+      dismiss: document.getElementById('models-seed-notice-dismiss').disabled
+    }))
+    assert.deepEqual(disabledInFlight, { apply: true, dismiss: true },
+      'both buttons must be disabled while the dismiss request is in flight')
+
+    await releaseSeedRequest(page)
+    await page.waitForFunction(() => {
+      const applyBtn = document.getElementById('models-seed-notice-apply')
+      const dismissBtn = document.getElementById('models-seed-notice-dismiss')
+      return !applyBtn.disabled && !dismissBtn.disabled
+    }, undefined, { timeout: 25000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// A dirty (unsaved) ladder blocks Apply instead of letting a
+// successful apply silently overwrite it with a fresh storage read.
+// ---------------------------------------------------------------------------
+
+test('a dirty ladder blocks Apply and shows the inline message, without sending a request -- Save unblocks it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'a', label: 'A', rank: null })]
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models, modelsSeedNotice: status })
+  try {
+    await page.locator('#models-ladder-list .entry').nth(0)
+      .getByRole('button', { name: /rank this|clasificar/i }).click()
+
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('models-seed-notice-dirty')).display !== 'none',
+      undefined, { timeout: 5000 }
+    )
+    const writtenWhileDirty = await page.evaluate(() => window.__written.modelsSeedRequest)
+    assert.equal(writtenWhileDirty, undefined, 'a dirty ladder must not send an apply request')
+
+    await page.click('#models-save-ladder')
+    await page.waitForFunction(
+      () => /saved|guardado/i.test(document.getElementById('models-ladder-said').innerText),
+      undefined, { timeout: 25000 }
+    )
+
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelsSeedRequest)
+    assert.equal(request.action, 'apply')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('"Discard my edits" reloads the ladder from storage, clears the dirty flag, and unblocks Apply', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'a', label: 'A', rank: null })]
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models, modelsSeedNotice: status })
+  try {
+    await page.locator('#models-ladder-list .entry').nth(0)
+      .getByRole('button', { name: /rank this|clasificar/i }).click()
+
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('models-seed-notice-dirty')).display !== 'none',
+      undefined, { timeout: 5000 }
+    )
+
+    await page.click('#models-seed-notice-discard')
+    // The dirty block hides synchronously on click, but the actual reload
+    // is an async storage read -- wait for that to finish (the "discarded"
+    // confirmation only appears after modelsRenderLadder runs) instead of
+    // racing the badge check against it.
+    await page.waitForFunction(
+      () => /discarded|descartado/i.test(document.getElementById('models-ladder-said').innerText),
+      undefined, { timeout: 25000 }
+    )
+    const dirtyVisible = await page.evaluate(() =>
+      getComputedStyle(document.getElementById('models-seed-notice-dirty')).display !== 'none')
+    assert.equal(dirtyVisible, false, 'the dirty block must stay hidden once edits are discarded')
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.ok(badges.every((b) => /unranked|sin clasificar/i.test(b)),
+      `discard must reload the ladder from storage, undoing the "Rank this" edit: ${JSON.stringify(badges)}`)
+
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the measurement readout shows an honest empty state with no calls measured, never a zeros table', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ models: [] })
+  try {
+    const text = await page.evaluate(() => document.getElementById('models-measurements').innerText)
+    assert.match(text, /no subagent call has been measured|no se ha medido ninguna/i)
+    assert.doesNotMatch(text, /undefined|NaN|\{\{/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a real measurement summary renders its real counts, with a dash (not 0%) for a null agreement rate', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const summary = {
+    decisions: 5, judged: 4, unjudged: 1, compared: 0, up: 0, down: 0, agree: 0,
+    agreementRate: null, applied: 0, outcomes: 0, comparable: 0, matches: 0, matchRate: null,
+    readiness: { ready: false, comparableShortfall: 1000, matchRateMet: null, reason: 'not-enough-samples' },
+  }
+  const { browser, page, errors } = await openPanel({ models: [], modelMeasurements: { ok: true, summary, checkedAt: new Date().toISOString() } })
+  try {
+    const text = await page.evaluate(() => document.getElementById('models-measurements').innerText)
+    assert.ok(text.includes('5'), `decisions count missing: ${text}`)
+    assert.ok(text.includes('4'), `judged count missing: ${text}`)
+    assert.ok(/not enough comparable|no hay suficientes|todavía sin casos/i.test(text), `null agreement rate was not rendered as unknown: ${text}`)
+    assert.doesNotMatch(text, /\bNaN\b|\{\{/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a failed measurement readout (ok:false) is reported as unavailable, never as "no calls measured yet"', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ models: [], modelMeasurements: { ok: false, reason: 'exception', detail: 'boom', checkedAt: new Date().toISOString() } })
+  try {
+    const text = await page.evaluate(() => document.getElementById('models-measurements').innerText)
+    assert.doesNotMatch(text, /no subagent call has been measured|no se ha medido ninguna/i, 'a failed readout must not read as an honest empty state')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every models.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('models.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('models.') === 0)
+    const missingInEn = esKeys.filter((key) => enKeys.indexOf(key) === -1)
+    const missingInEs = enKeys.filter((key) => esKeys.indexOf(key) === -1)
+    assert.deepEqual(missingInEn, [], `es-only models.* keys missing from en: ${missingInEn.join(', ')}`)
+    assert.deepEqual(missingInEs, [], `en-only models.* keys missing from es: ${missingInEs.join(', ')}`)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the Agent model hooks line renders only when the field exists, and never as "undefined"', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const withField = await openPanel({
+    claudeIntegrationStatus: {
+      ok: true,
+      hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+      agentModelHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+      env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+      secretMirror: { ok: true, exists: false },
+      checkedAt: new Date().toISOString(),
+    },
+  })
+  try {
+    const lines = await withField.page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+    assert.ok(lines.some((line) => /agent model hooks/i.test(line)), `no Agent model hooks line rendered: ${JSON.stringify(lines)}`)
+    assert.ok(!lines.some((line) => /undefined|\{\{/.test(line)), `an integration line leaked a missing value: ${JSON.stringify(lines)}`)
+    assert.deepEqual(withField.errors, [])
+  } finally {
+    await withField.browser.close()
+  }
+
+  const withoutField = await openPanel({
+    claudeIntegrationStatus: {
+      ok: true,
+      hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+      env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+      secretMirror: { ok: true, exists: false },
+      checkedAt: new Date().toISOString(),
+    },
+  })
+  try {
+    const lines = await withoutField.page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+    assert.ok(!lines.some((line) => /agent model hooks/i.test(line)), `an Agent model hooks line rendered with no status field: ${JSON.stringify(lines)}`)
+    assert.deepEqual(withoutField.errors, [])
+  } finally {
+    await withoutField.browser.close()
+  }
+})
