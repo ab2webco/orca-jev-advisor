@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
+import { discardsUncommittedWork, hasUnbalancedQuoting, someSegmentMatches, splitOnCommandSeparators, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
 
 // Each of these overwrites the working tree from the index or a commit, and
 // uncommitted changes to those paths are gone: no reflog, no stash, nothing
@@ -52,6 +52,28 @@ const DISCARDS: readonly string[] = [
   "timeout 60 git checkout -- .",
   "doas git restore .",
   "sudo -u root bash -c \"git restore .\"",
+  // odd/tasks/release-0.5.1.md T8 (JEVADV-24): reset/clean used to be
+  // matched by a separate, quote-blind regex in gate-bash.ts. Folding them
+  // in here gives them the same tokenizer, wrapper/eval/-c recursion and
+  // command-position discipline checkout/restore already have.
+  "git reset --hard",
+  "git reset --hard HEAD~3",
+  // Not the OLD regex's literal form (it required `--hard` immediately
+  // after `reset`), but still a hard reset -- the args, not their order,
+  // decide it, same as checkoutDiscards already does.
+  "git reset --quiet --hard",
+  "git clean -fd",
+  "git clean --force",
+  "bash -c \"git reset --hard\"",
+  "eval \"git reset --hard\"",
+  "env A=1 git reset --hard",
+  "git -C ../repo reset --hard",
+  // A bare `--` with nothing after it is what `xargs` leaves in the static
+  // text -- the real pathspecs only exist once xargs appends them at
+  // runtime, so this is the one place the old checkoutDiscards' "needs a
+  // pathspec after --" requirement had to give: nothing legitimate is
+  // spelled this way.
+  "find . | xargs git checkout --",
 ];
 
 // None of these touches uncommitted work in the working tree.
@@ -89,6 +111,13 @@ const KEEPS: readonly string[] = [
   "git checkout -b feature origin/main",
   "sudo -u root git commit -m \"git restore src/app.ts\"",
   "timeout 60 npm test",
+  // --soft/--mixed (the default) never touch the working tree, and a dry
+  // run never touches anything at all.
+  "git reset",
+  "git reset --soft HEAD~1",
+  "git reset --mixed",
+  "git clean -n",
+  "git clean --dry-run",
 ];
 
 for (const command of DISCARDS) {
@@ -187,4 +216,58 @@ test("startsWithGitDiscard only looks at the start of one segment", () => {
   assert.equal(startsWithGitDiscard("bash -c \"git restore .\""), false);
   // Same tokenizer as the deny tier: a quoted whole-tree pathspec is still one.
   assert.equal(startsWithGitDiscard("git checkout \".\""), true);
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24): forcePush/pushProtected are
+// someSegmentMatches' only `scope: 'segment'` callers (see gate-bash.ts's
+// NEVER_SILENTLY). Observed live: a `printf` whose double-quoted argument
+// merely SPELLED OUT a destructive git command was refused as if that
+// command had run. Quoted DATA -- an argument with whitespace in it, like a
+// commit message or a PR body -- must now be opaque to the pattern; a real
+// command a shell would execute must stay exactly as visible as before.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: a quoted sentence naming the pattern is not a match -- it is data, not a run", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('gh pr comment 1 --body "we avoided git push --force"', forcePush), false);
+  assert.equal(someSegmentMatches('git commit -m "build && test git push --force later"', forcePush), false);
+});
+
+test("someSegmentMatches: a quoted PROTECTED BRANCH sentence is not a match either", () => {
+  const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
+  assert.equal(someSegmentMatches('gh pr comment 1 --body "please do not push straight to main"', pushProtected), false);
+});
+
+test("someSegmentMatches: a single quoted WORD still matches -- it is one word, never a sentence", () => {
+  // `git push origin "main"` is still a push to main: quoting a bare branch
+  // name or flag is ordinary shell usage, not descriptive text, and no
+  // `\s`-spanning pattern can ever be spelled with one word alone.
+  const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('git push origin "main"', pushProtected), true);
+  assert.equal(someSegmentMatches('git push origin "-f"', forcePush), true);
+});
+
+test("someSegmentMatches: the script argument of bash -c / sh -c / eval still matches, quoted or not", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('bash -c "git push --force"', forcePush), true);
+  assert.equal(someSegmentMatches('sh -c "git push --force origin main"', forcePush), true);
+  assert.equal(someSegmentMatches('eval "git push --force"', forcePush), true);
+  // Wrapping in a subshell must not defeat the -c/eval recognition.
+  assert.equal(someSegmentMatches("(bash -c 'git push --force')", forcePush), true);
+});
+
+test("someSegmentMatches: an unbalanced quote fails CLOSED onto the raw segment text", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(hasUnbalancedQuoting('git commit -m "git push --force'), true);
+  // Today's (quote-blind) behaviour: the raw text still matches.
+  assert.equal(someSegmentMatches('git commit -m "git push --force', forcePush), true);
+  assert.equal(hasUnbalancedQuoting("git push --force origin main"), false);
+});
+
+test("someSegmentMatches: substitution and redirection tests above still hold with the new sanitizer", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches("git push $(echo x; echo --force) origin", forcePush), true);
+  assert.equal(someSegmentMatches("git push 2>&1 --force origin", forcePush), true);
 });

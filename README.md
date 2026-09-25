@@ -133,8 +133,7 @@ such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
 | Force push (`--force`/`-f`) | segment | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). |
 | Push to a protected branch (`main`/`master`/`production`) | segment | Same spanning-quantifier reason. |
 | `rm -rf /` (or `~`/`$HOME`) | command | No spanning quantifier; matching the whole command is already precise. |
-| `git reset --hard` / `git clean -f` | command | Same — no spanning quantifier. |
-| Discarding uncommitted work (`git checkout`/`git restore`) | command | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c` and `eval` bodies first; pre-splitting again would break that extraction. |
+| Discarding uncommitted work (`git checkout`/`git restore`/`git reset --hard`/`git clean -f`) | command | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c` and `eval` bodies first; pre-splitting again would break that extraction. `git reset --hard`/`git clean -f` used to be their own, separate, quote-blind regex — folded in here so all four subcommands get the same tokenizer and command-position discipline. That regex survives only as this rule's own fail-closed fallback for the one input its tokenizer cannot parse with confidence (an unbalanced quote). |
 | `DROP`/`TRUNCATE TABLE`/`DATABASE`/`SCHEMA` | command | No spanning quantifier. |
 | `kubectl delete`/`drain` | command | No spanning quantifier. |
 | `terraform`/`tofu apply` | command | No spanning quantifier. |
@@ -144,6 +143,18 @@ such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
 A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
 exactly as a shell would read it.
+
+Within a segment, the force-push and protected-branch rules also read a
+quoted argument the way a shell does: a *single quoted word* (`"main"`,
+`"-f"`) is still an ordinary argument and counts, but a quoted argument
+*with whitespace in it* — a commit message, a PR body — is data a shell
+never runs, and is opaque to the pattern. A `$(...)`/backtick substitution
+stays visible regardless of quoting (its source text still becomes part of
+the enclosing command's own arguments at runtime), and so does the script
+argument of `bash -c`/`sh -c`/`zsh -c`/`eval`, wherever it sits — a real
+command a shell will run. This closes a live false positive: a `printf`
+whose double-quoted text merely spelled out a hard reset was refused as if
+that command had run.
 
 ## Models
 

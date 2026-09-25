@@ -41,7 +41,7 @@ const DANGEROUS_PIPE_FAMILY = 'curl | shell'
  * rest of a compound command through unseen.
  */
 const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
-  /^(ls|pwd|cat|head|tail|wc|which|echo|date|whoami|env)\b/,
+  /^(ls|pwd|cat|head|tail|wc|which|echo|date|whoami)\b/,
   // Bare `cd`: changing directory alone can't be dangerous, whatever the target.
   /^cd(\s|$)/,
   /^(jq|rg|grep|sed -n|awk)\b/,
@@ -65,6 +65,20 @@ const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprin
 
 function isSafeFindSegment(segment: string): boolean {
   return /^find\b/.test(segment) && !FIND_DANGEROUS_FLAGS.test(segment)
+}
+
+/**
+ * `env` with nothing but flags after it only prints the environment; `env
+ * NAME=value cmd` or `env cmd` RUNS `cmd` with a modified environment --
+ * the leading word alone cannot tell these apart, so a generic safe-verb
+ * pattern (odd/tasks/release-0.5.1.md T8, JEVADV-24) waved `env A=1 git
+ * reset --hard` through as obviously safe before anything -- the deny tier
+ * included -- ever saw it. Safe only when NOTHING follows `env` except
+ * short-flag clusters (`-i`, `-u NAME`'s flag itself, etc.); an assignment
+ * or a bare command word means something is about to run.
+ */
+function isSafeEnvSegment(segment: string): boolean {
+  return /^env(\s+-[A-Za-z-]+)*\s*$/.test(segment)
 }
 
 /**
@@ -144,6 +158,7 @@ function isSafeSegment(segment: string): boolean {
   if (hasCommandSubstitution(segment)) return false
   if (hasRedirection(segment)) return false
   if (isSafeFindSegment(segment)) return true
+  if (isSafeEnvSegment(segment)) return true
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
 }
 

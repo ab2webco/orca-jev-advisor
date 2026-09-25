@@ -299,6 +299,14 @@ const SEGMENT_SCOPED_NOT_DENIED = [
   // Single segment: the quoted && never splits it, so `git push`/`--force`
   // never even appear as separate command words here.
   'git commit -m "build && test"',
+  // odd/tasks/release-0.5.1.md T8 (JEVADV-24): a quoted SENTENCE merely
+  // naming the pattern is data a shell never runs, not a command -- the
+  // exact live false positive this task exists to close (observed with a
+  // `printf` whose quoted text spelled out `git reset --hard`; `gh pr
+  // comment` reproduces the same shape for forcePush/pushProtected without
+  // any of `mentionsRatherThanRuns`' verbs saving it first).
+  'gh pr comment 1 --body "we avoided git push --force"',
+  'gh pr comment 1 --body "please do not push straight to main"',
 ]
 
 const SEGMENT_SCOPED_DENIED = [
@@ -327,6 +335,15 @@ const SEGMENT_SCOPED_DENIED = [
   'git push 2>&1 --force origin',
   'git push &>/dev/null -f origin',
   'git push >|log --force origin',
+  // odd/tasks/release-0.5.1.md T8 (JEVADV-24): the script argument of
+  // `sh -c`/`eval` is a real command a shell will run, quoted or not, and
+  // must stay caught -- including behind a leading `(` subshell.
+  'sh -c "git push --force origin main"',
+  'eval "git push --force"',
+  '(bash -c "git push --force")',
+  // A single quoted WORD is still a real argument, not descriptive prose:
+  // quoting a bare branch name is ordinary shell usage.
+  'git push origin "main"',
 ]
 
 for (const command of SEGMENT_SCOPED_NOT_DENIED) {
@@ -441,6 +458,15 @@ const DISCARDING_COMMANDS = [
   'git restore .',
   'git restore --worktree src/app.ts',
   'git restore --source=HEAD~1 src/app.ts',
+  // odd/tasks/release-0.5.1.md T8 (JEVADV-24): reset/clean folded into the
+  // same tokenizer discardsUncommittedWork already gives checkout/restore
+  // -- exercised end to end through the real hook, not just the unit tests
+  // in src/core/git_discard.test.ts.
+  'git reset --hard',
+  'git clean -fd',
+  'bash -c "git reset --hard"',
+  'env A=1 git reset --hard',
+  'git -C ../repo reset --hard',
 ]
 
 const NON_DISCARDING_COMMANDS = [
@@ -455,6 +481,8 @@ const NON_DISCARDING_COMMANDS = [
   // Naming the command in a message is not running it; this rule denies,
   // so a false match would refuse the agent's commit outright.
   'git commit -m "note: use git restore src/app.ts to undo"',
+  'git reset --soft HEAD~1',
+  'git clean -n',
 ]
 
 for (const command of DISCARDING_COMMANDS) {
@@ -473,3 +501,38 @@ for (const command of NON_DISCARDING_COMMANDS) {
     assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
   })
 }
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24) -- the exact command observed
+// live on 2026-09-25: a `printf` whose double-quoted text spelled out a
+// hard reset, followed by an unrelated `orca plane comment add` call, was
+// REFUSED as "discards uncommitted work -- nothing to recover it from". No
+// work was being discarded; the git words sat inside a quoted argument.
+// Two segments matter here: `printf` alone would already be saved by
+// mentionsRatherThanRuns (every segment leads with a read/print verb), but
+// `orca plane comment add` does not lead with one, so that guard never
+// fires and the OLD, quote-blind regex was the only thing standing between
+// this command and a denial it never earned.
+// ---------------------------------------------------------------------------
+
+test('real subprocess, not refused: a printf whose quoted text spells out a hard reset, followed by an unrelated command', () => {
+  const home = makeHome()
+  const command = 'printf \'%s\\n\' "most risk-stage asks are right: git reset --hard origin/main." > "$B"; orca plane comment add 1 --body-file "$B"'
+  const decision = decisionFor(home, command)
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path (no work is discarded here), got ${decision}`)
+})
+
+test('real subprocess, still refused: the same command with the quotes removed really does discard uncommitted work', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'echo start; git reset --hard; echo done'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('resetClean fails CLOSED on a command its tokenizer cannot parse: an unterminated quote falls back to the raw-text match', () => {
+  const home = makeHome()
+  // Not an obviously-safe verb and not a bare mention-only read/print
+  // command, so this reaches the NEVER_SILENTLY loop rather than being
+  // waved through by an earlier tier.
+  const payload = JSON.parse(run(home, 'git commit -m "git reset --hard'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})

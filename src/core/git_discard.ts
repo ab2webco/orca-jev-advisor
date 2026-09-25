@@ -1,8 +1,12 @@
 // Recognises the git commands that overwrite the working tree and lose
-// uncommitted changes: `git checkout` in its path and force forms, and
-// `git restore` whenever it writes the working tree. `git reset --hard` and
-// `git clean -f` stay with their existing regex in adapters/claude/
-// gate-bash.ts; this module covers what that regex never matched.
+// uncommitted changes: `git checkout` in its path and force forms, `git
+// restore` whenever it writes the working tree, and `git reset --hard` /
+// `git clean -f`. The last two used to stay with their own, separate,
+// quote-blind regex in adapters/claude/gate-bash.ts; they are folded in
+// here (odd/tasks/release-0.5.1.md T8) so every one of these commands gets
+// the same tokenizer, the same wrapper/eval/`-c` recursion, and the same
+// command-position discipline, instead of two different readings of the
+// same command line disagreeing about what a shell would actually run.
 //
 // It exists because `git checkout -- <file>` discarded an agent's
 // uncommitted work in a real session (odd/CHECKPOINT.md) while the deny
@@ -169,7 +173,12 @@ function isShortCluster(token: string): boolean {
 
 function checkoutDiscards(args: readonly string[]): boolean {
   const separator = args.indexOf("--");
-  if (separator !== -1 && separator < args.length - 1) return true;
+  // A bare `--` with nothing after it is not a meaningful invocation on its
+  // own; the one place it appears in real use is `xargs ... git checkout
+  // --`, where xargs appends the actual pathspecs after this static text
+  // ends. Denying it costs nothing -- no legitimate, non-destructive command
+  // is spelled this way.
+  if (separator !== -1) return true;
   if (
     args.some(
       (arg) =>
@@ -195,6 +204,19 @@ function restoreDiscards(args: readonly string[]): boolean {
   return worktree || !staged;
 }
 
+/** `--hard` throws away the working tree; `--soft`/`--mixed` (the default)
+ *  never touch it. The ARGS decide this, not their position -- unlike the
+ *  old regex, `git reset --quiet --hard` still counts. */
+function resetDiscards(args: readonly string[]): boolean {
+  return args.includes("--hard");
+}
+
+/** `-f`/`--force` is required before clean will run at all, so its presence
+ *  alone is enough -- including folded into a short cluster (`-df`, `-fx`). */
+function cleanDiscards(args: readonly string[]): boolean {
+  return args.some((arg) => arg === "--force" || (isShortCluster(arg) && arg.includes("f")));
+}
+
 /** True when `tokens[start]` is git and the invocation it begins discards uncommitted work. */
 function gitDiscardsFrom(tokens: readonly string[], start: number): boolean {
   if (programName(tokens[start] ?? "") !== "git") return false;
@@ -206,6 +228,8 @@ function gitDiscardsFrom(tokens: readonly string[], start: number): boolean {
   const args = tokens.slice(index + 1);
   if (subcommand === "checkout") return checkoutDiscards(args);
   if (subcommand === "restore") return restoreDiscards(args);
+  if (subcommand === "reset") return resetDiscards(args);
+  if (subcommand === "clean") return cleanDiscards(args);
   return false;
 }
 
@@ -321,14 +345,234 @@ function isRedirection(command: string, index: number): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Quote-opacity for someSegmentMatches (odd/tasks/release-0.5.1.md T8,
+// JEVADV-24). forcePush and pushProtected are its only `scope: 'segment'`
+// callers, and both used to test a segment's RAW text: a quoted argument
+// with whitespace in it -- a commit message, a PR body -- reads exactly
+// like a real command to a `.*`-spanning pattern, because nothing told the
+// pattern the text sat inside quotes. Observed live: `printf` whose
+// double-quoted argument merely SPELLED OUT a destructive git command was
+// refused as if that command had run.
+//
+// scanSegment below reduces a segment to the text a shell would actually
+// EXECUTE: a quoted, multi-word argument goes opaque, while `$(...)`,
+// backticks (even inside double quotes) and the script argument of
+// `bash -c`/`sh -c`/`zsh -c`/`dash -c`/`ksh -c`/`eval` stay exactly as
+// visible as before, because a shell really does run those. A single quoted
+// WORD (`"main"`, `"-f"`) also stays visible on purpose: it is ordinary
+// shell usage for a bare value, not descriptive prose, and no `\s`-spanning
+// pattern can ever be spelled with one word alone -- so keeping it visible
+// only ever adds a true match, never reopens the false positive this exists
+// to close.
+// ---------------------------------------------------------------------------
+
+/** One shell word of a scanned segment: its dequoted text, and whether ANY
+ *  of its characters were drawn from inside a quote. */
+interface ScanToken {
+  readonly text: string;
+  readonly quoted: boolean;
+}
+
+/**
+ * Like `tokenize`, but flags whether each token drew a character from
+ * inside a quote, and reports failure (null) on an unbalanced quote instead
+ * of silently absorbing the rest of the line into one token -- exactly what
+ * `tokenize` itself does, and exactly what the deny tier's fail-CLOSED
+ * contract cannot use (see scanSegment's own doc comment).
+ */
+function tokenizeForScan(segment: string): readonly ScanToken[] | null {
+  const tokens: ScanToken[] = [];
+  let current = "";
+  let inToken = false;
+  let quoted = false;
+  let single = false;
+  let double = false;
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index] ?? "";
+    if (char === "\\" && !single) {
+      current += segment[index + 1] ?? "";
+      inToken = true;
+      index += 1;
+    } else if (char === "'" && !double) {
+      single = !single;
+      inToken = true;
+      quoted = true;
+    } else if (char === '"' && !single) {
+      double = !double;
+      inToken = true;
+      quoted = true;
+    } else if (/\s/.test(char) && !single && !double) {
+      if (inToken) tokens.push({ text: current, quoted });
+      current = "";
+      inToken = false;
+      quoted = false;
+    } else {
+      current += char;
+      inToken = true;
+    }
+  }
+  if (single || double) return null;
+  if (inToken) tokens.push({ text: current, quoted });
+  return tokens;
+}
+
+/** Stands in for one `$(...)`/backtick span while the rest of a scanned
+ *  segment is tokenized; a control character no real command line can
+ *  contain, so splicing the recursively-scanned body back in by searching
+ *  for it can never collide with the segment's own text. Kept separate from
+ *  extractSubstitutions' own "_" marker above: that one is never spliced
+ *  back in, so it has no need to be collision-proof. */
+const SCAN_SUBSTITUTION_MARKER = "\u0001";
+
+/**
+ * The same walk as `extractSubstitutions`, but reports failure (null) on an
+ * unterminated quote or substitution instead of quietly keeping going --
+ * needed here because scanSegment must fail CLOSED (see its own doc
+ * comment) rather than guess at malformed input.
+ */
+function extractSubstitutionsForScan(text: string): { readonly outer: string; readonly bodies: readonly string[] } | null {
+  const bodies: string[] = [];
+  let outer = "";
+  let single = false;
+  let double = false;
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index] ?? "";
+    if (char === "\\" && !single) {
+      outer += text.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === "'" && !double) {
+      single = !single;
+      outer += char;
+      index += 1;
+      continue;
+    }
+    if (char === '"' && !single) {
+      double = !double;
+      outer += char;
+      index += 1;
+      continue;
+    }
+    if (!single && char === "$" && text[index + 1] === "(") {
+      let depth = 1;
+      let close = index + 2;
+      while (close < text.length && depth > 0) {
+        if (text[close] === "(") depth += 1;
+        else if (text[close] === ")") depth -= 1;
+        close += 1;
+      }
+      if (depth !== 0) return null;
+      bodies.push(text.slice(index + 2, close - 1));
+      outer += SCAN_SUBSTITUTION_MARKER;
+      index = close;
+      continue;
+    }
+    if (!single && char === "`") {
+      const close = text.indexOf("`", index + 1);
+      if (close === -1) return null;
+      bodies.push(text.slice(index + 1, close));
+      outer += SCAN_SUBSTITUTION_MARKER;
+      index = close + 1;
+      continue;
+    }
+    outer += char;
+    index += 1;
+  }
+  if (single || double) return null;
+  return { outer, bodies };
+}
+
+/** A subshell wrapping a real command must not hide it: `(bash -c '...')`
+ *  still runs `bash -c`. Stripped only for the SHELLS/eval name check below,
+ *  never for the token's own text in the reconstructed output. */
+function stripLeadingGroupers(token: string): string {
+  return token.replace(/^[({]+/, "");
+}
+
+const SCAN_MAX_DEPTH = 8;
+/** Stands in for one quoted, multi-word argument in scanSegment's output. */
+const SCAN_DATA_PLACEHOLDER = "‹data›";
+
+function scanToken(token: ScanToken): string {
+  return token.quoted && /\s/.test(token.text) ? SCAN_DATA_PLACEHOLDER : token.text;
+}
+
+/**
+ * `segment` reduced to the text someSegmentMatches' patterns are allowed to
+ * read -- see the module note above for the rule and why it exists. Returns
+ * null when `segment` cannot be read with confidence: an unbalanced quote,
+ * an unterminated substitution, or nesting deep enough to suggest either.
+ * Failing closed here means the caller falls back to the RAW segment text,
+ * which is what matched before this fix existed -- matching MORE freely on
+ * a parse this function could not finish, never less.
+ */
+function scanSegment(segment: string, depth: number): string | null {
+  if (depth > SCAN_MAX_DEPTH) return null;
+  const extracted = extractSubstitutionsForScan(segment);
+  if (extracted === null) return null;
+  const scannedBodies: string[] = [];
+  for (const body of extracted.bodies) {
+    const scanned = scanSegment(body, depth + 1);
+    if (scanned === null) return null;
+    scannedBodies.push(scanned);
+  }
+  // Substitution bodies are flattened back in, not hidden: a flag or branch
+  // produced by `$(...)`/backticks is still part of the enclosing command's
+  // own arguments at runtime (see someSegmentMatches' substitution tests).
+  let flattened = extracted.outer;
+  for (const body of scannedBodies) flattened = flattened.replace(SCAN_SUBSTITUTION_MARKER, ` ${body} `);
+
+  const tokens = tokenizeForScan(flattened);
+  if (tokens === null) return null;
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] as ScanToken;
+    const name = programName(stripLeadingGroupers(token.text));
+    const isEval = name === "eval";
+    const flagIndex = SHELLS.has(name)
+      ? tokens.findIndex((candidate, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(candidate.text))
+      : -1;
+    const scriptStart = isEval ? index + 1 : flagIndex + 1;
+    if ((isEval || flagIndex !== -1) && tokens[scriptStart] !== undefined) {
+      const script = tokens.slice(scriptStart).map((candidate) => candidate.text).join(" ");
+      const scanned = scanSegment(script, depth + 1);
+      if (scanned === null) return null;
+      const before = tokens.slice(0, scriptStart).map(scanToken);
+      return [...before, scanned].join(" ");
+    }
+  }
+
+  return tokens.map(scanToken).join(" ");
+}
+
+/**
+ * True when `command` cannot be read the way a shell would -- an unclosed
+ * single or double quote, or a `$(...)`/backtick that never closes. Used by
+ * gate-bash.ts's resetClean rule: discardsUncommittedWork's own tokenizer
+ * silently absorbs the rest of an unterminated quote into one token instead
+ * of failing, which would hide a `git reset --hard` sitting after it --
+ * exactly the case the resetClean rule's old, quote-blind regex never
+ * missed. That regex is kept as this rule's own fail-CLOSED fallback for
+ * exactly this one case; see NEVER_SILENTLY in gate-bash.ts.
+ */
+export function hasUnbalancedQuoting(command: string): boolean {
+  return scanSegment(command, 0) === null;
+}
+
 /**
  * True when `pattern` matches at least one of `command`'s segments
  * (`splitOnCommandSeparators`), rather than the whole joined string. Used by
  * gate-bash.ts's NEVER_SILENTLY loop for rules whose `scope` is `'segment'`:
  * a `.*` inside `pattern` can then never span a separator (`&&`, `;`, `|`,
  * newline) and falsely implicate a command its own match never touched,
- * while a flag produced by a substitution still counts for its command.
+ * while a flag produced by a substitution still counts for its command. As
+ * of T8 (JEVADV-24), each segment is also read through scanSegment first, so
+ * quoted DATA can no longer satisfy a pattern meant for a command a shell
+ * actually runs -- see the module note above.
  */
 export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): boolean {
-  return splitOnCommandSeparators(command).some((segment) => pattern.test(segment));
+  return splitOnCommandSeparators(command).some((segment) => pattern.test(scanSegment(segment, 0) ?? segment));
 }

@@ -154,6 +154,18 @@ test("node/npx invocations other than a version check are left on the existing p
   assert.equal(isObviouslySafeCommand("npx some-cli"), false);
 });
 
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24): `env` on its own only prints
+// the environment, but `env NAME=value cmd` RUNS `cmd` with that variable
+// set -- the safe-verb list matched both shapes on the leading word alone,
+// so `env A=1 git reset --hard` was waved through by tier 1a before the
+// deny tier (or anything else) ever saw it.
+test("env used as a wrapper to run another command is never safe, even though bare env is", () => {
+  assert.equal(isObviouslySafeCommand("env"), true);
+  assert.equal(isObviouslySafeCommand("env -i"), true);
+  assert.equal(isObviouslySafeCommand("env A=1 git reset --hard"), false);
+  assert.equal(isObviouslySafeCommand("env node script.js"), false);
+});
+
 test("an empty or whitespace-only command is not safe", () => {
   assert.equal(isObviouslySafeCommand(""), false);
   assert.equal(isObviouslySafeCommand("   "), false);

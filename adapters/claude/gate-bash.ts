@@ -84,7 +84,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
+import { discardsUncommittedWork, hasUnbalancedQuoting, someSegmentMatches } from '../../src/core/git_discard.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -226,6 +226,15 @@ type Decision = 'allow' | 'deny' | 'ask'
  */
 
 /**
+ * resetClean's own fail-CLOSED fallback -- see its NEVER_SILENTLY entry
+ * below and hasUnbalancedQuoting's doc comment (src/core/git_discard.ts).
+ * Quote-blind on purpose: it exists ONLY for the one input
+ * discardsUncommittedWork's tokenizer cannot parse with confidence, so
+ * matching more freely there is the safe direction to err in.
+ */
+const RESET_CLEAN_FALLBACK_PATTERN = /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/
+
+/**
  * Tier 1b: the rules that never run unannounced. `why` is a catalog key,
  * resolved at emit time in the panel's chosen language.
  *
@@ -256,22 +265,37 @@ const NEVER_SILENTLY: readonly {
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root.
   { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf', scope: 'command' },
-  // `git clean -f` destroys untracked work with no reflog behind it; the
-  // blast radius is one working tree, which is why this was the closest call
-  // of the nine.
-  { pattern: /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/, why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command' },
-  // The same loss through `git checkout -- <path>`, `git checkout .`,
-  // `git checkout -f` or `git restore <path>`: the working tree is
-  // overwritten and uncommitted changes are gone. This form discarded an
-  // agent's work in a real session while the rule above did not know it.
-  // A branch switch, `-b`/`-B`, `git switch` and `git restore --staged` are
-  // not matched -- see src/core/git_discard.ts for each reason. It shares
-  // `rule.resetClean` on purpose: that text ("discards uncommitted work --
-  // nothing to recover it from") names the effect, not the command.
+  // `git reset --hard` and `git clean -f` throw away uncommitted work with
+  // no reflog behind them -- the closest call of the nine, since the blast
+  // radius is one working tree. The same loss through `git checkout --
+  // <path>`, `git checkout .`, `git checkout -f` or `git restore <path>`:
+  // the working tree is overwritten and uncommitted changes are gone. This
+  // form discarded an agent's work in a real session while reset/clean did
+  // not know it. A branch switch, `-b`/`-B`, `git switch` and `git restore
+  // --staged` are not matched -- see src/core/git_discard.ts for each
+  // reason. All four subcommands share `rule.resetClean` on purpose: that
+  // text ("discards uncommitted work -- nothing to recover it from") names
+  // the effect, not the command.
+  //
   // `command` scope: discardsUncommittedWork already segments on its own
   // and extracts `$(...)`/backticks/`bash -c`/`eval` first; pre-splitting
   // here would break its substitution extraction.
-  { pattern: { test: discardsUncommittedWork }, why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command' },
+  //
+  // Until T8 (odd/tasks/release-0.5.1.md, JEVADV-24) reset/clean were
+  // matched by their OWN separate, quote-blind regex here -- a `printf`
+  // whose double-quoted argument merely SPELLED OUT `git reset --hard` was
+  // refused as if that command had run. Folding reset/clean into
+  // discardsUncommittedWork's tokenizer fixes that, but its tokenizer fails
+  // in the opposite direction on a genuinely unparseable command (an
+  // unbalanced quote): it silently swallows the rest of the line into one
+  // token instead of raising, which would hide a real `git reset --hard`
+  // sitting after it. RESET_CLEAN_FALLBACK_PATTERN is the OLD regex, kept
+  // as this rule's own fail-CLOSED fallback for exactly that one case --
+  // see hasUnbalancedQuoting's doc comment.
+  {
+    pattern: { test: (command) => discardsUncommittedWork(command) || (hasUnbalancedQuoting(command) && RESET_CLEAN_FALLBACK_PATTERN.test(command)) },
+    why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command',
+  },
   // Irrecoverable without a backup nobody can assume exists.
   { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable', scope: 'command' },
   { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete', scope: 'command' },
