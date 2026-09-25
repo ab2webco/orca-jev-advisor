@@ -55,7 +55,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
 - [x] **T5 sidecar EPIPE.** `adapters/orca/main.mjs` writes to child stdin
   (around `:162` and `:799`) with no `'error'` listener. A child that exits
   early crashes the whole background worker. Handle it once, for both sites.
-- [ ] **T6 calibration card.** `board.html` "How is calibration going?"
+- [x] **T6 calibration card.** `board.html` "How is calibration going?"
   divides by `asked`, but only shows approved, rejected and notRun, so asks
   still inside the wait window are unlabeled and the percentages do not sum
   to 100. Add an `awaiting` count to `ApprovalSummary` and a fourth legend
@@ -219,6 +219,63 @@ touches 7+ non-trivial files, which fires the writer trigger.
   `{ ok: false, reason: 'stdin-write-failed', detail }` -- safe even if the
   `execFile` callback also fires, since a Promise only ever settles once.
   GREEN: same command, 57/57. Full suite: `npm test` 977/977 pass.
+- **T6 done.** Commit: (recorded after commit below).
+  Data layer (`src/core/approval_record.ts`): added `ApprovalSummary.awaiting`
+  (asked, no outcome, still inside `UNRESOLVED_AFTER_MS`), counted directly
+  in `summarizeApprovals`'s existing loop alongside `notRun`, so
+  `approved+rejected+notRun+awaiting === asked` holds by construction, never
+  negative.
+  RED (data layer): added 4 assertions/tests to
+  `src/core/approval_record.test.ts` (join test, notRun test, the "still on
+  screen" test renamed to say "-- it is awaiting", and a new
+  "awaiting...always sums to asked" test). Ran `node --test
+  --experimental-strip-types src/core/approval_record.test.ts` -- failed
+  4/18, all `undefined !== 0/1` (the field did not exist yet).
+  GREEN (data layer): same command, 18/18.
+  Trace to the board: `adapters/orca/read-measurements.mjs`'s
+  `approvalsSummary()` explicitly copies `asked/approved/rejected/notRun`
+  from the summary -- added `awaiting` there too (both the per-window
+  `gate.windows[key].approvals` and the top-level `approvals`, since both
+  reuse the same function).
+  RED (trace): added "approvals.awaiting -- a pending record still inside
+  the wait window is reported under awaiting" to
+  `adapters/orca/read-measurements.test.mjs`. Ran `node --test
+  --experimental-strip-types adapters/orca/read-measurements.test.mjs` --
+  failed 1/28, `undefined !== 1`.
+  GREEN (trace): same command, 28/28.
+  UI (`adapters/orca/panels/board.html`): added a 4th `renderApprovals`
+  segment/legend row (`cls: 'v2'`, the one unused hue in this card's
+  existing v1/vd/v3 palette -- muted-foreground, distinct from primary/
+  destructive/ring), keyed `approvals.awaiting`, in both the `en`
+  ('Awaiting') and `es` ('Esperando respuesta') string tables. No hint
+  added -- unlike `notRun`, `awaiting` names no ambiguity to explain, so it
+  follows `approved`/`rejected`'s no-hint precedent, not `notRun`'s.
+  RED (UI): extended `scripts/panels.spec.mjs` with `openBoardPanel`
+  (board.html's own `renderBoardPanel`/host-bridge harness, alongside the
+  existing config.html one) and imported `SCENARIOS` from
+  `scripts/screenshot-panels.mjs` (real producer-derived fixture, per
+  `scripts/fixture_shape.test.mjs`'s own discipline) rather than a second
+  hand-typed board fixture. Added two tests: legend-values-sum-to-asked, and
+  no-raw-i18n-key. To observe true RED, temporarily reverted just the 4th
+  segment literal in `renderApprovals` and ran `node --test
+  --test-name-pattern="calibration card" scripts/panels.spec.mjs` -- failed
+  1/2: `AssertionError: legend rows ["81","1","15"] do not sum to asked
+  (106) -- 97 !== 106` (the exact 81/1/15/106 numbers from this task's own
+  problem statement, since `SCENARIOS.ready`'s default window is `week` =
+  `READY_ALL`). Restored the segment, reran -- GREEN, 2/2.
+  Fixtures: added `awaiting` (never hand-guessed -- each value is
+  `asked - approved - rejected - notRun` for that same fixture's own
+  numbers) to all 4 literal `approvals` blocks in
+  `scripts/screenshot-panels.mjs` (`READY_DAY`: 9, `READY_ALL`: 9,
+  `emptyWindow()`: 0, `DEGRADED`'s top-level `approvals`: 0); the 5th
+  (`EMPTY`) derives from `emptyWindow('all')` via spread, no separate edit
+  needed.
+  Full suite after all of T6: `npm test` 979/979 pass;
+  `node --test --experimental-strip-types src/core/approval_record.test.ts
+  adapters/orca/read-measurements.test.mjs scripts/fixture_shape.test.mjs`
+  49/49 (fixture_shape.test.mjs's real-producer key check still passes with
+  `awaiting` added on both sides). `npm run test:panels` and `npm run shots`
+  results recorded in the final verification section below.
 
 ## Next step
 

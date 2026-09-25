@@ -143,6 +143,15 @@ export interface ApprovalSummary {
    * which" beats a confident-looking guess.
    */
   readonly notRun: number;
+  /**
+   * Asked, with no outcome yet, but still inside {@link UNRESOLVED_AFTER_MS}
+   * -- a prompt genuinely still on someone's screen. Without this bucket,
+   * `approved + rejected + notRun` undercounts `asked` for exactly as long
+   * as any prompt is unanswered, which is why the calibration card's legend
+   * (board.html's renderApprovals) never summed to 100%: this is the fourth
+   * bucket every one of those percentages is missing.
+   */
+  readonly awaiting: number;
   readonly labelled: readonly LabelledDecision[];
 }
 
@@ -175,11 +184,13 @@ export function summarizeApprovals(
   let approved = 0;
   let rejected = 0;
   let notRun = 0;
+  let awaiting = 0;
 
   for (const p of pending) {
     const outcome = byId.get(p.toolUseId);
     if (outcome === undefined) {
       if (now - Date.parse(p.at) > UNRESOLVED_AFTER_MS) notRun += 1;
+      else awaiting += 1;
       continue;
     }
     if (outcome.outcome === "approved") approved += 1;
@@ -197,7 +208,7 @@ export function summarizeApprovals(
     }
   }
 
-  return { asked: pending.length, approved, rejected, notRun, labelled };
+  return { asked: pending.length, approved, rejected, notRun, awaiting, labelled };
 }
 
 export interface CeilingEvidence {

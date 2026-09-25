@@ -288,6 +288,19 @@ test('approvals.notRun -- a nine-rules-deny pending with no outcome is reported 
   assert.equal('unresolved' in result.approvals, false, 'the old field name must not linger alongside the new one')
 })
 
+// The calibration card (board.html's renderApprovals) draws approved,
+// rejected and notRun as a percentage of asked -- a pending record still
+// inside UNRESOLVED_AFTER_MS fell into none of those three, so this field
+// carries the board's own missing fourth bucket.
+test('approvals.awaiting -- a pending record still inside the wait window is reported under awaiting, not left uncounted', () => {
+  const home = makeHome()
+  writeApprovalsLog(home, [pendingRow('a', new Date().toISOString())])
+  const result = run(home)
+  assert.equal(result.approvals.asked, 1)
+  assert.equal(result.approvals.awaiting, 1)
+  assert.equal(result.approvals.approved + result.approvals.rejected + result.approvals.notRun, 0)
+})
+
 // ---------------------------------------------------------------------------
 // odd/tasks/advisor-board-charts.md T2 -- an `abBenchmark` aggregate,
 // folded from ab-benchmark-results.jsonl (adapters/cli/ab_benchmark_cli.ts,
