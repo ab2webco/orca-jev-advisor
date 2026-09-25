@@ -14,7 +14,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildSeedScopeIndex, decideAction, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, interpretDestinationPolicy, resolvePolicyScope } from "./decisions.ts";
+import {
+  buildSeedScopeIndex,
+  CONSEQUENCE_NOISE_MARGIN,
+  decideAction,
+  decideGateAction,
+  filterPoliciesForCommandScope,
+  filterPoliciesForDestination,
+  GATE_CONSEQUENCE_CEILING,
+  interpretDestinationPolicy,
+  resolvePolicyScope,
+} from "./decisions.ts";
 import type { Policy, PolicyScope } from "./decisions.ts";
 import type { Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer } from "./jev.ts";
 
@@ -266,11 +276,57 @@ test("decideAction: still callable with a single argument, using the global ceil
 test("decideAction: an explicit per-destination ceiling overrides the global one, in both directions", () => {
   const midRisk = riskAnswers(0.9, 0.1, 1.9); // above the global 1.78 ceiling
   assert.equal(decideAction(midRisk).verdict, "ask");
-  assert.equal(decideAction(midRisk, { consequenceCeiling: 2.0 }).verdict, "allow");
+  // JEVADV-26: 1.9 sits inside a 2.0 ceiling's noise band (2.0 - 0.12 =
+  // 1.88), so the override here is 2.1 -- comfortably above 1.9 + the
+  // margin -- to keep testing what this case is actually about (the
+  // override changing the verdict), not the band itself (covered below).
+  assert.equal(decideAction(midRisk, { consequenceCeiling: 2.1 }).verdict, "allow");
 
   const lowRisk = riskAnswers(0.9, 0.1, 0.5); // below the global ceiling
   assert.equal(decideAction(lowRisk).verdict, "allow");
   assert.equal(decideAction(lowRisk, { consequenceCeiling: 0.1 }).verdict, "ask");
+});
+
+// ===========================================================================
+// decideAction: CONSEQUENCE_NOISE_MARGIN -- JEVADV-26. A silent allow must
+// clear the ceiling by 3σ of Jev's measured repeat-call noise, not just sit
+// under it by an arbitrary amount. See CONSEQUENCE_NOISE_MARGIN's own
+// module comment in decisions.ts for the measurement behind 0.12.
+// ===========================================================================
+
+test("decideAction: consequence exactly at ceiling-margin allows", () => {
+  const atMargin = riskAnswers(0.9, 0.1, GATE_CONSEQUENCE_CEILING - CONSEQUENCE_NOISE_MARGIN);
+  const result = decideAction(atMargin);
+  assert.equal(result.verdict, "allow");
+});
+
+test("decideAction: ceiling-margin + 0.01 asks, with the band's own reason key", () => {
+  const justInsideBand = riskAnswers(0.9, 0.1, GATE_CONSEQUENCE_CEILING - CONSEQUENCE_NOISE_MARGIN + 0.01);
+  const result = decideAction(justInsideBand);
+  assert.equal(result.verdict, "ask");
+  assert.ok(
+    result.reasons.some((r) => r.key === "reason.tooCloseToTheLine"),
+    `expected the band's own reason key, got: ${JSON.stringify(result.reasons)}`,
+  );
+});
+
+test("decideAction: above the ceiling still asks, with today's reason keys -- the band reason is only for the band", () => {
+  const aboveCeiling = riskAnswers(0.9, 0.1, 1.9);
+  const result = decideAction(aboveCeiling);
+  assert.equal(result.verdict, "ask");
+  assert.ok(result.reasons.some((r) => r.key === "reason.needsCleanupAfter"));
+  assert.equal(result.reasons.some((r) => r.key === "reason.tooCloseToTheLine"), false);
+});
+
+test("decideAction: a per-destination ceiling is honoured with the same 0.12 margin", () => {
+  const options = { consequenceCeiling: 2.0 };
+  const atMargin = riskAnswers(0.9, 0.1, 1.88); // 2.0 - 0.12
+  assert.equal(decideAction(atMargin, options).verdict, "allow");
+
+  const justInsideBand = riskAnswers(0.9, 0.1, 1.89);
+  const inBand = decideAction(justInsideBand, options);
+  assert.equal(inBand.verdict, "ask");
+  assert.ok(inBand.reasons.some((r) => r.key === "reason.tooCloseToTheLine"));
 });
 
 // ===========================================================================
@@ -329,7 +385,10 @@ test("decideGateAction: no policy match falls through to the consequence-ceiling
   const withGlobalCeiling = decideGateAction({ action: ACTION, policies: [permits], answers: noMatch });
   assert.equal(withGlobalCeiling.verdict, "ask");
 
-  const withDestinationCeiling = decideGateAction({ action: ACTION, policies: [permits], answers: noMatch, consequenceCeiling: 2.0 });
+  // JEVADV-26: 1.9 sits inside a 2.0 ceiling's 0.12 noise band (2.0 - 0.12 =
+  // 1.88), so the override is 2.1 here -- see the same note on
+  // decideAction's own per-destination-ceiling test above.
+  const withDestinationCeiling = decideGateAction({ action: ACTION, policies: [permits], answers: noMatch, consequenceCeiling: 2.1 });
   assert.equal(withDestinationCeiling.verdict, "allow");
 });
 

@@ -30,6 +30,7 @@ export type GateKey =
   | "reason.someoneElseWillNotice"
   | "reason.breaksSomethingImportant"
   | "reason.needsCleanupAfter"
+  | "reason.tooCloseToTheLine"
   | "reason.noDestinationMatched";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
@@ -62,6 +63,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.someoneElseWillNotice": "el efecto lo va a notar alguien mas",
     "reason.breaksSomethingImportant": "si esta mal, rompe algo que le importa a alguien",
     "reason.needsCleanupAfter": "si esta mal, hay que limpiar despues",
+    "reason.tooCloseToTheLine": "tan cerca del limite que preguntar de nuevo podria cambiar la respuesta -- muy cerca para dejarlo pasar en silencio",
     "reason.noDestinationMatched": "no se pudo relacionar el directorio actual con ningun destino del catalogo -- se usaron los umbrales globales por defecto",
   },
   en: {
@@ -100,6 +102,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.someoneElseWillNotice": "someone else is going to notice the effect",
     "reason.breaksSomethingImportant": "if it's wrong, it breaks something that matters to someone",
     "reason.needsCleanupAfter": "if it's wrong, there's cleanup to do afterward",
+    "reason.tooCloseToTheLine": "too close to the line to let through without asking -- asked again, the answer could go either way",
     "reason.noDestinationMatched": "couldn't match the current directory to any catalog destination -- fell back to the default global thresholds",
   },
 };

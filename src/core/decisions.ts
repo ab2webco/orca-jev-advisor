@@ -441,6 +441,39 @@ const GATE_EXTERNAL_GATE = 0.5;
  */
 export const GATE_CONSEQUENCE_CEILING = 1.78;
 
+/**
+ * How far BELOW the ceiling (global or per-destination) a consequence score
+ * must land for a risk-path `allow` to stand alone, with no repeat judgment
+ * to check it.
+ *
+ * Measured against the live API (model jev-1.13.0, 2026-09-25): 87 real
+ * borderline commands, 5 identical calls each, 435 calls total. The
+ * consequence axis's pooled within-command standard deviation came back
+ * 0.039 (reversible 0.015, external 0.012 -- consequence is the noisiest of
+ * the three, which is also the one axis that decides, see decideAction's own
+ * note below). Every verdict that actually flipped between repeat calls sat
+ * within a few hundredths of GATE_CONSEQUENCE_CEILING or a destination's own
+ * override, never far from it -- so "just under the ceiling" and "clearly
+ * safe" are not the same thing. This constant is 3σ of that measured noise
+ * (3 × 0.039 = 0.117, rounded up to 0.12): a score at or below
+ * `ceiling - CONSEQUENCE_NOISE_MARGIN` is at least three standard deviations
+ * under the line, so a repeat call crossing back over it is roughly a 0.1%
+ * event instead of the 2-of-3 actually observed on a real release dispatch
+ * (`gh workflow run "Lab Release"`), allowed silently before this existed.
+ *
+ * Evaluated on 127 risk-path `allow` calls from the same run (22 from
+ * commands whose verdict actually flipped across repeats, 105 from stable
+ * ones): this margin (0.12) turned every flipping command's `allow` into
+ * `ask` -- 22/22, zero flipping commands still able to allow silently --
+ * while only turning 10 of the 105 stable allows into asks. The alternatives
+ * measured alongside it were worse trades: gating on confidence alone
+ * (<0.55) caught 19/22 flips at a cost of 34/105 stable asks, and a
+ * narrower margin of 0.08 caught 18/22 at a cost of 5/105 -- both let more
+ * flipping commands through, or asked about far more stable ones, than this
+ * margin's 22/22 for 10/105.
+ */
+export const CONSEQUENCE_NOISE_MARGIN = 0.12;
+
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
   return {
@@ -565,6 +598,13 @@ export function decideAction(answers: Record<string, Answer>, options?: DecideAc
   }
   if (consequence.score > consequenceCeiling) {
     reasons.push({ key: consequence.score > 2.3 ? "reason.breaksSomethingImportant" : "reason.needsCleanupAfter" });
+  } else if (consequence.score > consequenceCeiling - CONSEQUENCE_NOISE_MARGIN) {
+    // JEVADV-26: not over the line, but too close to it to trust a single
+    // call -- see CONSEQUENCE_NOISE_MARGIN's own comment for the repeat-call
+    // measurement behind this band. Its own reason key, not one of the two
+    // above: those describe an actual over-the-line verdict, and this one
+    // is explicitly "the score itself didn't clear it, not that it's bad".
+    reasons.push({ key: "reason.tooCloseToTheLine" });
   }
 
   // The three axes are not independent, and treating them as if they were
@@ -587,14 +627,23 @@ export function decideAction(answers: Record<string, Answer>, options?: DecideAc
   // stop a command that should have run. The other two answers are still read
   // and still reported, because they explain WHY to the person reading -- they
   // just no longer decide.
-  const ask = consequence.score > consequenceCeiling;
+  // JEVADV-26: a silent `allow` needs more than "under the ceiling" -- it
+  // needs to clear it by CONSEQUENCE_NOISE_MARGIN, 3σ of Jev's own
+  // repeat-call noise on this axis (see that constant's module comment).
+  // Below `consequenceCeiling` alone is where a real release dispatch was
+  // silently allowed on 2 of 3 identical calls; below
+  // `consequenceCeiling - CONSEQUENCE_NOISE_MARGIN` is where that stopped
+  // happening across the measured corpus.
+  const ask = consequence.score > consequenceCeiling - CONSEQUENCE_NOISE_MARGIN;
 
   // Reasons explain a STOP. On a pass they are noise that reads as a warning:
   // `docker rm my-container` was allowed while announcing "there's no
   // automatic way to undo it", which sounds like a refusal and is not one.
   // And when it does stop, the axis that actually decided leads, so the first
   // thing read is the reason it happened rather than a supporting detail.
-  const decisive = reasons.filter((r) => r.key === "reason.breaksSomethingImportant" || r.key === "reason.needsCleanupAfter");
+  const decisive = reasons.filter(
+    (r) => r.key === "reason.breaksSomethingImportant" || r.key === "reason.needsCleanupAfter" || r.key === "reason.tooCloseToTheLine",
+  );
   const supporting = reasons.filter((r) => !decisive.includes(r));
   const explained = ask ? [...decisive, ...supporting] : [];
 
