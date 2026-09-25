@@ -40,7 +40,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
   through, and "actually invoking it is still refused" fails. Pin
   `ORCA_USER_DATA_PATH` to a temp path, and sweep the other hook subprocess
   tests for the same leak.
-- [ ] **T2 pluginVersion stamp.** Main never writes `pluginVersion` on gate
+- [x] **T2 pluginVersion stamp.** Main never writes `pluginVersion` on gate
   decision records, so the board's "This version" filter can never enable.
   Cherry-pick `e399240` (already reviewed and approved in B1b), with RED
   observed first.
@@ -130,6 +130,23 @@ touches 7+ non-trivial files, which fires the writer trigger.
   GREEN: same command, 2/2 pass. Full suite: `npm test` (plain, no
   `env -u`) 974/974 pass after `npm install --no-audit --no-fund` (needed
   once in this fresh worktree; playwright wasn't installed yet).
+- **T2 done.** Commit: (recorded after commit below). Cherry-picked
+  `e399240` from `fabolivark/gate-approval-learning-b1b`, already reviewed
+  and approved in B1b, `git apply --check` verified clean on this branch
+  point before starting.
+  RED: applied only the test hunk (`git show e399240 -- adapters/claude/
+  gate-bash.test.mjs | git apply`), ran
+  `node --test --experimental-strip-types adapters/claude/gate-bash.test.mjs`
+  -- failed 1/58, `a written gate-decision record carries the real plugin
+  version`: `AssertionError [ERR_ASSERTION]: the row must carry the shipped
+  plugin version, not be missing the field` -- `actual: undefined`,
+  `expected: '0.4.0'` at `gate-bash.test.mjs:269:10`.
+  Fix: applied the `gate-bash.ts` hunks (`git show e399240 -- adapters/
+  claude/gate-bash.ts | git apply`) -- reads `orca-plugin.json`'s version
+  once at module load via `PLUGIN_ROOT`/`readPluginVersion()`, stamps it on
+  every appended gate-decision record.
+  GREEN: same command, 58/58 pass. `grep -c pluginVersion
+  adapters/claude/gate-bash.ts` -> 3. Full suite: `npm test` 975/975 pass.
 
 ## Next step
 
