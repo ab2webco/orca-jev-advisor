@@ -14,7 +14,7 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { buildDestinationRow, buildPolicyRow, stripUndefinedValues } from './panel_values.mjs'
+import { buildDestinationRow, buildPolicyRow, defaultWindowKey, liveEntryView, relativeAge, stripUndefinedValues } from './panel_values.mjs'
 
 // ---------- stripUndefinedValues --------------------------------------------
 
@@ -125,4 +125,78 @@ test('buildPolicyRow: an empty destinations scope produces an object with NO des
 test('buildPolicyRow: a non-empty destinations scope is kept', () => {
   const row = buildPolicyRow({ id: 'p1', rule: 'never force push', kind: 'prohibits', destinations: ['repo-a'] })
   assert.deepEqual(row.destinations, ['repo-a'])
+})
+
+// ---------- board.html helpers ----------------------------------------------
+// odd/tasks/panel-interventions-and-mod-copy.md T11: the board's window
+// picker, its "N min ago" labels and its live-status chips, hand-copied
+// into board.html the same way config.html copies the helpers above.
+
+function boardWindow (overrides = {}) {
+  return { available: true, totalDecisions: 10, ...overrides }
+}
+
+test('defaultWindowKey: the current plugin version when it is available and has decisions', () => {
+  const windows = { version: boardWindow(), day: boardWindow(), week: boardWindow(), all: boardWindow() }
+  assert.equal(defaultWindowKey(windows), 'version')
+})
+
+test('defaultWindowKey: the last 7 days when no record carries a version yet', () => {
+  const windows = { version: boardWindow({ available: false, totalDecisions: 0 }), day: boardWindow(), week: boardWindow(), all: boardWindow() }
+  assert.equal(defaultWindowKey(windows), 'week')
+})
+
+test('defaultWindowKey: all time when the last 7 days are empty but older decisions exist', () => {
+  const windows = {
+    version: boardWindow({ available: false, totalDecisions: 0 }),
+    day: boardWindow({ totalDecisions: 0 }),
+    week: boardWindow({ totalDecisions: 0 }),
+    all: boardWindow({ totalDecisions: 4 }),
+  }
+  assert.equal(defaultWindowKey(windows), 'all')
+})
+
+test('defaultWindowKey: all time for an empty log, and for a summary with no windows at all', () => {
+  const empty = boardWindow({ totalDecisions: 0 })
+  assert.equal(defaultWindowKey({ version: { ...empty, available: false }, day: empty, week: empty, all: empty }), 'all')
+  assert.equal(defaultWindowKey(undefined), 'all')
+  assert.equal(defaultWindowKey(null), 'all')
+})
+
+const NOW = Date.parse('2026-09-24T12:00:00.000Z')
+
+test('relativeAge: under a minute is "now", including a timestamp slightly in the future', () => {
+  assert.deepEqual(relativeAge('2026-09-24T11:59:30.000Z', NOW), { unit: 'now', n: 0 })
+  assert.deepEqual(relativeAge('2026-09-24T12:00:05.000Z', NOW), { unit: 'now', n: 0 })
+})
+
+test('relativeAge: minutes, then hours, then days, always whole and rounded down', () => {
+  assert.deepEqual(relativeAge('2026-09-24T11:55:59.000Z', NOW), { unit: 'min', n: 4 })
+  assert.deepEqual(relativeAge('2026-09-24T09:30:00.000Z', NOW), { unit: 'h', n: 2 })
+  assert.deepEqual(relativeAge('2026-09-21T11:00:00.000Z', NOW), { unit: 'd', n: 3 })
+})
+
+test('relativeAge: null for a missing or unparseable timestamp, never NaN or "undefined"', () => {
+  assert.equal(relativeAge(null, NOW), null)
+  assert.equal(relativeAge(undefined, NOW), null)
+  assert.equal(relativeAge('not a date', NOW), null)
+})
+
+test('liveEntryView: project and branch as the chips, the pane and worktree ids only in the tooltip', () => {
+  const view = liveEntryView({ worktreeId: 'wt-1', project: 'orca-supervisor', rama: 'feat/board', paneKey: '1e1fff06-aaaa:a62d09bd-bbbb' })
+  assert.deepEqual(view, {
+    name: 'orca-supervisor',
+    branch: 'feat/board',
+    title: 'wt-1 · 1e1fff06-aaaa:a62d09bd-bbbb',
+  })
+})
+
+test('liveEntryView: an unresolved worktree has no name and no branch, and its ids still land in the tooltip only', () => {
+  const view = liveEntryView({ worktreeId: null, project: null, rama: null, paneKey: '1e1fff06-aaaa:a62d09bd-bbbb' })
+  assert.deepEqual(view, { name: null, branch: null, title: '1e1fff06-aaaa:a62d09bd-bbbb' })
+})
+
+test('liveEntryView: empty strings count as missing, and a malformed entry never throws', () => {
+  assert.deepEqual(liveEntryView({ project: '', rama: '', paneKey: '' }), { name: null, branch: null, title: '' })
+  assert.deepEqual(liveEntryView(null), { name: null, branch: null, title: '' })
 })

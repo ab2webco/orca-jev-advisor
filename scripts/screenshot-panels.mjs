@@ -29,6 +29,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseSeedPolicies, parseSeedVersion } from '../src/core/policy_seed.ts'
 import { mergePolicySeeds } from '../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice } from '../src/core/policy_seed_notice.ts'
+import { foldGateDecisions } from '../src/core/gate_stats.ts'
+import { foldAbResults } from '../src/core/ab_report.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
@@ -57,6 +59,96 @@ const iso = new Date('2026-09-23T12:00:00.000Z').toISOString()
  */
 const FRESH = {}
 
+/**
+ * The board's windows, as read-measurements.mjs published them from the
+ * author's real logs on 2026-09-24 (a run of the real aggregator, pasted as
+ * literals so the harness stays deterministic and never reads a private log
+ * path). The log is under a week old, so the 7-day window and all time hold
+ * the same records; `week` reuses `all` rather than repeating it. No record
+ * carries a pluginVersion yet -- gate-bash.ts does not stamp one -- so the
+ * version window is unavailable, exactly as the real aggregator reports it.
+ */
+const READY_DAY = {
+  key: 'day', available: true, pluginVersion: null, since: '2026-09-24T00:28:46.766Z',
+  totalDecisions: 2409,
+  byVerdict: { allow: 2320, ask: 77, deny: 12 },
+  bySource: { 'local-rule': 23, cache: 240, jev: 2101, none: 45 },
+  jevLatency: { sampleCount: 2101, medianMs: 577, p95Ms: 1243, maxMs: 1809 },
+  interventions: {
+    rows: [
+      { commandFamily: 'cd', total: 769, ask: 22, deny: 2, notRun: 2 },
+      { commandFamily: 'gh cli', total: 123, ask: 11, deny: 0, notRun: 0 },
+      { commandFamily: 'git discard', total: 12, ask: 8, deny: 1, notRun: 1 },
+      { commandFamily: 'git push', total: 33, ask: 4, deny: 4, notRun: 1 },
+      { commandFamily: 'curl | shell', total: 7, ask: 5, deny: 2, notRun: 0 },
+      { commandFamily: 'rm -rf', total: 57, ask: 4, deny: 1, notRun: 1 },
+      { commandFamily: 'python3', total: 69, ask: 3, deny: 0, notRun: 0 },
+      { commandFamily: 'ssh', total: 30, ask: 3, deny: 0, notRun: 0 },
+      { commandFamily: 'bash', total: 6, ask: 3, deny: 0, notRun: 2 },
+      { commandFamily: 'orca', total: 123, ask: 2, deny: 0, notRun: 0 },
+      { commandFamily: 'git', total: 87, ask: 2, deny: 0, notRun: 0 },
+      { commandFamily: 'other', total: 38, ask: 2, deny: 0, notRun: 0 },
+      { commandFamily: 'git branch', total: 26, ask: 2, deny: 0, notRun: 0 },
+      { commandFamily: 'scratchpad', total: 22, ask: 2, deny: 0, notRun: 0 },
+      { commandFamily: 'terraform', total: 2, ask: 1, deny: 1, notRun: 1 },
+    ],
+    rest: { families: 4, total: 70, ask: 3, deny: 1, notRun: 1 },
+    quiet: { families: 60, total: 935 },
+  },
+  approvals: { asked: 89, approved: 71, rejected: 0, notRun: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 37, rejectedCount: 0 } },
+}
+const READY_ALL = {
+  key: 'all', available: true, pluginVersion: null, since: null,
+  totalDecisions: 3711,
+  byVerdict: { allow: 3383, ask: 316, deny: 12 },
+  bySource: { 'local-rule': 126, cache: 278, jev: 3262, none: 45 },
+  jevLatency: { sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809 },
+  interventions: {
+    rows: [
+      { commandFamily: 'cd', total: 1207, ask: 56, deny: 2, notRun: 2 },
+      { commandFamily: 'rm -rf', total: 137, ask: 55, deny: 1, notRun: 2 },
+      { commandFamily: 'gh cli', total: 175, ask: 40, deny: 0, notRun: 0 },
+      { commandFamily: 'export', total: 159, ask: 22, deny: 0, notRun: 0 },
+      { commandFamily: 'git push', total: 50, ask: 16, deny: 4, notRun: 2 },
+      { commandFamily: 'curl | shell', total: 19, ask: 17, deny: 2, notRun: 0 },
+      { commandFamily: 'git discard', total: 21, ask: 17, deny: 1, notRun: 1 },
+      { commandFamily: 'terraform', total: 18, ask: 17, deny: 1, notRun: 2 },
+      { commandFamily: 'kubectl', total: 9, ask: 9, deny: 0, notRun: 0 },
+      { commandFamily: 'other', total: 69, ask: 8, deny: 0, notRun: 1 },
+      { commandFamily: 'npm', total: 19, ask: 7, deny: 0, notRun: 0 },
+      { commandFamily: 'git', total: 136, ask: 6, deny: 0, notRun: 0 },
+      { commandFamily: 'python3', total: 84, ask: 5, deny: 0, notRun: 0 },
+      { commandFamily: 'db client', total: 5, ask: 5, deny: 0, notRun: 0 },
+      { commandFamily: 'ssh', total: 40, ask: 4, deny: 0, notRun: 0 },
+    ],
+    rest: { families: 18, total: 784, ask: 32, deny: 1, notRun: 5 },
+    quiet: { families: 69, total: 779 },
+  },
+  approvals: { asked: 106, approved: 81, rejected: 1, notRun: 15, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 43, rejectedCount: 0 } },
+}
+const READY_WINDOWS = {
+  version: { ...emptyWindow('version'), available: false },
+  day: READY_DAY,
+  week: { ...READY_ALL, key: 'week', since: '2026-09-18T00:28:46.766Z' },
+  all: READY_ALL,
+}
+
+/** One window exactly as read-measurements.mjs publishes it for an empty log. */
+function emptyWindow (key) {
+  return {
+    key, available: key !== 'version', pluginVersion: null, since: null,
+    totalDecisions: 0,
+    byVerdict: { allow: 0, ask: 0, deny: 0 },
+    bySource: { 'local-rule': 0, cache: 0, jev: 0, none: 0 },
+    jevLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
+    interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
+    approvals: {
+      asked: 0, approved: 0, rejected: 0, notRun: 0,
+      ceiling: { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 },
+    },
+  }
+}
+
 /** A machine where the worker has run and published everything it mirrors. */
 const READY = {
   // 'now' is resolved by hostBridge at the moment the page asks, not here.
@@ -83,7 +175,10 @@ const READY = {
   claudeIntegrationStatus: {
     ok: true,
     hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
-    secretMirror: { ok: true },
+    // statMirror()'s real shape. `{ ok: true }` alone left `exists` and
+    // `path` undefined, and the panel photographed "Key file: doesn't exist
+    // yet (undefined)." -- next to a secretStatus that says a key is set.
+    secretMirror: { ok: true, exists: true, mode: '600', platform: 'darwin', path: '/Users/you/.config/orca-supervisor/env' },
     checkedAt: iso
   },
   localeStatus: { value: 'en', checkedAt: iso },
@@ -111,7 +206,16 @@ const READY = {
     { id: 'own_branch', kind: 'permits', rule: 'All work goes on a feature branch. Work happens there without asking.' },
     { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main or develop, not even a one-line fix.' },
   ],
-  board: { entries: [] },
+  // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
+  // project and branch, one not (project and branch null, which is what a
+  // missed `orca worktree list` lookup leaves): the second is the row that
+  // used to print a raw UUID pair as its only label. The ids are made up.
+  board: {
+    entries: [
+      { worktreeId: 'wt-app', project: 'orca-supervisor', rama: 'feat/board-redesign', paneKey: '1e1fff06-5b2c-4c8e-9d11-7a0e3f2b9c41:a62d09bd-0f3e-4b7a-8c55-2d9e6f1a3b70', state: 'working', receivedAt: 2, updatedAt: 'now' },
+      { worktreeId: null, project: null, rama: null, paneKey: 'dc178159-8e2a-4f61-b3c7-5a9d0e4f2c18:4a14c726-3b9f-4d2e-a6c1-8f7e5d3b2a90', state: 'done', receivedAt: 1, updatedAt: 'now' },
+    ],
+  },
   // The shape is read-measurements.mjs's own output, not a flat invention:
   // `{ ok, gate, modSkills, approvals }`, with the board reading
   // `summary.approvals.*`. The first version of this fixture was flat, so
@@ -137,10 +241,12 @@ const READY = {
   measurementsSummary: {
     ok: true,
     gate: {
-      totalDecisions: 2297,
-      byVerdict: { allow: 2013, ask: 279, deny: 5 },
-      bySource: { jev: 2029, cache: 149, 'local-rule': 119, none: 0 },
-      jevLatency: { sampleCount: 2029, medianMs: 447, maxMs: 1742 },
+      totalDecisions: 3711,
+      byVerdict: {allow: 3383, ask: 316, deny: 12},
+      bySource: {'local-rule': 126, cache: 278, jev: 3262, none: 45},
+      jevLatency: {sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809},
+      windows: READY_WINDOWS,
+      health: { lastJevAt: '2026-09-25T00:28:45.360Z', consecutiveFailures: 0, lastFailureAt: '2026-09-24T20:25:32.366Z' },
       byCommandFamily: [
         { commandFamily: 'cd', total: 511, byVerdict: { allow: 498, ask: 13, deny: 0 } },
         { commandFamily: 'git', total: 402, byVerdict: { allow: 371, ask: 30, deny: 1 } },
@@ -153,7 +259,7 @@ const READY = {
         { project: null, total: 91 },
       ],
       corruptLines: 0,
-      cacheHitRate: 149 / 2297,
+      cacheHitRate: 278 / 3711,
       recent: [
         { at: '2026-09-24T15:02:03.837Z', project: 'orca-supervisor', commandFamily: 'cd', source: 'jev', verdict: 'allow', latencyMs: 784 },
         { at: '2026-09-24T15:01:44.102Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'local-rule', verdict: 'ask', latencyMs: null },
@@ -236,19 +342,63 @@ const READY = {
  * user as a measurement; it is a fixture, and the rest of the object is the
  * real `ready` data.
  */
+const DEGRADED_DAY = {
+  ...READY_DAY,
+  totalDecisions: READY_DAY.totalDecisions + 12,
+  byVerdict: { ...READY_DAY.byVerdict, allow: READY_DAY.byVerdict.allow + 12 },
+  bySource: { ...READY_DAY.bySource, none: READY_DAY.bySource.none + 12 },
+}
 const DEGRADED = {
   ...READY,
   measurementsSummary: {
     ...READY.measurementsSummary,
     gate: {
       ...READY.measurementsSummary.gate,
-      totalDecisions: 2354,
-      bySource: { ...READY.measurementsSummary.gate.bySource, none: 57 },
+      totalDecisions: READY_ALL.totalDecisions + 12,
+      bySource: { ...READY_ALL.bySource, none: READY_ALL.bySource.none + 12 },
+      // Also synthetic: a stamped build, so the per-version window is
+      // photographed available and selected by default -- the real log
+      // cannot show it until gate-bash.ts stamps pluginVersion.
+      windows: {
+        ...READY_WINDOWS,
+        version: { ...DEGRADED_DAY, key: 'version', pluginVersion: '0.4.0', since: '2026-09-24T12:21:00.000Z' },
+        day: DEGRADED_DAY,
+      },
+      health: { lastJevAt: '2026-09-24T17:20:41.118Z', consecutiveFailures: 12, lastFailureAt: '2026-09-24T17:33:10.004Z' },
       recent: [
         { at: '2026-09-24T17:33:10.004Z', project: 'orca-supervisor', commandFamily: 'other', source: 'none', verdict: 'allow', latencyMs: null },
         ...READY.measurementsSummary.gate.recent,
       ],
     },
+  },
+}
+
+/**
+ * A machine where the worker has run but nothing has been measured yet: the
+ * heartbeat is live and every log is empty. Unlike `fresh` (the worker never
+ * ran, so there is no summary at all), this is the summary the real
+ * aggregator publishes for an empty home -- fixture_shape.test.mjs compares it
+ * against that output -- and the board must render it as one explanatory card,
+ * never a column of empty sections or an "undefined".
+ */
+const EMPTY_GATE_SUMMARY = foldGateDecisions([])
+const EMPTY = {
+  ...READY,
+  board: { entries: [] },
+  measurementsSummary: {
+    ok: true,
+    gate: {
+      ...EMPTY_GATE_SUMMARY,
+      windows: { version: emptyWindow('version'), day: emptyWindow('day'), week: emptyWindow('week'), all: emptyWindow('all') },
+      health: { lastJevAt: null, consecutiveFailures: 0, lastFailureAt: null },
+      corruptLines: 0,
+      cacheHitRate: null,
+      recent: [],
+      notRunByCommandFamily: [],
+    },
+    modSkills: READY.measurementsSummary.modSkills,
+    approvals: { ...emptyWindow('all').approvals, corruptLines: 0 },
+    abBenchmark: { ...foldAbResults([]), corruptLines: 0 },
   },
 }
 
@@ -316,7 +466,7 @@ const BASELINE = {
   policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, at: iso },
 }
 
-const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE }
+const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */
@@ -347,6 +497,10 @@ function hostBridge(storage) {
       value = { ...value, id: lastRequestId }
     }
     if (value && value.at === 'now') value = { ...value, at: new Date().toISOString() }
+    // Same sentinel for a live-status row, so its "N min ago" reads as live.
+    if (value && Array.isArray(value.entries)) {
+      value = { ...value, entries: value.entries.map((e) => (e.updatedAt === 'now' ? { ...e, updatedAt: new Date().toISOString() } : e)) }
+    }
     // storage.set and notifications.show simply succeed; nothing here persists.
     window.postMessage(
       { type: 'orca-panel-action-result', requestId: msg.requestId, ok: true, value: { value } },
