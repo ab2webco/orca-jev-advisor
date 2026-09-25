@@ -21,6 +21,28 @@ test("an env assignment never reaches the family name", () => {
   assert.equal(commandFamily("A=1 npm run deploy"), "package script");
 });
 
+// odd/tasks/release-0.5.1.md T9 (JEVADV-25): `stripAssignments` required a
+// `\s+` AFTER the assignment, so once `splitSegments` had already isolated
+// a leading `NAME=value` into its own segment (nothing trailing it
+// anymore), the regex stopped matching it at all. The fallback then took
+// THAT unstripped segment as the family's raw material: `programName`
+// found a `/` in the assignment's VALUE and returned its basename as the
+// family -- `DEV=/Users/x/Projects/orca-jev-advisor-dev` was logged as
+// commandFamily `orca-jev-advisor-dev`, a project path standing in for a
+// program name. `export NAME=value;` never matched at all, for the same
+// reason plus the unhandled `export` keyword.
+test("a leading env assignment isolated by its own separator still never reaches the family name", () => {
+  assert.equal(commandFamily("A=/x/y; node z"), "node");
+  assert.equal(commandFamily("DEV=/Users/x/Projects/orca-jev-advisor-dev; node run.mjs"), "node");
+});
+
+test("export NAME=value; is skipped like a bare assignment, leaving the family of the first real command", () => {
+  // `cd` is not stripped or specially treated -- same "existing rules"
+  // commandFamily already documents for `cd src && ls` above: the
+  // fallback is the first segment's own program name, whatever it is.
+  assert.equal(commandFamily("export PATH=/usr/bin; cd d && git status"), "cd");
+});
+
 test("no classified family carries a fragment of the command's own text", () => {
   const withSecrets = [
     "TOKEN=ghp_verysecret gh pr merge 1",

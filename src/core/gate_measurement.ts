@@ -165,15 +165,28 @@ export function splitSegments(command: string): string[] {
 }
 
 /**
- * Drops the `VAR=value` prefixes a command may carry before the program name.
+ * Drops the `VAR=value` prefixes a command may carry before the program name
+ * -- including an `export NAME=value` form, and one with nothing trailing it
+ * at all.
  *
  * This is the security-critical half of this module. Without it the fallback
  * below read `TOKEN=ghp_... gh pr merge` as its first word and, after
  * stripping punctuation, wrote `TOKENghp_...` into the log -- the literal
  * secret, in the one file this module promises never to put one in.
+ *
+ * The terminator used to be `\s+` alone, which required something to follow
+ * the assignment. `splitSegments` splits BEFORE this runs, so a command like
+ * `DEV=/path/to/project; node run.mjs` handed this function the assignment
+ * ALONE as its own segment -- nothing trailing it anymore -- and the regex
+ * stopped matching. The fallback then read that unstripped segment as the
+ * family's raw material: `programName` found a `/` in the assignment's own
+ * VALUE and returned its basename, so a project path (`orca-jev-advisor-dev`)
+ * was logged as the family, standing in for a program name it never was.
+ * `(?:\s+|$)` accepts the end of the segment as a terminator too, and
+ * `splitSegments` already filters the empty string this then produces.
  */
 export function stripAssignments(segment: string): string {
-  return segment.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/, "");
+  return segment.replace(/^(?:(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/, "");
 }
 
 /**
