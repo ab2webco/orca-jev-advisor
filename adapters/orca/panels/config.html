@@ -174,6 +174,13 @@
          policy kind is the same class of "needs your attention", not a new
          color of its own. */
       .hint.warn { color: var(--destructive, var(--fb-destructive)); }
+      /* News, not a failure: the reader's own text colour on the muted
+         surface, so it stands out from a plain hint without borrowing the
+         destructive red that .hint.warn keeps for things that need fixing. */
+      .hint.info { color: var(--foreground, var(--fb-foreground));
+                   background: var(--muted, var(--fb-muted));
+                   border: 1px solid var(--border, var(--fb-border));
+                   border-radius: var(--radius-md); padding: 8px 10px; }
       code { font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
       /* The global `input { width: 100% }` rule above is meant for text/number
          fields; a checkbox stretched to the row's full width renders as one
@@ -249,7 +256,7 @@
         <h2 data-i18n="policies.heading"></h2>
         <p class="hint" data-i18n="policies.hint"></p>
         <div id="policy-seed-notice" style="display:none; margin-bottom: 14px">
-          <p class="hint warn" id="policy-seed-notice-text"></p>
+          <p class="hint info" id="policy-seed-notice-text"></p>
           <div class="actions">
             <button id="policy-seed-notice-review" type="button" data-i18n="policies.seedNoticeReview"></button>
             <button id="policy-seed-notice-dismiss" class="link" type="button" data-i18n="policies.seedNoticeDismiss"></button>
@@ -346,6 +353,7 @@
           'integration.mirrorPresent': 'Archivo de la clave: presente, permisos {{mode}}, en {{path}}',
           'integration.mirrorPresentWindows': 'Archivo de la clave: presente, en {{path}} (Windows no tiene permisos POSIX; protégelo con los permisos NTFS de tu cuenta).',
           'integration.mirrorMissing': 'Archivo de la clave: no existe todavía ({{path}}).',
+          'integration.mirrorMissingNoPath': 'Archivo de la clave: no existe todavía.',
           'integration.mirrorUnknown': 'Archivo de la clave: no se pudo comprobar.',
           'entry.untitled': '(sin nombre)',
           'integration.hookCount': 'Hook de Bash: puesto en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
@@ -518,6 +526,7 @@
           'integration.mirrorPresent': 'Key file: present, permissions {{mode}}, at {{path}}',
           'integration.mirrorPresentWindows': 'Key file: present, at {{path}} (Windows has no POSIX permissions; protect it with your account NTFS permissions).',
           'integration.mirrorMissing': "Key file: doesn't exist yet ({{path}}).",
+          'integration.mirrorMissingNoPath': "Key file: doesn't exist yet.",
           'integration.mirrorUnknown': 'Key file: could not check.',
           'entry.untitled': '(unnamed)',
           'integration.hookCount': 'Bash hook: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
@@ -2059,10 +2068,24 @@
           : t('integration.envNotInstalled')
         claudeIntegrationStatusEl.appendChild(li(envLine))
 
+        // write-secret-mirror.mjs's statMirror() always reports `exists` and
+        // `path` alongside `ok`; a record missing either cannot say anything
+        // true about the file, so it gets the "could not check" line rather
+        // than a sentence with "undefined" where the path should be. A known
+        // absence with no path keeps its meaning without the placeholder.
         var mirror = status.secretMirror
-        var mirrorLine = mirror && mirror.ok
-          ? (mirror.exists ? (mirror.platform === 'win32' ? t('integration.mirrorPresentWindows', { path: mirror.path }) : t('integration.mirrorPresent', { mode: mirror.mode, path: mirror.path })) : t('integration.mirrorMissing', { path: mirror.path }))
-          : t('integration.mirrorUnknown')
+        var mirrorLine
+        if (!mirror || !mirror.ok || typeof mirror.exists !== 'boolean') {
+          mirrorLine = t('integration.mirrorUnknown')
+        } else if (!mirror.exists) {
+          mirrorLine = mirror.path ? t('integration.mirrorMissing', { path: mirror.path }) : t('integration.mirrorMissingNoPath')
+        } else if (!mirror.path) {
+          mirrorLine = t('integration.mirrorUnknown')
+        } else if (mirror.platform === 'win32') {
+          mirrorLine = t('integration.mirrorPresentWindows', { path: mirror.path })
+        } else {
+          mirrorLine = t('integration.mirrorPresent', { mode: mirror.mode, path: mirror.path })
+        }
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
         claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements, modSkillsStatus)))

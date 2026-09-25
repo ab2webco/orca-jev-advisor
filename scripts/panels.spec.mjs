@@ -154,9 +154,9 @@ function hostBridge (storage) {
   })
 }
 
-async function openPanel (storage, locale = 'en') {
+async function openPanel (storage, locale = 'en', colorScheme = 'light') {
   const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 } })
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
@@ -358,3 +358,80 @@ test('every policies.* key in one language catalog exists in the other', { skip:
     await browser.close()
   }
 })
+
+for (const colorScheme of ['light', 'dark']) {
+  test(`the baseline notice reads as information, not as an error (${colorScheme})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    // "The shipped baseline changed" is news, not a failure: nothing broke and
+    // nothing is lost by ignoring it. Painting it in the destructive red the
+    // panel keeps for a failed save or an unset policy kind cries wolf, and
+    // teaches the reader to skim past the red that does matter.
+    const { browser, page, errors } = await openPanel({
+      policies: existingBeforeBaselineUpdate(),
+      policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, at: new Date().toISOString() }
+    }, 'en', colorScheme)
+    try {
+      const colors = await page.evaluate(() => {
+        const probe = document.createElement('p')
+        probe.className = 'hint warn'
+        document.body.appendChild(probe)
+        const destructive = getComputedStyle(probe).color
+        probe.remove()
+        return { notice: getComputedStyle(document.getElementById('policy-seed-notice-text')).color, destructive }
+      })
+      assert.notEqual(colors.notice, colors.destructive, `the baseline notice renders in the error colour ${colors.destructive}`)
+      const text = await page.evaluate(() => document.getElementById('policy-seed-notice-text').innerText)
+      assert.equal(text, `The shipped baseline changed: ${BASELINE_UPDATE_DECISION.added} new, ${BASELINE_UPDATE_DECISION.differing} different from yours.`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+// What write-secret-mirror.mjs's statMirror() actually returns, one per
+// branch it has -- plus the bare `{ ok: true }` the screenshot fixture used to
+// send, which is how "Key file: doesn't exist yet (undefined)." got
+// photographed: `exists` and `path` both absent, so the panel took the
+// "missing" branch and interpolated a path nobody had supplied.
+const KEY_FILE_PATH = '/Users/someone/.config/orca-supervisor/env'
+const SECRET_MIRROR_SHAPES = {
+  present: { ok: true, exists: true, mode: '600', platform: 'darwin', path: KEY_FILE_PATH },
+  presentWindows: { ok: true, exists: true, mode: '666', platform: 'win32', path: KEY_FILE_PATH },
+  missing: { ok: true, exists: false, mode: null, platform: 'darwin', path: KEY_FILE_PATH },
+  missingNoPath: { ok: true, exists: false },
+  sparse: { ok: true },
+  failed: { ok: false, reason: 'exception', detail: 'boom' }
+}
+
+async function integrationLines (secretMirror, locale) {
+  const { browser, page, errors } = await openPanel({
+    claudeIntegrationStatus: {
+      ok: true,
+      hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2, orcaPanesCovered: true },
+      env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+      secretMirror,
+      checkedAt: new Date().toISOString()
+    }
+  }, locale)
+  try {
+    const lines = await page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+    return { lines, errors }
+  } finally {
+    await browser.close()
+  }
+}
+
+for (const locale of ['en', 'es']) {
+  for (const [shape, secretMirror] of Object.entries(SECRET_MIRROR_SHAPES)) {
+    test(`no Claude Code integration line ever says "undefined" (${locale}, key file ${shape})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+      const { lines, errors } = await integrationLines(secretMirror, locale)
+      assert.ok(lines.length >= 4, `expected the integration list to render, got ${JSON.stringify(lines)}`)
+      const bad = lines.filter((line) => /undefined|null|\{\{/.test(line))
+      assert.deepEqual(bad, [], `integration lines leaked a missing value: ${JSON.stringify(bad)}`)
+      if (secretMirror.path) {
+        assert.ok(lines.some((line) => line.includes(secretMirror.path)), `the key file's real path is not shown: ${JSON.stringify(lines)}`)
+      }
+      assert.deepEqual(errors, [])
+    })
+  }
+}
