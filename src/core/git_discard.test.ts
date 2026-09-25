@@ -152,6 +152,14 @@ test("splitOnCommandSeparators: a quoted paren inside a substitution does not cl
   assert.deepEqual(splitOnCommandSeparators('git push $(echo ")"; echo --force) origin'), ['git push $(echo ")"; echo --force) origin']);
 });
 
+test("splitOnCommandSeparators: a redirection never splits its command", () => {
+  assert.deepEqual(splitOnCommandSeparators("git push 2>&1 origin"), ["git push 2>&1 origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push &>/dev/null origin"), ["git push &>/dev/null origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push 0<&3 origin"), ["git push 0<&3 origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push >|log origin"), ["git push >|log origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push 2>&1 && ls"), ["git push 2>&1", "ls"]);
+});
+
 test("splitOnCommandSeparators: parentheses never split", () => {
   assert.deepEqual(splitOnCommandSeparators("(git status) && ls"), ["(git status)", "ls"]);
 });

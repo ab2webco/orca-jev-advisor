@@ -113,7 +113,8 @@ either against the whole command or against each of the command's segments
 or a newline, with quoted text left untouched) independently. Parentheses
 never split a segment: a `$(...)` or backtick substitution is part of the
 arguments of the command it feeds, so a flag or branch it produces still
-counts for that command, and a plain subshell keeps its command whole:
+counts for that command, and a plain subshell stays whole. A redirection
+such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
 
 | Rule | Scope | Why |
 |------|-------|-----|

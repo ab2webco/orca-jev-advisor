@@ -277,6 +277,11 @@ const SEGMENT_SCOPED_DENIED = [
   'git push origin `echo main`',
   'git push $(echo x; echo --force) origin',
   '(git push --force origin)',
+  // A redirection is part of its command, never a separator: `2>&1`, `&>`
+  // and `>|` must not cut the push off from a flag that follows them.
+  'git push 2>&1 --force origin',
+  'git push &>/dev/null -f origin',
+  'git push >|log --force origin',
 ]
 
 for (const command of SEGMENT_SCOPED_NOT_DENIED) {

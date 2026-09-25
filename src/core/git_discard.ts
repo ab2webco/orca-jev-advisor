@@ -271,10 +271,13 @@ export function startsWithGitDiscard(segment: string): boolean {
 
 /**
  * Splits on the shell's command separators (`;`, `&&`, `||`, `|`, `&`,
- * newline) outside quotes AND outside command substitutions (`$(...)`,
- * backticks). Unlike `splitOutsideQuotes` it never splits on parentheses:
- * a substitution is part of the arguments of the command it feeds, so
- * `git push $(echo --force) origin` stays one segment.
+ * newline) outside quotes, backticks and parentheses. Unlike
+ * `splitOutsideQuotes` it never splits on a parenthesis: a `$(...)`
+ * substitution is part of the arguments of the command it feeds, so
+ * `git push $(echo --force) origin` stays one segment. A plain `( ... )`
+ * subshell also stays whole, which errs toward matching (a deny rule may
+ * see two of its commands together), never toward missing one. A
+ * redirection (`2>&1`, `&>`, `>|`) is part of its command, not a separator.
  */
 export function splitOnCommandSeparators(command: string): string[] {
   const parts: string[] = [];
@@ -295,7 +298,7 @@ export function splitOnCommandSeparators(command: string): string[] {
     else if (char === "`" && !single) backtick = !backtick;
     else if (char === "(" && !single && !double) depth += 1;
     else if (char === ")" && !single && !double && depth > 0) depth -= 1;
-    if (!single && !double && !backtick && depth === 0 && /[;&|\n]/.test(char)) {
+    if (!single && !double && !backtick && depth === 0 && /[;&|\n]/.test(char) && !isRedirection(command, index)) {
       parts.push(current);
       current = "";
       continue;
@@ -304,6 +307,18 @@ export function splitOnCommandSeparators(command: string): string[] {
   }
   parts.push(current);
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * True when the `&` or `|` at `index` belongs to a redirection (`2>&1`,
+ * `0<&3`, `&>file`, `>|file`) rather than separating two commands.
+ */
+function isRedirection(command: string, index: number): boolean {
+  const char = command[index];
+  const previous = command[index - 1];
+  if (char === "&") return previous === ">" || previous === "<" || command[index + 1] === ">";
+  if (char === "|") return previous === ">";
+  return false;
 }
 
 /**
