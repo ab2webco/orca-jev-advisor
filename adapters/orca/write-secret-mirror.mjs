@@ -18,7 +18,7 @@
  * works the same way on Windows, unlike the wrapper this project used
  * before), where the sandbox does not apply.
  *
- * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save>
+ * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|models-save>
  *   save   reads the new key from stdin (never argv, never logged), and
  *          atomically (temp file + rename) writes or replaces its
  *          TYPESAFE_API_KEY= line in the mirror file, mode 0600. Other
@@ -54,11 +54,22 @@
  *          denyDropTable, denyTerraformDestroy}` (all `true` when the file
  *          has never been written or fails to parse), for main.mjs's
  *          publishDenyTierStatus.
+ *   models-save  reads `{active, ready, models}` as JSON from stdin --
+ *          adapters/orca/models-worker.mjs's mirrorModels, the model-catalog
+ *          analogue of catalog-save/policies-save above -- validates it is
+ *          shaped that way (an object, `active`/`ready` booleans, `models`
+ *          an array; individual rows are not re-validated here, since the
+ *          worker already ran them through model_catalog.ts's own tolerant
+ *          parser before calling this script), and atomically writes it to
+ *          models-catalog.json in the config dir. Not secret, so ordinary
+ *          file permissions, same as catalog-save/policies-save -- the Agent
+ *          PreToolUse/PostToolUse hooks (adapters/claude/agent-model.ts)
+ *          read this file directly.
  *
  * Always prints exactly one JSON line to stdout and nothing else -- no
  * console.error, no stray output that would corrupt the parent's parse.
- * `save`, `clear`, `catalog-save` and `policies-save` answer `{ok:true}`
- * or `{ok:false, reason, detail}`; `read` answers `{ok:true, value}` or
+ * `save`, `clear`, `catalog-save`, `policies-save` and `models-save` answer
+ * `{ok:true}` or `{ok:false, reason, detail}`; `read` answers `{ok:true, value}` or
  * the same failure shape. The key itself is never written to stderr, to
  * a log, or to any field but `value` on `read` -- and that leaves this
  * process only over the pipe its own parent already owns.
@@ -70,6 +81,7 @@ import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
 import { parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
+import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
 // Guarded stand-ins for the mutating fs/promises calls this file makes --
 // see guarded_fs.ts's module doc for why every write in this script goes
 // through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/chmod.
@@ -103,6 +115,7 @@ let CATALOG_PATH = ''
 let POLICIES_PATH = ''
 let MOD_SKILLS_CONFIG_PATH = ''
 let DENY_TIER_CONFIG_PATH = ''
+let MODELS_PATH = ''
 let CONFIG_DIR_RESOLUTION_ERROR = null
 try {
   CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
@@ -132,6 +145,11 @@ try {
   // switches above; the fail-CLOSED default lives in the parser, not in
   // this file's permission mode.
   DENY_TIER_CONFIG_PATH = join(CONFIG_DIR, 'deny-tier-config.json')
+  // The model catalog mirror -- see models-worker.mjs's mirrorModels. Same
+  // filename constant the Agent hooks' own reader (model_mirror.ts's
+  // parseModelsMirror) is documented against, so the two sides can never
+  // silently drift onto different filenames.
+  MODELS_PATH = join(CONFIG_DIR, MODELS_MIRROR_FILE)
 } catch (error) {
   CONFIG_DIR_RESOLUTION_ERROR = error
 }
@@ -359,6 +377,40 @@ async function denyTierConfigRead () {
   return { ok: true, value: parseDenyTierConfig(content) }
 }
 
+/** True for a plain object (not an array, not null) -- the same narrow
+ *  check src/guards.ts's isRecord makes, duplicated here rather than
+ *  imported: this script is a plain Node CLI with no other TypeScript
+ *  runtime import beyond the pure `.ts` modules it already reads config
+ *  from (paths.ts, mod_skills_config.ts, deny_tier_config.ts,
+ *  model_mirror.ts), and a one-line predicate is not worth adding another
+ *  cross-module dependency for. */
+function isPlainObject (value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Validates the payload shape before writing -- an object with boolean
+ *  `active`/`ready` and an array `models`. Individual model rows are NOT
+ *  re-validated here: the worker already ran the stored catalog through
+ *  model_catalog.ts's own tolerant `parseModelCatalog` before calling this
+ *  script (see models-worker.mjs's mirrorModels), and re-checking each row
+ *  a second time here would just be a second, driftable copy of that same
+ *  parser. A malformed top-level shape is refused outright, never
+ *  half-written or silently coerced -- the Agent hooks' own reader
+ *  (model_mirror.ts's parseModelsMirror) already fails toward measurement
+ *  on a bad file, but a bad WRITE is a bug in this plugin, not a fact about
+ *  the person's disk, and deserves a reported reason instead of a silent
+ *  corruption. */
+async function modelsSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  if (!parsed.ok) return parsed
+  const value = parsed.value
+  if (!isPlainObject(value) || typeof value.active !== 'boolean' || typeof value.ready !== 'boolean' || !Array.isArray(value.models)) {
+    return { ok: false, reason: 'invalid-shape', detail: 'expected an object shaped { active: boolean, ready: boolean, models: array }.' }
+  }
+  await writeAtomic(`${JSON.stringify(value, null, 2)}\n`, MODELS_PATH, null)
+  return { ok: true }
+}
+
 async function main () {
   const mode = process.argv[2]
   let result
@@ -388,6 +440,8 @@ async function main () {
       result = await denyTierConfigSave((await readStdin()).trim())
     } else if (mode === 'deny-tier-config-read') {
       result = await denyTierConfigRead()
+    } else if (mode === 'models-save') {
+      result = await modelsSave((await readStdin()).trim())
     } else {
       result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
     }

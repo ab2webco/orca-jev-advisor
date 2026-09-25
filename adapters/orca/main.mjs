@@ -58,6 +58,14 @@ import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
+import {
+  attendModelsMirrorRequest,
+  attendModelsSeedRequest,
+  mirrorModels,
+  publishModelMeasurements,
+  publishModelsSeedNotice,
+  seedModelsIfEmpty,
+} from './models-worker.mjs'
 
 // Every sidecar below (write-secret-mirror.mjs, install-claude-integration.mjs,
 // read-measurements.mjs) is spawned with an explicit `--permission` sandbox
@@ -756,6 +764,51 @@ async function publishMeasurementsSummary (orca, storageHost) {
   await storageHost.set(MEASUREMENTS_STATUS_KEY, { ...summary, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`measurements summary publish failed: ${error.message}`))
 }
+
+// The model-reclassification readout (models-worker.mjs's
+// publishModelMeasurements) needs its own sidecar, not this one:
+// read-measurements.mjs sums gate/mod-skills/approvals/ab-benchmark logs and
+// takes no input, while read-model-measurements.mjs needs the stored model
+// catalog piped over stdin to compare each decision's requested model
+// against a ranked entry. Same permission flags and sidecarEnv as every
+// other spawn in this file; models-worker.mjs itself never spawns a child
+// process (see that file's own header note on why `options.readSummary`/
+// `options.mirror` have no default there).
+const MODEL_MEASUREMENTS_SCRIPT = join(__dirname, 'read-model-measurements.mjs')
+
+function runReadModelMeasurementsScript (catalog) {
+  return new Promise((resolve) => {
+    try {
+      const child = execFile(process.execPath, ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${CACHE_DIR}`, MODEL_MEASUREMENTS_SCRIPT], {
+        timeout: MEASUREMENTS_TIMEOUT_MS,
+        maxBuffer: 4 * 1024 * 1024,
+        env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+      }, (error, stdout) => {
+        let result = null
+        try {
+          result = JSON.parse(stdout || 'null')
+        } catch {
+          result = null
+        }
+        if (!result || typeof result !== 'object' || typeof result.ok !== 'boolean') {
+          resolve({ ok: false, reason: 'no-json', detail: String(error?.message ?? "the script didn't return JSON").slice(0, 200) })
+          return
+        }
+        resolve(result)
+      })
+      child.stdin.write(JSON.stringify(catalog))
+      child.stdin.end()
+    } catch (error) {
+      resolve({ ok: false, reason: 'launch-failed', detail: String(error?.message ?? error).slice(0, 200) })
+    }
+  })
+}
+
+/** The real `options` every models-worker.mjs call in this file passes --
+ *  its own sidecar-spawning dependencies, kept in one place so the several
+ *  call sites below cannot drift onto two different mirror/readSummary
+ *  implementations. */
+const MODELS_WORKER_OPTIONS = { mirror: runSecretMirrorScript, readSummary: runReadModelMeasurementsScript }
 
 // ---------------------------------------------------------------------------
 // Secret request/result channel -- sandboxed panels may call ONLY
@@ -1573,6 +1626,11 @@ async function checkClaudeIntegration () {
   else if (!status.hook.pathMatches) parts.push('the hook points at a different gate-bash.ts path')
   if (!status.env.installed) parts.push(`missing ${status.env.name}=1`)
   if (!status.modCopy.installed) parts.push('the skills mod copy is missing or stale')
+  // T6a's Agent-matcher hooks (adapters/claude/agent-model.ts) -- read the
+  // same way status.hook/env/modCopy already are above, no restructuring
+  // needed: install-claude-integration.mjs's status() already reports this
+  // field (see that file's own `agentModelHook` aggregate).
+  if (status.agentModelHook?.installed !== true) parts.push('missing the Agent model PreToolUse/PostToolUse hooks')
   if (parts.length === 0) return { id: 'claude-integration', ok: true, detail: 'Hook, environment variable and skills mod all installed.' }
   return { id: 'claude-integration', ok: false, detail: `Not fully installed: ${parts.join('; ')}.` }
 }
@@ -1655,6 +1713,7 @@ export default function activate (orca) {
   let secretTimer = null
   const catalogPolicyMirrorSeen = { value: null }
   const policySeedNoticeSeen = { value: null }
+  const modelsMirrorSeen = { value: null }
   const runSecretPoll = () => {
     publishWorkerHeartbeat(orca, storageHost)
       .then(() => attendSecretRequest(orca, storageHost, secretsHost))
@@ -1677,6 +1736,10 @@ export default function activate (orca) {
       .catch((error) => orca.log(`policy seed dismiss request handling failed: ${error.message}`))
       .then(() => attendPolicySeedNoticeRefresh(orca, storageHost, policySeedNoticeSeen))
       .catch((error) => orca.log(`policy seed notice refresh failed: ${error.message}`))
+      .then(() => attendModelsMirrorRequest(orca, storageHost, modelsMirrorSeen, MODELS_WORKER_OPTIONS))
+      .catch((error) => orca.log(`models mirror request handling failed: ${error.message}`))
+      .then(() => attendModelsSeedRequest(orca, storageHost, MODELS_WORKER_OPTIONS))
+      .catch((error) => orca.log(`models seed request handling failed: ${error.message}`))
       .then(() => storageHost.get(PANEL_SEEN_KEY).catch(() => null))
       .then((seen) => {
         if (secretPollStopped) return
@@ -1721,6 +1784,18 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
     .then(() => publishPolicySeedNoticeStatus(orca, storageHost))
     .catch((error) => orca.log(`initial policy seed notice status failed: ${error.message}`))
+    // Model catalog: seed once, mirror it out for the Agent hooks, then
+    // check whether a newer shipped baseline has anything to offer -- same
+    // three-step order as the policy chain just above, for the same reason
+    // (a freshly-seeded catalog must reach models-catalog.json on this same
+    // activation, and the baseline notice must be computed from whatever
+    // ends up stored, not from a snapshot taken before seeding ran).
+    .then(() => seedModelsIfEmpty(orca, storageHost))
+    .catch((error) => orca.log(`initial model seeding failed: ${error.message}`))
+    .then(() => mirrorModels(orca, storageHost, MODELS_WORKER_OPTIONS))
+    .catch((error) => orca.log(`initial models mirror failed: ${error.message}`))
+    .then(() => publishModelsSeedNotice(orca, storageHost, MODELS_WORKER_OPTIONS))
+    .catch((error) => orca.log(`initial models seed notice failed: ${error.message}`))
   // "Al activarse, el worker debe dejar funcionando todo lo que hoy es
   // manual" (T8): every activation re-asserts the hook, the env var and the
   // mod-skills link, idempotently -- a fresh install where none of this
@@ -1745,9 +1820,16 @@ export default function activate (orca) {
   // to tie this to the secret/panel poll's fast cadence.
   publishMeasurementsSummary(orca, storageHost)
     .catch((error) => orca.log(`initial measurements summary failed: ${error.message}`))
+  // Same cadence, same reasoning, for the model-reclassification log --
+  // model-reclassifications.jsonl only grows when a real Agent tool call
+  // happens elsewhere, never from this worker's own actions.
+  publishModelMeasurements(orca, storageHost, MODELS_WORKER_OPTIONS)
+    .catch((error) => orca.log(`initial model measurements failed: ${error.message}`))
   const measurementsTimer = setInterval(() => {
     publishMeasurementsSummary(orca, storageHost)
       .catch((error) => orca.log(`measurements summary refresh failed: ${error.message}`))
+    publishModelMeasurements(orca, storageHost, MODELS_WORKER_OPTIONS)
+      .catch((error) => orca.log(`model measurements refresh failed: ${error.message}`))
   }, MEASUREMENTS_REFRESH_MS)
   if (typeof measurementsTimer.unref === 'function') measurementsTimer.unref()
 
