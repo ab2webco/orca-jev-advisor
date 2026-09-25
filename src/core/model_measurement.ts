@@ -322,6 +322,12 @@ export function summarizeModelMeasurements(
   let comparable = 0;
   let matches = 0;
   for (const decision of judged) {
+    // An applied decision means active mode already rewrote the request to
+    // the recommendation, so the outcome's resolvedModel matching it proves
+    // nothing about Jev's prediction -- it is circular, not a comparison.
+    // Only a decision Jev merely measured (never applied) tells readiness
+    // anything about match rate.
+    if (decision.applied) continue;
     const outcome = joinedOutcomeById.get(decision.id);
     if (outcome === undefined || outcome.resolvedModel === null) continue;
     comparable += 1;

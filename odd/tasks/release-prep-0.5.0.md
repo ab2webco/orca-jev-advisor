@@ -49,7 +49,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
   the documented field is `totalDurationMs`
   (https://code.claude.com/docs/en/hooks, Agent section). Read the
   documented field only.
-- [ ] **T4 readiness self-fulfilment.** `src/core/model_measurement.ts`
+- [x] **T4 readiness self-fulfilment.** `src/core/model_measurement.ts`
   readiness counts decisions that active mode applied as "matches". Exclude
   applied decisions from `comparable` and `matches`.
 - [ ] **T5 sidecar EPIPE.** `adapters/orca/main.mjs` writes to child stdin
@@ -181,6 +181,22 @@ touches 7+ non-trivial files, which fires the writer trigger.
   `adapters/claude/agent-model-hook.test.ts` 18/18. Full suite: `npm test`
   975/975 pass (net test count unchanged: 4 old duration tests replaced by
   4 new ones).
+- **T4 done.** Commit: (recorded after commit below). Confirmed the exact
+  field: `ModelDecisionRecord.applied: boolean` (`model_measurement.ts:80`,
+  written by `agent-model-hook.ts` when active mode rewrites the request to
+  the recommendation), already summed as `summary.applied` at line 296 but
+  never excluded from the `comparable`/`matches` join at lines 322-333.
+  RED: added "an applied decision's outcome is excluded from comparable and
+  matches" to `src/core/model_measurement.test.ts` -- two judged decisions,
+  one `applied: true` with a matching outcome, one `applied: false` with a
+  matching outcome; expected `comparable: 1, matches: 1` (only the
+  non-applied one). Ran `node --test --experimental-strip-types
+  src/core/model_measurement.test.ts` -- failed 1/25:
+  `AssertionError: the applied decision's trivially-matching outcome must
+  not count -- 2 !== 1`.
+  Fix: the `comparable`/`matches` loop now `continue`s when
+  `decision.applied` is true, before joining the outcome.
+  GREEN: same command, 25/25. Full suite: `npm test` 976/976 pass.
 
 ## Next step
 

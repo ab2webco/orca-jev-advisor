@@ -335,6 +335,24 @@ test("an outcome record whose id matches no decision is ignored", () => {
   assert.equal(summary.comparable, 0);
 });
 
+test("an applied decision's outcome is excluded from comparable and matches -- active mode forced the model, so a match proves nothing about Jev's prediction", () => {
+  const applied = judgedDecision({
+    id: "tool-1",
+    applied: true,
+    recommended: { id: "claude-sonnet-5", agentModel: "sonnet", rank: 2 },
+  });
+  const appliedOutcome = outcome({ id: "tool-1", resolvedModel: "sonnet" });
+  const unapplied = judgedDecision({
+    id: "tool-2",
+    applied: false,
+    recommended: { id: "claude-sonnet-5", agentModel: "sonnet", rank: 2 },
+  });
+  const unappliedOutcome = outcome({ id: "tool-2", resolvedModel: "sonnet" });
+  const summary = summarizeModelMeasurements([applied, appliedOutcome, unapplied, unappliedOutcome], catalog);
+  assert.equal(summary.comparable, 1, "the applied decision's trivially-matching outcome must not count");
+  assert.equal(summary.matches, 1, "only the non-applied decision's match counts");
+});
+
 test("summarizeModelMeasurements feeds comparable/matchRate into evaluateModSkillsReadiness with the given thresholds", () => {
   const decisions = Array.from({ length: 5 }, (_, index) =>
     judgedDecision({ id: `d${index}`, recommended: { id: "claude-sonnet-5", agentModel: "sonnet", rank: 2 } }),
