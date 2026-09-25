@@ -67,6 +67,14 @@ touches 7+ non-trivial files, which fires the writer trigger.
   end.
 - [x] **T8 version bump.** `chore(release): 0.5.0` in `package.json` and
   `orca-plugin.json` (and `package-lock.json` if it carries the version).
+- [x] **T9 in-app revert claim** (added after the writer reported it as a
+  gap; route: direct inline, since it is one file with a mechanical text
+  change). `config.html` `integration.hint`, in `en` and `es`, said that
+  "Revert everything" puts all seven things back. It now says what the
+  code does: the revert removes the hook entries, the env var and the
+  skills-mod copy (`install-claude-integration.mjs` uninstall); clearing
+  the key deletes the key file (`write-secret-mirror.mjs:258`); the three
+  JSON mirrors are never deleted. This matches the README (T7).
 
 ## Acceptance criteria
 
@@ -444,8 +452,9 @@ touches 7+ non-trivial files, which fires the writer trigger.
 
 Out of T1..T8's scope; reported, not touched.
 
-- **`adapters/orca/panels/config.html`'s `integration.hint` (both `en` and
-  `es`) says "Revert everything puts it all back" for all seven things.**
+- **(Closed by T9.) `adapters/orca/panels/config.html`'s `integration.hint`
+  (both `en` and `es`) said "Revert everything puts it all back" for all
+  seven things.**
   Traced while writing T7 (see T7's `d4e3723` correction note above): the
   revert action only touches three of the seven (hook entries, env var,
   skills-mod copy). The API key file has its own separate clear action
