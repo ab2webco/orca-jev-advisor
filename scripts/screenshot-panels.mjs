@@ -83,7 +83,10 @@ const READY = {
   claudeIntegrationStatus: {
     ok: true,
     hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
-    secretMirror: { ok: true },
+    // statMirror()'s real shape. `{ ok: true }` alone left `exists` and
+    // `path` undefined, and the panel photographed "Key file: doesn't exist
+    // yet (undefined)." -- next to a secretStatus that says a key is set.
+    secretMirror: { ok: true, exists: true, mode: '600', platform: 'darwin', path: '/Users/you/.config/orca-supervisor/env' },
     checkedAt: iso
   },
   localeStatus: { value: 'en', checkedAt: iso },
