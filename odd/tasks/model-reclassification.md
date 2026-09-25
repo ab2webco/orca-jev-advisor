@@ -57,14 +57,21 @@ authored lines per PR; coordinator brief). RDD on (global): after each
 work-unit commit run `gentle-ai review assess --committed-only`; consent is
 relayed through `orca orchestration ask`.
 
-Slices (revised after the first slicing pass; one PR per work unit):
-- PR 1 (#19): T1 catalog + seed. Base main.
-- PR 2 (#20): T2 seed-once + notice. Base PR 1.
-- PR 3: T3 Jev question + rewrite decision. Base PR 2.
-- PR 4: T4 measurement records + readout + readiness. Base PR 3.
-- PR 5: T5-T6a Agent hooks + installer entries. Base PR 4.
-- PR 6: T6b worker mirror/seed/notice/readout sidecars. Base PR 5.
-- PR 7: T7 config panel Models section + screenshots. Base PR 6.
+Slices as delivered (one PR per work unit, each based on the previous one;
+`main` was merged down the stack with normal merge commits, never a force
+push, because the gate refuses force pushes):
+- #19 T1 catalog + seed. Base main.
+- #20 T2 seed-once + notice. Base #19.
+- #23 T3 Jev question + rewrite decision. Base #20.
+- #24 T4 measurement records + readout + readiness. Base #23.
+- #25 T5 Agent hooks (CLI + handler + mirror parser). Base #24.
+- #26 T6a installer entries. Base #25.
+- #27 T6b worker seed/mirror/notice/readout. Base #26.
+- #28 T7 config panel Models section (+ the fix-now commit). Base #27.
+#23-#28 exceed ~400 lines (one module plus tests each); size:exception
+recommended in each PR. Stale branches with no PR (from before a rebase the
+gate refused to force-push): fabolivark/model-catalog-01,
+fabolivark/model-catalog-02.
 
 ## Decisions
 - Question shape: an ordinal ScoreQuestion whose levels are the available
@@ -113,10 +120,10 @@ Slices (revised after the first slicing pass; one PR per work unit):
   `applyModelSeedChoices` (only accepted ids replace user rows). Mirrors
   policy_seed_notice / policy_seed_import. Route: inline.
   Checks: `src/core/model_seed_notice.test.ts`.
-- [x] **T3** `src/core/model_decisions.ts`: Jev ChoiceQuestion built from the
-  available ladder (criteria = entry labels + legend), state from the Agent
-  input, `interpretModelChoice`, `decideModelRewrite` (active + ready +
-  confidence >= threshold + differs), `buildUpdatedAgentInput` (echo all
+- [x] **T3** `src/core/model_decisions.ts`: Jev ordinal ScoreQuestion built
+  from the available ladder (levels = entries, smallest first), state from the
+  Agent input, `interpretModelAnswer`, `decideModelRewrite` (active + ready +
+  bypassPermissions + confidence >= threshold + differs), `buildUpdatedAgentInput` (echo all
   fields). Route: delegated writer (2 non-trivial files with T4).
 - [x] **T4** `src/core/model_measurement.ts` + readiness (reuse
   `evaluateModSkillsReadiness`): decision/outcome records, join by
@@ -229,3 +236,22 @@ Slices (revised after the first slicing pass; one PR per work unit):
   R3-003: Apply is blocked, with an inline message and "Discard my edits",
   while ladder edits are unsaved. Delegated writer; RED observed (16 unit and
   8 browser tests), then GREEN.
+- T7 fix: commit 1a75497. Its review: granted, approved, acknowledged
+  (lineage review-49d31a2a74d0b22a). Advisory follow-ups: a successful save
+  does not hide the unsaved-edits message; ladder edits made while an Apply
+  or a save is in flight are overwritten or marked clean when it lands; a
+  failed "Discard my edits" read hides the message while the ladder stays
+  dirty.
+  Final `npm run check`: 939 unit + 44 browser tests, 112 screenshots, no
+  overflow or script errors. Models section re-read at 1440/768/390/320 in
+  both themes, plus a local-only render with one unranked entry ("Rank this")
+  at 320 and 1440 in both themes. Not looked at: the in-flight disabled
+  buttons and the unsaved-edits message (browser tests only).
+
+## Next step
+Coordinator: review and merge #19 -> #28 in order (retarget each child to
+main after its parent merges). Follow-ups worth a next PR, in priority order:
+the sidecar stdin EPIPE listener (#27), excluding applied decisions from
+readiness (#24 R3-002, before anyone enables active mode), observing a live
+PostToolUse(Agent) payload for the `resolvedModel` spelling (#24 R3-003),
+then the smaller items listed per PR.
