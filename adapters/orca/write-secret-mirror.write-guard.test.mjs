@@ -25,6 +25,10 @@ const SCRIPT_PATH = join(__dirname, 'write-secret-mirror.mjs')
 
 const FAKE_REAL_HOME = join(PLUGIN_ROOT, '.orca-jev-write-guard-fixture-mirror-home')
 const FAKE_CATALOG_PATH = join(FAKE_REAL_HOME, '.config', 'orca-supervisor', 'catalog.json')
+// The model catalog mirror (models-worker.mjs's mirrorModels) is written by
+// this same script, through the same CONFIG_DIR resolution -- the same
+// incident class applies to it as to catalog.json/policies.json above.
+const FAKE_MODELS_PATH = join(FAKE_REAL_HOME, '.config', 'orca-supervisor', 'models-catalog.json')
 
 function resetFixture () {
   rmSync(FAKE_REAL_HOME, { recursive: true, force: true })
@@ -83,6 +87,50 @@ test('still saves normally against an isolated (mkdtemp-style) HOME', () => {
     assert.equal(result.ok, true, `expected a normal catalog-save to succeed, got: ${JSON.stringify(result)}`)
     const written = JSON.parse(readFileSync(join(tempHome, '.config', 'orca-supervisor', 'catalog.json'), 'utf8'))
     assert.deepEqual(written, { destinations: [] })
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})
+
+test('refuses models-save against a real-looking, non-isolated HOME under the test runner', () => {
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'fixture must not pre-exist')
+
+  const result = runMirrorAgainst(FAKE_REAL_HOME, 'models-save', JSON.stringify({ active: false, ready: false, models: [] }))
+
+  // Same guard, same reason -- see the catalog-save test above for why this
+  // fires one layer earlier than a per-write check.
+  assert.equal(result.ok, false, `expected the paths guard to refuse models-save, got: ${JSON.stringify(result)}`)
+  assert.equal(result.reason, 'exception')
+  assert.match(result.detail, /paths guard/i)
+  assert.match(result.detail, /refused to hand back/i)
+  assert.equal(existsSync(FAKE_MODELS_PATH), false, 'the guard must fire before any file is created')
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'the guard must fire before even the directory is created')
+})
+
+test('models-save still saves normally against an isolated (mkdtemp-style) HOME', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-models-sanity-'))
+  try {
+    const payload = { active: true, ready: false, models: [] }
+    const result = runMirrorAgainst(tempHome, 'models-save', JSON.stringify(payload), {
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
+    assert.equal(result.ok, true, `expected a normal models-save to succeed, got: ${JSON.stringify(result)}`)
+    const written = JSON.parse(readFileSync(join(tempHome, '.config', 'orca-supervisor', 'models-catalog.json'), 'utf8'))
+    assert.deepEqual(written, payload)
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})
+
+test('models-save rejects a payload that is not {active: boolean, ready: boolean, models: array}', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-models-shape-'))
+  try {
+    const result = runMirrorAgainst(tempHome, 'models-save', JSON.stringify({ active: 'yes', ready: false, models: [] }), {
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
+    assert.equal(result.ok, false)
+    assert.equal(result.reason, 'invalid-shape')
+    assert.equal(existsSync(join(tempHome, '.config', 'orca-supervisor', 'models-catalog.json')), false)
   } finally {
     rmSync(tempHome, { recursive: true, force: true })
   }
