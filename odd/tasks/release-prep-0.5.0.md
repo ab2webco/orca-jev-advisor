@@ -267,9 +267,11 @@ touches 7+ non-trivial files, which fires the writer trigger.
   `asked - approved - rejected - notRun` for that same fixture's own
   numbers) to all 4 literal `approvals` blocks in
   `scripts/screenshot-panels.mjs` (`READY_DAY`: 9, `READY_ALL`: 9,
-  `emptyWindow()`: 0, `DEGRADED`'s top-level `approvals`: 0); the 5th
-  (`EMPTY`) derives from `emptyWindow('all')` via spread, no separate edit
-  needed.
+  `emptyWindow()`: 0, `READY.measurementsSummary`'s top-level `approvals`
+  (the field `aggregateApprovals()` publishes distinct from `gate.windows`,
+  unused by any panel today, inherited unchanged by `DEGRADED` via its
+  `...READY` spread): 0); the 5th (`EMPTY`) derives from
+  `emptyWindow('all')` via spread, no separate edit needed.
   Full suite after all of T6: `npm test` 979/979 pass;
   `node --test --experimental-strip-types src/core/approval_record.test.ts
   adapters/orca/read-measurements.test.mjs scripts/fixture_shape.test.mjs`

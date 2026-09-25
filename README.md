@@ -55,15 +55,19 @@ and no key at all. The key only buys judgement on the grey cases.
 ## What it writes outside itself
 
 A plugin that reaches outside its own directory should say so. This one
-writes seven things, all listed in the settings panel, and **Revert
-everything** puts them back:
+writes seven things, all listed in the settings panel. **Revert
+everything** puts back the hook entries, the env var and the skills-mod
+copy — the key file and the three JSON mirrors below are never deleted by
+any action here; each is only ever overwritten by its own next save (the
+key has its own separate removal, from clearing it in the settings
+panel):
 
 | What | Where | Why |
 |---|---|---|
 | Seven hook entries — four on the command gate (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`) plus three on model reclassification (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`) | `settings.json` in every Claude Code config root, including Orca's own per-account ones | so the gate and the model hooks run in Orca's agent panes, not only outside them |
 | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` | the same files | required by the skill and tool advisories |
 | The API key, plain text, mode `600` | `~/.config/orca-supervisor/env` | the gate runs outside Orca and cannot reach encrypted plugin storage |
-| A copy of the skills mod | `~/.claude/skills/orca-jev-mod-skills` | so Claude Code auto-loads it |
+| A copy of the skills mod | `skills/orca-jev-mod-skills` under every one of the same config roots | so Claude Code auto-loads it in each one |
 | A human-readable mirror of the destination catalog (not secret) | `~/.config/orca-supervisor/catalog.json` | the gate reads it outside Orca, with no channel back into plugin storage |
 | A human-readable mirror of the team policies (not secret) | `~/.config/orca-supervisor/policies.json` | same reason |
 | A human-readable mirror of the model catalog (not secret) | `~/.config/orca-supervisor/models-catalog.json` | the model hook reads it outside Orca to rank a recommendation |
@@ -159,8 +163,11 @@ means the subagent runs on whatever model was already requested.
 
 **Revert.** The same **Revert everything** action (Settings → Jev
 Advisor, or the *Advisor: Revert the Claude Code side* command) removes
-the model hooks and the model catalog mirror along with everything else —
-there is nothing model-specific to undo separately.
+the three model hooks along with the command gate's four — there is
+nothing model-specific to undo separately. It does not delete
+`models-catalog.json`: like the destination and policy mirrors, that file
+is only ever overwritten by a later mirror, never cleared by this or any
+other action.
 
 **Not yet proven end to end.** A live active rewrite — active mode
 actually swapping a subagent's model in an installed session — has not
