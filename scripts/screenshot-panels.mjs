@@ -29,6 +29,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseSeedPolicies, parseSeedVersion } from '../src/core/policy_seed.ts'
 import { mergePolicySeeds } from '../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice } from '../src/core/policy_seed_notice.ts'
+import { parseModelSeedEntries, parseModelSeedVersion } from '../src/core/model_catalog.ts'
+import { decideModelSeedNotice, diffModelSeed } from '../src/core/model_seed_notice.ts'
+import { summarizeModelMeasurements } from '../src/core/model_measurement.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
@@ -41,6 +44,12 @@ const WORK_DIR = join(OUT_DIR, '.rendered')
 const RAW_SEED = JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8'))
 const SHIPPED_POLICIES = parseSeedPolicies(RAW_SEED)
 const SHIPPED_POLICIES_VERSION = parseSeedVersion(RAW_SEED)
+
+// Same discipline for odd/tasks/model-reclassification.md T7's Models
+// section: the real shipped model catalog (seed/models.json), read once.
+const RAW_MODEL_SEED = JSON.parse(await readFile(join(ROOT, 'seed/models.json'), 'utf8'))
+const SHIPPED_MODELS = parseModelSeedEntries(RAW_MODEL_SEED)
+const SHIPPED_MODELS_VERSION = parseModelSeedVersion(RAW_MODEL_SEED)
 
 /** The panel throttles its own host calls; anything shorter photographs a spinner. */
 const SETTLE_MS = 6000
@@ -56,6 +65,66 @@ const iso = new Date('2026-09-23T12:00:00.000Z').toISOString()
  * has forked the worker.
  */
 const FRESH = {}
+
+// odd/tasks/model-reclassification.md T7's measurement readout fixture: a
+// small, hand-written log of ModelDecisionRecord/ModelOutcomeRecord
+// objects, fed through the REAL summarizeModelMeasurements
+// (src/core/model_measurement.ts) against the real shipped catalog above --
+// the same discipline SHIPPED_POLICIES follows for the policy notices: the
+// numbers the panel shows are the real function's output, never typed in
+// by hand.
+const MODEL_MEASUREMENT_RECORDS = [
+  // Jev recommended a larger model (opus, rank 2) than the sonnet (rank 3)
+  // that was requested, and the subagent actually ran on opus: agreement.
+  {
+    type: 'model-decision', id: 'tool-1', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
+    subagentType: 'general-purpose', promptChars: 240, requestedModel: 'sonnet',
+    recommended: { id: 'claude-opus-5-5', agentModel: 'opus', rank: 2 },
+    score: 0.82, confidence: 0.74, applied: false, rewriteReason: 'measurement', ladderSize: 3,
+    latencyMs: 612, permissionMode: 'default', complexity: { tier: 'advanced', tierIndex: 2, score: 0.7 },
+  },
+  { type: 'model-outcome', id: 'tool-1', at: iso, status: 'success', resolvedModel: 'opus', inputTokens: 4200, outputTokens: 900, durationMs: 54000 },
+  // Jev recommended a smaller model (sonnet, rank 3) than opus (rank 2)
+  // that was requested, and the subagent ran on sonnet: agreement too.
+  {
+    type: 'model-decision', id: 'tool-2', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
+    subagentType: 'Explore', promptChars: 90, requestedModel: 'opus',
+    recommended: { id: 'claude-sonnet-5', agentModel: 'sonnet', rank: 3 },
+    score: 0.31, confidence: 0.81, applied: false, rewriteReason: 'measurement', ladderSize: 3,
+    latencyMs: 448, permissionMode: 'default', complexity: { tier: 'trivial', tierIndex: 0, score: 0.1 },
+  },
+  { type: 'model-outcome', id: 'tool-2', at: iso, status: 'success', resolvedModel: 'sonnet', inputTokens: 1100, outputTokens: 210, durationMs: 9000 },
+  // Jev agreed with what was requested (sonnet), no outcome joined yet --
+  // this row stays judged but not comparable.
+  {
+    type: 'model-decision', id: 'tool-3', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
+    subagentType: 'general-purpose', promptChars: 512, requestedModel: 'sonnet',
+    recommended: { id: 'claude-sonnet-5', agentModel: 'sonnet', rank: 3 },
+    score: 0.55, confidence: 0.69, applied: false, rewriteReason: 'measurement', ladderSize: 3,
+    latencyMs: 390, permissionMode: 'default', complexity: { tier: 'standard', tierIndex: 1, score: 0.4 },
+  },
+  // Jev's own call failed open -- an unjudged decision (source: 'none'),
+  // the shape a past defect in this repo once discarded (see
+  // src/core/model_measurement.ts's own module note on parseModelRecord).
+  {
+    type: 'model-decision', id: 'tool-4', at: iso, mode: 'measurement', source: 'none', failOpen: 'jev-unreachable',
+    subagentType: null, promptChars: 80, requestedModel: null, recommended: null,
+    score: null, confidence: null, applied: false, rewriteReason: null, ladderSize: 3,
+    latencyMs: 1800, permissionMode: 'default', complexity: null,
+  },
+  // Jev agreed with what was requested (haiku), but the subagent actually
+  // ran on sonnet -- a disagreement between the recommendation and what
+  // really ran, not between the recommendation and the request.
+  {
+    type: 'model-decision', id: 'tool-5', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
+    subagentType: 'general-purpose', promptChars: 150, requestedModel: 'haiku',
+    recommended: { id: 'claude-haiku-4-5-20251001', agentModel: 'haiku', rank: 4 },
+    score: 0.12, confidence: 0.88, applied: false, rewriteReason: 'measurement', ladderSize: 3,
+    latencyMs: 210, permissionMode: 'default', complexity: { tier: 'trivial', tierIndex: 0, score: 0.05 },
+  },
+  { type: 'model-outcome', id: 'tool-5', at: iso, status: 'success', resolvedModel: 'sonnet', inputTokens: 800, outputTokens: 120, durationMs: 12000 },
+]
+const MODEL_MEASUREMENTS_SUMMARY = summarizeModelMeasurements(MODEL_MEASUREMENT_RECORDS, SHIPPED_MODELS)
 
 /** A machine where the worker has run and published everything it mirrors. */
 const READY = {
@@ -83,12 +152,22 @@ const READY = {
   claudeIntegrationStatus: {
     ok: true,
     hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+    // install-claude-integration.mjs's real aggregate shape for the Agent
+    // PreToolUse/PostToolUse/PostToolUseFailure hooks -- same fields as
+    // `hook` above.
+    agentModelHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
     // statMirror()'s real shape. `{ ok: true }` alone left `exists` and
     // `path` undefined, and the panel photographed "Key file: doesn't exist
     // yet (undefined)." -- next to a secretStatus that says a key is set.
     secretMirror: { ok: true, exists: true, mode: '600', platform: 'darwin', path: '/Users/you/.config/orca-supervisor/env' },
     checkedAt: iso
   },
+  // odd/tasks/model-reclassification.md T7. The real shipped catalog,
+  // active mode off (the default), and the real summarizeModelMeasurements
+  // output for MODEL_MEASUREMENT_RECORDS above.
+  models: SHIPPED_MODELS,
+  modelsConfig: { active: false },
+  modelMeasurements: { ok: true, summary: MODEL_MEASUREMENTS_SUMMARY, checkedAt: iso },
   localeStatus: { value: 'en', checkedAt: iso },
   config: { ceiling: 1.78 },
   catalog: {
@@ -313,13 +392,49 @@ const BASELINE_NOTICE_DECISION = decidePolicySeedNotice({
   shipped: SHIPPED_POLICIES,
 })
 
+// odd/tasks/model-reclassification.md T7's own baseline-notice fixture:
+// one shipped model this install never has (haiku, dropped below) and one
+// shared id whose label the install's own copy differs on (opus) -- real
+// `diffModelSeed`/`decideModelSeedNotice` output over that list, in the
+// exact `{ due, added, differing, shippedVersion, items, checkedAt }` shape
+// models-worker.mjs's publishModelsSeedNotice publishes (its own
+// `noticeItems` helper is module-private, so the `added`/`changed` item
+// rows below are built the same way it builds them, from the real diff).
+const MODEL_BASELINE_EXISTING = SHIPPED_MODELS
+  .filter((row) => row.id !== 'claude-haiku-4-5-20251001')
+  .map((row) => (row.id === 'claude-opus-5-5' ? { ...row, label: 'Claude Opus (previous label)' } : row))
+const MODEL_BASELINE_DIFF = diffModelSeed(MODEL_BASELINE_EXISTING, SHIPPED_MODELS)
+const MODEL_BASELINE_DECISION = decideModelSeedNotice({
+  shippedVersion: SHIPPED_MODELS_VERSION,
+  offeredVersion: 0,
+  existing: MODEL_BASELINE_EXISTING,
+  shipped: SHIPPED_MODELS,
+})
+const MODEL_BASELINE_ITEMS = [
+  ...MODEL_BASELINE_DIFF.added.map((row) => ({ id: row.id, label: row.label, kind: 'added', fields: [] })),
+  ...MODEL_BASELINE_DIFF.differing.map((diff) => ({ id: diff.id, label: diff.seed.label, kind: 'changed', fields: diff.fields })),
+]
+
 const BASELINE = {
   ...READY,
   policies: BASELINE_EXISTING_POLICIES,
   policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, at: iso },
+  models: MODEL_BASELINE_EXISTING,
+  modelsSeedNotice: { ...MODEL_BASELINE_DECISION, items: MODEL_BASELINE_ITEMS, checkedAt: iso },
 }
 
-const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE }
+/**
+ * A fresh catalog with the worker having already run once (so every OTHER
+ * key is the same as `ready`) but the person having removed every model:
+ * odd/tasks/model-reclassification.md's own empty-catalog state, distinct
+ * from `fresh` (which has never seen the worker at all) and worth its own
+ * screenshot since the Models section's copy differs from every other
+ * section's empty state.
+ */
+const { modelMeasurements: _readyModelMeasurements, ...READY_WITHOUT_MODEL_MEASUREMENTS } = READY
+const MODELS_EMPTY = { ...READY_WITHOUT_MODEL_MEASUREMENTS, models: [] }
+
+const SCENARIOS = { fresh: FRESH, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */

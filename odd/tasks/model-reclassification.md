@@ -126,7 +126,7 @@ Slices (revised after the first slicing pass; one PR per work unit):
 - [x] **T6** Installer entries (matcher `Agent`), integration list text,
   revert; worker mirror of the catalog to `<configDir>/models-catalog.json`,
   seed-once + notice in main.mjs. Route: same writer as T5.
-- [ ] **T7** config.html Models section (ladder editor, availability,
+- [x] **T7** config.html Models section (ladder editor, availability,
   reorder/add/remove, baseline notice, measurement readout, empty states),
   screenshot fixtures incl. empty catalog, `npm run check`, read the images.
   Route: delegated writer; screenshots read by the parent.
@@ -206,3 +206,19 @@ Slices (revised after the first slicing pass; one PR per work unit):
     `added + differing`; the panel is expected to only render them when
     `due` is true. An added item's `fields` is always `[]` (nothing to
     compare against); a changed item's `label` is the SHIPPED entry's label.
+- T6b: commit 9af2670 (delegated writer). Review granted, approved,
+  acknowledged (lineage review-b69f0c4d8a38a92c). Advisory follow-ups:
+  child.stdin in runReadModelMeasurementsScript has no 'error' listener (an
+  early sidecar exit could raise an unhandled EPIPE in the worker); mirror
+  writes are not serialized, so a stale `ready` can land last; the doctor
+  check and the readout failure paths are untested.
+- T7: delegated writer; parent ran `npm run check` and read the images.
+  Found and fixed at 320px: the Haiku title overflowed (shared .entry-name is
+  flex 0 0 auto), and the agreement figure was labelled "what actually ran"
+  while it compares against the requested model. The integration hint now
+  lists the model catalog mirror (seven things, not six).
+  Screens looked at: ready 1440 light+dark (ladder, active switch, readout),
+  768 light (integration list), 320 light+dark (ladder after the fix),
+  models-empty 320 light (empty catalog + empty readout), baseline 390 dark
+  (baseline notice). All 96 renders passed the overflow and script-error
+  check.

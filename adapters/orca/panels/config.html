@@ -193,6 +193,22 @@
       .checkbox-row .checkbox-label { font-size: 12px; font-weight: 500;
                                        color: var(--foreground, var(--fb-foreground)); }
       .checkbox-row .hint { margin-top: 0; }
+      /* Models section only: an id like claude-haiku-4-5-20251001 or a full
+         source URL is long enough to overflow the 320px viewport unless it
+         can break mid-word, unlike ordinary prose. No new colors -- the
+         badge and meta line reuse the same --border/--muted-foreground
+         tokens every other row in this panel already uses. */
+      #models-section .entry-name, #models-section a { overflow-wrap: anywhere; }
+      /* The shared .entry-name rule is flex: 0 0 auto, which cannot shrink
+         below its longest unbreakable run -- measured at 320px as a 331px
+         page. Inside this section a name may shrink and wrap instead. */
+      #models-section .entry-name { flex: 1 1 auto; min-width: 0; }
+      #models-section .models-row-meta { overflow-wrap: anywhere; font-size: 11px; line-height: 1.5;
+        color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      #models-section .models-badge { display: inline-block; font-size: 10px; text-transform: uppercase;
+        letter-spacing: 0.04em; padding: 1px 6px; margin-left: 6px; border-radius: 999px;
+        border: 1px solid var(--border, var(--fb-border)); color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      #models-section .models-row-fields { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     </style>
   </head>
   <body>
@@ -296,6 +312,74 @@
         </div>
       </section>
 
+      <!--
+        odd/tasks/model-reclassification.md T7. Self-contained on purpose:
+        this is the only section a parallel change may not need to touch,
+        so every id/key here is prefixed `models`/`MODEL`, and its own
+        logic lives in its own script tag at the end of the body rather
+        than inside the original panel script above.
+      -->
+      <section id="models-section">
+        <h2 data-i18n="models.heading"></h2>
+        <p class="hint" data-i18n="models.hint"></p>
+        <p class="hint" id="models-empty-catalog-hint" style="display:none" data-i18n="models.emptyCatalog"></p>
+
+        <div id="models-seed-notice" style="display:none; margin-bottom: 14px">
+          <p class="hint info" id="models-seed-notice-text"></p>
+          <div id="models-seed-notice-items"></div>
+          <div class="actions">
+            <button id="models-seed-notice-apply" type="button" data-i18n="models.seedNoticeApply"></button>
+            <button id="models-seed-notice-dismiss" class="link" type="button" data-i18n="models.seedNoticeDismiss"></button>
+            <span class="said" id="models-seed-notice-said"></span>
+          </div>
+        </div>
+
+        <div id="models-ladder-list"></div>
+        <div class="actions">
+          <button id="models-save-ladder" type="button" data-i18n="models.saveLadder"></button>
+          <span class="said" id="models-ladder-said"></span>
+        </div>
+
+        <h2 style="margin-top:16px" data-i18n="models.addHeading"></h2>
+        <div class="row two">
+          <div><label for="models-add-id" data-i18n="models.fieldId"></label>
+            <input id="models-add-id" type="text" data-i18n-placeholder="models.fieldIdPlaceholder" /></div>
+          <div><label for="models-add-label" data-i18n="models.fieldLabel"></label>
+            <input id="models-add-label" type="text" /></div>
+        </div>
+        <div class="row two">
+          <div><label for="models-add-provider" data-i18n="models.fieldProvider"></label>
+            <input id="models-add-provider" type="text" /></div>
+          <div><label for="models-add-agentmodel" data-i18n="models.fieldAgentModel"></label>
+            <input id="models-add-agentmodel" type="text" data-i18n-placeholder="models.fieldAgentModelPlaceholder" /></div>
+        </div>
+        <div class="row two">
+          <div><label for="models-add-source" data-i18n="models.fieldSource"></label>
+            <input id="models-add-source" type="text" data-i18n-placeholder="models.fieldSourcePlaceholder" /></div>
+          <div><label for="models-add-summary" data-i18n="models.fieldSummary"></label>
+            <input id="models-add-summary" type="text" /></div>
+        </div>
+        <div class="actions">
+          <button id="models-add-row" type="button" data-i18n="models.add"></button>
+          <span class="said" id="models-add-said"></span>
+        </div>
+
+        <div class="checkbox-row" style="margin-top:16px">
+          <input id="models-active" type="checkbox" />
+          <div class="checkbox-text">
+            <span class="checkbox-label" data-i18n="models.activeLabel"></span>
+            <span class="hint" id="models-active-hint"></span>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="models-save-config" type="button" data-i18n="models.saveConfig"></button>
+          <span class="said" id="models-config-said"></span>
+        </div>
+
+        <h2 style="margin-top:16px" data-i18n="models.measurementsHeading"></h2>
+        <div id="models-measurements"></div>
+      </section>
+
       <section id="deny-tier-section">
         <h2 data-i18n="denyTier.heading"></h2>
         <p class="hint" data-i18n="denyTier.hint"></p>
@@ -342,7 +426,7 @@
           'secret.configured': 'Clave configurada (termina en …{{tail}}).',
           'secret.notConfigured': 'Sin clave configurada.',
           'integration.heading': 'Integración con Claude Code',
-          'integration.hint': 'Este plugin escribe seis cosas fuera de sí mismo para que el hook y el mod de skills funcionen en Claude Code: una entrada en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, una copia del mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), y un espejo de las políticas del equipo en JSON legible (no es secreto). Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
+          'integration.hint': 'Este plugin escribe siete cosas fuera de sí mismo para que los hooks y el mod de skills funcionen en Claude Code: entradas en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, una copia del mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), un espejo de las políticas del equipo en JSON legible (no es secreto), y un espejo del catálogo de modelos en JSON legible (no es secreto). Nada de esto se hace sin mostrarlo aquí, y "Revertir todo" lo deja como estaba.',
           'integration.checking': 'Comprobando…',
           'integration.statusUnavailable': 'No se pudo leer el estado.',
           'integration.hookInstalled': 'Hook de Bash: puesto, en {{path}}',
@@ -497,6 +581,70 @@
           'error.derivationFailed': 'No se pudo consultar la lista de worktrees de Orca, así que no se agregó ningún destino. El registro de Orca tiene el motivo exacto.',
           'error.seedUnavailable': 'No se pudieron cargar las políticas base incluidas con el plugin.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
+          // odd/tasks/model-reclassification.md T7 -- self-contained keys
+          // for models-section's own script tag, at the end of the body.
+          'models.heading': 'Catálogo de modelos',
+          'models.hint': 'Jev elige, de esta escalera, el modelo en el que corre una subtarea (subagent); el más grande primero, y solo se elige entre los marcados disponibles. El modo medición (el de hoy) solo registra la recomendación y no cambia nada.',
+          'models.emptyCatalog': 'El catálogo está vacío: por ahora cada llamada a una subtarea pasa sin cambios. Usa el formulario de abajo para agregar un modelo.',
+          'models.unrankedBadge': 'sin clasificar',
+          'models.rankLabel': 'Puesto {{rank}}',
+          'models.availableLabel': 'Disponible',
+          'models.sourceLink': 'Fuente',
+          'models.moveUp': 'Subir',
+          'models.moveDown': 'Bajar',
+          'models.markUnranked': 'Marcar sin clasificar',
+          'models.remove': 'Quitar',
+          'models.saveLadder': 'Guardar la escalera',
+          'models.savingLadder': 'Guardando…',
+          'models.savedLadder': 'Guardado.',
+          'models.addHeading': 'Agregar modelo',
+          'models.fieldId': 'id',
+          'models.fieldIdPlaceholder': 'id-corto',
+          'models.fieldLabel': 'Etiqueta',
+          'models.fieldProvider': 'provider',
+          'models.fieldAgentModel': 'agentModel',
+          'models.fieldAgentModelPlaceholder': 'sonnet, opus, haiku, fable…',
+          'models.fieldSource': 'source (opcional)',
+          'models.fieldSourcePlaceholder': 'https://…',
+          'models.fieldSummary': 'summary (opcional)',
+          'models.add': '+ Agregar modelo',
+          'models.addMissingFields': 'Completa id, etiqueta, provider y agentModel.',
+          'models.addDuplicateId': 'Ya existe un modelo con ese id.',
+          'models.added': 'Agregado, sin clasificar y no disponible -- ajústalo abajo y guarda la escalera.',
+          'models.activeLabel': 'Dejar que Jev reescriba el modelo (modo activo)',
+          'models.activeHint': 'Apagado (hoy): solo mide. Encendido: reescribe el modelo únicamente cuando la medición ya alcanzó su umbral de listo, Jev está seguro y no está de acuerdo con lo pedido, y la sesión corre en modo bypassPermissions; en cualquier otro caso solo mide, sin cambiar nada.',
+          'models.readiness.noData': 'Medición: todavía sin decisiones comparables.',
+          'models.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} decisiones comparables. Faltan {{shortfall}}.',
+          'models.readiness.rateLow': 'Medición: ya hay {{comparable}} decisiones comparables, pero el acierto es {{matchRate}}%, por debajo del umbral. Encender esto ahora aplicaría un criterio que los datos no respaldan.',
+          'models.readiness.ready': 'Medición: umbral alcanzado -- {{comparable}} decisiones comparables con {{matchRate}}% de acierto. Ya hay con qué calibrar.',
+          'models.readiness.unknown': 'Medición: sin lectura todavía.',
+          'models.saveConfig': 'Guardar modo activo',
+          'models.savingConfig': 'Guardando…',
+          'models.savedConfig': 'Guardado.',
+          'models.seedNoticeText': 'La base de modelos que trae el plugin cambió a la versión {{version}}: {{added}} nuevo(s), {{differing}} distinto(s) de los tuyos.',
+          'models.seedNoticeItemAdded': '{{label}} ({{id}}) -- nuevo',
+          'models.seedNoticeItemChanged': '{{label}} ({{id}}) -- difiere en: {{fields}}',
+          'models.seedNoticeApply': 'Aplicar los marcados',
+          'models.seedNoticeApplying': 'Aplicando…',
+          'models.seedNoticeApplied': 'Listo: {{replaced}} reemplazado(s), {{added}} añadido(s).',
+          'models.seedNoticeDismiss': 'Descartar',
+          'models.seedNoticeDismissing': 'Descartando…',
+          'models.seedNoticeDismissed': 'Descartado. No se cambió ningún modelo.',
+          'models.seedNoticeNoneChosen': 'No marcaste ninguno, así que no se cambió nada.',
+          'models.measurementsHeading': 'Medición',
+          'models.measurementsEmpty': 'Todavía no se ha medido ninguna llamada a una subtarea.',
+          'models.measurementsUnavailable': 'No se pudo leer la medición.',
+          'models.measurementsDecisions': 'Decisiones: {{decisions}}',
+          'models.measurementsJudged': 'Juzgadas por Jev: {{judged}}',
+          'models.measurementsUnjudged': 'Pasaron sin juzgar: {{unjudged}}',
+          'models.measurementsUp': 'Recomendó un modelo más grande: {{up}}',
+          'models.measurementsDown': 'Recomendó uno más chico: {{down}}',
+          'models.measurementsAgree': 'De acuerdo con lo pedido: {{agree}}',
+          'models.measurementsAgreementRate': 'Coincidencia con el modelo pedido: {{rate}}%',
+          'models.measurementsAgreementRateUnknown': 'Coincidencia con el modelo pedido: -- (todavía sin casos comparables)',
+          'models.measurementsApplied': 'Reescrituras aplicadas: {{applied}}',
+          'integration.agentModelHookInstalled': 'Hooks de modelo del Agent: puestos en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
+          'integration.agentModelHookNotInstalled': 'Hooks de modelo del Agent: no puestos.',
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
@@ -515,7 +663,7 @@
           'secret.configured': 'Key configured (ends in …{{tail}}).',
           'secret.notConfigured': 'No key configured.',
           'integration.heading': 'Claude Code integration',
-          'integration.hint': "This plugin writes six things outside itself so the hook and the skills mod work in Claude Code: an entry in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a copy of the skills mod, a human-readable JSON mirror of the destination catalog (not secret), and a human-readable JSON mirror of the team policies (not secret). None of this happens without showing it here, and \"Revert everything\" puts it all back.",
+          'integration.hint': "This plugin writes seven things outside itself so the hooks and the skills mod work in Claude Code: entries in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a copy of the skills mod, a human-readable JSON mirror of the destination catalog (not secret), a human-readable JSON mirror of the team policies (not secret), and a human-readable JSON mirror of the model catalog (not secret). None of this happens without showing it here, and \"Revert everything\" puts it all back.",
           'integration.checking': 'Checking…',
           'integration.statusUnavailable': 'Could not read the status.',
           'integration.hookInstalled': 'Bash hook: installed, at {{path}}',
@@ -670,6 +818,70 @@
           'error.derivationFailed': "Orca's worktree list could not be read, so no destination was added. Orca's log has the exact cause.",
           'error.seedUnavailable': "Could not load the plugin's baseline policies.",
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
+          // odd/tasks/model-reclassification.md T7 -- self-contained keys
+          // for models-section's own script tag, at the end of the body.
+          'models.heading': 'Model catalog',
+          'models.hint': "Jev picks the model a subagent runs on from this ladder; largest first, and only among the ones marked available. Measurement mode (today's default) only records the recommendation and changes nothing.",
+          'models.emptyCatalog': 'The catalog is empty, so every subagent call passes through unchanged for now. Use the form below to add a model.',
+          'models.unrankedBadge': 'unranked',
+          'models.rankLabel': 'Rank {{rank}}',
+          'models.availableLabel': 'Available',
+          'models.sourceLink': 'Source',
+          'models.moveUp': 'Move up',
+          'models.moveDown': 'Move down',
+          'models.markUnranked': 'Mark unranked',
+          'models.remove': 'Remove',
+          'models.saveLadder': 'Save the ladder',
+          'models.savingLadder': 'Saving…',
+          'models.savedLadder': 'Saved.',
+          'models.addHeading': 'Add a model',
+          'models.fieldId': 'id',
+          'models.fieldIdPlaceholder': 'short-id',
+          'models.fieldLabel': 'Label',
+          'models.fieldProvider': 'provider',
+          'models.fieldAgentModel': 'agentModel',
+          'models.fieldAgentModelPlaceholder': 'sonnet, opus, haiku, fable…',
+          'models.fieldSource': 'source (optional)',
+          'models.fieldSourcePlaceholder': 'https://…',
+          'models.fieldSummary': 'summary (optional)',
+          'models.add': '+ Add model',
+          'models.addMissingFields': 'Fill in id, label, provider and agentModel.',
+          'models.addDuplicateId': 'A model with that id already exists.',
+          'models.added': 'Added, unranked and not available -- adjust it below and save the ladder.',
+          'models.activeLabel': 'Let Jev rewrite the model (active mode)',
+          'models.activeHint': "Off (today): measures only. On: rewrites the model only when measurement has reached its readiness threshold, Jev is confident and disagrees with what was requested, and the session runs in bypassPermissions; any other case only measures, changing nothing.",
+          'models.readiness.noData': 'Measurement: no comparable decisions yet.',
+          'models.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable decisions. {{shortfall}} to go.',
+          'models.readiness.rateLow': 'Measurement: {{comparable}} comparable decisions already, but the match rate is {{matchRate}}%, below the threshold. Turning this on now would apply a criterion the data does not support.',
+          'models.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable decisions at {{matchRate}}% match. There is now something to calibrate from.',
+          'models.readiness.unknown': 'Measurement: nothing read yet.',
+          'models.saveConfig': 'Save active mode',
+          'models.savingConfig': 'Saving…',
+          'models.savedConfig': 'Saved.',
+          'models.seedNoticeText': 'The shipped model baseline changed to version {{version}}: {{added}} new, {{differing}} different from yours.',
+          'models.seedNoticeItemAdded': '{{label}} ({{id}}) -- new',
+          'models.seedNoticeItemChanged': '{{label}} ({{id}}) -- differs in: {{fields}}',
+          'models.seedNoticeApply': 'Apply the ticked ones',
+          'models.seedNoticeApplying': 'Applying…',
+          'models.seedNoticeApplied': 'Done: {{replaced}} replaced, {{added}} added.',
+          'models.seedNoticeDismiss': 'Dismiss',
+          'models.seedNoticeDismissing': 'Dismissing…',
+          'models.seedNoticeDismissed': 'Dismissed. No model was changed.',
+          'models.seedNoticeNoneChosen': 'Nothing was ticked, so nothing changed.',
+          'models.measurementsHeading': 'Measurement',
+          'models.measurementsEmpty': 'No subagent call has been measured yet.',
+          'models.measurementsUnavailable': 'Could not read the measurement readout.',
+          'models.measurementsDecisions': 'Decisions: {{decisions}}',
+          'models.measurementsJudged': 'Judged by Jev: {{judged}}',
+          'models.measurementsUnjudged': 'Passed through unjudged: {{unjudged}}',
+          'models.measurementsUp': 'Recommended a larger model: {{up}}',
+          'models.measurementsDown': 'Recommended a smaller one: {{down}}',
+          'models.measurementsAgree': 'Agreed with what was requested: {{agree}}',
+          'models.measurementsAgreementRate': 'Agreement with the requested model: {{rate}}%',
+          'models.measurementsAgreementRateUnknown': 'Agreement with the requested model: -- (not enough comparable cases yet)',
+          'models.measurementsApplied': 'Rewrites applied: {{applied}}',
+          'integration.agentModelHookInstalled': 'Agent model hooks: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
+          'integration.agentModelHookNotInstalled': 'Agent model hooks: not installed.',
         }
       }
 
@@ -2089,6 +2301,16 @@
         claudeIntegrationStatusEl.appendChild(li(mirrorLine))
 
         claudeIntegrationStatusEl.appendChild(li(modSkillsLine(status.modCopy, measurements, modSkillsStatus)))
+
+        // odd/tasks/model-reclassification.md T7 -- one added line, guarded
+        // on the field existing (install-claude-integration.mjs's status()
+        // only ever omits it if an older worker build never computed it).
+        if (status.agentModelHook && typeof status.agentModelHook.installed === 'boolean') {
+          var agentModelHookLine = status.agentModelHook.installed
+            ? t('integration.agentModelHookInstalled', { installed: String(status.agentModelHook.installedCount), total: String(status.agentModelHook.totalCount) })
+            : t('integration.agentModelHookNotInstalled')
+          claudeIntegrationStatusEl.appendChild(li(agentModelHookLine))
+        }
       }
 
       var MEASUREMENTS_STATUS_KEY = 'measurementsSummary'
@@ -2223,6 +2445,508 @@
       signalPanelOpen()
       startHeartbeat()
       load()
+    </script>
+
+    <!--
+      odd/tasks/model-reclassification.md T7 -- the Models section's own,
+      self-contained script. Deliberately a second script tag rather than
+      an addition to the one above: parallel work also edits config.html (a
+      learned-allows section, the Team policies notice style, and the
+      integration line), so every identifier here is its own thing, never a
+      function added to the original script. It reuses the original
+      script's globals freely (both are classic, non-module scripts sharing
+      one global scope): el/elMake/read/write/writeBackground/t/said/
+      shownError/errorText/errorMessageFor/signalPanelOpen/CATALOG.
+    -->
+    <script>
+      'use strict'
+
+      // ---------- storage keys -------------------------------------------
+      // Verbatim from adapters/orca/models-worker.mjs's own exported
+      // constants -- see that file's module note for the shapes behind
+      // each one.
+      var MODELS_KEY = 'models'
+      var MODELS_CONFIG_KEY = 'modelsConfig'
+      var MODELS_MIRROR_REQUEST_KEY = 'modelsMirrorRequest'
+      var MODELS_SEED_NOTICE_KEY = 'modelsSeedNotice'
+      var MODELS_SEED_REQUEST_KEY = 'modelsSeedRequest'
+      var MODELS_SEED_RESULT_KEY = 'modelsSeedResult'
+      var MODEL_MEASUREMENTS_KEY = 'modelMeasurements'
+
+      // Mirrors DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS
+      // (src/core/mod_skills_readiness.ts), the same way READINESS_FALLBACK
+      // above mirrors it for the skills mod: summarizeModelMeasurements
+      // (src/core/model_measurement.ts) always evaluates readiness against
+      // exactly this constant, so naming it here is not a guess -- only a
+      // fallback for the hint text before the first real readout loads.
+      var MODELS_READINESS_FALLBACK = { minComparable: 1000, minMatchRate: 0.7 }
+
+      // ---------- catalog shape (hand-copied, read-only check) -----------
+      // Mirrors isModelEntry (src/core/model_catalog.ts) -- this sandboxed
+      // panel has no module graph reaching src/core (see isHeartbeatFresh's
+      // own comment, above, for the same reasoning applied to worker-
+      // status.mjs). A row failing this is dropped here, exactly as
+      // parseModelCatalog drops it on the worker side: one bad row costs
+      // only that row.
+      function modelsParseCatalog (value) {
+        if (!Array.isArray(value)) return []
+        return value.filter(function (row) {
+          return !!row && typeof row === 'object' &&
+            typeof row.id === 'string' && row.id.length > 0 &&
+            typeof row.provider === 'string' && row.provider.length > 0 &&
+            typeof row.label === 'string' && row.label.length > 0 &&
+            (row.rank === null || (typeof row.rank === 'number' && row.rank >= 1)) &&
+            typeof row.agentModel === 'string' && row.agentModel.length > 0 &&
+            typeof row.source === 'string' &&
+            typeof row.available === 'boolean' &&
+            (row.summary === undefined || typeof row.summary === 'string')
+        })
+      }
+
+      /** Ranked entries first (by rank ascending), then unranked ones in
+       *  stored order -- the exact rule src/core/model_catalog.ts's
+       *  orderedLadder applies, hand-copied for the same reason as
+       *  modelsParseCatalog above. This is also the DISPLAY-order
+       *  invariant modelsReorder below assumes: a ranked prefix followed
+       *  by an unranked tail. */
+      function modelsSplitLadder (entries) {
+        var ranked = entries.filter(function (e) { return e.rank !== null })
+          .slice().sort(function (a, b) { return a.rank - b.rank })
+        var unranked = entries.filter(function (e) { return e.rank === null })
+        return ranked.concat(unranked)
+      }
+
+      /** The only shape allowed onto the wire for one row -- mirrors
+       *  buildDestinationRow/buildPolicyRow above: every field isModelEntry
+       *  requires is always present with the right type, and a blank
+       *  optional field is OMITTED rather than sent as `''`/`undefined`
+       *  (see stripUndefinedValues's own comment for why `undefined`
+       *  specifically must never reach storage.set). */
+      function modelsBuildRow (fields) {
+        var row = {
+          id: fields.id,
+          provider: fields.provider,
+          label: fields.label,
+          rank: fields.rank === undefined ? null : fields.rank,
+          agentModel: fields.agentModel,
+          source: fields.source || '',
+          available: !!fields.available
+        }
+        if (fields.summary) row.summary = fields.summary
+        return row
+      }
+
+      /**
+       * Pure reorder over a ladder already in DISPLAY order (see
+       * modelsSplitLadder). Crossing from unranked into ranked happens on
+       * exactly one move -- moveUp on the first unranked row, which takes
+       * over the last ranked row's slot and demotes it -- and moveDown
+       * never demotes a ranked row on its own: the only way out of the
+       * ranked part is the explicit "mark unranked" action
+       * (modelsMarkUnranked below). That keeps every arrow predictable: a
+       * person can reorder freely without ever losing a rank by clicking
+       * the wrong one.
+       */
+      function modelsReorder (display, index, direction) {
+        var rows = display.map(function (row) { return Object.assign({}, row) })
+        var rankedCount = rows.filter(function (r) { return r.rank !== null }).length
+
+        if (direction === 'up') {
+          if (index === 0) {
+            // Nothing above the very first row -- UNLESS nothing is ranked
+            // yet, in which case this is how the very first model gets its
+            // rank: there is nobody to displace.
+            if (rankedCount === 0) rows[0].rank = 1
+            return rows
+          }
+          if (index === rankedCount) {
+            // The one door in: the first unranked row takes the last
+            // ranked row's slot, which becomes unranked in its place.
+            var promoted = rows[index]
+            var displaced = rows[index - 1]
+            promoted.rank = displaced.rank
+            displaced.rank = null
+            rows[index - 1] = promoted
+            rows[index] = displaced
+            return rows
+          }
+          var upA = rows[index]
+          var upB = rows[index - 1]
+          if (upA.rank !== null && upB.rank !== null) {
+            var upTmp = upA.rank
+            upA.rank = upB.rank
+            upB.rank = upTmp
+          }
+          rows[index - 1] = upA
+          rows[index] = upB
+          return rows
+        }
+
+        // direction === 'down'. The last ranked row moving down is a
+        // no-op on purpose -- see the module note above.
+        if (index >= rows.length - 1 || index === rankedCount - 1) return rows
+        var downA = rows[index]
+        var downB = rows[index + 1]
+        if (downA.rank !== null && downB.rank !== null) {
+          var downTmp = downA.rank
+          downA.rank = downB.rank
+          downB.rank = downTmp
+        }
+        rows[index] = downB
+        rows[index + 1] = downA
+        return rows
+      }
+
+      /** Moves one ranked row out to the front of the unranked tail,
+       *  touching only that row's own `rank` -- never renumbering the
+       *  ranked rows around it, which would change ranks the person never
+       *  asked to change (and could flag them as "differing" against a
+       *  future seed diff for no reason of the person's own making). */
+      function modelsMarkUnranked (index) {
+        var row = modelsLadder[index]
+        row.rank = null
+        modelsLadder.splice(index, 1)
+        var newRankedCount = modelsLadder.filter(function (r) { return r.rank !== null }).length
+        modelsLadder.splice(newRankedCount, 0, row)
+        modelsRenderLadder()
+      }
+
+      // ---------- ladder editor: state + render ---------------------------
+
+      /** The ladder, always kept in DISPLAY order (modelsSplitLadder's
+       *  invariant). Loaded once in modelsLoad, mutated in place by every
+       *  button below, and only written to storage when "Save the ladder"
+       *  is pressed -- exactly like the destination/policy editors above,
+       *  which stage every edit in the DOM until "Save configuration". */
+      var modelsLadder = []
+
+      var modelsLadderListEl = el('models-ladder-list')
+
+      function modelsRenderLadder () {
+        el('models-empty-catalog-hint').style.display = modelsLadder.length === 0 ? '' : 'none'
+        modelsLadderListEl.innerHTML = ''
+        var rankedCount = modelsLadder.filter(function (r) { return r.rank !== null }).length
+
+        modelsLadder.forEach(function (row, index) {
+          var entry = elMake('div', 'entry')
+
+          var top = elMake('div', 'models-row-fields')
+          var name = elMake('span', 'entry-name')
+          name.textContent = row.label + ' (' + row.id + ')'
+          top.appendChild(name)
+          var badge = elMake('span', 'models-badge')
+          badge.textContent = row.rank !== null ? t('models.rankLabel', { rank: String(row.rank) }) : t('models.unrankedBadge')
+          top.appendChild(badge)
+          entry.appendChild(top)
+
+          var meta = elMake('div', 'models-row-meta')
+          meta.textContent = row.provider + ' · ' + row.agentModel
+          entry.appendChild(meta)
+
+          if (row.source && /^https?:\/\//i.test(row.source)) {
+            var link = elMake('a')
+            link.href = row.source
+            link.target = '_blank'
+            link.rel = 'noopener'
+            link.textContent = t('models.sourceLink')
+            entry.appendChild(link)
+          }
+
+          var availableRow = elMake('div', 'checkbox-row')
+          var availableBox = elMake('input')
+          availableBox.type = 'checkbox'
+          availableBox.checked = !!row.available
+          availableBox.addEventListener('change', function () { row.available = availableBox.checked })
+          var availableText = elMake('div', 'checkbox-text')
+          var availableLabel = elMake('span', 'checkbox-label')
+          availableLabel.textContent = t('models.availableLabel')
+          availableText.appendChild(availableLabel)
+          availableRow.appendChild(availableBox)
+          availableRow.appendChild(availableText)
+          entry.appendChild(availableRow)
+
+          var actions = elMake('div', 'entry-actions')
+
+          var upBtn = elMake('button')
+          upBtn.type = 'button'
+          upBtn.textContent = t('models.moveUp')
+          upBtn.disabled = index === 0 && !(rankedCount === 0 && row.rank === null)
+          upBtn.addEventListener('click', function () {
+            modelsLadder = modelsReorder(modelsLadder, index, 'up')
+            modelsRenderLadder()
+          })
+          actions.appendChild(upBtn)
+
+          var downBtn = elMake('button')
+          downBtn.type = 'button'
+          downBtn.textContent = t('models.moveDown')
+          downBtn.disabled = index === modelsLadder.length - 1 || index === rankedCount - 1
+          downBtn.addEventListener('click', function () {
+            modelsLadder = modelsReorder(modelsLadder, index, 'down')
+            modelsRenderLadder()
+          })
+          actions.appendChild(downBtn)
+
+          if (row.rank !== null) {
+            var unrankBtn = elMake('button')
+            unrankBtn.type = 'button'
+            unrankBtn.textContent = t('models.markUnranked')
+            unrankBtn.addEventListener('click', function () { modelsMarkUnranked(index) })
+            actions.appendChild(unrankBtn)
+          }
+
+          var removeBtn = elMake('button', 'link')
+          removeBtn.type = 'button'
+          removeBtn.textContent = t('models.remove')
+          removeBtn.addEventListener('click', function () {
+            // Splice only -- never renumber the rows around it (see
+            // modelsMarkUnranked's own comment for why).
+            modelsLadder.splice(index, 1)
+            modelsRenderLadder()
+          })
+          actions.appendChild(removeBtn)
+
+          entry.appendChild(actions)
+          modelsLadderListEl.appendChild(entry)
+        })
+      }
+
+      el('models-add-row').addEventListener('click', function () {
+        var id = el('models-add-id').value.trim()
+        var label = el('models-add-label').value.trim()
+        var provider = el('models-add-provider').value.trim()
+        var agentModel = el('models-add-agentmodel').value.trim()
+        var source = el('models-add-source').value.trim()
+        var summary = el('models-add-summary').value.trim()
+        var saidEl = el('models-add-said')
+        if (!id || !label || !provider || !agentModel) {
+          said(saidEl, t('models.addMissingFields'), true)
+          return
+        }
+        if (modelsLadder.some(function (r) { return r.id === id })) {
+          said(saidEl, t('models.addDuplicateId'), true)
+          return
+        }
+        // Always UNRANKED and not available -- never guess an order or
+        // whether the person can actually run it.
+        modelsLadder.push(modelsBuildRow({
+          id: id, label: label, provider: provider, agentModel: agentModel,
+          source: source, summary: summary, rank: null, available: false
+        }))
+        said(saidEl, t('models.added'))
+        el('models-add-id').value = ''
+        el('models-add-label').value = ''
+        el('models-add-provider').value = ''
+        el('models-add-agentmodel').value = ''
+        el('models-add-source').value = ''
+        el('models-add-summary').value = ''
+        modelsRenderLadder()
+      })
+
+      el('models-save-ladder').addEventListener('click', function () {
+        var saidEl = el('models-ladder-said')
+        said(saidEl, t('models.savingLadder'))
+        write(MODELS_KEY, modelsLadder.map(modelsBuildRow)).then(function (result) {
+          if (!result || !result.ok) throw shownError(t('common.hostRejectedWrite'))
+          writeBackground(MODELS_MIRROR_REQUEST_KEY, new Date().toISOString())
+          said(saidEl, t('models.savedLadder'))
+        }).catch(function (error) {
+          said(saidEl, errorText(error), true)
+        })
+      })
+
+      // ---------- active mode switch ---------------------------------------
+
+      /** The hint's base sentence plus the live readiness line -- a null
+       *  matchRate/summary is never rendered as a 0%, exactly like
+       *  renderModSkillsReadiness above. */
+      function modelsRenderActiveHint (measurements) {
+        var hintEl = el('models-active-hint')
+        var summary = measurements && measurements.ok ? measurements.summary : null
+        var readiness = summary ? summary.readiness : null
+        var base = t('models.activeHint')
+        if (!readiness) { hintEl.textContent = base + ' ' + t('models.readiness.unknown'); return }
+        var comparable = summary.comparable || 0
+        var params = {
+          minComparable: String(MODELS_READINESS_FALLBACK.minComparable),
+          comparable: String(comparable),
+          shortfall: String(readiness.comparableShortfall || 0),
+          matchRate: summary.matchRate == null ? '-' : String(Math.round(summary.matchRate * 1000) / 10)
+        }
+        var line
+        if (comparable === 0) line = t('models.readiness.noData')
+        else if (readiness.reason === 'ready') line = t('models.readiness.ready', params)
+        else if (readiness.reason === 'match-rate-too-low') line = t('models.readiness.rateLow', params)
+        else line = t('models.readiness.shortfall', params)
+        hintEl.textContent = base + ' ' + line
+      }
+
+      el('models-save-config').addEventListener('click', function () {
+        var saidEl = el('models-config-said')
+        said(saidEl, t('models.savingConfig'))
+        write(MODELS_CONFIG_KEY, { active: el('models-active').checked }).then(function (result) {
+          if (!result || !result.ok) throw shownError(t('common.hostRejectedWrite'))
+          writeBackground(MODELS_MIRROR_REQUEST_KEY, new Date().toISOString())
+          said(saidEl, t('models.savedConfig'))
+        }).catch(function (error) {
+          said(saidEl, errorText(error), true)
+        })
+      })
+
+      // ---------- baseline notice: render, apply, dismiss -------------------
+
+      var modelsSeedNoticeEl = el('models-seed-notice')
+      var modelsSeedNoticeTextEl = el('models-seed-notice-text')
+      var modelsSeedNoticeItemsEl = el('models-seed-notice-items')
+
+      /** Same double-check renderPolicySeedNotice makes above: rendered
+       *  ONLY when the status exists, says it is due, and its own counts
+       *  are non-zero. Nothing here is ever computed by the panel itself. */
+      function modelsRenderSeedNotice (status) {
+        var added = status && typeof status.added === 'number' ? status.added : 0
+        var differing = status && typeof status.differing === 'number' ? status.differing : 0
+        var visible = !!status && status.due === true && (added + differing) > 0
+        modelsSeedNoticeEl.style.display = visible ? '' : 'none'
+        modelsSeedNoticeItemsEl.innerHTML = ''
+        if (!visible) return
+        modelsSeedNoticeTextEl.textContent = t('models.seedNoticeText', {
+          version: String(status.shippedVersion), added: String(added), differing: String(differing)
+        })
+        // Nothing preselected -- the person ticks what they want, exactly
+        // like the Team policies diff list above.
+        ;(status.items || []).forEach(function (item) {
+          var row = elMake('div', 'checkbox-row')
+          var box = elMake('input')
+          box.type = 'checkbox'
+          box.setAttribute('data-models-seed-item-id', item.id)
+          var text = elMake('div', 'checkbox-text')
+          var label = elMake('span', 'checkbox-label')
+          label.textContent = item.kind === 'added'
+            ? t('models.seedNoticeItemAdded', { id: item.id, label: item.label })
+            : t('models.seedNoticeItemChanged', { id: item.id, label: item.label, fields: (item.fields || []).join(', ') })
+          text.appendChild(label)
+          row.appendChild(box)
+          row.appendChild(text)
+          modelsSeedNoticeItemsEl.appendChild(row)
+        })
+      }
+
+      function modelsLoadSeedNoticeStatus () {
+        return read(MODELS_SEED_NOTICE_KEY, false).then(modelsRenderSeedNotice)
+      }
+
+      function modelsWaitForSeedResult (requestId, deadline) {
+        return read(MODELS_SEED_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return modelsWaitForSeedResult(requestId, deadline) })
+        })
+      }
+
+      function modelsSendSeedRequest (action, acceptedIds) {
+        var requestId = 'models-seed-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), action: action, acceptedIds: acceptedIds || [] }
+        signalPanelOpen()
+        return write(MODELS_SEED_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return modelsWaitForSeedResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      el('models-seed-notice-apply').addEventListener('click', function () {
+        var saidEl = el('models-seed-notice-said')
+        var accepted = []
+        modelsSeedNoticeItemsEl.querySelectorAll('input[data-models-seed-item-id]').forEach(function (box) {
+          if (box.checked) accepted.push(box.getAttribute('data-models-seed-item-id'))
+        })
+        if (accepted.length === 0) { said(saidEl, t('models.seedNoticeNoneChosen')); return }
+        said(saidEl, t('models.seedNoticeApplying'))
+        modelsSendSeedRequest('apply', accepted).then(function (result) {
+          said(saidEl, t('models.seedNoticeApplied', { replaced: String(result.replaced || 0), added: String(result.added || 0) }))
+          return Promise.all([read(MODELS_KEY, false), modelsLoadSeedNoticeStatus()])
+        }).then(function (results) {
+          modelsLadder = modelsSplitLadder(modelsParseCatalog(results[0]))
+          modelsRenderLadder()
+        }).catch(function (error) {
+          said(saidEl, errorText(error), true)
+        })
+      })
+
+      el('models-seed-notice-dismiss').addEventListener('click', function () {
+        var saidEl = el('models-seed-notice-said')
+        said(saidEl, t('models.seedNoticeDismissing'))
+        modelsSendSeedRequest('dismiss', []).then(function () {
+          said(saidEl, t('models.seedNoticeDismissed'))
+          return modelsLoadSeedNoticeStatus()
+        }).catch(function (error) {
+          said(saidEl, errorText(error), true)
+        })
+      })
+
+      // ---------- measurement readout ---------------------------------------
+
+      function modelsAppendLine (container, text) {
+        var p = elMake('p', 'hint')
+        p.style.margin = '4px 0'
+        p.textContent = text
+        container.appendChild(p)
+      }
+
+      /** Three states, never two: absent/zero decisions reads as the
+       *  empty sentence; a sidecar failure (`ok: false`) is a DIFFERENT
+       *  sentence -- "no calls measured yet" would be a lie about a
+       *  readout that actually failed to compute; only `ok: true` with at
+       *  least one decision renders the table. Every number below comes
+       *  straight from `summary`, never invented. */
+      function modelsRenderMeasurements (measurements) {
+        var container = el('models-measurements')
+        container.innerHTML = ''
+        if (!measurements) { modelsAppendLine(container, t('models.measurementsEmpty')); return }
+        if (!measurements.ok) { modelsAppendLine(container, t('models.measurementsUnavailable')); return }
+        var summary = measurements.summary
+        if (!summary || summary.decisions === 0) { modelsAppendLine(container, t('models.measurementsEmpty')); return }
+        modelsAppendLine(container, t('models.measurementsDecisions', { decisions: String(summary.decisions) }))
+        modelsAppendLine(container, t('models.measurementsJudged', { judged: String(summary.judged) }))
+        modelsAppendLine(container, t('models.measurementsUnjudged', { unjudged: String(summary.unjudged) }))
+        modelsAppendLine(container, t('models.measurementsUp', { up: String(summary.up) }))
+        modelsAppendLine(container, t('models.measurementsDown', { down: String(summary.down) }))
+        modelsAppendLine(container, t('models.measurementsAgree', { agree: String(summary.agree) }))
+        modelsAppendLine(container, summary.agreementRate == null
+          ? t('models.measurementsAgreementRateUnknown')
+          : t('models.measurementsAgreementRate', { rate: String(Math.round(summary.agreementRate * 1000) / 10) }))
+        modelsAppendLine(container, t('models.measurementsApplied', { applied: String(summary.applied) }))
+      }
+
+      // ---------- load ------------------------------------------------------
+
+      function modelsLoad () {
+        modelsRenderSeedNotice(null)
+        modelsRenderMeasurements(null)
+        return Promise.all([
+          read(MODELS_KEY, false),
+          read(MODELS_CONFIG_KEY, false),
+          read(MODELS_SEED_NOTICE_KEY, false),
+          read(MODEL_MEASUREMENTS_KEY, false)
+        ]).then(function (results) {
+          // A never-seeded or freshly-emptied catalog reads as [], same as
+          // FRESH: every subagent call passes through unchanged, which
+          // modelsRenderLadder's own empty-state hint says in words.
+          modelsLadder = modelsSplitLadder(modelsParseCatalog(results[0]))
+          modelsRenderLadder()
+          el('models-active').checked = !!(results[1] && results[1].active === true)
+          modelsRenderSeedNotice(results[2])
+          modelsRenderMeasurements(results[3])
+          modelsRenderActiveHint(results[3])
+        }).catch(function (error) {
+          said(el('models-ladder-said'), errorText(error), true)
+        })
+      }
+
+      modelsLoad()
     </script>
   </body>
 </html>
