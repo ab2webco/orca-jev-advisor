@@ -28,11 +28,23 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 
-import { SCENARIOS } from './screenshot-panels.mjs'
+// screenshot-panels.mjs imports `playwright` itself, unguarded, at its own
+// top -- so this import is guarded the same way scripts/panels.spec.mjs
+// guards its own SCENARIOS import, or a machine with no playwright (this
+// file's own header: every fixture in it exists to catch drift a human
+// would otherwise find by eye) would throw ERR_MODULE_NOT_FOUND here before
+// a single test even registers, instead of skipping.
+let SCENARIOS = null
+try {
+  ({ SCENARIOS } = await import('./screenshot-panels.mjs'))
+} catch {
+  SCENARIOS = null
+}
 
 const execFileAsync = promisify(execFile)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const READY = SCENARIOS.ready
+const READY = SCENARIOS?.ready
+const SKIP_NO_PLAYWRIGHT = { skip: SCENARIOS ? false : 'playwright is not installed' }
 
 /** Every key path in `fixture`, as dotted strings. Arrays contribute their
  *  first element's keys under `[]`, which is enough to catch a renamed field
@@ -94,7 +106,7 @@ async function realMeasurementsSummary () {
   }
 }
 
-test('the ready fixture\'s measurementsSummary carries only keys read-measurements.mjs really publishes', async () => {
+test('the ready fixture\'s measurementsSummary carries only keys read-measurements.mjs really publishes', SKIP_NO_PLAYWRIGHT, async () => {
   const real = await realMeasurementsSummary()
   assert.equal(real.ok, true, `the aggregator failed: ${JSON.stringify(real)}`)
   const realPaths = new Set(keyPaths(real))
@@ -102,7 +114,7 @@ test('the ready fixture\'s measurementsSummary carries only keys read-measuremen
   assert.deepEqual(missing, [], `fixture keys the worker never publishes: ${missing.join(', ')}`)
 })
 
-test('the ready fixture stores policies as the array the panel iterates', () => {
+test('the ready fixture stores policies as the array the panel iterates', SKIP_NO_PLAYWRIGHT, () => {
   assert.ok(Array.isArray(READY.policies), 'policies must be an array -- the panel calls .forEach on it')
   for (const row of READY.policies) {
     assert.equal(typeof row.id, 'string')
@@ -111,22 +123,22 @@ test('the ready fixture stores policies as the array the panel iterates', () => 
   }
 })
 
-test('the ready fixture stores the catalog and the board in the shapes their panels read', () => {
+test('the ready fixture stores the catalog and the board in the shapes their panels read', SKIP_NO_PLAYWRIGHT, () => {
   assert.ok(Array.isArray(READY.catalog.destinations), 'catalog.destinations must be an array')
   assert.ok(Array.isArray(READY.board.entries), 'board.entries must be an array')
 })
 
-test('the ready fixture uses the secret-status field the worker writes, not the one an earlier draft guessed', () => {
+test('the ready fixture uses the secret-status field the worker writes, not the one an earlier draft guessed', SKIP_NO_PLAYWRIGHT, () => {
   assert.equal(typeof READY.secretStatus.configured, 'boolean')
   assert.equal(READY.secretStatus.isConfigured, undefined, 'isConfigured is the old wrong name')
 })
 
-test('the heartbeat is resolved per page, never pinned at module load', () => {
+test('the heartbeat is resolved per page, never pinned at module load', SKIP_NO_PLAYWRIGHT, () => {
   assert.equal(READY.workerHeartbeat.at, 'now',
     "a literal timestamp goes stale mid-run; hostBridge resolves the sentinel 'now' when the page asks")
 })
 
-test('the empty fixture is exactly what read-measurements.mjs publishes for an empty home, apart from the clock-derived window bounds', async () => {
+test('the empty fixture is exactly what read-measurements.mjs publishes for an empty home, apart from the clock-derived window bounds', SKIP_NO_PLAYWRIGHT, async () => {
   const home = mkdtempSync(join(tmpdir(), 'orca-fixture-empty-'))
   try {
     const { stdout } = await execFileAsync(
