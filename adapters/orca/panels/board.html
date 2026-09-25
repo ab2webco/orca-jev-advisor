@@ -190,6 +190,66 @@
       .cmp-foot { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); margin: 2px 0 0; }
       .verdict-chip { font-variant-numeric: tabular-nums; }
 
+      /* ---- the four questions ------------------------------------------
+         Status strip, toll, interventions, calibration -- in that order in
+         the DOM, which is also the reading order at every width. From
+         1100px the interventions table takes the right column beside toll
+         and calibration, so all four fit in a 1440x900 viewport without
+         scrolling. Everything else sits below them. */
+      .windows { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 12px 8px; }
+      .windows button {
+        font: inherit; font-size: 12px; line-height: 1; padding: 5px 10px; cursor: pointer;
+        border: 1px solid var(--border, var(--fb-border)); border-radius: 9999px;
+        background: transparent; color: var(--muted-foreground, var(--fb-muted-foreground));
+      }
+      .windows button[aria-pressed="true"] {
+        background: var(--primary, var(--fb-primary)); color: var(--primary-foreground, var(--fb-primary-foreground));
+        border-color: transparent; font-weight: 600;
+      }
+      .windows button[disabled] { opacity: 0.45; cursor: default; }
+      .windows button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      .windows .meta { flex-basis: 100%; }
+
+      .strip { margin: 0 12px; padding: 8px 12px; border: 1px solid var(--border, var(--fb-border));
+               border-radius: var(--radius-md); }
+      .strip > h2 { margin: 0 0 6px; }
+      .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .chip { font-size: 12px; border: 1px solid var(--border, var(--fb-border)); border-radius: 9999px;
+              padding: 2px 9px; font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+      .chip.alarm { color: var(--destructive, var(--fb-destructive)); border-color: currentColor; font-weight: 600; }
+      .chip b { font-weight: 600; }
+
+      .top { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); padding: 10px 12px 0; }
+      @media (min-width: 1100px) {
+        /* auto then 1fr: the table spans both rows, and without this its
+           height is split across them, opening a gap under the toll card. */
+        .top { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+               grid-template-rows: auto 1fr;
+               grid-template-areas: "toll interv" "calib interv"; align-items: start; }
+        #card-toll { grid-area: toll; }
+        #card-interventions { grid-area: interv; }
+        #card-calibration { grid-area: calib; }
+      }
+
+      .itable { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 12px;
+                font-variant-numeric: tabular-nums; }
+      .itable th { font-weight: 600; text-align: right; padding: 0 0 4px 6px; font-size: 11px;
+                   color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .itable th:first-child, .itable td:first-child { text-align: left; padding-left: 0; }
+      .itable td { text-align: right; padding: 3px 0 3px 6px; border-top: 1px solid var(--border, var(--fb-border)); }
+      .itable td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .itable col.n { width: 5.2em; }
+      .itable th { white-space: nowrap; }
+      .itable .deny { color: var(--destructive, var(--fb-destructive)); font-weight: 600; }
+      .itable .zero { color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .itable tr.agg td { color: var(--muted-foreground, var(--fb-muted-foreground)); font-style: italic; }
+
+      .recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+      .recent-list li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 12px; }
+      .live-list { display: grid; gap: 6px; }
+      .live-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+      .live-row .name { font-weight: 600; overflow-wrap: anywhere; }
+
       /* The honesty card. Same border as the rest -- it is not a warning,
          it is the part of the panel that says what these numbers do not
          cover, and it should read as ordinary content, not an alarm. */
@@ -206,34 +266,56 @@
     </header>
     <p class="meta nota" id="note"></p>
 
+    <nav class="windows" id="windows" data-i18n-aria="window.label">
+      <button type="button" data-window="version"></button>
+      <button type="button" data-window="day" data-i18n="window.day"></button>
+      <button type="button" data-window="week" data-i18n="window.week"></button>
+      <button type="button" data-window="all" data-i18n="window.all"></button>
+      <span class="meta" id="window-note"></span>
+    </nav>
+
+    <section class="card wide" id="card-empty" style="display:none;margin:0 12px">
+      <h2 data-i18n="empty.heading"></h2>
+      <p class="empty-line" id="empty-body" style="margin:0"></p>
+    </section>
+
+    <section class="strip" id="card-status">
+      <h2 data-i18n="status.heading"></h2>
+      <div class="chips" id="status-body"></div>
+    </section>
+
+    <div class="top" id="top">
+      <section class="card" id="card-toll">
+        <h2 data-i18n="toll.heading"></h2>
+        <div id="toll-body"></div>
+      </section>
+
+      <section class="card" id="card-interventions">
+        <h2 data-i18n="interv.heading"></h2>
+        <div id="interventions-body"></div>
+      </section>
+
+      <section class="card" id="card-calibration">
+        <h2 data-i18n="approvals.heading"></h2>
+        <div id="approvals-body"></div>
+      </section>
+    </div>
+
     <div class="cards">
-      <section class="card wide" id="card-load">
-        <h2 data-i18n="load.heading"></h2>
-        <div id="load-empty" class="empty-line" style="display:none"></div>
-        <div id="load-body"></div>
+      <section class="card wide" id="card-recent">
+        <h2 data-i18n="stats.recentHeading"></h2>
+        <div id="stats-recent"></div>
+      </section>
+
+      <section class="card wide" id="card-live">
+        <h2 data-i18n="live.heading"></h2>
+        <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
       </section>
 
       <section class="card wide" id="card-speed">
         <h2 data-i18n="speed.heading"></h2>
         <div id="speed-empty" class="empty-line" style="display:none"></div>
         <div id="speed-body"></div>
-      </section>
-
-      <section class="card" id="card-verdicts">
-        <h2 data-i18n="verdict.heading"></h2>
-        <div id="verdict-empty" class="empty-line" style="display:none"></div>
-        <div id="verdict-body"></div>
-      </section>
-
-      <section class="card" id="card-approvals">
-        <h2 data-i18n="approvals.heading"></h2>
-        <div id="approvals-empty" class="empty-line" style="display:none"></div>
-        <div id="approvals-body"></div>
-      </section>
-
-      <section class="card" id="card-families">
-        <h2 data-i18n="gate.byFamilyHeading"></h2>
-        <div id="families-body"></div>
       </section>
 
       <section class="card" id="card-projects">
@@ -246,19 +328,9 @@
         <div id="skills-body"></div>
       </section>
 
-      <section class="card" id="card-unmeasured">
+      <section class="card wide" id="card-unmeasured">
         <h2 data-i18n="unmeasured.heading"></h2>
         <ul class="unmeasured" id="unmeasured-body"></ul>
-      </section>
-
-      <section class="card wide" id="card-recent">
-        <h2 data-i18n="stats.recentHeading"></h2>
-        <div id="stats-recent"></div>
-      </section>
-
-      <section class="card wide" id="card-live">
-        <h2 data-i18n="live.heading"></h2>
-        <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
       </section>
     </div>
 
@@ -273,12 +345,48 @@
       // ---------- catalogo de idioma (es/en) --------------------------------
       var CATALOG = {
         es: {
+          'window.label': 'Ventana de tiempo',
+          'window.version': 'Esta versión ({{v}})',
+          'window.versionNone': 'Esta versión',
+          'window.versionUnavailable': 'Ningún registro de decisión lleva todavía la versión del plugin, así que no hay vista por versión.',
+          'window.day': '24 h',
+          'window.week': '7 días',
+          'window.all': 'Todo',
+          'window.emptyWindow': 'Sin decisiones en esta ventana. Elige una más amplia.',
+          'empty.heading': 'Todavía no hay nada medido',
+          'empty.body': 'El gate todavía no ha juzgado ningún comando. Cuando Claude Code proponga el primero, este tablero responde aquí sus cuatro preguntas: si el gate funciona, qué cuesta, dónde interviene y cómo va la calibración.',
+          'status.heading': '¿Funciona el gate?',
+          'status.jevAnswered': 'Jev contestó por última vez {{age}}',
+          'status.jevNever': 'Jev todavía no ha contestado ninguna llamada',
+          'status.failures': '{{n}} sin respuesta seguidas desde entonces',
+          'status.noFailures': 'ninguna sin respuesta desde entonces',
+          'status.unjudged': '{{n}} pasaron sin juicio en esta ventana',
+          'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
+          'status.latencyNone': 'sin latencia de Jev medida en esta ventana',
+          'toll.heading': '¿Qué me cuesta?',
+          'toll.unit': 'decisiones en esta ventana',
+          'toll.avoided': 'Las reglas locales y la caché resolvieron {{n}} sin llamar a la red.',
+          'gate.source.jevMedian': 'Jev (con red, mediana {{ms}} ms)',
+          'interv.heading': '¿Dónde interviene?',
+          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas, de {{total}} decisiones',
+          'interv.family': 'Familia',
+          'interv.ask': 'Pregunta',
+          'interv.deny': 'Bloqueó',
+          'interv.notRun': 'No corrió',
+          'interv.rest': '{{n}} familias más',
+          'interv.quiet': '{{n}} familias sin intervenciones ({{total}} decisiones)',
+          'interv.none': 'Nada se preguntó ni se bloqueó en esta ventana.',
+          'interv.notRunFoot': '«No corrió» es una clasificación, no un hecho: ver ¿Cómo va la calibración?',
+          'age.now': 'ahora mismo',
+          'age.min': 'hace {{n}} min',
+          'age.h': 'hace {{n}} h',
+          'age.d': 'hace {{n}} d',
           'board.refresh': 'Releer el tablero',
           'stats.skillsEmpty': 'El mod de skills todavía no ha registrado ninguna decisión.',
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
           'stats.listingChars': 'Caracteres de listado no enviados',
-          'stats.byProjectHeading': 'Por proyecto',
+          'stats.byProjectHeading': 'Por proyecto (todo el registro)',
           'stats.byProjectEmpty': 'Sin datos todavía.',
           'stats.recentHeading': 'Últimas decisiones del gate',
           'stats.recentEmpty': 'Sin decisiones todavía.',
@@ -288,21 +396,12 @@
           'stats.recentNone': 'sin respuesta',
           'stats.na': 'sin datos suficientes',
           'stats.unknownProject': '(proyecto desconocido)',
-          'gate.heading': 'Lo que hizo el gate de Jev',
-          'gate.empty': 'El gate todavía no se ha ejecutado. Esta sección se llena la próxima vez que Claude Code proponga un comando que el gate deba juzgar.',
-          'gate.verdict.allow': 'Permitidas en silencio',
-          'gate.verdict.ask': 'Con pregunta',
-          'gate.verdict.deny': 'Bloqueadas',
           'gate.source.localRule': 'Regla local (~1ms, sin red)',
           'gate.source.cache': 'Caché (sin red)',
           'gate.source.jev': 'Jev (con red)',
           'gate.source.none': 'Nadie: Jev no contestó',
           'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso -- fallar abierto es lo correcto -- pero nadie lo revisó, así que no cuentan arriba.',
-          'gate.latency': 'Latencia de Jev: mediana {{median}}ms · máxima {{max}}ms ({{n}} llamada(s) medida(s))',
-          'gate.latency.none': 'Latencia de Jev: sin llamadas a la red todavía (todo se resolvió por regla local o por caché).',
-          'gate.byFamilyHeading': 'Por familia de comando',
-          'gate.byFamilyEmpty': 'Sin datos todavía.',
-          'approvals.heading': 'Lo que la persona respondió',
+          'approvals.heading': '¿Cómo va la calibración?',
           'approvals.empty': 'El gate todavía no ha detenido ningún comando. Esta sección se llena la próxima vez que se pregunte y la persona responda.',
           'approvals.approved': 'Aprobadas',
           'approvals.rejected': 'Rechazadas',
@@ -328,9 +427,6 @@
           'live.agentsCount': '{{n}} agente(s)',
           'live.updating': 'Actualizando…',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
-          'load.heading': 'Decisiones que el modelo no tuvo que tomar',
-          'load.unit': 'comandos juzgados por el gate',
-          'load.sub': 'Cada uno es un comando que Claude Code propuso y que se resolvió aquí. El modelo no deliberó ninguno.',
           'speed.heading': 'Cuánto tarda cada uno en decidir',
           'speed.empty': 'Todavía no hay comparaciones emparejadas. Se llenan cuando el muestreo A/B corre: cada muestra manda el mismo comando a Jev y al modelo y guarda las dos respuestas.',
           'speed.jev': 'Jev',
@@ -347,7 +443,6 @@
           'speed.tokensJev': 'Jev: {{in}} de entrada · {{out}} de salida',
           'speed.tokensBig': '{{model}}: {{in}} de entrada · {{out}} de salida · {{cache}} de contexto cargado',
           'speed.tokensNote': 'Cada deliberación del modelo se midió en frío: «claude -p» carga su propio contexto cada vez. En una sesión viva ese contexto ya está cargado, así que esa cifra es el coste de decidir en frío, no el de cada decisión dentro de la sesión.',
-          'verdict.heading': 'En qué terminaron',
           'skills.heading': 'Mod de skills',
           'unmeasured.heading': 'Lo que estos números no miden',
           'unmeasured.money': 'Dinero. Este panel no convierte nada a coste y no va a hacerlo.',
@@ -357,12 +452,48 @@
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
         },
         en: {
+          'window.label': 'Time window',
+          'window.version': 'This version ({{v}})',
+          'window.versionNone': 'This version',
+          'window.versionUnavailable': 'No decision record carries a plugin version yet, so there is no per-version view.',
+          'window.day': '24 h',
+          'window.week': '7 days',
+          'window.all': 'All time',
+          'window.emptyWindow': 'No decisions in this window. Pick a wider one.',
+          'empty.heading': 'Nothing measured yet',
+          'empty.body': 'The gate has not judged any command yet. Once Claude Code proposes the first one, this board answers its four questions here: is the gate working, what it costs, where it steps in, and how calibration is going.',
+          'status.heading': 'Is the gate working?',
+          'status.jevAnswered': 'Jev last answered {{age}}',
+          'status.jevNever': 'Jev has not answered a call yet',
+          'status.failures': '{{n}} unanswered in a row since then',
+          'status.noFailures': 'none unanswered since then',
+          'status.unjudged': '{{n}} passed unjudged in this window',
+          'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
+          'status.latencyNone': 'no Jev latency measured in this window',
+          'toll.heading': 'What does it cost?',
+          'toll.unit': 'decisions in this window',
+          'toll.avoided': 'Local rules and the cache settled {{n}} of them without a network call.',
+          'gate.source.jevMedian': 'Jev (network, median {{ms}} ms)',
+          'interv.heading': 'Where does it step in?',
+          'interv.sub': '{{ask}} asked · {{deny}} blocked, out of {{total}} decisions',
+          'interv.family': 'Family',
+          'interv.ask': 'Asked',
+          'interv.deny': 'Blocked',
+          'interv.notRun': "Didn't run",
+          'interv.rest': '{{n}} more families',
+          'interv.quiet': '{{n}} families with no interventions ({{total}} decisions)',
+          'interv.none': 'Nothing was asked or blocked in this window.',
+          'interv.notRunFoot': "\"Didn't run\" is a classification, not a fact: see How is calibration going?",
+          'age.now': 'just now',
+          'age.min': '{{n}} min ago',
+          'age.h': '{{n}} h ago',
+          'age.d': '{{n}} d ago',
           'board.refresh': 'Reload the board',
           'stats.skillsEmpty': 'The skills mod has not recorded any decision yet.',
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
           'stats.listingChars': 'Listing characters not sent',
-          'stats.byProjectHeading': 'By project',
+          'stats.byProjectHeading': 'By project (whole log)',
           'stats.byProjectEmpty': 'No data yet.',
           'stats.recentHeading': 'Latest gate decisions',
           'stats.recentEmpty': 'No decisions yet.',
@@ -372,21 +503,12 @@
           'stats.recentNone': 'no answer',
           'stats.na': 'not enough data',
           'stats.unknownProject': '(unknown project)',
-          'gate.heading': 'What the Jev gate did',
-          'gate.empty': 'The gate has not run yet. This section fills in the next time Claude Code proposes a command for the gate to judge.',
-          'gate.verdict.allow': 'Allowed silently',
-          'gate.verdict.ask': 'Asked',
-          'gate.verdict.deny': 'Blocked',
           'gate.source.localRule': 'Local rule (~1ms, no network)',
           'gate.source.cache': 'Cache (no network)',
           'gate.source.jev': 'Jev (network)',
           'gate.source.none': 'Nobody: Jev did not answer',
           'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead -- failing open is correct -- but nobody reviewed it, so they are not counted above.',
-          'gate.latency': 'Jev latency: median {{median}}ms · max {{max}}ms ({{n}} measured call(s))',
-          'gate.latency.none': 'Jev latency: no network calls yet (everything resolved by local rule or cache).',
-          'gate.byFamilyHeading': 'By command family',
-          'gate.byFamilyEmpty': 'No data yet.',
-          'approvals.heading': 'What the person answered',
+          'approvals.heading': 'How is calibration going?',
           'approvals.empty': 'The gate has not stopped any command yet. This section fills in the next time it asks and the person answers.',
           'approvals.approved': 'Approved',
           'approvals.rejected': 'Rejected',
@@ -412,9 +534,6 @@
           'live.agentsCount': '{{n}} agent(s)',
           'live.updating': 'Updating…',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
-          'load.heading': 'Decisions the model did not have to make',
-          'load.unit': 'commands judged by the gate',
-          'load.sub': 'Each one is a command Claude Code proposed and that was settled here. The model deliberated none of them.',
           'speed.heading': 'How long each one takes to decide',
           'speed.empty': 'No paired comparisons yet. They fill in when the A/B sampling runs: each sample sends the same command to Jev and to the model and keeps both answers.',
           'speed.jev': 'Jev',
@@ -431,7 +550,6 @@
           'speed.tokensJev': 'Jev: {{in}} in · {{out}} out',
           'speed.tokensBig': '{{model}}: {{in}} in · {{out}} out · {{cache}} of context loaded',
           'speed.tokensNote': 'Every model deliberation was measured cold: "claude -p" loads its own context each time. Inside a live session that context is already resident, so this figure is the cost of deciding cold, not the cost of each in-session decision.',
-          'verdict.heading': 'How they ended',
           'skills.heading': 'Skills mod',
           'unmeasured.heading': 'What these numbers do not measure',
           'unmeasured.money': 'Money. This panel converts nothing into cost and will not start.',
@@ -685,29 +803,204 @@
         else bodyEl.innerHTML = '<p class="empty-line">' + esc(emptyText || '') + '</p>'
       }
 
-      function renderLoad (gate) {
-        var total = gate.totalDecisions || 0
-        if (total <= 0) { fill('load-body', 'load-empty', '', t('gate.empty')); return }
-        var source = gate.bySource || {}
+      // ---------- board helpers --------------------------------------------
+      // Hand-copied from adapters/orca/panels/panel_values.mjs (tested there),
+      // converted to ES5 -- `grep -n defaultWindowKey` across both files is
+      // how to check the copies still agree.
+      function defaultWindowKey (windows) {
+        if (!windows) return 'all'
+        var order = ['version', 'week', 'all']
+        for (var i = 0; i < order.length; i++) {
+          var w = windows[order[i]]
+          if (w && w.available && w.totalDecisions > 0) return order[i]
+        }
+        return 'all'
+      }
+      function relativeAge (iso, nowMs) {
+        if (typeof iso !== 'string') return null
+        var at = Date.parse(iso)
+        if (isNaN(at)) return null
+        var seconds = Math.floor((nowMs - at) / 1000)
+        if (seconds < 60) return { unit: 'now', n: 0 }
+        var minutes = Math.floor(seconds / 60)
+        if (minutes < 60) return { unit: 'min', n: minutes }
+        var hours = Math.floor(minutes / 60)
+        if (hours < 24) return { unit: 'h', n: hours }
+        return { unit: 'd', n: Math.floor(hours / 24) }
+      }
+      function liveEntryView (entry) {
+        var e = entry || {}
+        function present (value) { return (typeof value === 'string' && value.length > 0) ? value : null }
+        return {
+          name: present(e.project),
+          branch: present(e.rama),
+          title: [present(e.worktreeId), present(e.paneKey)].filter(function (part) { return part !== null }).join(' · ')
+        }
+      }
+
+      /** "4 min ago", or '' when the timestamp cannot be read -- never "NaN". */
+      function ago (iso) {
+        var age = relativeAge(iso, Date.now())
+        return age ? t('age.' + age.unit, { n: String(age.n) }) : ''
+      }
+
+      // ---------- window picker ----------------------------------------------
+      // null until the person picks one; until then the board follows
+      // defaultWindowKey, so a log that gains a stamped version moves the
+      // default along with it instead of freezing whatever loaded first.
+      var chosenWindow = null
+      function activeWindowKey (windows) {
+        if (chosenWindow && windows && windows[chosenWindow] && windows[chosenWindow].available) return chosenWindow
+        return defaultWindowKey(windows)
+      }
+      function renderWindowPicker (windows, activeKey) {
+        var version = windows && windows.version
+        var versionAvailable = !!(version && version.available)
+        var buttons = el('windows').querySelectorAll('button[data-window]')
+        for (var i = 0; i < buttons.length; i++) {
+          var b = buttons[i]
+          var key = b.getAttribute('data-window')
+          if (key === 'version') {
+            b.textContent = versionAvailable ? t('window.version', { v: version.pluginVersion }) : t('window.versionNone')
+            b.disabled = !versionAvailable
+            b.title = versionAvailable ? '' : t('window.versionUnavailable')
+          } else {
+            b.disabled = !windows
+          }
+          b.setAttribute('aria-pressed', key === activeKey ? 'true' : 'false')
+        }
+        var w = windows && windows[activeKey]
+        var note = !versionAvailable ? t('window.versionUnavailable') : ''
+        if (w && w.totalDecisions <= 0) note = t('window.emptyWindow')
+        el('window-note').textContent = note
+      }
+      el('windows').addEventListener('click', function (event) {
+        var target = event.target
+        if (!target || !target.getAttribute || target.disabled) return
+        var key = target.getAttribute('data-window')
+        if (!key) return
+        chosenWindow = key
+        if (lastStats) renderStats(lastStats)
+      })
+
+      // ---------- the four questions -------------------------------------
+      function renderStatus (health, w) {
+        var chips = []
+        if (health.lastJevAt) chips.push(chip(t('status.jevAnswered', { age: ago(health.lastJevAt) }), ''))
+        else chips.push(chip(t('status.jevNever'), ''))
+        var failures = health.consecutiveFailures || 0
+        chips.push(failures > 0
+          ? chip(t('status.failures', { n: num(failures) }), 'alarm', health.lastFailureAt ? ago(health.lastFailureAt) : '')
+          : chip(t('status.noFailures'), ''))
+        var unjudged = (w.bySource && w.bySource.none) || 0
+        chips.push(chip(t('status.unjudged', { n: num(unjudged) }), unjudged > 0 ? 'alarm' : ''))
+        var latency = w.jevLatency || {}
+        chips.push(latency.sampleCount > 0
+          ? chip(t('status.latency', { p50: ms(latency.medianMs), p95: ms(latency.p95Ms) }), '')
+          : chip(t('status.latencyNone'), ''))
+        el('status-body').innerHTML = chips.join('')
+      }
+      function chip (text, cls, title) {
+        return '<span class="chip' + (cls ? ' ' + cls : '') + '"' +
+          (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>'
+      }
+
+      function renderToll (w) {
+        var total = w.totalDecisions || 0
+        var source = w.bySource || {}
         // A `none` record is a command that reached the point of asking Jev
-        // and got no answer -- it passed UNJUDGED. Counting it as a decision
-        // the gate made would be the exact overstatement this panel exists
-        // not to make, so the headline counts judged commands only and the
-        // unjudged ones get their own sentence.
+        // and got no answer -- it passed UNJUDGED. It stays in the bar, in
+        // red, and gets its own sentence; it is never folded into what the
+        // gate settled.
         var unjudged = source.none || 0
-        var judged = total - unjudged
+        var median = w.jevLatency && w.jevLatency.medianMs
         var segments = [
-          { value: source.jev || 0, cls: 'v1', label: t('gate.source.jev') },
+          { value: source.jev || 0, cls: 'v1', label: median != null ? t('gate.source.jevMedian', { ms: ms(median) }) : t('gate.source.jev') },
           { value: source.cache || 0, cls: 'v2', label: t('gate.source.cache') },
           { value: source['local-rule'] || 0, cls: 'v3', label: t('gate.source.localRule') },
           { value: unjudged, cls: 'vd', label: t('gate.source.none') }
         ]
-        fill('load-body', 'load-empty',
-          '<div class="kpi"><span class="kpi-n">' + esc(num(judged)) + '</span>' +
-          '<span class="kpi-unit">' + esc(t('load.unit')) + '</span></div>' +
-          '<p class="kpi-sub">' + esc(t('load.sub')) + '</p>' +
+        // A count, not minutes: minutes saved would be this count times a
+        // median, an extrapolation the unmeasured card says this board does
+        // not make.
+        var avoided = (source.cache || 0) + (source['local-rule'] || 0)
+        el('toll-body').innerHTML =
+          '<div class="kpi"><span class="kpi-n">' + esc(num(total)) + '</span>' +
+          '<span class="kpi-unit">' + esc(t('toll.unit')) + '</span></div>' +
+          '<p class="kpi-sub">' + esc(t('toll.avoided', { n: num(avoided) })) + '</p>' +
           stackedBar(segments, total) + legendList(segments, total) +
-          (unjudged > 0 ? line(t('load.unjudged', { n: String(unjudged) })) : ''))
+          (unjudged > 0 ? line(t('load.unjudged', { n: num(unjudged) })) : '')
+      }
+
+      function countCell (value, cls) {
+        var n = value || 0
+        return '<td class="' + (n === 0 ? 'zero' : (cls || '')) + '">' + esc(num(n)) + '</td>'
+      }
+      function renderInterventions (w) {
+        var verdict = w.byVerdict || {}
+        var table = w.interventions || {}
+        var rows = table.rows || []
+        var sub = line(t('interv.sub', {
+          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), total: num(w.totalDecisions || 0)
+        }), 'kpi-sub')
+        if (rows.length === 0) {
+          el('interventions-body').innerHTML = sub + line(t('interv.none'), 'empty-line')
+          return
+        }
+        var body = rows.map(function (r) {
+          return '<tr><td title="' + esc(r.commandFamily) + '">' + esc(r.commandFamily) + '</td>' +
+            countCell(r.ask) + countCell(r.deny, 'deny') + countCell(r.notRun) + '</tr>'
+        })
+        if (table.rest) {
+          var restLabel = esc(t('interv.rest', { n: num(table.rest.families) }))
+          body.push('<tr class="agg"><td title="' + restLabel + '">' + restLabel + '</td>' +
+            countCell(table.rest.ask) + countCell(table.rest.deny, 'deny') + countCell(table.rest.notRun) + '</tr>')
+        }
+        var quiet = table.quiet || { families: 0, total: 0 }
+        var hasNotRun = rows.some(function (r) { return r.notRun > 0 }) || !!(table.rest && table.rest.notRun > 0)
+        el('interventions-body').innerHTML = sub +
+          '<table class="itable"><colgroup><col><col class="n"><col class="n"><col class="n"></colgroup>' +
+          '<thead><tr><th scope="col">' + esc(t('interv.family')) + '</th><th scope="col">' + esc(t('interv.ask')) +
+          '</th><th scope="col">' + esc(t('interv.deny')) + '</th><th scope="col">' + esc(t('interv.notRun')) + '</th></tr></thead>' +
+          '<tbody>' + body.join('') + '</tbody></table>' +
+          (quiet.families > 0 ? line(t('interv.quiet', { n: num(quiet.families), total: num(quiet.total) })) : '') +
+          (hasNotRun ? line(t('interv.notRunFoot')) : '')
+      }
+
+      function renderApprovals (approvals) {
+        var asked = approvals.asked || 0
+        if (asked <= 0) { el('approvals-body').innerHTML = line(t('approvals.empty'), 'empty-line'); return }
+        var segments = [
+          { value: approvals.approved || 0, cls: 'v1', label: t('approvals.approved') },
+          { value: approvals.rejected || 0, cls: 'vd', label: t('approvals.rejected') },
+          { value: approvals.notRun || 0, cls: 'v3', label: t('approvals.notRun') }
+        ]
+        var parts = [stackedBar(segments, asked), legendList(segments, asked)]
+        // P7: the uncertainty stays in the copy, and only when the count is
+        // non-zero -- explaining zero of something is noise.
+        if ((approvals.notRun || 0) > 0) parts.push(line(t('approvals.notRunHint')))
+
+        var ceiling = approvals.ceiling || {}
+        if (ceiling.suggestedCeiling != null) {
+          parts.push(hbars([
+            { label: t('approvals.highestApproved'), value: ceiling.highestApproved },
+            { label: t('approvals.lowestRejected'), value: ceiling.lowestRejected },
+            { label: t('approvals.suggestedCeiling'), value: ceiling.suggestedCeiling }
+          ], 'v2'))
+          parts.push(line(t('approvals.evidenceCount', {
+            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+          })))
+        } else if ((ceiling.approvedCount || 0) === 0 || (ceiling.rejectedCount || 0) === 0) {
+          parts.push(line(t('approvals.noSuggestionInsufficient', {
+            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+          })))
+        } else {
+          parts.push(line(t('approvals.noSuggestionOverlap', {
+            highest: String(ceiling.highestApproved), lowest: String(ceiling.lowestRejected),
+            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
+          })))
+        }
+        el('approvals-body').innerHTML = parts.join('')
       }
 
       function renderSpeed (ab) {
@@ -763,66 +1056,6 @@
         fill('speed-body', 'speed-empty', parts.join(''), '')
       }
 
-      function renderVerdicts (gate) {
-        var total = gate.totalDecisions || 0
-        if (total <= 0) { fill('verdict-body', 'verdict-empty', '', t('gate.empty')); return }
-        var verdict = gate.byVerdict || {}
-        var segments = [
-          { value: verdict.allow || 0, cls: 'v1', label: t('gate.verdict.allow') },
-          { value: verdict.ask || 0, cls: 'v3', label: t('gate.verdict.ask') },
-          { value: verdict.deny || 0, cls: 'vd', label: t('gate.verdict.deny') }
-        ]
-        var latency = gate.jevLatency || {}
-        var foot = latency.sampleCount > 0
-          ? t('gate.latency', { median: ms(latency.medianMs), max: ms(latency.maxMs), n: String(latency.sampleCount) })
-          : t('gate.latency.none')
-        fill('verdict-body', 'verdict-empty',
-          stackedBar(segments, total) + legendList(segments, total) + line(foot))
-      }
-
-      function renderApprovals (approvals) {
-        var asked = approvals.asked || 0
-        if (asked <= 0) { fill('approvals-body', 'approvals-empty', '', t('approvals.empty')); return }
-        var segments = [
-          { value: approvals.approved || 0, cls: 'v1', label: t('approvals.approved') },
-          { value: approvals.rejected || 0, cls: 'vd', label: t('approvals.rejected') },
-          { value: approvals.notRun || 0, cls: 'v3', label: t('approvals.notRun') }
-        ]
-        var parts = [stackedBar(segments, asked), legendList(segments, asked)]
-        // P7: the uncertainty stays in the copy, and only when the count is
-        // non-zero -- explaining zero of something is noise.
-        if ((approvals.notRun || 0) > 0) parts.push(line(t('approvals.notRunHint')))
-
-        var ceiling = approvals.ceiling || {}
-        if (ceiling.suggestedCeiling != null) {
-          parts.push(hbars([
-            { label: t('approvals.highestApproved'), value: ceiling.highestApproved },
-            { label: t('approvals.lowestRejected'), value: ceiling.lowestRejected },
-            { label: t('approvals.suggestedCeiling'), value: ceiling.suggestedCeiling }
-          ], 'v2'))
-          parts.push(line(t('approvals.evidenceCount', {
-            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
-          })))
-        } else if ((ceiling.approvedCount || 0) === 0 || (ceiling.rejectedCount || 0) === 0) {
-          parts.push(line(t('approvals.noSuggestionInsufficient', {
-            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
-          })))
-        } else {
-          parts.push(line(t('approvals.noSuggestionOverlap', {
-            highest: String(ceiling.highestApproved), lowest: String(ceiling.lowestRejected),
-            approved: String(ceiling.approvedCount || 0), rejected: String(ceiling.rejectedCount || 0)
-          })))
-        }
-        fill('approvals-body', 'approvals-empty', parts.join(''), '')
-      }
-
-      function renderFamilies (gate) {
-        var families = (gate.byCommandFamily || []).slice(0, 8)
-        fill('families-body', null, hbars(families.map(function (f) {
-          return { label: f.commandFamily, value: f.total }
-        }), 'v1'), t('gate.byFamilyEmpty'))
-      }
-
       function renderProjects (gate, mod) {
         var totals = {}
         ;(gate.byProject || []).forEach(function (p) {
@@ -860,41 +1093,81 @@
       function renderRecent (gate) {
         var recent = gate.recent || []
         if (recent.length === 0) {
-          el('stats-recent').innerHTML = '<p class="empty-line">' + esc(t('stats.recentEmpty')) + '</p>'
+          el('stats-recent').innerHTML = line(t('stats.recentEmpty'), 'empty-line')
           return
         }
         var sourceLabel = {
           'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'),
           jev: t('stats.recentJev'), none: t('stats.recentNone')
         }
-        el('stats-recent').innerHTML = recent.map(function (r) {
-          var latency = r.latencyMs != null ? ' · ' + r.latencyMs + 'ms' : ''
-          return '<div class="item" style="padding:6px 0"><div class="line1">' +
-            '<span class="worktree">' + esc(projectLabel(r.project)) + '</span>' +
+        // Family, source, verdict, age: the project moves to the tooltip and
+        // the full timestamp is gone -- "4 min ago" is what a person scans.
+        el('stats-recent').innerHTML = '<ul class="recent-list">' + recent.map(function (r) {
+          var latency = r.latencyMs != null ? ' · ' + ms(r.latencyMs) + ' ms' : ''
+          return '<li title="' + esc(projectLabel(r.project)) + '">' +
             '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
-            '<span class="tag">' + esc(sourceLabel[r.source] || esc(r.source)) + latency + '</span>' +
+            '<span class="tag">' + esc((sourceLabel[r.source] || r.source || '') + latency) + '</span>' +
             '<span class="' + tagClass(r.verdict === 'deny' ? 'blocked' : (r.verdict === 'ask' ? 'working' : 'done')) + '">' +
             esc(r.verdict || '') + '</span>' +
-            '<span class="when">' + when(r.at) + '</span></div></div>'
-        }).join('')
+            '<span class="when">' + esc(ago(r.at)) + '</span></li>'
+        }).join('') + '</ul>'
+      }
+
+      function show (id, visible) { el(id).style.display = visible ? '' : 'none' }
+
+      // Whether the board has anything to say beyond its empty state. The
+      // live card reads it too, so an empty log and an empty live list do
+      // not leave a card that only says "no data".
+      var hasMeasurements = false
+      function syncLiveVisibility () {
+        var entries = (lastBoard && Array.isArray(lastBoard.entries)) ? lastBoard.entries : []
+        show('card-live', hasMeasurements || entries.length > 0)
       }
 
       function renderStats (summary) {
         lastStats = summary
-        renderUnmeasured()
         var ok = !!(summary && summary.ok)
         var gate = (ok && summary.gate) || {}
         var mod = (ok && summary.modSkills) || {}
-        var approvals = (ok && summary.approvals) || {}
         var ab = (ok && summary.abBenchmark) || {}
-        renderLoad(gate)
-        renderSpeed(ab)
-        renderVerdicts(gate)
-        renderApprovals(approvals)
-        renderFamilies(gate)
-        renderProjects(gate, mod)
-        renderSkills(mod)
-        renderRecent(gate)
+        var windows = gate.windows || null
+        var hasGate = !!(windows && windows.all && windows.all.totalDecisions > 0)
+        var hasSpeed = (ab.sampleCount || 0) > 0
+        var hasSkills = (mod.totalDecisions || 0) > 0
+        hasMeasurements = hasGate || hasSpeed || hasSkills
+
+        // An empty log gets one card that says why, never a column of empty
+        // sections and never a zero standing in for "nothing yet".
+        show('card-empty', !hasGate)
+        el('empty-body').textContent = t('empty.body')
+        show('windows', hasGate)
+        show('card-status', hasGate)
+        show('card-recent', hasGate)
+        show('card-projects', hasGate || hasSkills)
+        show('card-speed', hasMeasurements)
+        show('card-skills', hasMeasurements)
+        show('card-unmeasured', hasMeasurements)
+        syncLiveVisibility()
+
+        var key = activeWindowKey(windows)
+        var w = (windows && windows[key]) || {}
+        show('top', hasGate && w.totalDecisions > 0)
+        if (hasGate) {
+          renderWindowPicker(windows, key)
+          renderStatus(gate.health || {}, w)
+          if (w.totalDecisions > 0) {
+            renderToll(w)
+            renderInterventions(w)
+            renderApprovals(w.approvals || {})
+          }
+          renderRecent(gate)
+        }
+        if (hasMeasurements) {
+          renderUnmeasured()
+          renderSpeed(ab)
+          renderSkills(mod)
+        }
+        if (hasGate || hasSkills) renderProjects(gate, mod)
       }
 
       // ---------- render: live board -----------------------------------------
@@ -904,12 +1177,6 @@
         if (state === 'blocked') return 'tag blocked'
         return 'tag'
       }
-      function when (iso) {
-        var ms = Date.parse(String(iso || ''))
-        if (!ms) return esc(iso)
-        try { return new Date(ms).toLocaleString() } catch (error) { return esc(iso) }
-      }
-
       var lastBoard = null
       function render (board) {
         lastBoard = board
@@ -926,21 +1193,22 @@
         if (!entries.length) {
           cardsEl.innerHTML = '<p class="empty">' + esc(t('live.empty')) + '</p>'
           statusEl.textContent = ''
+          syncLiveVisibility()
           return
         }
 
-        cardsEl.innerHTML = entries.map(function (entry) {
-          var label = entry.project
-            ? esc(entry.project) + (entry.rama ? ' · ' + esc(entry.rama) : '')
-            : esc(t('live.unknownWorktree'))
-          return '<div class="item"><div class="line1">' +
-            '<span class="worktree">' + label + '</span>' +
+        // A pane key is a pair of UUIDs that tells a person nothing: the
+        // project and branch are the chips, the ids only the tooltip.
+        cardsEl.innerHTML = '<div class="live-list">' + entries.map(function (entry) {
+          var view = liveEntryView(entry)
+          return '<div class="live-row" title="' + esc(view.title) + '">' +
+            '<span class="name">' + esc(view.name || t('live.unknownWorktree')) + '</span>' +
+            (view.branch ? '<span class="tag">' + esc(view.branch) + '</span>' : '') +
             '<span class="' + tagClass(entry.state) + '">' + esc(entry.state || '?') + '</span>' +
-            '<span class="when">' + when(entry.updatedAt) + '</span></div>' +
-            '<div class="pane">' + esc(entry.paneKey || '') + '</div>' +
-            '</div>'
-        }).join('')
+            '<span class="when">' + esc(ago(entry.updatedAt)) + '</span></div>'
+        }).join('') + '</div>'
         statusEl.textContent = t('live.agentsCount', { n: String(entries.length) })
+        syncLiveVisibility()
       }
 
       // Every number on this board (board entries, measurementsSummary) is
