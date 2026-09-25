@@ -521,6 +521,109 @@ test('adding a model with a duplicate id is refused, and a valid one lands unran
   }
 })
 
+// ---------------------------------------------------------------------------
+// "Rank this" is the only way an unranked entry enters the ranked
+// ladder, appended at the bottom without demoting anyone; every rank-
+// changing action renumbers 1..n with no gaps. See
+// config_html_models.test.mjs for the pure-function coverage of
+// modelsReorder/modelsRankThis/modelsMarkUnranked/modelsRemove/
+// modelsRenumber -- these check the same behavior through the real buttons.
+// ---------------------------------------------------------------------------
+
+test('the "Rank this" action grows the ladder without demoting anyone, and renumbers 1..n', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+    modelRow({ id: 'b', label: 'B', rank: 2, available: true }),
+    modelRow({ id: 'u', label: 'U', rank: null }),
+  ]
+  const { browser, page, errors } = await openPanel({ models })
+  try {
+    const entries = page.locator('#models-ladder-list .entry')
+    await entries.nth(2).getByRole('button', { name: /rank this|clasificar/i }).click()
+    const names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.deepEqual(names, ['A (a)', 'B (b)', 'U (u)'], '"Rank this" must not reorder the display')
+    assert.ok(badges[0].includes('1') && badges[1].includes('2') && badges[2].includes('3'),
+      `ranks after "Rank this" are not 1..3: ${JSON.stringify(badges)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('adding a model then ranking it grows the ladder from N to N+1 with ranks 1..N+1', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'a', label: 'A', rank: 1, available: true })]
+  const { browser, page } = await openPanel({ models })
+  try {
+    await page.fill('#models-add-id', 'new-model')
+    await page.fill('#models-add-label', 'New Model')
+    await page.fill('#models-add-provider', 'anthropic')
+    await page.fill('#models-add-agentmodel', 'haiku')
+    await page.click('#models-add-row')
+    const entries = page.locator('#models-ladder-list .entry')
+    await entries.nth(1).getByRole('button', { name: /rank this|clasificar/i }).click()
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.equal(badges.length, 2)
+    assert.ok(badges[0].includes('1') && badges[1].includes('2'), `ranks not 1..2: ${JSON.stringify(badges)}`)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an unranked entry has no move up/down of its own -- only "Rank this" gets it into the ladder', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+    modelRow({ id: 'u', label: 'U', rank: null }),
+  ]
+  const { browser, page } = await openPanel({ models })
+  try {
+    const unrankedEntry = page.locator('#models-ladder-list .entry').nth(1)
+    const upDisabled = await unrankedEntry.getByRole('button', { name: /move up|subir/i }).isDisabled()
+    const downDisabled = await unrankedEntry.getByRole('button', { name: /move down|bajar/i }).isDisabled()
+    assert.ok(upDisabled, 'an unranked row\'s move-up button must be disabled')
+    assert.ok(downDisabled, 'an unranked row\'s move-down button must be disabled')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('move down swaps two ranked rows, and mark-unranked/remove renumber the rest with no gaps', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [
+    modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+    modelRow({ id: 'b', label: 'B', rank: 2, available: true }),
+    modelRow({ id: 'c', label: 'C', rank: 3, available: true }),
+  ]
+  const { browser, page } = await openPanel({ models })
+  try {
+    const entries = () => page.locator('#models-ladder-list .entry')
+    await entries().nth(0).getByRole('button', { name: /move down|bajar/i }).click()
+    let names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['B (b)', 'A (a)', 'C (c)'])
+
+    await entries().nth(0).getByRole('button', { name: /mark unranked|marcar sin clasificar/i }).click()
+    let badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['A (a)', 'C (c)', 'B (b)'], 'marking unranked must not renumber the entries around it out of order')
+    assert.ok(badges[0].includes('1') && badges[1].includes('2'), `remaining ranks not renumbered: ${JSON.stringify(badges)}`)
+
+    await entries().nth(0).getByRole('button', { name: /^remove$|^quitar$/i }).click()
+    badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    names = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .entry-name')).map((el) => el.textContent))
+    assert.deepEqual(names, ['C (c)', 'B (b)'])
+    assert.ok(badges[0].includes('1'), `remaining rank not renumbered after remove: ${JSON.stringify(badges)}`)
+  } finally {
+    await browser.close()
+  }
+})
+
 test('the model baseline notice stays hidden with no status, and shows the real counts when due', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const hidden = await openPanel({ models: [] })
   try {
@@ -595,6 +698,179 @@ test('clicking the model notice\'s dismiss button sends a dismiss request with n
     const request = await page.evaluate(() => window.__written.modelsSeedRequest)
     assert.equal(request.action, 'dismiss')
     assert.deepEqual(request.acceptedIds, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Apply/Dismiss stay disabled from the click until the matching
+// result (or the timeout) arrives, so a second click can never replace an
+// in-flight request. The bridge answers `modelsSeedResult` synchronously
+// inside the same tick `modelsSeedRequest` is written, so a plain click+
+// assert would pass by luck; these hold the request with a property
+// override on `window.__written` until the assertion has run, then release
+// it so the panel's own poll picks it up.
+// ---------------------------------------------------------------------------
+
+async function holdSeedRequest (page) {
+  await page.evaluate(() => {
+    window.__heldSeedRequest = undefined
+    Object.defineProperty(window.__written, 'modelsSeedRequest', {
+      configurable: true,
+      set (v) { window.__heldSeedRequest = v },
+      get () { return undefined }
+    })
+  })
+}
+
+async function releaseSeedRequest (page) {
+  await page.evaluate(() => {
+    delete window.__written.modelsSeedRequest
+    window.__written.modelsSeedRequest = window.__heldSeedRequest
+  })
+}
+
+test('Apply and Dismiss are both disabled while an apply request is in flight, then re-enabled', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    await holdSeedRequest(page)
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => window.__heldSeedRequest !== undefined, undefined, { timeout: 25000 })
+
+    const disabledInFlight = await page.evaluate(() => ({
+      apply: document.getElementById('models-seed-notice-apply').disabled,
+      dismiss: document.getElementById('models-seed-notice-dismiss').disabled
+    }))
+    assert.deepEqual(disabledInFlight, { apply: true, dismiss: true },
+      'both buttons must be disabled while the apply request is in flight')
+
+    await releaseSeedRequest(page)
+    await page.waitForFunction(() => {
+      const applyBtn = document.getElementById('models-seed-notice-apply')
+      const dismissBtn = document.getElementById('models-seed-notice-dismiss')
+      return !applyBtn.disabled && !dismissBtn.disabled
+    }, undefined, { timeout: 25000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+test('Apply and Dismiss are both disabled while a dismiss request is in flight, then re-enabled', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
+  try {
+    await holdSeedRequest(page)
+    await page.click('#models-seed-notice-dismiss')
+    await page.waitForFunction(() => window.__heldSeedRequest !== undefined, undefined, { timeout: 25000 })
+
+    const disabledInFlight = await page.evaluate(() => ({
+      apply: document.getElementById('models-seed-notice-apply').disabled,
+      dismiss: document.getElementById('models-seed-notice-dismiss').disabled
+    }))
+    assert.deepEqual(disabledInFlight, { apply: true, dismiss: true },
+      'both buttons must be disabled while the dismiss request is in flight')
+
+    await releaseSeedRequest(page)
+    await page.waitForFunction(() => {
+      const applyBtn = document.getElementById('models-seed-notice-apply')
+      const dismissBtn = document.getElementById('models-seed-notice-dismiss')
+      return !applyBtn.disabled && !dismissBtn.disabled
+    }, undefined, { timeout: 25000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// A dirty (unsaved) ladder blocks Apply instead of letting a
+// successful apply silently overwrite it with a fresh storage read.
+// ---------------------------------------------------------------------------
+
+test('a dirty ladder blocks Apply and shows the inline message, without sending a request -- Save unblocks it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'a', label: 'A', rank: null })]
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models, modelsSeedNotice: status })
+  try {
+    await page.locator('#models-ladder-list .entry').nth(0)
+      .getByRole('button', { name: /rank this|clasificar/i }).click()
+
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('models-seed-notice-dirty')).display !== 'none',
+      undefined, { timeout: 5000 }
+    )
+    const writtenWhileDirty = await page.evaluate(() => window.__written.modelsSeedRequest)
+    assert.equal(writtenWhileDirty, undefined, 'a dirty ladder must not send an apply request')
+
+    await page.click('#models-save-ladder')
+    await page.waitForFunction(
+      () => /saved|guardado/i.test(document.getElementById('models-ladder-said').innerText),
+      undefined, { timeout: 25000 }
+    )
+
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelsSeedRequest)
+    assert.equal(request.action, 'apply')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('"Discard my edits" reloads the ladder from storage, clears the dirty flag, and unblocks Apply', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const models = [modelRow({ id: 'a', label: 'A', rank: null })]
+  const status = {
+    due: true, added: 1, differing: 0, shippedVersion: 2,
+    items: [{ id: 'new-id', label: 'New Model', kind: 'added', fields: [] }],
+    checkedAt: new Date().toISOString(),
+  }
+  const { browser, page } = await openPanel({ models, modelsSeedNotice: status })
+  try {
+    await page.locator('#models-ladder-list .entry').nth(0)
+      .getByRole('button', { name: /rank this|clasificar/i }).click()
+
+    await page.check('#models-seed-notice-items input[type=checkbox]')
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(
+      () => getComputedStyle(document.getElementById('models-seed-notice-dirty')).display !== 'none',
+      undefined, { timeout: 5000 }
+    )
+
+    await page.click('#models-seed-notice-discard')
+    // The dirty block hides synchronously on click, but the actual reload
+    // is an async storage read -- wait for that to finish (the "discarded"
+    // confirmation only appears after modelsRenderLadder runs) instead of
+    // racing the badge check against it.
+    await page.waitForFunction(
+      () => /discarded|descartado/i.test(document.getElementById('models-ladder-said').innerText),
+      undefined, { timeout: 25000 }
+    )
+    const dirtyVisible = await page.evaluate(() =>
+      getComputedStyle(document.getElementById('models-seed-notice-dirty')).display !== 'none')
+    assert.equal(dirtyVisible, false, 'the dirty block must stay hidden once edits are discarded')
+    const badges = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#models-ladder-list .models-badge')).map((el) => el.textContent))
+    assert.ok(badges.every((b) => /unranked|sin clasificar/i.test(b)),
+      `discard must reload the ladder from storage, undoing the "Rank this" edit: ${JSON.stringify(badges)}`)
+
+    await page.click('#models-seed-notice-apply')
+    await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
   } finally {
     await browser.close()
   }

@@ -332,6 +332,10 @@
             <button id="models-seed-notice-dismiss" class="link" type="button" data-i18n="models.seedNoticeDismiss"></button>
             <span class="said" id="models-seed-notice-said"></span>
           </div>
+          <div id="models-seed-notice-dirty" style="display:none; margin-top: 8px">
+            <p class="hint warn" id="models-seed-notice-dirty-text" data-i18n="models.seedNoticeDirtyBlocked"></p>
+            <button id="models-seed-notice-discard" class="link" type="button" data-i18n="models.seedNoticeDiscardEdits"></button>
+          </div>
         </div>
 
         <div id="models-ladder-list"></div>
@@ -593,6 +597,7 @@
           'models.moveUp': 'Subir',
           'models.moveDown': 'Bajar',
           'models.markUnranked': 'Marcar sin clasificar',
+          'models.rankThis': 'Clasificar',
           'models.remove': 'Quitar',
           'models.saveLadder': 'Guardar la escalera',
           'models.savingLadder': 'Guardando…',
@@ -631,6 +636,9 @@
           'models.seedNoticeDismissing': 'Descartando…',
           'models.seedNoticeDismissed': 'Descartado. No se cambió ningún modelo.',
           'models.seedNoticeNoneChosen': 'No marcaste ninguno, así que no se cambió nada.',
+          'models.seedNoticeDirtyBlocked': 'Tienes cambios sin guardar en la escalera. Guarda la escalera o descarta tus cambios antes de aplicar la base.',
+          'models.seedNoticeDiscardEdits': 'Descartar mis cambios',
+          'models.seedNoticeEditsDiscarded': 'Descartado: la escalera se recargó desde el almacenamiento.',
           'models.measurementsHeading': 'Medición',
           'models.measurementsEmpty': 'Todavía no se ha medido ninguna llamada a una subtarea.',
           'models.measurementsUnavailable': 'No se pudo leer la medición.',
@@ -830,6 +838,7 @@
           'models.moveUp': 'Move up',
           'models.moveDown': 'Move down',
           'models.markUnranked': 'Mark unranked',
+          'models.rankThis': 'Rank this',
           'models.remove': 'Remove',
           'models.saveLadder': 'Save the ladder',
           'models.savingLadder': 'Saving…',
@@ -868,6 +877,9 @@
           'models.seedNoticeDismissing': 'Dismissing…',
           'models.seedNoticeDismissed': 'Dismissed. No model was changed.',
           'models.seedNoticeNoneChosen': 'Nothing was ticked, so nothing changed.',
+          'models.seedNoticeDirtyBlocked': 'You have unsaved ladder edits. Save the ladder or discard your edits before applying the baseline.',
+          'models.seedNoticeDiscardEdits': 'Discard my edits',
+          'models.seedNoticeEditsDiscarded': 'Discarded: the ladder was reloaded from storage.',
           'models.measurementsHeading': 'Measurement',
           'models.measurementsEmpty': 'No subagent call has been measured yet.',
           'models.measurementsUnavailable': 'Could not read the measurement readout.',
@@ -2536,79 +2548,79 @@
         return row
       }
 
+      /** Pure: renumbers every RANKED row 1..n in its current display-order
+       *  position, leaving unranked rows (rank: null) untouched. Every
+       *  rank-changing action below (reorder, rank this, mark unranked,
+       *  remove) finishes with this pass, so a rank can never gap or
+       *  duplicate no matter which action touched the ladder last. */
+      function modelsRenumber (display) {
+        var next = 1
+        return display.map(function (row) {
+          if (row.rank === null) return row
+          var renumbered = Object.assign({}, row, { rank: next })
+          next += 1
+          return renumbered
+        })
+      }
+
       /**
        * Pure reorder over a ladder already in DISPLAY order (see
-       * modelsSplitLadder). Crossing from unranked into ranked happens on
-       * exactly one move -- moveUp on the first unranked row, which takes
-       * over the last ranked row's slot and demotes it -- and moveDown
-       * never demotes a ranked row on its own: the only way out of the
-       * ranked part is the explicit "mark unranked" action
-       * (modelsMarkUnranked below). That keeps every arrow predictable: a
-       * person can reorder freely without ever losing a rank by clicking
-       * the wrong one.
+       * modelsSplitLadder). Moving up/down only swaps positions WITHIN the
+       * ranked part -- an unranked row has no up/down of its own (the UI
+       * disables those buttons for it; this still no-ops defensively if
+       * called on one anyway). The ONLY way an unranked entry enters the
+       * ranked ladder is the explicit "Rank this" action (modelsRankThis
+       * below), which appends it at the bottom without displacing anyone --
+       * the ladder could never grow before that action existed.
+       * Finishes with modelsRenumber so the swap can never leave a gap or
+       * a duplicate rank behind.
        */
       function modelsReorder (display, index, direction) {
         var rows = display.map(function (row) { return Object.assign({}, row) })
         var rankedCount = rows.filter(function (r) { return r.rank !== null }).length
-
-        if (direction === 'up') {
-          if (index === 0) {
-            // Nothing above the very first row -- UNLESS nothing is ranked
-            // yet, in which case this is how the very first model gets its
-            // rank: there is nobody to displace.
-            if (rankedCount === 0) rows[0].rank = 1
-            return rows
-          }
-          if (index === rankedCount) {
-            // The one door in: the first unranked row takes the last
-            // ranked row's slot, which becomes unranked in its place.
-            var promoted = rows[index]
-            var displaced = rows[index - 1]
-            promoted.rank = displaced.rank
-            displaced.rank = null
-            rows[index - 1] = promoted
-            rows[index] = displaced
-            return rows
-          }
-          var upA = rows[index]
-          var upB = rows[index - 1]
-          if (upA.rank !== null && upB.rank !== null) {
-            var upTmp = upA.rank
-            upA.rank = upB.rank
-            upB.rank = upTmp
-          }
-          rows[index - 1] = upA
-          rows[index] = upB
-          return rows
-        }
-
-        // direction === 'down'. The last ranked row moving down is a
-        // no-op on purpose -- see the module note above.
-        if (index >= rows.length - 1 || index === rankedCount - 1) return rows
-        var downA = rows[index]
-        var downB = rows[index + 1]
-        if (downA.rank !== null && downB.rank !== null) {
-          var downTmp = downA.rank
-          downA.rank = downB.rank
-          downB.rank = downTmp
-        }
-        rows[index] = downB
-        rows[index + 1] = downA
-        return rows
+        if (index < 0 || index >= rankedCount) return rows
+        var target = direction === 'up' ? index - 1 : index + 1
+        if (target < 0 || target >= rankedCount) return rows
+        var tmp = rows[index]
+        rows[index] = rows[target]
+        rows[target] = tmp
+        return modelsRenumber(rows)
       }
 
-      /** Moves one ranked row out to the front of the unranked tail,
-       *  touching only that row's own `rank` -- never renumbering the
-       *  ranked rows around it, which would change ranks the person never
-       *  asked to change (and could flag them as "differing" against a
-       *  future seed diff for no reason of the person's own making). */
-      function modelsMarkUnranked (index) {
-        var row = modelsLadder[index]
+      /** Pure: moves one UNRANKED row into the ranked ladder, appended at
+       *  the bottom (the newest, lowest rank) without demoting anyone --
+       *  the ONLY way an entry enters the ranked part. Renumbered
+       *  immediately after, same discipline as every other rank-changing
+       *  action. */
+      function modelsRankThis (display, index) {
+        var rows = display.map(function (row) { return Object.assign({}, row) })
+        var row = rows[index]
+        rows.splice(index, 1)
+        var rankedCount = rows.filter(function (r) { return r.rank !== null }).length
+        row.rank = rankedCount + 1
+        rows.splice(rankedCount, 0, row)
+        return modelsRenumber(rows)
+      }
+
+      /** Pure: moves one ranked row out to the front of the unranked tail,
+       *  then renumbers the ranked rows left behind so leaving the ladder
+       *  never opens a gap. */
+      function modelsMarkUnranked (display, index) {
+        var rows = display.map(function (row) { return Object.assign({}, row) })
+        var row = rows[index]
         row.rank = null
-        modelsLadder.splice(index, 1)
-        var newRankedCount = modelsLadder.filter(function (r) { return r.rank !== null }).length
-        modelsLadder.splice(newRankedCount, 0, row)
-        modelsRenderLadder()
+        rows.splice(index, 1)
+        var newRankedCount = rows.filter(function (r) { return r.rank !== null }).length
+        rows.splice(newRankedCount, 0, row)
+        return modelsRenumber(rows)
+      }
+
+      /** Pure: removes one row outright, then renumbers the ranked rows
+       *  left behind so removing a ranked entry never opens a gap. */
+      function modelsRemove (display, index) {
+        var rows = display.map(function (row) { return Object.assign({}, row) })
+        rows.splice(index, 1)
+        return modelsRenumber(rows)
       }
 
       // ---------- ladder editor: state + render ---------------------------
@@ -2619,6 +2631,16 @@
        *  is pressed -- exactly like the destination/policy editors above,
        *  which stage every edit in the DOM until "Save configuration". */
       var modelsLadder = []
+
+      /** Whether the ladder has edits not yet written to storage by "Save
+       *  the ladder" -- set by every mutating ladder action (reorder, rank
+       *  this, mark unranked, remove, add, toggling available), cleared by
+       *  a successful save, a fresh load, and "Discard my edits". The
+       *  baseline notice's Apply button refuses to run while this is true:
+       *  applying replaces modelsLadder outright with a fresh
+       *  storage read, and doing that over unsaved edits would silently
+       *  discard them. */
+      var modelsDirty = false
 
       var modelsLadderListEl = el('models-ladder-list')
 
@@ -2656,7 +2678,10 @@
           var availableBox = elMake('input')
           availableBox.type = 'checkbox'
           availableBox.checked = !!row.available
-          availableBox.addEventListener('change', function () { row.available = availableBox.checked })
+          availableBox.addEventListener('change', function () {
+            row.available = availableBox.checked
+            modelsDirty = true
+          })
           var availableText = elMake('div', 'checkbox-text')
           var availableLabel = elMake('span', 'checkbox-label')
           availableLabel.textContent = t('models.availableLabel')
@@ -2667,12 +2692,16 @@
 
           var actions = elMake('div', 'entry-actions')
 
+          // Up/down only ever move a RANKED row -- an unranked row has no
+          // order of its own until "Rank this" gives it one, so its own
+          // arrows stay disabled rather than doing anything.
           var upBtn = elMake('button')
           upBtn.type = 'button'
           upBtn.textContent = t('models.moveUp')
-          upBtn.disabled = index === 0 && !(rankedCount === 0 && row.rank === null)
+          upBtn.disabled = row.rank === null || index === 0
           upBtn.addEventListener('click', function () {
             modelsLadder = modelsReorder(modelsLadder, index, 'up')
+            modelsDirty = true
             modelsRenderLadder()
           })
           actions.appendChild(upBtn)
@@ -2680,9 +2709,10 @@
           var downBtn = elMake('button')
           downBtn.type = 'button'
           downBtn.textContent = t('models.moveDown')
-          downBtn.disabled = index === modelsLadder.length - 1 || index === rankedCount - 1
+          downBtn.disabled = row.rank === null || index === rankedCount - 1
           downBtn.addEventListener('click', function () {
             modelsLadder = modelsReorder(modelsLadder, index, 'down')
+            modelsDirty = true
             modelsRenderLadder()
           })
           actions.appendChild(downBtn)
@@ -2691,17 +2721,32 @@
             var unrankBtn = elMake('button')
             unrankBtn.type = 'button'
             unrankBtn.textContent = t('models.markUnranked')
-            unrankBtn.addEventListener('click', function () { modelsMarkUnranked(index) })
+            unrankBtn.addEventListener('click', function () {
+              modelsLadder = modelsMarkUnranked(modelsLadder, index)
+              modelsDirty = true
+              modelsRenderLadder()
+            })
             actions.appendChild(unrankBtn)
+          } else {
+            // The only door into the ranked ladder: appends this row at
+            // the bottom without demoting anyone.
+            var rankThisBtn = elMake('button')
+            rankThisBtn.type = 'button'
+            rankThisBtn.textContent = t('models.rankThis')
+            rankThisBtn.addEventListener('click', function () {
+              modelsLadder = modelsRankThis(modelsLadder, index)
+              modelsDirty = true
+              modelsRenderLadder()
+            })
+            actions.appendChild(rankThisBtn)
           }
 
           var removeBtn = elMake('button', 'link')
           removeBtn.type = 'button'
           removeBtn.textContent = t('models.remove')
           removeBtn.addEventListener('click', function () {
-            // Splice only -- never renumber the rows around it (see
-            // modelsMarkUnranked's own comment for why).
-            modelsLadder.splice(index, 1)
+            modelsLadder = modelsRemove(modelsLadder, index)
+            modelsDirty = true
             modelsRenderLadder()
           })
           actions.appendChild(removeBtn)
@@ -2733,6 +2778,7 @@
           id: id, label: label, provider: provider, agentModel: agentModel,
           source: source, summary: summary, rank: null, available: false
         }))
+        modelsDirty = true
         said(saidEl, t('models.added'))
         el('models-add-id').value = ''
         el('models-add-label').value = ''
@@ -2749,6 +2795,7 @@
         write(MODELS_KEY, modelsLadder.map(modelsBuildRow)).then(function (result) {
           if (!result || !result.ok) throw shownError(t('common.hostRejectedWrite'))
           writeBackground(MODELS_MIRROR_REQUEST_KEY, new Date().toISOString())
+          modelsDirty = false
           said(saidEl, t('models.savedLadder'))
         }).catch(function (error) {
           said(saidEl, errorText(error), true)
@@ -2798,6 +2845,25 @@
       var modelsSeedNoticeEl = el('models-seed-notice')
       var modelsSeedNoticeTextEl = el('models-seed-notice-text')
       var modelsSeedNoticeItemsEl = el('models-seed-notice-items')
+      var modelsSeedNoticeDirtyEl = el('models-seed-notice-dirty')
+      var modelsSeedNoticeApplyBtn = el('models-seed-notice-apply')
+      var modelsSeedNoticeDismissBtn = el('models-seed-notice-dismiss')
+
+      /** Both buttons are disabled from the click that sends a
+       *  request until its matching result (or the timeout) arrives, so a
+       *  second click can never replace an in-flight request and strand
+       *  the first waiter with "worker silent". */
+      function modelsSetSeedNoticeButtonsDisabled (disabled) {
+        modelsSeedNoticeApplyBtn.disabled = disabled
+        modelsSeedNoticeDismissBtn.disabled = disabled
+      }
+
+      /** Shown when Apply is refused because the ladder has
+       *  unsaved edits (modelsDirty). Hidden again by a fresh load, a
+       *  save, or "Discard my edits" -- whichever clears the flag. */
+      function modelsSetSeedNoticeDirtyVisible (visible) {
+        modelsSeedNoticeDirtyEl.style.display = visible ? '' : 'none'
+      }
 
       /** Same double-check renderPolicySeedNotice makes above: rendered
        *  ONLY when the status exists, says it is due, and its own counts
@@ -2859,29 +2925,59 @@
 
       el('models-seed-notice-apply').addEventListener('click', function () {
         var saidEl = el('models-seed-notice-said')
+        // A successful apply replaces modelsLadder outright with a
+        // fresh storage read -- refuse to even ask while there are unsaved
+        // ladder edits, rather than silently discarding them.
+        if (modelsDirty) {
+          modelsSetSeedNoticeDirtyVisible(true)
+          return
+        }
         var accepted = []
         modelsSeedNoticeItemsEl.querySelectorAll('input[data-models-seed-item-id]').forEach(function (box) {
           if (box.checked) accepted.push(box.getAttribute('data-models-seed-item-id'))
         })
         if (accepted.length === 0) { said(saidEl, t('models.seedNoticeNoneChosen')); return }
         said(saidEl, t('models.seedNoticeApplying'))
+        modelsSetSeedNoticeButtonsDisabled(true)
         modelsSendSeedRequest('apply', accepted).then(function (result) {
           said(saidEl, t('models.seedNoticeApplied', { replaced: String(result.replaced || 0), added: String(result.added || 0) }))
           return Promise.all([read(MODELS_KEY, false), modelsLoadSeedNoticeStatus()])
         }).then(function (results) {
           modelsLadder = modelsSplitLadder(modelsParseCatalog(results[0]))
+          modelsDirty = false
           modelsRenderLadder()
         }).catch(function (error) {
           said(saidEl, errorText(error), true)
+        }).then(function () {
+          modelsSetSeedNoticeButtonsDisabled(false)
         })
       })
 
       el('models-seed-notice-dismiss').addEventListener('click', function () {
         var saidEl = el('models-seed-notice-said')
         said(saidEl, t('models.seedNoticeDismissing'))
+        modelsSetSeedNoticeButtonsDisabled(true)
         modelsSendSeedRequest('dismiss', []).then(function () {
           said(saidEl, t('models.seedNoticeDismissed'))
           return modelsLoadSeedNoticeStatus()
+        }).catch(function (error) {
+          said(saidEl, errorText(error), true)
+        }).then(function () {
+          modelsSetSeedNoticeButtonsDisabled(false)
+        })
+      })
+
+      el('models-seed-notice-discard').addEventListener('click', function () {
+        // Undoes any unsaved ladder edits by reloading the ladder
+        // straight from storage, the same read Apply itself uses, then
+        // clears the flag Apply was refusing on.
+        var saidEl = el('models-ladder-said')
+        modelsSetSeedNoticeDirtyVisible(false)
+        read(MODELS_KEY, false).then(function (stored) {
+          modelsLadder = modelsSplitLadder(modelsParseCatalog(stored))
+          modelsDirty = false
+          modelsRenderLadder()
+          said(saidEl, t('models.seedNoticeEditsDiscarded'))
         }).catch(function (error) {
           said(saidEl, errorText(error), true)
         })
@@ -2926,6 +3022,7 @@
       function modelsLoad () {
         modelsRenderSeedNotice(null)
         modelsRenderMeasurements(null)
+        modelsSetSeedNoticeDirtyVisible(false)
         return Promise.all([
           read(MODELS_KEY, false),
           read(MODELS_CONFIG_KEY, false),
@@ -2936,6 +3033,7 @@
           // FRESH: every subagent call passes through unchanged, which
           // modelsRenderLadder's own empty-state hint says in words.
           modelsLadder = modelsSplitLadder(modelsParseCatalog(results[0]))
+          modelsDirty = false
           modelsRenderLadder()
           el('models-active').checked = !!(results[1] && results[1].active === true)
           modelsRenderSeedNotice(results[2])

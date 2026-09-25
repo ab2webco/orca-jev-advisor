@@ -70,6 +70,9 @@ const EXPECTED_IDS = [
   'models-seed-notice-apply',
   'models-seed-notice-dismiss',
   'models-seed-notice-said',
+  'models-seed-notice-dirty',
+  'models-seed-notice-dirty-text',
+  'models-seed-notice-discard',
   'models-ladder-list',
   'models-save-ladder',
   'models-ladder-said',
@@ -205,15 +208,55 @@ function extractFunction (source, name) {
   return source.slice(start, i)
 }
 
-function loadModelsReorder () {
-  const src = extractFunction(configHtml, 'modelsReorder')
-  const factory = new Function(`${src}; return modelsReorder`)
+/** Concatenates zero or more pure helper functions ahead of the named
+ *  target's own source before evaluating it -- a Function() body has no
+ *  access to config.html's other declarations, and modelsReorder,
+ *  modelsRankThis, modelsMarkUnranked and modelsRemove all call
+ *  modelsRenumber, so each loader needs it in scope to run at all: every
+ *  rank-changing action ends with the same renumbering pass, so a rank
+ *  can never gap or duplicate. */
+function loadModelsHelper (name, deps) {
+  const depsSrc = (deps || []).map((dep) => extractFunction(configHtml, dep)).join('\n')
+  const src = extractFunction(configHtml, name)
+  const factory = new Function(`${depsSrc}\n${src}; return ${name}`)
   return factory()
 }
 
 function row (id, rank) {
   return { id: id, provider: 'anthropic', label: id, rank: rank, agentModel: id, source: '', available: true }
 }
+
+function loadModelsRenumber () { return loadModelsHelper('modelsRenumber', []) }
+function loadModelsReorder () { return loadModelsHelper('modelsReorder', ['modelsRenumber']) }
+function loadModelsRankThis () { return loadModelsHelper('modelsRankThis', ['modelsRenumber']) }
+function loadModelsMarkUnranked () { return loadModelsHelper('modelsMarkUnranked', ['modelsRenumber']) }
+function loadModelsRemove () { return loadModelsHelper('modelsRemove', ['modelsRenumber']) }
+
+// ---------------------------------------------------------------------------
+// modelsRenumber: the shared renumbering pass every rank-changing action
+// (reorder, rank this, mark unranked, remove) finishes with.
+// ---------------------------------------------------------------------------
+
+test('modelsRenumber: renumbers ranked rows 1..n in display order, leaving unranked rows untouched', () => {
+  const modelsRenumber = loadModelsRenumber()
+  const display = [row('a', 3), row('u1', null), row('b', 7), row('u2', null)]
+  const result = modelsRenumber(display)
+  assert.deepEqual(result.map((r) => r.id), ['a', 'u1', 'b', 'u2'])
+  assert.deepEqual(result.map((r) => r.rank), [1, null, 2, null])
+})
+
+test('modelsRenumber: an already-correct ladder is unchanged', () => {
+  const modelsRenumber = loadModelsRenumber()
+  const display = [row('a', 1), row('b', 2), row('c', null)]
+  const result = modelsRenumber(display)
+  assert.deepEqual(result.map((r) => r.rank), [1, 2, null])
+})
+
+// ---------------------------------------------------------------------------
+// modelsReorder: moving up/down only swaps WITHIN the ranked part -- an
+// unranked row has no up/down of its own; the only door into the
+// ranked ladder is modelsRankThis, tested further down.
+// ---------------------------------------------------------------------------
 
 test('modelsReorder: swaps two ranked rows and keeps ranks 1..n', () => {
   const modelsReorder = loadModelsReorder()
@@ -223,14 +266,23 @@ test('modelsReorder: swaps two ranked rows and keeps ranks 1..n', () => {
   assert.deepEqual(result.map((r) => r.rank), [1, 2, 3])
 })
 
+test('modelsReorder: move down swaps two ranked rows and keeps ranks 1..n', () => {
+  const modelsReorder = loadModelsReorder()
+  const display = [row('a', 1), row('b', 2), row('c', 3)]
+  const result = modelsReorder(display, 0, 'down')
+  assert.deepEqual(result.map((r) => r.id), ['b', 'a', 'c'])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2, 3])
+})
+
 test('modelsReorder: moving the top ranked row up is a no-op', () => {
   const modelsReorder = loadModelsReorder()
   const display = [row('a', 1), row('b', 2)]
   const result = modelsReorder(display, 0, 'up')
   assert.deepEqual(result.map((r) => r.id), ['a', 'b'])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2])
 })
 
-test('modelsReorder: moving the last ranked row down is a no-op -- "mark unranked" is the only way out', () => {
+test('modelsReorder: moving the last ranked row down is a no-op -- "Rank this" is the only way to grow the ladder', () => {
   const modelsReorder = loadModelsReorder()
   const display = [row('a', 1), row('b', 2), row('c', null)]
   const result = modelsReorder(display, 1, 'down')
@@ -238,28 +290,109 @@ test('modelsReorder: moving the last ranked row down is a no-op -- "mark unranke
   assert.deepEqual(result.map((r) => r.rank), [1, 2, null])
 })
 
-test('modelsReorder: moving the first unranked row up promotes it, demoting the previously-last-ranked row', () => {
-  const modelsReorder = loadModelsReorder()
-  const display = [row('a', 1), row('b', 2), row('c', null), row('d', null)]
-  const result = modelsReorder(display, 2, 'up')
-  assert.deepEqual(result.map((r) => r.id), ['a', 'c', 'b', 'd'])
-  assert.deepEqual(result.map((r) => r.rank), [1, 2, null, null])
-})
-
-test('modelsReorder: moving the only unranked row up when nothing is ranked gives it rank 1', () => {
+test('modelsReorder: an unranked row never moves up, even the first one when nothing is ranked', () => {
   const modelsReorder = loadModelsReorder()
   const display = [row('a', null), row('b', null)]
   const result = modelsReorder(display, 0, 'up')
   assert.deepEqual(result.map((r) => r.id), ['a', 'b'])
+  assert.deepEqual(result.map((r) => r.rank), [null, null])
+})
+
+test('modelsReorder: an unranked row never moves, up or down, while other rows are ranked', () => {
+  const modelsReorder = loadModelsReorder()
+  const display = [row('a', 1), row('b', null), row('c', null)]
+  assert.deepEqual(modelsReorder(display, 2, 'up').map((r) => r.id), ['a', 'b', 'c'])
+  assert.deepEqual(modelsReorder(display, 1, 'down').map((r) => r.id), ['a', 'b', 'c'])
+})
+
+// ---------------------------------------------------------------------------
+// modelsRankThis: the ONLY way an unranked entry enters the ranked ladder
+// -- appended at the bottom, never demoting anyone.
+// ---------------------------------------------------------------------------
+
+test('modelsRankThis: on an empty ranked set gives the entry rank 1', () => {
+  const modelsRankThis = loadModelsRankThis()
+  const display = [row('a', null), row('b', null)]
+  const result = modelsRankThis(display, 0)
+  assert.deepEqual(result.map((r) => r.id), ['a', 'b'])
   assert.deepEqual(result.map((r) => r.rank), [1, null])
 })
 
-test('modelsReorder: reordering two unranked rows never assigns a rank', () => {
-  const modelsReorder = loadModelsReorder()
-  const display = [row('a', 1), row('b', null), row('c', null)]
-  const result = modelsReorder(display, 2, 'up')
+test('modelsRankThis: appends the entry at the bottom of an existing ladder without demoting anyone', () => {
+  const modelsRankThis = loadModelsRankThis()
+  const display = [row('a', 1), row('b', 2), row('c', null), row('d', null)]
+  const result = modelsRankThis(display, 2)
+  assert.deepEqual(result.map((r) => r.id), ['a', 'b', 'c', 'd'])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2, 3, null])
+})
+
+test('modelsRankThis: add-then-rank grows the ladder from N to N+1 with ranks 1..N+1', () => {
+  const modelsRankThis = loadModelsRankThis()
+  const modelsBuildRow = loadModelsBuildRow()
+  const display = [row('a', 1), row('b', 2), row('c', 3)]
+  const added = modelsBuildRow({
+    id: 'new', label: 'New', provider: 'anthropic', agentModel: 'sonnet',
+    source: '', summary: '', rank: null, available: false
+  })
+  const withAdded = display.concat([added])
+  const result = modelsRankThis(withAdded, 3)
+  assert.deepEqual(result.map((r) => r.id), ['a', 'b', 'c', 'new'])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2, 3, 4])
+})
+
+// ---------------------------------------------------------------------------
+// modelsMarkUnranked / modelsRemove: both renumber the ranked rows left
+// behind, so leaving the ladder never opens a gap.
+// ---------------------------------------------------------------------------
+
+test('modelsMarkUnranked: marking a middle ranked row unranked renumbers the rest with no gaps', () => {
+  const modelsMarkUnranked = loadModelsMarkUnranked()
+  const display = [row('a', 1), row('b', 2), row('c', 3)]
+  const result = modelsMarkUnranked(display, 1)
   assert.deepEqual(result.map((r) => r.id), ['a', 'c', 'b'])
-  assert.deepEqual(result.map((r) => r.rank), [1, null, null])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2, null])
+})
+
+test('modelsRemove: removing a ranked row renumbers the rest with no gaps', () => {
+  const modelsRemove = loadModelsRemove()
+  const display = [row('a', 1), row('b', 2), row('c', 3)]
+  const result = modelsRemove(display, 0)
+  assert.deepEqual(result.map((r) => r.id), ['b', 'c'])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2])
+})
+
+test('modelsRemove: removing an unranked row leaves the ranked ranks untouched', () => {
+  const modelsRemove = loadModelsRemove()
+  const display = [row('a', 1), row('b', 2), row('u', null)]
+  const result = modelsRemove(display, 2)
+  assert.deepEqual(result.map((r) => r.id), ['a', 'b'])
+  assert.deepEqual(result.map((r) => r.rank), [1, 2])
+})
+
+test('every rank-changing action produces a ladder with no duplicate ranks and no gaps', () => {
+  const modelsReorder = loadModelsReorder()
+  const modelsRankThis = loadModelsRankThis()
+  const modelsMarkUnranked = loadModelsMarkUnranked()
+  const modelsRemove = loadModelsRemove()
+
+  function assertNoGapsOrDuplicates (display) {
+    const ranks = display.map((r) => r.rank).filter((r) => r !== null)
+    const unique = new Set(ranks)
+    assert.equal(unique.size, ranks.length, `duplicate rank in ${JSON.stringify(ranks)}`)
+    const sorted = ranks.slice().sort((a, b) => a - b)
+    sorted.forEach((r, i) => assert.equal(r, i + 1, `gap or non-sequential rank in ${JSON.stringify(ranks)}`))
+  }
+
+  let display = [row('a', 1), row('b', 2), row('c', null), row('d', null)]
+  assertNoGapsOrDuplicates(display)
+  display = modelsRankThis(display, 2)
+  assertNoGapsOrDuplicates(display)
+  display = modelsReorder(display, 1, 'up')
+  assertNoGapsOrDuplicates(display)
+  display = modelsMarkUnranked(display, 0)
+  assertNoGapsOrDuplicates(display)
+  display = modelsRemove(display, 0)
+  assertNoGapsOrDuplicates(display)
 })
 
 function loadModelsBuildRow () {

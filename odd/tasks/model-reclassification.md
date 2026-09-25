@@ -222,3 +222,10 @@ Slices (revised after the first slicing pass; one PR per work unit):
   models-empty 320 light (empty catalog + empty readout), baseline 390 dark
   (baseline notice). All 96 renders passed the overflow and script-error
   check.
+- T7 fix (coordinator: fix-now, one commit): slice 8 review R3-001 broke U3
+  (the ranked ladder could never grow). "Rank this" now appends an unranked
+  entry without demoting anyone, and every rank-changing action renumbers
+  1..n. R3-002: Apply/Dismiss are disabled while a request is in flight.
+  R3-003: Apply is blocked, with an inline message and "Discard my edits",
+  while ladder edits are unsaved. Delegated writer; RED observed (16 unit and
+  8 browser tests), then GREEN.
