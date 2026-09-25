@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { discardsUncommittedWork, startsWithGitDiscard } from "./git_discard.ts";
+import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOutsideQuotes, startsWithGitDiscard } from "./git_discard.ts";
 
 // Each of these overwrites the working tree from the index or a commit, and
 // uncommitted changes to those paths are gone: no reflog, no stash, nothing
@@ -102,6 +102,82 @@ for (const command of KEEPS) {
     assert.equal(discardsUncommittedWork(command), false);
   });
 }
+
+// splitOutsideQuotes / someSegmentMatches -- exported for gate-bash.ts's
+// NEVER_SILENTLY loop (M4): a `scope: 'segment'` rule must test each
+// segment independently, so a `.*` inside the rule's own pattern can never
+// span a separator and falsely implicate an unrelated segment.
+test("splitOutsideQuotes: a quoted && stays inside one segment", () => {
+  assert.deepEqual(splitOutsideQuotes('git commit -m "build && test"'), ['git commit -m "build && test"']);
+});
+
+test("splitOutsideQuotes: an unquoted && splits into two segments", () => {
+  assert.deepEqual(splitOutsideQuotes("git status && git push --force"), ["git status", "git push --force"]);
+});
+
+test("splitOutsideQuotes: an unquoted ; splits into two segments", () => {
+  assert.deepEqual(splitOutsideQuotes("git status; git push --force"), ["git status", "git push --force"]);
+});
+
+test("splitOutsideQuotes: an unquoted || splits into two segments", () => {
+  assert.deepEqual(splitOutsideQuotes("git status || git push --force"), ["git status", "git push --force"]);
+});
+
+test("splitOutsideQuotes: an unquoted | splits into two segments", () => {
+  assert.deepEqual(splitOutsideQuotes("git status | git push --force"), ["git status", "git push --force"]);
+});
+
+test("splitOutsideQuotes: an unquoted newline splits into two segments", () => {
+  assert.deepEqual(splitOutsideQuotes("git status\ngit push --force"), ["git status", "git push --force"]);
+});
+
+test("splitOutsideQuotes: unquoted parens split into segments", () => {
+  assert.deepEqual(splitOutsideQuotes("(git status)"), ["git status"]);
+});
+
+test("someSegmentMatches: a pattern matching one segment does not match a command whose only match is in another segment", () => {
+  const pattern = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches("git push origin --delete x && git branch -f main origin/main", pattern), false);
+});
+
+test("splitOnCommandSeparators: a substitution stays inside the command it feeds", () => {
+  assert.deepEqual(splitOnCommandSeparators("git push $(echo x; echo y) origin && git status"), [
+    "git push $(echo x; echo y) origin",
+    "git status",
+  ]);
+  assert.deepEqual(splitOnCommandSeparators("git push `echo a | cat` origin; ls"), ["git push `echo a | cat` origin", "ls"]);
+});
+
+test("splitOnCommandSeparators: a quoted paren inside a substitution does not close it", () => {
+  assert.deepEqual(splitOnCommandSeparators('git push $(echo ")"; echo --force) origin'), ['git push $(echo ")"; echo --force) origin']);
+});
+
+test("splitOnCommandSeparators: a redirection never splits its command", () => {
+  assert.deepEqual(splitOnCommandSeparators("git push 2>&1 origin"), ["git push 2>&1 origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push &>/dev/null origin"), ["git push &>/dev/null origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push 0<&3 origin"), ["git push 0<&3 origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push >|log origin"), ["git push >|log origin"]);
+  assert.deepEqual(splitOnCommandSeparators("git push 2>&1 && ls"), ["git push 2>&1", "ls"]);
+});
+
+test("splitOnCommandSeparators: parentheses never split", () => {
+  assert.deepEqual(splitOnCommandSeparators("(git status) && ls"), ["(git status)", "ls"]);
+});
+
+test("splitOnCommandSeparators: separators split outside quotes only", () => {
+  assert.deepEqual(splitOnCommandSeparators('git commit -m "a && b" || ls\nls'), ['git commit -m "a && b"', "ls", "ls"]);
+});
+
+test("someSegmentMatches: a flag produced by a substitution still matches its push", () => {
+  const pattern = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches("git push $(echo --force) origin", pattern), true);
+  assert.equal(someSegmentMatches("git push `echo -f` origin", pattern), true);
+});
+
+test("someSegmentMatches: true when a segment matches", () => {
+  const pattern = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches("git status && git push --force origin main", pattern), true);
+});
 
 test("startsWithGitDiscard only looks at the start of one segment", () => {
   assert.equal(startsWithGitDiscard("git checkout -- src/app.ts"), true);

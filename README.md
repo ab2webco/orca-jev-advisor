@@ -104,6 +104,35 @@ project can be scoped to it.
 **Thresholds.** Sensible defaults, measured. Change them only with
 evidence.
 
+## Command gate: deny-tier rule scope
+
+A handful of `NEVER_SILENTLY` rules — the ones that never run unannounced,
+regardless of the API key or Jev — deny by default. Each rule is evaluated
+either against the whole command or against each of the command's segments
+(the parts a shell would run separately, split on `&&`, `||`, `;`, `|`, `&`
+or a newline, with quoted text left untouched) independently. Parentheses
+never split a segment: a `$(...)` or backtick substitution is part of the
+arguments of the command it feeds, so a flag or branch it produces still
+counts for that command, and a plain subshell stays whole. A redirection
+such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
+
+| Rule | Scope | Why |
+|------|-------|-----|
+| Force push (`--force`/`-f`) | segment | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). |
+| Push to a protected branch (`main`/`master`/`production`) | segment | Same spanning-quantifier reason. |
+| `rm -rf /` (or `~`/`$HOME`) | command | No spanning quantifier; matching the whole command is already precise. |
+| `git reset --hard` / `git clean -f` | command | Same — no spanning quantifier. |
+| Discarding uncommitted work (`git checkout`/`git restore`) | command | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c` and `eval` bodies first; pre-splitting again would break that extraction. |
+| `DROP`/`TRUNCATE TABLE`/`DATABASE`/`SCHEMA` | command | No spanning quantifier. |
+| `kubectl delete`/`drain` | command | No spanning quantifier. |
+| `terraform`/`tofu apply` | command | No spanning quantifier. |
+| `terraform`/`tofu destroy` | command | No spanning quantifier. |
+| `curl \| bash`/`sh`/`zsh` | command (mandatory) | This rule matches ACROSS a pipe by design — the whole point is catching a curl piped into a shell. Segment scope would silently disable it. |
+
+A quoted separator (for example `git commit -m "build && test"`) never
+splits a segment: the text inside the quotes stays part of one segment,
+exactly as a shell would read it.
+
 ## What is measured, and what is not
 
 The command gate's thresholds were calibrated against a labelled corpus of

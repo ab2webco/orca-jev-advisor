@@ -101,7 +101,7 @@ function extractSubstitutions(command: string): { readonly outer: string; readon
  * newline) and subshell parentheses -- but only outside quotes, so a
  * separator inside a commit message does not start a command.
  */
-function splitOutsideQuotes(command: string): string[] {
+export function splitOutsideQuotes(command: string): string[] {
   const parts: string[] = [];
   let current = "";
   let single = false;
@@ -267,4 +267,68 @@ export function discardsUncommittedWork(command: string): boolean {
  */
 export function startsWithGitDiscard(segment: string): boolean {
   return gitDiscardsFrom(tokenize(segment.trim()), 0);
+}
+
+/**
+ * Splits on the shell's command separators (`;`, `&&`, `||`, `|`, `&`,
+ * newline) outside quotes, backticks and parentheses. Unlike
+ * `splitOutsideQuotes` it never splits on a parenthesis: a `$(...)`
+ * substitution is part of the arguments of the command it feeds, so
+ * `git push $(echo --force) origin` stays one segment. A plain `( ... )`
+ * subshell also stays whole, which errs toward matching (a deny rule may
+ * see two of its commands together), never toward missing one. A
+ * redirection (`2>&1`, `&>`, `>|`) is part of its command, not a separator.
+ */
+export function splitOnCommandSeparators(command: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let single = false;
+  let double = false;
+  let backtick = false;
+  let depth = 0;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (char === "\\" && !single) {
+      current += command.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (char === "`" && !single) backtick = !backtick;
+    else if (char === "(" && !single && !double) depth += 1;
+    else if (char === ")" && !single && !double && depth > 0) depth -= 1;
+    if (!single && !double && !backtick && depth === 0 && /[;&|\n]/.test(char) && !isRedirection(command, index)) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  parts.push(current);
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+}
+
+/**
+ * True when the `&` or `|` at `index` belongs to a redirection (`2>&1`,
+ * `0<&3`, `&>file`, `>|file`) rather than separating two commands.
+ */
+function isRedirection(command: string, index: number): boolean {
+  const char = command[index];
+  const previous = command[index - 1];
+  if (char === "&") return previous === ">" || previous === "<" || command[index + 1] === ">";
+  if (char === "|") return previous === ">";
+  return false;
+}
+
+/**
+ * True when `pattern` matches at least one of `command`'s segments
+ * (`splitOnCommandSeparators`), rather than the whole joined string. Used by
+ * gate-bash.ts's NEVER_SILENTLY loop for rules whose `scope` is `'segment'`:
+ * a `.*` inside `pattern` can then never span a separator (`&&`, `;`, `|`,
+ * newline) and falsely implicate a command its own match never touched,
+ * while a flag produced by a substitution still counts for its command.
+ */
+export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): boolean {
+  return splitOnCommandSeparators(command).some((segment) => pattern.test(segment));
 }
