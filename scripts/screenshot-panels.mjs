@@ -140,7 +140,10 @@ const MODEL_MEASUREMENTS_SUMMARY = summarizeModelMeasurements(MODEL_MEASUREMENT_
 const READY_DAY = {
   key: 'day', available: true, pluginVersion: null, since: '2026-09-24T00:28:46.766Z',
   totalDecisions: 2409,
-  byVerdict: { allow: 2320, ask: 77, deny: 12 },
+  // The advise-model release: the risk stage's own borderline verdict no
+  // longer asks a person -- it advises the coding model instead. 40 of the
+  // 2320 that used to be a plain 'allow' are now this new bucket.
+  byVerdict: { allow: 2280, ask: 77, deny: 12, advise: 40 },
   bySource: { 'local-rule': 23, cache: 240, jev: 2101, none: 45 },
   jevLatency: { sampleCount: 2101, medianMs: 577, p95Ms: 1243, maxMs: 1809 },
   interventions: {
@@ -169,7 +172,7 @@ const READY_DAY = {
 const READY_ALL = {
   key: 'all', available: true, pluginVersion: null, since: null,
   totalDecisions: 3711,
-  byVerdict: { allow: 3383, ask: 316, deny: 12 },
+  byVerdict: { allow: 3323, ask: 316, deny: 12, advise: 60 },
   bySource: { 'local-rule': 126, cache: 278, jev: 3262, none: 45 },
   jevLatency: { sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809 },
   interventions: {
@@ -207,7 +210,7 @@ function emptyWindow (key) {
   return {
     key, available: key !== 'version', pluginVersion: null, since: null,
     totalDecisions: 0,
-    byVerdict: { allow: 0, ask: 0, deny: 0 },
+    byVerdict: { allow: 0, ask: 0, deny: 0, advise: 0 },
     bySource: { 'local-rule': 0, cache: 0, jev: 0, none: 0 },
     jevLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
     interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
@@ -321,7 +324,7 @@ const READY = {
     ok: true,
     gate: {
       totalDecisions: 3711,
-      byVerdict: {allow: 3383, ask: 316, deny: 12},
+      byVerdict: {allow: 3323, ask: 316, deny: 12, advise: 60},
       bySource: {'local-rule': 126, cache: 278, jev: 3262, none: 45},
       jevLatency: {sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809},
       windows: READY_WINDOWS,
@@ -342,6 +345,9 @@ const READY = {
       recent: [
         { at: '2026-09-24T15:02:03.837Z', project: 'orca-supervisor', commandFamily: 'cd', source: 'jev', verdict: 'allow', latencyMs: 784 },
         { at: '2026-09-24T15:01:44.102Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'local-rule', verdict: 'ask', latencyMs: null },
+        // The advise-model release's own new verdict: the model was refused
+        // this one attempt and handed a reason, nobody was interrupted.
+        { at: '2026-09-24T15:01:20.511Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'jev', verdict: 'advise', latencyMs: 640 },
         { at: '2026-09-24T15:00:58.640Z', project: 'orca-oss', commandFamily: 'git', source: 'cache', verdict: 'allow', latencyMs: null },
       ],
     },

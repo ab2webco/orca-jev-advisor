@@ -115,6 +115,17 @@
                   border-color: transparent; font-weight: 600; }
       .tag.working { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
       .tag.blocked { color: var(--destructive, var(--fb-destructive)); border-style: dashed; }
+      /* `advised`: the model was refused this one attempt and handed a
+         concrete reason, but nobody was interrupted -- neither `done`'s
+         quiet accent (that reads as a clean pass), nor `blocked`'s red
+         (nothing was permanently refused), nor `working`'s plain bold (that
+         is a human still waiting). --primary is already this panel's own
+         "distinct, high-contrast" token (the selected window-picker button
+         above), so this reuses it rather than inventing a colour the host's
+         own allowlist does not carry. */
+      .tag.advised { background: var(--primary, var(--fb-primary));
+                     color: var(--primary-foreground, var(--fb-primary-foreground));
+                     border-color: transparent; font-weight: 600; }
       .empty { color: var(--muted-foreground, var(--fb-muted-foreground)); padding: 8px 12px; }
       .stale { color: var(--destructive, var(--fb-destructive)); }
 
@@ -369,7 +380,7 @@
           'toll.avoided': 'Las reglas locales y la caché resolvieron {{n}} sin llamar a la red.',
           'gate.source.jevMedian': 'Jev (con red, mediana {{ms}} ms)',
           'interv.heading': '¿Dónde interviene?',
-          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas, de {{total}} decisiones',
+          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas · {{advise}} avisadas al modelo, de {{total}} decisiones',
           'interv.family': 'Familia',
           'interv.ask': 'Pregunta',
           'interv.deny': 'Bloqueó',
@@ -395,6 +406,7 @@
           'stats.recentLocalRule': 'regla local',
           'stats.recentJev': 'jev',
           'stats.recentNone': 'sin respuesta',
+          'stats.recentAdvise': 'aviso al modelo',
           'stats.na': 'sin datos suficientes',
           'stats.unknownProject': '(proyecto desconocido)',
           'gate.source.localRule': 'Regla local (~1ms, sin red)',
@@ -482,7 +494,7 @@
           'toll.avoided': 'Local rules and the cache settled {{n}} of them without a network call.',
           'gate.source.jevMedian': 'Jev (network, median {{ms}} ms)',
           'interv.heading': 'Where does it step in?',
-          'interv.sub': '{{ask}} asked · {{deny}} blocked, out of {{total}} decisions',
+          'interv.sub': '{{ask}} asked · {{deny}} blocked · {{advise}} advised the model, out of {{total}} decisions',
           'interv.family': 'Family',
           'interv.ask': 'Asked',
           'interv.deny': 'Blocked',
@@ -508,6 +520,7 @@
           'stats.recentLocalRule': 'local rule',
           'stats.recentJev': 'jev',
           'stats.recentNone': 'no answer',
+          'stats.recentAdvise': 'advised the model',
           'stats.na': 'not enough data',
           'stats.unknownProject': '(unknown project)',
           'gate.source.localRule': 'Local rule (~1ms, no network)',
@@ -993,7 +1006,7 @@
         var table = w.interventions || {}
         var rows = table.rows || []
         var sub = line(t('interv.sub', {
-          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), total: num(w.totalDecisions || 0)
+          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), advise: num(verdict.advise || 0), total: num(w.totalDecisions || 0)
         }), 'kpi-sub')
         if (rows.length === 0) {
           el('interventions-body').innerHTML = sub + line(t('interv.none'), 'empty-line')
@@ -1156,6 +1169,13 @@
           'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'),
           jev: t('stats.recentJev'), none: t('stats.recentNone')
         }
+        // 'advise' (the advise-model release): the model was refused this
+        // one attempt and handed a reason, but nobody was interrupted --
+        // its own state, own label, never `done`'s green (a clean pass) and
+        // never `blocked`'s red (nothing was permanently refused). Every
+        // OTHER verdict keeps printing its own raw word, unchanged.
+        var verdictState = { deny: 'blocked', ask: 'working', advise: 'advised' }
+        var verdictLabel = { advise: t('stats.recentAdvise') }
         // Family, source, verdict, age: the project moves to the tooltip and
         // the full timestamp is gone -- "4 min ago" is what a person scans.
         el('stats-recent').innerHTML = '<ul class="recent-list">' + recent.map(function (r) {
@@ -1163,8 +1183,8 @@
           return '<li title="' + esc(projectLabel(r.project)) + '">' +
             '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
             '<span class="tag">' + esc((sourceLabel[r.source] || r.source || '') + latency) + '</span>' +
-            '<span class="' + tagClass(r.verdict === 'deny' ? 'blocked' : (r.verdict === 'ask' ? 'working' : 'done')) + '">' +
-            esc(r.verdict || '') + '</span>' +
+            '<span class="' + tagClass(verdictState[r.verdict] || 'done') + '">' +
+            esc(verdictLabel[r.verdict] || r.verdict || '') + '</span>' +
             '<span class="when">' + esc(ago(r.at)) + '</span></li>'
         }).join('') + '</ul>'
       }
@@ -1245,6 +1265,7 @@
         if (state === 'done') return 'tag done'
         if (state === 'working') return 'tag working'
         if (state === 'blocked') return 'tag blocked'
+        if (state === 'advised') return 'tag advised'
         return 'tag'
       }
       var lastBoard = null
