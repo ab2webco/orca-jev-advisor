@@ -72,9 +72,29 @@ here — each is only ever overwritten by its own next save:
 | A human-readable mirror of the model catalog (not secret) | `~/.config/orca-supervisor/models-catalog.json` | the model hook reads it outside Orca to rank a recommendation |
 
 Nothing is sent anywhere except the questions themselves, to
-`api.typesafe.ai`. Your commands are not stored: the measurement log keeps
-a coarse command *family* (`git push`, `rm -rf`, `terraform`) and never the
-command, because a command can carry a secret in an env assignment.
+`api.typesafe.ai` (see "What leaves your machine" below). Your commands are
+not stored: the measurement log keeps a coarse command *family* (`git
+push`, `rm -rf`, `terraform`) and never the command, because a command can
+carry a secret in an env assignment.
+
+## What leaves your machine
+
+The command gate's risk and policy questions carry the proposed command
+itself — Jev has to read it to judge what it does. Before that request
+leaves this machine, anything that looks like a credential *value* in the
+command text is masked first: an `export TOKEN=…` / `NAME=value` assignment
+whose name mentions key, token, secret, password, auth, credential or
+private; an `Authorization: Bearer …` header; the password half of a
+`user:pass@host` URL or a `curl -u user:pass`; a known token prefix (`sk-`,
+`ghp_`, `AKIA…`, and similar); and other long, random-looking strings. Only
+the value is replaced with a fixed marker — variable names, flags, hosts
+and paths stay exactly as written, because that structure is what the
+judgement reasons about.
+
+This masking runs only on the copy sent to Jev. The local rules that refuse
+a force push, a recursive delete or a dropped table always judge the real,
+unredacted command, and — as already noted above — nothing written to this
+machine's own logs contains the command text either way.
 
 ## What it costs
 

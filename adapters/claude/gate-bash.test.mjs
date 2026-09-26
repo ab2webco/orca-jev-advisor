@@ -201,6 +201,32 @@ test('the verdict cache key changes with GATE_DECISION_RULES_VERSION, so a verdi
   // this suite never does; see this file's own header note).
 })
 
+// odd/tasks/release-0.5.1.md JEVADV-29: the verdict-cache key must stay
+// computed from the command's REAL (unredacted) shape -- secret redaction
+// is wired into decisions.ts's buildActionGateState, which only the Jev
+// request itself passes through; gate-bash.ts's cacheKey() call happens
+// earlier in main(), straight off the raw `command` variable, and this task
+// must not change that. expectedCacheKey() (this file's own mirror of
+// cacheKey()) is given the RAW command including the secret-shaped
+// assignment; a hit here proves the running hook keyed its cache entry off
+// the same unredacted text, not some redacted stand-in.
+test('JEVADV-29: the cache key for a command with a secret-shaped value is still computed from the unredacted text', () => {
+  const home = makeHome()
+  const cwd = home
+  const command = 'export TOKEN=abc123456789; some-unmeasured-tool --flag'
+  const key = expectedCacheKey(command, cwd, home)
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [key]: { decision: 'ask', reason: 'unredacted cache key test', at: Date.now() - 1000 },
+  }))
+
+  const stdout = run(home, command, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.systemMessage, /unredacted cache key test/)
+})
+
 // ---------------------------------------------------------------------------
 // Deny tier -- NEVER_SILENTLY used to only ever emit 'ask', even for the
 // three rules whose blast radius is beyond the repository AND beyond
@@ -276,6 +302,21 @@ test('a force push denies by default, and drops to ask when its switch is off', 
     'ask',
     'switched off must reach ask, never allow',
   )
+})
+
+// odd/tasks/release-0.5.1.md JEVADV-29: secret redaction (src/core/secret_
+// redaction.ts, wired into decisions.ts's buildActionGateState) must never
+// reach the local-rule path -- it is wired in only where a command becomes
+// a Jev request, and the tier-1b NEVER_SILENTLY loop runs BEFORE the API
+// key check, well before askJev is ever called. This is the same local-rule
+// deny path as the test above, just with a leading env assignment whose
+// NAME is secret-shaped, proving that leading text does not somehow shield
+// the force-push pattern from the (unredacted) local rule that must catch it.
+test('JEVADV-29: a command with a secret-shaped env assignment is still refused locally -- redaction never reaches the local-rule path', () => {
+  const home = makeHome()
+  const stdout = run(home, 'export TOKEN=abc123456789; git push --force origin main')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
 // ---------------------------------------------------------------------------

@@ -24,13 +24,13 @@
  * fails with `ERR_MODULE_NOT_FOUND` naming `playwright`, the package,
  * regardless of what specifier the caller passed to importOptional.
  */
-export function isMissingOptionalPackageError(error, optionalPackageName) {
+export function isMissingOptionalPackageError (error, optionalPackageName) {
   return (
     error instanceof Error &&
-    error.code === "ERR_MODULE_NOT_FOUND" &&
-    typeof error.message === "string" &&
+    error.code === 'ERR_MODULE_NOT_FOUND' &&
+    typeof error.message === 'string' &&
     error.message.includes(optionalPackageName)
-  );
+  )
 }
 
 /**
@@ -40,11 +40,11 @@ export function isMissingOptionalPackageError(error, optionalPackageName) {
  * unrelated missing module -- rethrows, so a real defect in the optional
  * module fails whatever imports it instead of silently skipping.
  */
-export async function importOptional(specifier, optionalPackageName) {
+export async function importOptional (specifier, optionalPackageName) {
   try {
-    return await import(specifier);
+    return await import(specifier)
   } catch (error) {
-    if (isMissingOptionalPackageError(error, optionalPackageName)) return null;
-    throw error;
+    if (isMissingOptionalPackageError(error, optionalPackageName)) return null
+    throw error
   }
 }

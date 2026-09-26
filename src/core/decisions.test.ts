@@ -15,6 +15,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildActionGateState,
   buildSeedScopeIndex,
   CONSEQUENCE_NOISE_MARGIN,
   decideAction,
@@ -499,4 +500,31 @@ test("GATE_DECISION_RULES_VERSION: is an exported, stable positive integer -- ga
   assert.equal(typeof GATE_DECISION_RULES_VERSION, "number");
   assert.equal(Number.isInteger(GATE_DECISION_RULES_VERSION), true);
   assert.ok(GATE_DECISION_RULES_VERSION >= 1);
+});
+
+// ===========================================================================
+// buildActionGateState: JEVADV-29 (odd/tasks/release-0.5.1.md) -- the single
+// point where a proposed command enters a Jev request must send a REDACTED
+// copy, never the raw command. One test here stands for both the risk and
+// the policy stage (gate-bash.ts's askJev shares this SAME state across
+// both, in one callJev call) and for the AB benchmark's direct-batch path
+// (ab_benchmark_cli.ts's makeRealJevCaller also calls this function) --
+// wiring it here, once, covers every caller with no separate call-site fix.
+// ===========================================================================
+
+test("buildActionGateState: a secret-shaped value in the command is redacted before it reaches proposed_command", () => {
+  const state = buildActionGateState("export TOKEN=abc123456789; git push", "some context");
+  assert.equal(state.proposed_command, "export TOKEN=[REDACTED]; git push");
+  assert.notEqual(state.proposed_command, "export TOKEN=abc123456789; git push", "the raw command must never reach the state Jev receives");
+});
+
+test("buildActionGateState: a command with nothing secret-shaped is passed through unchanged", () => {
+  const state = buildActionGateState("git status", "some context");
+  assert.equal(state.proposed_command, "git status");
+});
+
+test("buildActionGateState: context and destination are unaffected by redaction -- only the command is ever touched", () => {
+  const state = buildActionGateState("export TOKEN=abc123456789", "repo context here", { label: "a client site", kind: "client-site" });
+  assert.equal(state.context, "repo context here");
+  assert.deepEqual(state.destination, { kind: "client-site", description: "a client site" });
 });
