@@ -224,11 +224,14 @@ remote resolves to somewhere shared. `git push -u origin main` in a
 brand-new personal repo whose `origin` is a local bare directory (or a
 `file://` URL given directly) is not that: the rule resolves `origin` from
 the repository's own `.git/config` (a linked worktree's shared commondir,
-never the network) and lets that one case continue to the ordinary Jev path
-instead of stopping locally. Anything it cannot positively resolve without
-the network — GitHub/GitLab/SSH/HTTPS remotes, an unknown remote name, an
-unreadable config — keeps denying exactly as before. Force push is
-unaffected and stays denied everywhere, including to a local remote.
+never the network) — its `pushurl` when the remote has one (`git remote
+set-url --push`, where fetches and pushes go to two different places),
+`url` otherwise, exactly the way `git push` itself resolves it — and lets
+that one case continue to the ordinary Jev path instead of stopping
+locally. Anything it cannot positively resolve without the network —
+GitHub/GitLab/SSH/HTTPS remotes, an unknown remote name, an unreadable
+config — keeps denying exactly as before. Force push is unaffected and
+stays denied everywhere, including to a local remote.
 
 **Two-level rules: a run denies, a mention goes to Jev instead of stopping
 locally.** Force push, protected-branch and discard are all read through the

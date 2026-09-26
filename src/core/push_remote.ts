@@ -84,22 +84,58 @@ export function isLocalRemoteReference(ref: string): boolean {
 }
 
 /**
- * Parses `[remote "<remoteName>"] url = …` out of already-read `.git/config`
- * text. Deliberately minimal -- exactly the shape `git remote add` itself
- * writes (a `[remote "name"]` header line, then indented `key = value`
- * lines until the next `[` header or the end of the file) -- not a general
- * git-config parser. `null` when the section or its `url` is missing.
+ * `[remote "<remoteName>"]`'s own body text out of already-read
+ * `.git/config`, from its header line to the next `[` header or the end of
+ * the file. `null` when the section itself does not exist. Shared by
+ * parseGitConfigRemoteUrl and parseGitConfigRemotePushUrl below, so both
+ * read exactly the same section boundary.
  */
-export function parseGitConfigRemoteUrl(configText: string, remoteName: string): string | null {
+function remoteConfigSection(configText: string, remoteName: string): string | null {
   const escapedName = remoteName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const headerPattern = new RegExp(`^\\[remote\\s+"${escapedName}"\\]\\s*$`, "m");
   const headerMatch = headerPattern.exec(configText);
   if (headerMatch === null) return null;
   const afterHeader = configText.slice(headerMatch.index + headerMatch[0].length);
   const nextHeaderMatch = /^\[/m.exec(afterHeader);
-  const body = nextHeaderMatch === null ? afterHeader : afterHeader.slice(0, nextHeaderMatch.index);
-  const urlMatch = /^[ \t]*url[ \t]*=[ \t]*(.+?)[ \t]*$/m.exec(body);
-  return urlMatch === null ? null : urlMatch[1];
+  return nextHeaderMatch === null ? afterHeader : afterHeader.slice(0, nextHeaderMatch.index);
+}
+
+function configField(body: string, key: string): string | null {
+  const pattern = new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(.+?)[ \\t]*$`, "m");
+  const match = pattern.exec(body);
+  return match === null ? null : match[1];
+}
+
+/**
+ * Parses `[remote "<remoteName>"] url = …` out of already-read `.git/config`
+ * text. Deliberately minimal -- exactly the shape `git remote add` itself
+ * writes (a `[remote "name"]` header line, then indented `key = value`
+ * lines until the next `[` header or the end of the file) -- not a general
+ * git-config parser. `null` when the section or its `url` is missing.
+ *
+ * This is the FETCH url, which `git push` itself does not necessarily use
+ * -- see parseGitConfigRemotePushUrl below, which resolvePushRemoteIsLocal
+ * actually calls.
+ */
+export function parseGitConfigRemoteUrl(configText: string, remoteName: string): string | null {
+  const body = remoteConfigSection(configText, remoteName);
+  return body === null ? null : configField(body, "url");
+}
+
+/**
+ * The URL `git push` actually sends `remoteName` to: its `pushurl` when the
+ * section has one (`git remote set-url --push`, a real "fetch from one
+ * place, push to another" pattern -- e.g. a local mirror clone whose real
+ * pushes go to GitHub), falling back to `url` otherwise, exactly the way
+ * git itself resolves it. Reading `url` alone here would let a remote like
+ * that resolve to the wrong (local) answer even though the push itself
+ * goes to `pushurl` -- a deny-tier rule turning MORE permissive on a case
+ * the release's own constraints forbid.
+ */
+export function parseGitConfigRemotePushUrl(configText: string, remoteName: string): string | null {
+  const body = remoteConfigSection(configText, remoteName);
+  if (body === null) return null;
+  return configField(body, "pushurl") ?? configField(body, "url");
 }
 
 export interface ResolvePushRemoteInput {
@@ -129,7 +165,7 @@ export function resolvePushRemoteIsLocal(input: ResolvePushRemoteInput): boolean
     const gitDir = resolveGitDirForConfig(input.cwd);
     if (gitDir === null) return false;
     const configText = readFile(`${gitDir}/config`);
-    const url = parseGitConfigRemoteUrl(configText, ref);
+    const url = parseGitConfigRemotePushUrl(configText, ref);
     if (url === null) return false;
     return isLocalRemoteReference(url);
   } catch {

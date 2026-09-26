@@ -608,6 +608,20 @@ test('JEVADV-39: a file:// URL given directly as the push argument is not a loca
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
 })
 
+test('JEVADV-39: a remote whose url is local but whose pushurl is shared still denies -- git push itself goes to pushurl', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-push-pushurl-test-')))
+  const bareRemote = join(base, 'sandbox-remote.git')
+  git(['init', '-q', '--bare', bareRemote], base)
+  const repo = join(base, 'sandbox-app')
+  initRepo(repo)
+  git(['remote', 'add', 'origin', bareRemote], repo)
+  git(['remote', 'set-url', '--push', 'origin', 'https://github.com/example/repo.git'], repo)
+
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push -u origin main', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', "today's bug: reading url alone ignored pushurl, which is where this push actually goes")
+})
+
 test('deny tier: a rule switched off downgrades to ask, never to allow', () => {
   const home = makeHome()
   writeDenyTierConfig(home, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })

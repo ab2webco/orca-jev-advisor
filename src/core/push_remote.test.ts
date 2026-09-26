@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { extractPushRemoteArg, isLocalRemoteReference, parseGitConfigRemoteUrl, resolvePushRemoteIsLocal } from "./push_remote.ts";
+import { extractPushRemoteArg, isLocalRemoteReference, parseGitConfigRemotePushUrl, parseGitConfigRemoteUrl, resolvePushRemoteIsLocal } from "./push_remote.ts";
 
 // ---------------------------------------------------------------------------
 // A bare remote NAME resolved through a REAL `.git/config` -- same fixture
@@ -148,6 +148,57 @@ test("parseGitConfigRemoteUrl: picks the right remote among several", () => {
     "",
   ].join("\n");
   assert.equal(parseGitConfigRemoteUrl(configText, "upstream"), "/Users/dev/bare.git");
+});
+
+test("parseGitConfigRemotePushUrl: prefers pushurl over url when both are present", () => {
+  const configText = '[remote "origin"]\n\turl = /Users/dev/bare.git\n\tpushurl = https://github.com/example/repo.git\n';
+  assert.equal(parseGitConfigRemotePushUrl(configText, "origin"), "https://github.com/example/repo.git");
+});
+
+test("parseGitConfigRemotePushUrl: falls back to url when there is no pushurl", () => {
+  const configText = '[remote "origin"]\n\turl = /Users/dev/bare.git\n';
+  assert.equal(parseGitConfigRemotePushUrl(configText, "origin"), "/Users/dev/bare.git");
+});
+
+test("parseGitConfigRemotePushUrl: null when the section has neither", () => {
+  const configText = '[remote "origin"]\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n';
+  assert.equal(parseGitConfigRemotePushUrl(configText, "origin"), null);
+});
+
+// ---------------------------------------------------------------------------
+// pushurl: git pushes to a remote's `pushurl` when the section has one,
+// keeping `url` as the FETCH url only -- a real "mirror push elsewhere"
+// pattern (`git remote set-url --push`), not exotic. Reading `url` alone
+// would resolve a config like this to the wrong (local) answer even though
+// `git push` itself goes to `pushurl` -- a deny-tier rule turning MORE
+// permissive on a case the task's own constraints forbid.
+// ---------------------------------------------------------------------------
+
+test("resolvePushRemoteIsLocal: a REAL remote whose url is local but whose pushurl is shared -- push actually goes to pushurl, so this is NOT local", () => {
+  const base = makeTempRoot("orca-jev-push-remote-pushurl-test-");
+  const bareRemote = join(base, "sandbox-remote.git");
+  git(["init", "-q", "--bare", bareRemote], base);
+  const repo = join(base, "sandbox-app");
+  initRepo(repo);
+  git(["remote", "add", "origin", bareRemote], repo);
+  git(["remote", "set-url", "--push", "origin", "https://github.com/example/repo.git"], repo);
+
+  assert.equal(
+    resolvePushRemoteIsLocal({ command: "git push -u origin main", cwd: repo }),
+    false,
+    "today's bug: reading url alone ignored pushurl, which is where git push actually sends this",
+  );
+});
+
+test("resolvePushRemoteIsLocal: a REAL remote with only url (no pushurl) still resolves from url, unchanged", () => {
+  const base = makeTempRoot("orca-jev-push-remote-nopushurl-test-");
+  const bareRemote = join(base, "sandbox-remote.git");
+  git(["init", "-q", "--bare", bareRemote], base);
+  const repo = join(base, "sandbox-app");
+  initRepo(repo);
+  git(["remote", "add", "origin", bareRemote], repo);
+
+  assert.equal(resolvePushRemoteIsLocal({ command: "git push -u origin main", cwd: repo }), true);
 });
 
 // ---------------------------------------------------------------------------
