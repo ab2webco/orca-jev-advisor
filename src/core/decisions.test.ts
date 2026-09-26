@@ -22,6 +22,7 @@ import {
   filterPoliciesForCommandScope,
   filterPoliciesForDestination,
   GATE_CONSEQUENCE_CEILING,
+  GATE_DECISION_RULES_VERSION,
   interpretDestinationPolicy,
   resolvePolicyScope,
 } from "./decisions.ts";
@@ -364,10 +365,10 @@ test("decideAction: above the ceiling still asks, with today's reason keys -- th
 
 test("decideAction: a per-destination ceiling is honoured with the same 0.12 margin", () => {
   const options = { consequenceCeiling: 2.0 };
-  const atMargin = riskAnswers(0.9, 0.1, 1.88); // 2.0 - 0.12
+  const atMargin = riskAnswers(0.9, 0.1, 2.0 - CONSEQUENCE_NOISE_MARGIN);
   assert.equal(decideAction(atMargin, options).verdict, "allow");
 
-  const justInsideBand = riskAnswers(0.9, 0.1, 1.89);
+  const justInsideBand = riskAnswers(0.9, 0.1, 2.0 - CONSEQUENCE_NOISE_MARGIN + 0.01);
   const inBand = decideAction(justInsideBand, options);
   assert.equal(inBand.verdict, "ask");
   assert.ok(inBand.reasons.some((r) => r.key === "reason.tooCloseToTheLine"));
@@ -479,4 +480,23 @@ test("decideGateAction: noDestinationMatched is NOT added when a policy resolved
     result.reasons.some((r) => r.key === "reason.noDestinationMatched"),
     false,
   );
+});
+
+// ===========================================================================
+// GATE_DECISION_RULES_VERSION -- native review follow-up on JEVADV-26
+// (review-3ca73b9da09b0927, R3/R4): gate-bash.ts's verdict cache is keyed
+// on the command's SHAPE alone, with no way to tell a verdict computed
+// under one release's decision rules from one computed under another. An
+// `allow` cached under 0.5.0 -- before CONSEQUENCE_NOISE_MARGIN existed --
+// for a score that 0.5.1's margin would now put inside the ask band keeps
+// replaying after the upgrade, silently skipping the very check the margin
+// exists to add. This constant is folded into gate-bash.ts's own cacheKey()
+// (adapters/claude/gate-bash.ts) so an older entry simply misses instead of
+// being trusted across a rule change it was never judged against.
+// ===========================================================================
+
+test("GATE_DECISION_RULES_VERSION: is an exported, stable positive integer -- gate-bash.ts's cache key folds it in so an upgrade invalidates old entries instead of replaying them", () => {
+  assert.equal(typeof GATE_DECISION_RULES_VERSION, "number");
+  assert.equal(Number.isInteger(GATE_DECISION_RULES_VERSION), true);
+  assert.ok(GATE_DECISION_RULES_VERSION >= 1);
 });

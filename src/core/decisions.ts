@@ -494,6 +494,36 @@ export const GATE_CONSEQUENCE_CEILING = 1.78;
  */
 export const CONSEQUENCE_NOISE_MARGIN = 0.12;
 
+/**
+ * Folded into gate-bash.ts's own verdict-cache key (its `cacheKey()`,
+ * alongside the command's shape) so that a cached verdict is only ever
+ * replayed for the SAME decision rules it was judged under.
+ *
+ * The cache key was the command's shape alone (src/core/command_shape.ts):
+ * the program, its flags, and the class of each argument, with no
+ * dependency on THIS file's own thresholds. That is fine while the rules
+ * never change, and wrong the moment they do: an `allow` cached before
+ * CONSEQUENCE_NOISE_MARGIN existed (JEVADV-26) was computed against a bare
+ * `score > ceiling` check, with no margin band at all. After upgrading to a
+ * release that adds the margin, that same shape's next occurrence hits the
+ * stale `allow` entry and never re-enters decideAction at all -- the exact
+ * stale-cache bypass the margin exists to close, just relocated to
+ * whichever verdict was cached before the margin shipped (review
+ * review-3ca73b9da09b0927, R3/R4 on JEVADV-26/T3).
+ *
+ * BUMP POLICY: bump this whenever a change to this file's decision rules
+ * (a threshold, a ceiling, a margin, a new reason that changes the verdict,
+ * new policy scoping that changes which policies can stop a command) could
+ * turn a PAST 'allow' into something other than 'allow' for a command that
+ * would previously have cached one. A change that could only turn a past
+ * 'ask' into 'allow', or leaves 'allow' outcomes untouched, needs no bump:
+ * replaying a stale 'ask' costs an extra prompt, never a silent bypass, and
+ * gate-bash.ts's own cache TTL (GATE_CACHE_TTL_MS, src/core/gate_cache.ts,
+ * 30 days) already retires it on its own. A small integer, not a semver:
+ * nothing outside this file's own cache key ever reads it.
+ */
+export const GATE_DECISION_RULES_VERSION = 1;
+
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
   return {

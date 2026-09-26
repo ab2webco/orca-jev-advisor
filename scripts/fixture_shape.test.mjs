@@ -28,17 +28,29 @@ import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { test } from 'node:test'
 
+import { importOptional } from './optional_import.mjs'
+
 // screenshot-panels.mjs imports `playwright` itself, unguarded, at its own
-// top -- so this import is guarded the same way scripts/panels.spec.mjs
-// guards its own SCENARIOS import, or a machine with no playwright (this
-// file's own header: every fixture in it exists to catch drift a human
-// would otherwise find by eye) would throw ERR_MODULE_NOT_FOUND here before
-// a single test even registers, instead of skipping.
+// top -- so a machine with no playwright (this file's own header: every
+// fixture in it exists to catch drift a human would otherwise find by eye)
+// throws ERR_MODULE_NOT_FOUND here before a single test even registers,
+// instead of skipping. importOptional (JEVADV-35, review-3ca73b9da09b0927
+// R2/R3) treats ONLY that exact failure as "not installed": a bare
+// `catch {}` here used to also swallow a syntax error or a broken export in
+// screenshot-panels.mjs as if playwright were merely absent, silently
+// skipping every fixture-shape test on a real defect instead of failing.
+const imported = await importOptional('./screenshot-panels.mjs', 'playwright')
 let SCENARIOS = null
-try {
-  ({ SCENARIOS } = await import('./screenshot-panels.mjs'))
-} catch {
-  SCENARIOS = null
+if (imported !== null) {
+  ;({ SCENARIOS } = imported)
+  if (SCENARIOS === undefined) {
+    // A dynamic import that succeeds but does not export what this file
+    // expects does NOT throw on its own -- destructuring an absent named
+    // export just yields `undefined`. Left unchecked, a renamed or removed
+    // `SCENARIOS` export would look identical to "playwright is not
+    // installed" and skip every test below instead of failing loudly.
+    throw new Error('screenshot-panels.mjs no longer exports SCENARIOS -- a renamed or removed export must fail this file, not be treated as "playwright is not installed"')
+  }
 }
 
 const execFileAsync = promisify(execFile)

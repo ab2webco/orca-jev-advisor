@@ -27,7 +27,7 @@
 // ordinary non-worktree repo): a worktree this module cannot positively
 // resolve must fall back to "no match", never throw and never guess.
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -82,6 +82,43 @@ function parseGitdirFile(gitFilePath: string): string | null {
 }
 
 /**
+ * Verifies git's OWN back-pointer: `gitdir` (the per-worktree admin
+ * directory a linked worktree's `.git` FILE names, `<main>/.git/worktrees/
+ * <name>`) itself contains a `gitdir` file -- confusingly, the same name one
+ * level up -- naming the exact `.git` FILE this walk started from. Without
+ * this, ANY `.git` file whose `gitdir:` line and that gitdir's `commondir`
+ * both resolve on disk is trusted, and both of those are real, valid
+ * git-internal state that a byte-for-byte COPY of a real linked worktree's
+ * `.git` file reproduces perfectly when placed in an unrelated directory --
+ * git itself never wrote that directory into its worktree registry, but
+ * nothing upstream of this check would have noticed
+ * (odd/tasks/release-0.5.1.md JEVADV-35, review-3ca73b9da09b0927 R1).
+ *
+ * `realpathSync` on both sides of the comparison, same reasoning as this
+ * module's own tests already document for the temp roots they create: a
+ * symlinked path segment (macOS's `/var` -> `/private/var`, or any other)
+ * must not defeat a comparison that is otherwise correct. Any failure to
+ * read or resolve either side -- a missing back-pointer file, a dangling
+ * target -- fails closed to "no match", same discipline as every other step
+ * in this module.
+ */
+function verifyBackPointer(gitFilePath: string, gitdir: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(join(gitdir, "gitdir"), "utf8").trim();
+  } catch {
+    return false;
+  }
+  if (raw.length === 0) return false;
+  const pointedPath = isAbsolute(raw) ? raw : resolve(gitdir, raw);
+  try {
+    return realpathSync(pointedPath) === realpathSync(gitFilePath);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolves the shared `.git` directory a linked worktree's own gitdir points
  * back to, preferring the `commondir` file git writes there (the exact
  * mechanism git itself uses) and falling back to stripping a trailing
@@ -130,6 +167,10 @@ function resolveLinkedWorktreeInfo(cwd: string): LinkedWorktreeInfo | null {
   if (entry === null || entry.isDirectory) return null;
   const gitdir = parseGitdirFile(entry.path);
   if (gitdir === null) return null;
+  // Cheap and fails fast: reject a forged `.git` file before ever touching
+  // `commondir` or the main checkout's path (see verifyBackPointer's own
+  // comment above for exactly what this closes).
+  if (!verifyBackPointer(entry.path, gitdir)) return null;
   const commonGitDir = resolveCommonGitDir(gitdir);
   if (commonGitDir === null) return null;
   return { worktreeRoot: dirname(entry.path), mainCheckoutRoot: dirname(commonGitDir) };
@@ -144,10 +185,23 @@ export function resolveLinkedWorktreeMainCheckout(cwd: string): string | null {
   return resolveLinkedWorktreeInfo(cwd)?.mainCheckoutRoot ?? null;
 }
 
-/** What matchDestinationForCwd resolved: which destination's rules apply, and which physical root the command actually runs against. */
-export interface MatchedDestinationForCwd {
+/**
+ * What matchDestinationForCwd resolved: which destination's rules apply, and
+ * which physical root the command actually runs against.
+ *
+ * Generic over `D` so a caller passing a richer destination type (e.g.
+ * gate_catalog_mirror.ts's MirroredDestination) gets `.destination` typed as
+ * THAT type, not the narrower MatchableDestination -- see matchDestination's
+ * own comment in destination_match.ts (JEVADV-35, review-3ca73b9da09b0927
+ * R2). Before this, a call site had to widen the result with an explicit
+ * type annotation (`const matched: MirroredDestination | null = ...`) that
+ * only compiled because every field MirroredDestination adds over
+ * MatchableDestination is optional -- true today, silently unsafe the
+ * moment that stops being true.
+ */
+export interface MatchedDestinationForCwd<D extends MatchableDestination = MatchableDestination> {
   /** Which destination's policies and consequence-ceiling override apply. */
-  readonly destination: MatchableDestination;
+  readonly destination: D;
   /**
    * The physical worktree root a caller building command_shape.ts's cache
    * key should use as `treeRoot` for THIS cwd -- deliberately NOT always the
@@ -176,10 +230,10 @@ export interface MatchedDestinationForCwd {
  * matches, never narrows or overrides destination_match.ts's own
  * longest-prefix rule.
  */
-export function matchDestinationForCwd(
+export function matchDestinationForCwd<D extends MatchableDestination>(
   cwd: string,
-  destinations: readonly MatchableDestination[],
-): MatchedDestinationForCwd | null {
+  destinations: readonly D[],
+): MatchedDestinationForCwd<D> | null {
   const direct = matchDestination(cwd, destinations);
   if (direct !== null) return { destination: direct, treeRoot: direct.worktreePath };
   const info = resolveLinkedWorktreeInfo(cwd);

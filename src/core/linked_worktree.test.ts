@@ -9,8 +9,8 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { after, test } from "node:test";
 
@@ -33,12 +33,12 @@ after(() => {
   }
 });
 
-/** Isolated from the developer's own global/system git config (a `commit.gpgsign=true` or a template dir would otherwise break these fixtures on another machine) -- same discipline as this project's other tests never touching real user state. */
+/** Isolated from the developer's own global/system git config (a `commit.gpgsign=true` or a template dir would otherwise break these fixtures on another machine) -- same discipline as this project's other tests never touching real user state. `os.devNull` rather than the POSIX literal, so this stays correct on Windows (`NUL`) too. */
 function git(args: readonly string[], cwd: string): void {
   execFileSync("git", args, {
     cwd,
     stdio: "ignore",
-    env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" },
+    env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull },
   });
 }
 
@@ -145,6 +145,43 @@ test("a .git file pointing at a gitdir that doesn't exist resolves to null, neve
 
   assert.doesNotThrow(() => resolveLinkedWorktreeMainCheckout(dir));
   assert.equal(resolveLinkedWorktreeMainCheckout(dir), null);
+});
+
+// odd/tasks/release-0.5.1.md JEVADV-35 (review-3ca73b9da09b0927, R1): this
+// module used to trust ANY `.git` FILE found walking up, as long as its
+// `gitdir:` line and that gitdir's `commondir` both resolved on disk --
+// never checking that the MAIN checkout's own worktree registry actually
+// names this exact `.git` file back. A `.git` file is five lines of plain
+// text; copying a real linked worktree's own `.git` file into an unrelated
+// directory reproduces a real, resolvable `gitdir`/`commondir` pair for a
+// directory git never created as a worktree at all, and this module used to
+// resolve it to the real main checkout anyway -- borrowing that checkout's
+// destination (its policies, its consequence-ceiling override) for a
+// directory with no real relationship to it.
+test("a forged .git file (a byte-for-byte copy of a real worktree's) does not resolve -- the main checkout's own back-pointer names the real worktree, not this copy", () => {
+  const base = makeTempRoot("jevadv35-forged-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+  const realSibling = join(base, "main-repo-sibling-real");
+  git(["worktree", "add", "-q", realSibling, "-b", "feature-branch"], main);
+
+  // The forgery: the REAL sibling's `.git` file, byte-for-byte, placed in a
+  // directory git never touched. Its `gitdir:` line and that gitdir's
+  // `commondir` both still resolve on disk -- they point at real, valid
+  // git-internal state -- so the pre-JEVADV-35 checks alone would have
+  // accepted it.
+  const forgedDir = join(base, "unrelated-directory");
+  mkdirSync(forgedDir, { recursive: true });
+  writeFileSync(join(forgedDir, ".git"), readFileSync(join(realSibling, ".git"), "utf8"));
+
+  assert.equal(
+    resolveLinkedWorktreeMainCheckout(forgedDir),
+    null,
+    "the main checkout's worktrees/<name>/gitdir names the REAL sibling's .git file, never this forged copy",
+  );
+  // The real sibling itself must be entirely unaffected by the forgery
+  // existing alongside it.
+  assert.equal(resolveLinkedWorktreeMainCheckout(realSibling), main);
 });
 
 // ===========================================================================

@@ -13,13 +13,14 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
 import { commandShape } from '../../src/core/command_shape.ts'
+import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCRIPT_PATH = join(__dirname, 'gate-bash.ts')
@@ -81,15 +82,24 @@ function verdictCachePath (home) {
   return join(home, '.cache', 'orca-supervisor', 'gate-bash.json')
 }
 
-/** Computes the exact cache key gate-bash.ts would compute for `command`
- *  run from `cwd` under `home`, with no catalog mirror present (so
- *  destinationId/treeRoot are null) and `cwd` outside any git repository
- *  (so repoContext resolves to this fixed, branch-less string). */
-function expectedCacheKey (command, cwd, home) {
-  const repoContext = 'no remote, unknown branch, this is a working branch, clean'
-  const shape = commandShape(command, { cwd, home, destinationId: null, treeRoot: undefined, repoContext })
+/** Computes the exact cache key gate-bash.ts would compute for `command` run
+ *  from `cwd` under `home`, given the destination match (or lack of one)
+ *  gate-bash.ts itself would resolve. Mirrors cacheKey() in gate-bash.ts
+ *  exactly, including the GATE_DECISION_RULES_VERSION prefix (JEVADV-35,
+ *  review-3ca73b9da09b0927 R3/R4) -- a drift between this helper and that
+ *  private function would show up as every "honoured" test below silently
+ *  falling through to a cache MISS instead of failing on a key mismatch. */
+function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean' } = {}) {
+  const shape = commandShape(command, { cwd, home, destinationId, treeRoot, repoContext })
   if (shape === null) throw new Error('test command must have a non-null shape to exercise the cache path')
-  return createHash('sha256').update(shape).digest('hex').slice(0, 24)
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}`).digest('hex').slice(0, 24)
+}
+
+/** No catalog mirror present (destinationId/treeRoot null) and `cwd` outside
+ *  any git repository (repoContext resolves to this fixed, branch-less
+ *  string) -- the shape every existing cache test in this file exercises. */
+function expectedCacheKey (command, cwd, home) {
+  return computeCacheKey(command, cwd, home)
 }
 
 test('no API key: the first command passes through with a one-time notice', () => {
@@ -159,6 +169,36 @@ test('an expired cached verdict is dropped from disk instead of being reused for
   const persisted = JSON.parse(readFileSync(cachePath, 'utf8'))
   assert.ok(Object.hasOwn(persisted, freshKey), 'a verdict cached seconds ago must survive a read')
   assert.equal(Object.hasOwn(persisted, 'unrelated-expired-key'), false, 'a verdict cached over 30 days ago must be dropped on read, not reused forever')
+})
+
+// odd/tasks/release-0.5.1.md JEVADV-35 (review-3ca73b9da09b0927, R3/R4): the
+// verdict cache key must fold in decisions.ts's GATE_DECISION_RULES_VERSION,
+// not just the command's shape -- otherwise a verdict cached under one
+// release's decision rules (e.g. an 'allow' cached before CONSEQUENCE_NOISE_
+// MARGIN existed) keeps replaying after an upgrade that changes what that
+// same shape should resolve to. This is a pure, in-process comparison (no
+// subprocess, no network): it fails the moment the version stops changing
+// the key, which is exactly the defect this task closes.
+test('the verdict cache key changes with GATE_DECISION_RULES_VERSION, so a verdict cached under an older release misses instead of replaying after a decision-rule upgrade', () => {
+  const home = makeHome()
+  const cwd = home
+  const repoContext = 'no remote, unknown branch, this is a working branch, clean'
+  const shape = commandShape(MIDDLE_TIER_COMMAND, { cwd, home, destinationId: null, treeRoot: undefined, repoContext })
+  // gate-bash.ts's pre-JEVADV-35 formula: the shape alone, with no version
+  // folded in at all -- what every cache entry written before this task was
+  // keyed with.
+  const unversionedKey = createHash('sha256').update(shape).digest('hex').slice(0, 24)
+  const versionedKey = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
+  assert.notEqual(versionedKey, unversionedKey, 'folding the rules version into the key must actually change it, or an old entry would still be honoured after an upgrade')
+  // The end-to-end proof that gate-bash.ts's own (private) cacheKey() really
+  // computes this same versioned formula, not just this test's own copy of
+  // it, is 'a fresh cached verdict is honoured without a fresh Jev call'
+  // above: it round-trips through expectedCacheKey() and the real running
+  // hook, and a drift between the two would turn that hit into a silent
+  // cache miss reaching for the network instead (which is why no test here
+  // pre-populates the cache under a stale key and then runs the hook with a
+  // real API key -- a genuine miss would call the real Jev endpoint, which
+  // this suite never does; see this file's own header note).
 })
 
 // ---------------------------------------------------------------------------
@@ -281,6 +321,85 @@ test('a local-rule stop is recorded with stopReason "local-rule"', () => {
   const record = JSON.parse(lines[0])
   assert.equal(record.stopReason, 'local-rule')
   assert.equal(record.policyId, undefined, 'a local-rule stop never carries a policyId')
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-35 (review-3ca73b9da09b0927, R3): treeRoot
+// wiring for a linked worktree, exercised through the REAL hook process (a
+// real `git worktree add`, a real catalog mirror), not just linked_worktree
+// .test.ts's unit coverage of the resolver alone -- proving the two are
+// actually wired together inside gate-bash.ts's own main(). Runs entirely
+// off the cache-hit path (see this file's own header note on never reaching
+// the real network): a pre-populated cache entry, keyed the way the FIXED
+// wiring computes it, is only ever honoured if main() really resolved the
+// sibling worktree's cwd to its main checkout's destination AND kept the
+// sibling's own root as treeRoot -- resolving to `main` for either one
+// would produce a different key and miss.
+// ---------------------------------------------------------------------------
+
+function approvalsPath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-approvals.jsonl')
+}
+
+function catalogMirrorPath (home) {
+  return join(home, '.config', 'orca-supervisor', 'catalog.json')
+}
+
+/** Same isolation as src/core/linked_worktree.test.ts's own `git` helper. */
+function git (args, cwd) {
+  execFileSync('git', args, {
+    cwd,
+    stdio: 'ignore',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_SYSTEM: devNull }
+  })
+}
+
+function initRepo (root) {
+  mkdirSync(root, { recursive: true })
+  git(['init', '-q'], root)
+  git(['config', 'user.email', 'test@test.com'], root)
+  git(['config', 'user.name', 'test'], root)
+  git(['commit', '--allow-empty', '-q', '-m', 'init'], root)
+}
+
+test('a command run in a linked sibling worktree is judged with the main checkout\'s destination, with the sibling\'s own root as treeRoot', () => {
+  // realpath'd immediately, same reasoning as linked_worktree.test.ts: macOS
+  // resolves $TMPDIR through a /var -> /private/var symlink, and git itself
+  // resolves it too when it writes an absolute gitdir: line.
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-treeroot-test-')))
+  const main = join(base, 'cineco-frontend')
+  initRepo(main)
+  const sibling = join(base, 'cineco-frontend-cin-985')
+  git(['worktree', 'add', '-q', sibling, '-b', 'cin-985'], main)
+
+  const home = makeHome()
+  mkdirSync(dirname(catalogMirrorPath(home)), { recursive: true })
+  writeFileSync(catalogMirrorPath(home), JSON.stringify({ destinations: [{ id: 'cineco-frontend', worktreePath: main }] }))
+
+  // A command that is neither tier-1a nor a NEVER_SILENTLY match, with a
+  // relative-path argument -- so treeRoot actually changes its shape:
+  // `./dist` from `sibling` resolves to `sibling/dist`, which is IN_TREE
+  // under the (correct) sibling treeRoot and OUT_OF_TREE under `main`.
+  const command = 'some-unmeasured-tool ./dist'
+  const repoContext = 'no remote, branch cin-985, this is a working branch, clean'
+  const correctKey = computeCacheKey(command, sibling, home, { destinationId: 'cineco-frontend', treeRoot: sibling, repoContext })
+  const wrongKey = computeCacheKey(command, sibling, home, { destinationId: 'cineco-frontend', treeRoot: main, repoContext })
+  assert.notEqual(correctKey, wrongKey, 'treeRoot must actually change the shape, or this test proves nothing')
+
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [correctKey]: { decision: 'ask', reason: 'treeRoot wiring test', at: Date.now() - 1000 },
+  }))
+
+  const stdout = run(home, command, { cwd: sibling, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask', 'the pre-populated entry is only honoured if main() computed the SAME (correct) key')
+  assert.match(payload.systemMessage, /treeRoot wiring test/)
+
+  const lines = readFileSync(approvalsPath(home), 'utf8').trim().split('\n')
+  const record = JSON.parse(lines[lines.length - 1])
+  assert.equal(record.destinationId, 'cineco-frontend', 'the sibling worktree must be judged with its MAIN checkout\'s destination, not left unmatched')
 })
 
 // ---------------------------------------------------------------------------

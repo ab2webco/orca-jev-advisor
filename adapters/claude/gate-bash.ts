@@ -65,7 +65,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
@@ -431,10 +431,18 @@ type CacheEntry = GateCacheEntry
  *
  * Null means "ask every time": a command whose meaning cannot be known
  * without running it never borrows another command's answer.
+ *
+ * The hashed material is prefixed with decisions.ts's own
+ * GATE_DECISION_RULES_VERSION, not just the shape -- see that constant's
+ * own comment (review-3ca73b9da09b0927, R3/R4 on JEVADV-26/T3). Without it,
+ * an `allow` cached before a decision-rule change (e.g. CONSEQUENCE_NOISE_
+ * MARGIN's introduction) keeps replaying after the upgrade, for a command
+ * the NEW rules would no longer silently allow -- an older entry now simply
+ * misses instead of being trusted across a rule change it never saw.
  */
 function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null): string | null {
   const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
-  return shape === null ? null : createHash('sha256').update(shape).digest('hex').slice(0, 24)
+  return shape === null ? null : createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}`).digest('hex').slice(0, 24)
 }
 
 /**
