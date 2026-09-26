@@ -261,6 +261,33 @@ test('the seeded policies are the ones a person actually sees in the panel', { s
   }
 })
 
+test('a policy stored with a legacy Spanish kind keeps its kind on screen and on save', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  // Found live on 2026-09-26: rows stored before the kind rename carry
+  // permite/prohibe/pregunta. The gate already maps them (migratePolicyKind),
+  // but the panel showed them as "-- Choose --" and a plain "Save" wrote
+  // them back WITHOUT a kind, which silently took every one of them out of
+  // judgment -- client_always_asks and production among them.
+  const legacy = [
+    { id: 'legacy_permits', rule: 'Reading code happens without asking.', kind: 'permite' },
+    { id: 'legacy_prohibits', rule: 'Never write directly on main.', kind: 'prohibe' },
+    { id: 'legacy_asks', rule: 'Anything that touches a client gets confirmed.', kind: 'pregunta' },
+  ]
+  const { browser, page, errors } = await openPanel({ policies: legacy })
+  try {
+    const shownKinds = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#policies-list .entry select')).slice(0, 3).map((select) => select.value))
+    assert.deepEqual(shownKinds, ['permits', 'prohibits', 'requires_human'])
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    const written = await page.evaluate(() => window.__written.policies)
+    assert.deepEqual(written.map((row) => row.kind), ['permits', 'prohibits', 'requires_human'],
+      'saving must never drop a legacy kind the gate still honours')
+    assert.deepEqual(errors, [], 'the panel threw while rendering or saving the policies')
+  } finally {
+    await browser.close()
+  }
+})
+
 test('a panel with no policies shows none, which is what a pre-seed install looked like', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page } = await openPanel({ policies: [] })
   try {

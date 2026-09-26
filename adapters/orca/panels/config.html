@@ -1862,6 +1862,17 @@
         { value: 'prohibits', labelKey: 'policies.kindProhibits' }
       ]
 
+      // Rows stored before the kind rename still carry the Spanish enum.
+      // src/core/decisions.ts's migratePolicyKind maps these same three
+      // values at decision time, so the gate honours them. The panel must
+      // read them the same way: shown as "-- Choose --", a plain Save wrote
+      // them back WITHOUT a kind and silently took them out of judgment.
+      var LEGACY_POLICY_KINDS = { permite: 'permits', prohibe: 'prohibits', pregunta: 'requires_human' }
+
+      function currentPolicyKind (value) {
+        return Object.prototype.hasOwnProperty.call(LEGACY_POLICY_KINDS, value) ? LEGACY_POLICY_KINDS[value] : value
+      }
+
       function policyKindLabel (value) {
         var match = POLICY_KIND_OPTIONS.filter(function (o) { return o.value === value })[0]
         return match ? t(match.labelKey) : t('policies.kindUnset')
@@ -1898,7 +1909,8 @@
         // `kind` existed, or with a typo'd value) never gets guessed into one
         // of the three real options -- it lands on the '' sentinel instead,
         // and stays there, visibly, until a human picks one.
-        var storedKind = POLICY_KIND_OPTIONS.some(function (o) { return o.value === row.kind && o.value !== '' }) ? row.kind : ''
+        var rowKind = currentPolicyKind(row.kind)
+        var storedKind = POLICY_KIND_OPTIONS.some(function (o) { return o.value === rowKind && o.value !== '' }) ? rowKind : ''
         POLICY_KIND_OPTIONS.forEach(function (option) {
           var opt = elMake('option')
           opt.value = option.value
