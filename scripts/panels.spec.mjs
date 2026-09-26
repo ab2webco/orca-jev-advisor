@@ -171,6 +171,8 @@ function hostBridge (storage) {
       // about the request being sent does not have to supply one.
       if (key === 'catalogRefreshResult' && window.__written.catalogRefreshRequest) {
         value = { ...storage.__refreshResult, id: window.__written.catalogRefreshRequest.id }
+      } else if (key === 'catalogProposalAcceptResult' && window.__written.catalogProposalAcceptRequest) {
+        value = { ok: true, added: 0, ...storage.__proposalAcceptResult, id: window.__written.catalogProposalAcceptRequest.id }
       } else if (key === 'policySeedImportResult' && window.__written.policySeedImportRequest) {
         value = {
           ok: true, added: 0, skipped: 0, replaced: 0, differing: [],
@@ -278,7 +280,7 @@ test('a refresh that could not reach the CLI says so, instead of reporting nothi
   // refresh was indistinguishable from a refresh with nothing to do.
   const { browser, page } = await openPanel({
     catalog: { destinations: [] },
-    __refreshResult: { at: new Date().toISOString(), ok: false, added: null, reason: 'derivation-failed', detail: 'spawn orca ENOENT' }
+    __refreshResult: { at: new Date().toISOString(), ok: false, proposed: null, reason: 'derivation-failed', detail: 'spawn orca ENOENT' }
   })
   try {
     await page.click('#refresh-catalog')
@@ -299,7 +301,7 @@ test('a refresh that genuinely adds nothing keeps saying exactly that', { skip: 
   // The other side of the same fork: the honest "nothing new" must survive.
   const { browser, page } = await openPanel({
     catalog: { destinations: [] },
-    __refreshResult: { at: new Date().toISOString(), ok: true, added: 0, reason: null, detail: null }
+    __refreshResult: { at: new Date().toISOString(), ok: true, proposed: 0, reason: null, detail: null }
   })
   try {
     await page.click('#refresh-catalog')
@@ -310,6 +312,100 @@ test('a refresh that genuinely adds nothing keeps saying exactly that', { skip: 
 
     const said = await page.evaluate(() => document.getElementById('catalog-refresh-said').innerText)
     assert.doesNotMatch(said, /could not be read/i, 'a healthy refresh was reported as a failure')
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-11 (odd/tasks/release-0.5.1.md) -- "Search Orca" used to silently
+// ADD a newly-seen worktree with `kind: "project"` hardcoded. It now only
+// computes a proposal list; the person ticks which repositories to adopt
+// and picks a kind for each, never a guessed one.
+// ---------------------------------------------------------------------------
+
+const CATALOG_PROPOSAL_FIXTURE = {
+  ok: true,
+  proposals: [
+    { id: 'cineco-backend', label: 'cineco-backend', worktreePath: '/Users/dev/Projects/cineco-backend' },
+    { id: 'myparkplanner-be', label: 'myparkplanner-be', worktreePath: '/Users/dev/Projects/myparkplanner-be' }
+  ],
+  checkedAt: new Date().toISOString()
+}
+
+test('a proposed repository renders on a plain reload, with no kind pre-selected', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({
+    catalog: { destinations: [] },
+    catalogProposalsStatus: CATALOG_PROPOSAL_FIXTURE
+  })
+  try {
+    const rows = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#catalog-proposals input[data-catalog-proposal-id]')).map((box) => box.getAttribute('data-catalog-proposal-id')))
+    assert.deepEqual(rows.sort(), ['cineco-backend', 'myparkplanner-be'])
+    const kindValues = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#catalog-proposals select[data-catalog-proposal-kind]')).map((select) => select.value))
+    assert.ok(kindValues.every((v) => v === ''), `every proposal's kind must start unchosen, got: ${JSON.stringify(kindValues)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('clicking "Add ticked" with a ticked row but no kind chosen refuses, and sends no request', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    catalog: { destinations: [] },
+    catalogProposalsStatus: CATALOG_PROPOSAL_FIXTURE
+  })
+  try {
+    await page.click('#catalog-proposals input[data-catalog-proposal-id="cineco-backend"]')
+    await page.click('#add-catalog-proposals')
+    await page.waitForFunction(() => {
+      const said = document.querySelector('#catalog-proposals .said')
+      return said && said.innerText.trim().length > 0
+    }, undefined, { timeout: 25000 })
+    const written = await page.evaluate(() => window.__written.catalogProposalAcceptRequest)
+    assert.equal(written, undefined, 'a row with no kind chosen must never reach a request')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('ticking a proposal, picking a kind, and clicking "Add ticked" sends exactly that id/kind pair', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    catalog: { destinations: [] },
+    catalogProposalsStatus: CATALOG_PROPOSAL_FIXTURE,
+    __proposalAcceptResult: { added: 1 }
+  })
+  try {
+    await page.click('#catalog-proposals input[data-catalog-proposal-id="cineco-backend"]')
+    await page.selectOption('#catalog-proposals select[data-catalog-proposal-kind="cineco-backend"]', 'client-site')
+    await page.click('#add-catalog-proposals')
+    await page.waitForFunction(() => !!window.__written.catalogProposalAcceptRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.catalogProposalAcceptRequest)
+    assert.deepEqual(request.accepted, [{ id: 'cineco-backend', kind: 'client-site' }])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the catalog-proposals list stays empty on a reload when the status carries none', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ catalog: { destinations: [] } })
+  try {
+    const rows = await page.evaluate(() => document.querySelectorAll('#catalog-proposals input[data-catalog-proposal-id]').length)
+    assert.equal(rows, 0)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every catalog.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('catalog.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('catalog.') === 0)
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
   } finally {
     await browser.close()
   }

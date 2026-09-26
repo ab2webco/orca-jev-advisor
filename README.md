@@ -133,9 +133,12 @@ acts there: your own tooling can be judged loosely, a client's production
 site cannot. The plugin ships an example catalog with placeholder paths
 that matches nothing — a shipped catalog full of somebody else's
 repositories would be worse than none — so today you add your own from
-the settings panel. Orca already knows your worktrees, and building the
-catalog from them at install is the obvious next step; it is not built
-yet.
+the settings panel, by hand or from a proposal: "Search Orca" lists
+repositories Orca already knows that your catalog does not, one row per
+repository, and you pick its kind (client-site, project, service, support)
+before adding it — never guessed for you. This can only propose a
+repository Orca has already opened as a worktree; one it has never touched
+is invisible to the plugin.
 
 A command run inside a *linked* git worktree — the shape Orca itself
 creates, next to the main checkout rather than inside it

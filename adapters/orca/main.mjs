@@ -47,12 +47,14 @@ import {
   interpretDestinationPolicy
 } from '../../src/core/decisions.ts'
 import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
+import { deriveCatalogProposals } from '../../src/core/catalog_proposals.ts'
+import { resolveLinkedWorktreeMainCheckout } from '../../src/core/linked_worktree.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeedPolicies } from '../../src/core/policy_seed.ts'
 import { mergePolicySeeds, resolvePolicySeedImport } from '../../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice, parseOfferedVersion } from '../../src/core/policy_seed_notice.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
 import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
-import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
+import { DEFAULT_DERIVED_AUTONOMY, deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
@@ -255,6 +257,26 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
 // reusing that cache.
 // ---------------------------------------------------------------------------
 
+/** Runs `orca worktree ps --json` and returns the parsed OrcaWorktree[] list
+ *  -- the one fetch both deriveCatalogFromOrca (below) and JEVADV-11's
+ *  computeCatalogProposals (odd/tasks/release-0.5.1.md) read, so both ever
+ *  see the exact same live data through one code path. Never throws: a
+ *  fetch that cannot run reports its detail rather than swallowing it (see
+ *  cmdRefreshCatalog below for why that distinction matters to the caller). */
+async function fetchOrcaWorktrees (orca) {
+  try {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
+    return { worktrees: parseWorktreeList(JSON.parse(stdout)), failure: null }
+  } catch (error) {
+    const detail = String(error?.message ?? error).slice(0, 200)
+    orca.log(`orca worktree ps fetch failed: ${detail.slice(0, 160)}`)
+    return { worktrees: [], failure: detail }
+  }
+}
+
 /** Runs `orca worktree ps --json` and turns the result into destinations.
  *  Never throws: a derivation that cannot run leaves the catalog exactly as
  *  it was, which is always a safe, working state -- same fail-open shape as
@@ -262,18 +284,9 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
  *  failure detail rather than swallowing it (see cmdRefreshCatalog below for
  *  why that distinction matters to the caller). */
 async function deriveCatalogFromOrca (orca) {
-  try {
-    const { execFile } = await import('node:child_process')
-    const { promisify } = await import('node:util')
-    const execFileAsync = promisify(execFile)
-    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
-    const worktrees = parseWorktreeList(JSON.parse(stdout))
-    return { destinations: deriveDestinations(worktrees), failure: null }
-  } catch (error) {
-    const detail = String(error?.message ?? error).slice(0, 200)
-    orca.log(`catalog derivation (orca worktree ps) failed: ${detail.slice(0, 160)}`)
-    return { destinations: [], failure: detail }
-  }
+  const { worktrees, failure } = await fetchOrcaWorktrees(orca)
+  if (failure !== null) return { destinations: [], failure }
+  return { destinations: deriveDestinations(worktrees), failure: null }
 }
 
 /** Bootstraps the catalog from Orca's own worktree list, but ONLY when it
@@ -351,33 +364,153 @@ async function seedPoliciesIfEmpty (orca, storageHost) {
   }
 }
 
-/** advisor.refreshCatalog -- adds destinations for worktrees Orca has seen
- *  that are not yet in the catalog. Every id already present (and every
- *  field on it: thresholds, consequenceCeiling, everything) is left
- *  completely untouched, and nothing already in the catalog is ever
- *  removed -- a worktree disappearing from Orca's list is not this
- *  plugin's call to prune. Re-mirrors to catalog.json when it changes
- *  anything, so the gate sees the addition without waiting for the panel's
- *  own save button. */
-async function cmdRefreshCatalog (orca, storageHost) {
+// ---------------------------------------------------------------------------
+// JEVADV-11 (odd/tasks/release-0.5.1.md) -- cmdRefreshCatalog used to add a
+// newly-seen worktree straight to the catalog with `kind: "project"`
+// hardcoded (deriveDestinations has nothing else to guess from). That
+// silent default is exactly why a real client repository never got
+// "client-site" treatment: nothing ever asked. This is now a PROPOSAL,
+// never a write -- src/core/catalog_proposals.ts's deriveCatalogProposals
+// is the pure decision; computeCatalogProposals below is only the I/O shell
+// around it (the live worktree list, and each candidate's linked-worktree
+// main checkout, both real reads). Only attendCatalogProposalAcceptRequest
+// can turn a proposal into a catalog row, and only with a kind the person
+// explicitly chose.
+//
+// Documented limit (see catalog_proposals.ts's own module doc): this can
+// only propose a repository `orca worktree ps` already reports. A
+// repository Orca has never opened as a worktree is invisible here --
+// there is no broader "every repository on this machine" API on this
+// plugin's host surface to reach for instead.
+// ---------------------------------------------------------------------------
+
+/** Which repositories `orca worktree ps` already knows about that the
+ *  catalog does not yet cover. The one piece of real I/O
+ *  deriveCatalogProposals itself cannot do: fetching the live worktree list
+ *  (fetchOrcaWorktrees) and resolving a candidate's linked-worktree main
+ *  checkout (resolveLinkedWorktreeMainCheckout, a `.git` file read -- see
+ *  src/core/linked_worktree.ts). `options.fetchOrcaWorktrees`/
+ *  `options.mainCheckoutOf` let tests substitute both, so no test needs a
+ *  real CLI call or a real `.git` file (same discipline as every other
+ *  `options.mirror` in this file -- see the module note above
+ *  attendModSkillsConfigRequest's own tests). Fails open, same shape as
+ *  deriveCatalogFromOrca: a fetch failure reports `{ proposals: [],
+ *  failure }` rather than throwing. */
+async function computeCatalogProposals (orca, storageHost, options = {}) {
+  const fetchWorktrees = options.fetchOrcaWorktrees ?? fetchOrcaWorktrees
+  const mainCheckoutOf = options.mainCheckoutOf ?? resolveLinkedWorktreeMainCheckout
+  const { worktrees, failure } = await fetchWorktrees(orca)
+  if (failure !== null) return { proposals: [], failure }
+  const catalog = await getCatalog(storageHost)
+  return { proposals: deriveCatalogProposals(worktrees, catalog.destinations, mainCheckoutOf), failure: null }
+}
+
+/** What the panel's proposal list reads on load -- `{ok, proposals,
+ *  reason?, detail?, checkedAt}`, the same "never conflate a broken read
+ *  with a genuinely empty one" discipline cmdRefreshCatalog's own module
+ *  note already established for `derivation-failed`. Computed and
+ *  published together so a caller that also needs the fresh proposals
+ *  (cmdRefreshCatalog, attendCatalogProposalAcceptRequest) does not have to
+ *  recompute them a second time. */
+const CATALOG_PROPOSALS_STATUS_KEY = 'catalogProposalsStatus'
+
+async function publishCatalogProposalsStatus (orca, storageHost, options = {}) {
+  const { proposals, failure } = await computeCatalogProposals(orca, storageHost, options)
+  const status = failure === null
+    ? { ok: true, proposals, reason: null, detail: null, checkedAt: new Date().toISOString() }
+    : { ok: false, proposals: [], reason: 'derivation-failed', detail: failure, checkedAt: new Date().toISOString() }
+  await storageHost.set(CATALOG_PROPOSALS_STATUS_KEY, status)
+    .catch((error) => orca.log(`catalog proposals status publish failed: ${error.message}`))
+  return { proposals, failure }
+}
+
+/** advisor.refreshCatalog -- computes and publishes the proposal list
+ *  (CATALOG_PROPOSALS_STATUS_KEY); never writes the catalog itself. A
+ *  refresh that could not ask Orca anything is NOT a refresh that found
+ *  nothing new -- reporting both as `ok: true, proposed: 0` is what made a
+ *  broken CLI call look to the developer like a dead button, with the real
+ *  cause reachable only by opening Orca's log. */
+async function cmdRefreshCatalog (orca, storageHost, options = {}) {
   try {
-    const current = await getCatalog(storageHost)
-    const { destinations: derived, failure } = await deriveCatalogFromOrca(orca)
-    // A refresh that could not ask Orca anything is NOT a refresh that found
-    // nothing new. Reporting both as `ok: true, added: 0` is what made a
-    // broken CLI call look to the developer like a dead button, with the real
-    // cause reachable only by opening Orca's log.
+    const { proposals, failure } = await publishCatalogProposalsStatus(orca, storageHost, options)
     if (failure !== null) return { ok: false, reason: 'derivation-failed', detail: failure }
-    const existingIds = new Set(current.destinations.map((d) => d.id))
-    const additions = derived.filter((d) => !existingIds.has(d.id))
-    if (additions.length > 0) {
-      await setCatalog(storageHost, { destinations: [...current.destinations, ...additions] })
-      await mirrorCatalogAndPolicies(orca, storageHost)
-    }
-    return { ok: true, added: additions.length }
+    return { ok: true, proposed: proposals.length }
   } catch (error) {
     return { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
+}
+
+/** True for one of the four real DestinationKind values (src/core/store.ts)
+ *  -- store.ts's own isDestinationKind is not exported (store.ts is not a
+ *  file this fix touches), so this is a small, deliberate duplicate rather
+ *  than a cross-module reach for one line -- same call write-secret-
+ *  mirror.mjs's own isPlainObject already made. Never widened beyond the
+ *  four literals store.ts itself accepts: an invalid or missing kind here
+ *  must be refused, not coerced into a guess. */
+function isDestinationKind (value) {
+  return value === 'service' || value === 'client-site' || value === 'project' || value === 'support'
+}
+
+const CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY = 'catalogProposalAcceptRequest'
+const CATALOG_PROPOSAL_ACCEPT_RESULT_KEY = 'catalogProposalAcceptResult'
+
+/** Attends one pending "add these ticked proposals, with these kinds"
+ *  request from the panel -- the ONLY path that can turn a catalog proposal
+ *  into a real destination (JEVADV-11). Re-derives the live proposal list
+ *  rather than trusting the request's own ids blindly: a stale panel
+ *  selection (the underlying worktree list moved on since the person
+ *  opened the panel) is silently dropped, never written with whatever kind
+ *  happened to be typed next to it. Same for an entry whose kind is not one
+ *  of the four real values -- isDestinationKind above, never trusted from
+ *  the panel alone. Republishes the proposal status afterward so the
+ *  accepted rows disappear from the panel's very next read. */
+async function attendCatalogProposalAcceptRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY).catch((error) =>
+    orca.log(`catalog proposal accept request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, added: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`catalog proposal accept result publish failed: ${err.message}`))
+    return
+  }
+
+  const mirror = options.mirror ?? mirrorCatalogAndPolicies
+  const requestedAccepted = Array.isArray(request.accepted) ? request.accepted : []
+  let result
+  try {
+    const { proposals, failure } = await computeCatalogProposals(orca, storageHost, options)
+    if (failure !== null) {
+      result = { ok: false, reason: 'derivation-failed', detail: failure }
+    } else {
+      const proposalsById = new Map(proposals.map((p) => [p.id, p]))
+      const toAdd = []
+      for (const entry of requestedAccepted) {
+        if (!isRecord(entry) || typeof entry.id !== 'string' || !isDestinationKind(entry.kind)) continue
+        const proposal = proposalsById.get(entry.id)
+        if (proposal === undefined) continue
+        toAdd.push({ id: proposal.id, label: proposal.label, kind: entry.kind, worktreePath: proposal.worktreePath, autonomy: DEFAULT_DERIVED_AUTONOMY })
+      }
+      if (toAdd.length > 0) {
+        const current = await getCatalog(storageHost)
+        await setCatalog(storageHost, { destinations: [...current.destinations, ...toAdd] })
+        await mirror(orca, storageHost)
+      }
+      result = { ok: true, added: toAdd.length }
+    }
+  } catch (error) {
+    result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
+  }
+
+  await storageHost.set(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`catalog proposal accept result publish failed: ${err.message}`))
+
+  await publishCatalogProposalsStatus(orca, storageHost, options)
 }
 
 // ---------------------------------------------------------------------------
@@ -1442,7 +1575,7 @@ const CATALOG_REFRESH_REQUEST_KEY = 'catalogRefreshRequest'
 const CATALOG_REFRESH_RESULT_KEY = 'catalogRefreshResult'
 
 /** Attends one pending catalog-refresh request from the panel, if any. */
-async function attendCatalogRefreshRequest (orca, storageHost) {
+async function attendCatalogRefreshRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(CATALOG_REFRESH_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
 
@@ -1452,14 +1585,18 @@ async function attendCatalogRefreshRequest (orca, storageHost) {
   const age = Date.now() - Date.parse(request.at)
   if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
     await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
-      id: request.id, at: new Date().toISOString(), ok: false, added: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+      id: request.id, at: new Date().toISOString(), ok: false, proposed: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
     }).catch((err) => orca.log(`catalog refresh result publish failed: ${err.message}`))
     return
   }
 
-  const result = await cmdRefreshCatalog(orca, storageHost)
+  // JEVADV-11: cmdRefreshCatalog no longer adds anything itself -- `proposed`
+  // is how many uncatalogued repositories it found (published in full to
+  // CATALOG_PROPOSALS_STATUS_KEY for the panel's tick list), replacing the
+  // old `added` count from when this silently wrote them with a guessed kind.
+  const result = await cmdRefreshCatalog(orca, storageHost, options)
   await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
-    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+    id: request.id, at: new Date().toISOString(), ok: result.ok, proposed: result.proposed ?? null, reason: result.reason ?? null, detail: result.detail ?? null
   }).catch((err) => orca.log(`catalog refresh result publish failed: ${err.message}`))
 }
 
@@ -1849,6 +1986,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => attendCatalogRefreshRequest(orca, storageHost))
       .catch((error) => orca.log(`catalog refresh request handling failed: ${error.message}`))
+      .then(() => attendCatalogProposalAcceptRequest(orca, storageHost))
+      .catch((error) => orca.log(`catalog proposal accept request handling failed: ${error.message}`))
       .then(() => attendPolicySeedImportRequest(orca, storageHost))
       .catch((error) => orca.log(`policy seed import request handling failed: ${error.message}`))
       .then(() => attendPolicySeedDismissRequest(orca, storageHost))
@@ -1903,6 +2042,12 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
     .then(() => publishPolicySeedNoticeStatus(orca, storageHost))
     .catch((error) => orca.log(`initial policy seed notice status failed: ${error.message}`))
+    // JEVADV-11: computed after the catalog bootstrap above, so a
+    // freshly-seeded destination is never proposed a second time on this
+    // same activation. Fails open, same shape as every other publish in
+    // this chain -- a stuck CLI must not block activation.
+    .then(() => publishCatalogProposalsStatus(orca, storageHost))
+    .catch((error) => orca.log(`initial catalog proposals status failed: ${error.message}`))
     // Model catalog: seed once, mirror it out for the Agent hooks, then
     // check whether a newer shipped baseline has anything to offer -- same
     // three-step order as the policy chain just above, for the same reason
@@ -1987,6 +2132,7 @@ export default function activate (orca) {
 
 export {
   applyOrcaUiLanguageAtActivation,
+  attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -1996,6 +2142,8 @@ export {
   attendPolicySeedImportRequest,
   attendPolicySeedNoticeRefresh,
   attendSecretRequest,
+  CATALOG_PROPOSAL_ACCEPT_RESULT_KEY,
+  CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
   claudeIntegrationResultPayload,

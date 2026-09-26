@@ -588,7 +588,27 @@ const BASELINE = {
 const { modelMeasurements: _readyModelMeasurements, ...READY_WITHOUT_MODEL_MEASUREMENTS } = READY
 const MODELS_EMPTY = { ...READY_WITHOUT_MODEL_MEASUREMENTS, models: [] }
 
-const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY }
+/**
+ * JEVADV-11 (odd/tasks/release-0.5.1.md) -- two real client repositories
+ * "Search Orca" found that the catalog does not yet cover, each awaiting a
+ * kind choice: catalogProposalsStatus is the exact shape
+ * publishCatalogProposalsStatus (main.mjs) publishes, never a hand-typed
+ * count. Needs no click: the tick list renders straight from the status,
+ * same as `baseline` above.
+ */
+const CATALOG_PROPOSALS = {
+  ...READY,
+  catalogProposalsStatus: {
+    ok: true,
+    proposals: [
+      { id: 'cineco-backend', label: 'cineco-backend', worktreePath: '/Users/dev/Projects/cineco-backend' },
+      { id: 'myparkplanner-be', label: 'myparkplanner-be', worktreePath: '/Users/dev/Projects/myparkplanner-be' },
+    ],
+    checkedAt: iso,
+  },
+}
+
+const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'catalog-proposals': CATALOG_PROPOSALS }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */

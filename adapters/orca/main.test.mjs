@@ -31,6 +31,7 @@ after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }))
 
 const {
   applyOrcaUiLanguageAtActivation,
+  attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -40,6 +41,8 @@ const {
   attendPolicySeedImportRequest,
   attendPolicySeedNoticeRefresh,
   attendSecretRequest,
+  CATALOG_PROPOSAL_ACCEPT_RESULT_KEY,
+  CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
   claudeIntegrationResultPayload,
@@ -562,6 +565,133 @@ test('cmdRefreshCatalog: surfaces derivation-failed instead of reporting success
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'derivation-failed')
   assert.equal(result.added, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-11 (odd/tasks/release-0.5.1.md) -- cmdRefreshCatalog only ever
+// added a newly-seen worktree with `kind: "project"` hardcoded
+// (worktree_catalog.ts's deriveDestinations has nothing else to guess from),
+// which is exactly why a real client repository never got "client-site"
+// treatment: nothing ever asked. It no longer WRITES anything; it computes
+// and publishes a proposal list instead (src/core/catalog_proposals.ts's
+// deriveCatalogProposals), and a NEW request/result channel
+// (attendCatalogProposalAcceptRequest) is the only path that can add one,
+// always with a kind the person explicitly chose. Every test here injects
+// `fetchOrcaWorktrees` -- the real one shells out to `orca worktree ps`,
+// exactly the hazard T8's own tests above already guard against for
+// deriveCatalogFromOrca.
+// ---------------------------------------------------------------------------
+
+function fakeWorktreeFetch (worktrees) {
+  return async () => ({ worktrees, failure: null })
+}
+
+test('cmdRefreshCatalog: proposes an uncatalogued repository without writing it to the catalog', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
+  const result = await cmdRefreshCatalog(orca, storageHost, {
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'myparkplanner-be', path: '/Users/dev/Projects/myparkplanner-be' }])
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.proposed, 1)
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 0, 'a proposal must never be written to the catalog on its own')
+  const status = await storageHost.get(CATALOG_PROPOSALS_STATUS_KEY)
+  assert.equal(status.ok, true)
+  assert.equal(status.proposals.length, 1)
+  assert.equal(status.proposals[0].worktreePath, '/Users/dev/Projects/myparkplanner-be')
+  assert.equal('kind' in status.proposals[0], false, 'a proposal must never carry a guessed kind')
+})
+
+test('cmdRefreshCatalog: a repository the catalog already covers is never proposed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [{ id: 'cineco-frontend', label: 'cineco-frontend', kind: 'client-site', worktreePath: '/Users/dev/Projects/cineco-frontend', autonomy: {} }] }
+  })
+  const result = await cmdRefreshCatalog(orca, storageHost, {
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'cineco-frontend', path: '/Users/dev/Projects/cineco-frontend' }])
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.proposed, 0)
+})
+
+test('attendCatalogProposalAcceptRequest: an expired request publishes reason "expired"', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalogProposalAcceptRequest: { id: 'cpa-1', at: TEN_MINUTES_AGO, accepted: [] }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost)
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.id, 'cpa-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+})
+
+test('attendCatalogProposalAcceptRequest: adds only the accepted proposals, each with its chosen kind, and republishes the status', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [] },
+    catalogProposalAcceptRequest: {
+      id: 'cpa-2', at: new Date().toISOString(),
+      accepted: [{ id: 'cineco-backend', kind: 'client-site' }]
+    }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost, {
+    mirror: noopMirror,
+    fetchOrcaWorktrees: fakeWorktreeFetch([
+      { repo: 'cineco-backend', path: '/Users/dev/Projects/cineco-backend' },
+      { repo: 'myparkplanner-be', path: '/Users/dev/Projects/myparkplanner-be' }
+    ])
+  })
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.id, 'cpa-2')
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 1)
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 1)
+  assert.equal(catalog.destinations[0].kind, 'client-site')
+  assert.equal(catalog.destinations[0].worktreePath, '/Users/dev/Projects/cineco-backend')
+  // The accepted repo drops out of the republished proposal list; the other one stays.
+  const status = await storageHost.get(CATALOG_PROPOSALS_STATUS_KEY)
+  assert.deepEqual(status.proposals.map((p) => p.worktreePath), ['/Users/dev/Projects/myparkplanner-be'])
+})
+
+test('attendCatalogProposalAcceptRequest: an entry with an invalid or missing kind is skipped, never written with a guessed one', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [] },
+    catalogProposalAcceptRequest: {
+      id: 'cpa-3', at: new Date().toISOString(),
+      accepted: [{ id: 'myparkplanner-be', kind: 'not-a-real-kind' }]
+    }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost, {
+    mirror: noopMirror,
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'myparkplanner-be', path: '/Users/dev/Projects/myparkplanner-be' }])
+  })
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 0)
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 0)
+})
+
+test('attendCatalogProposalAcceptRequest: a stale proposal id (no longer in the live derivation) is ignored, not thrown', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [] },
+    catalogProposalAcceptRequest: {
+      id: 'cpa-4', at: new Date().toISOString(),
+      accepted: [{ id: 'a-repo-that-no-longer-appears', kind: 'project' }]
+    }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost, {
+    mirror: noopMirror,
+    fetchOrcaWorktrees: fakeWorktreeFetch([])
+  })
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 0)
 })
 
 test('deriveInitialCatalogIfEmpty: the "only when empty" guard leaves an already-populated catalog untouched', async () => {
