@@ -165,21 +165,23 @@ evolution" holds JEVADV-12..23.
   c6599b0. The policy stage stays authoritative (option D). Live: `git worktree
   remove` and `git branch -d` allowed at stage `local-allow`. Route: delegated
   writer.
-- [ ] **T15 — Real push shapes qualify (JEVADV-45 follow-up).** `cd <dir> &&`,
+- [x] **T15 — Real push shapes qualify (JEVADV-45 follow-up).** Done in 78c4b47. `cd <dir> &&`,
   `2>&1` and pipes into safe readers. Lane Q, in progress. Route: delegated
   writer.
 - [x] **T16 — mod-skills sees symlinked skills (JEVADV-46).** 3446994. Live:
   candidates 62 → 76; the Plane prompt picks orca-plane (0.56). Route:
   delegated writer.
-- [ ] **T17 — The cache honours policy changes (JEVADV-48).** Urgent.
-- [ ] **T18 — Policies never silently lose their kind (JEVADV-49).** Urgent.
+- [x] **T17 — The cache honours policy changes (JEVADV-48).** Done in e47f81b.
+- [x] **T18 — Policies never silently lose their kind (JEVADV-49).** Done in 495e485 and 7470d0f.
   On 2026-09-26 at 11:48Z a panel save (seed accept, before the JEVADV-42
   fix was loaded) stripped the kind of 20 of 23 stored policies. The kinds
   were restored by hand from values read earlier that day; the mirror was
   rewritten with the plugin's own writer (23 policies); 136 cache entries
   from the window were dropped.
-- [ ] **T19 — The gate advises the coding model (decision pending the
-  scenario matrix).** Evidence so far: 66 real asks and denies classified
+- [x] **T19 — The gate advises the coding model.** Done in dbb5c61..067ff19
+  (advice, prohibits hard stop, local rules, deploy floor, board). Replay of
+  151 real commands: normal work asking a person 37 → 2, harmful without at
+  least an advice 0. Evidence so far: 66 real asks and denies classified
   (41 normal, 17 harmful, 8 unsure; 5 of 12 denies were text false
   positives); a miss check found no harmful command allowed by a judgment on
   0.5.1, and one on 0.5.0 (a client PR merge on cineco-frontend); the
@@ -187,7 +189,11 @@ evolution" holds JEVADV-12..23.
   message, never routes around it, and an advice costs one turn.
   JEVADV-47 (human-facing message copy) is on hold until this decides the
   audience.
-- [ ] **T7 — Release.** Version 0.5.1, README and changelog, `npm run
+- [x] **T20 — Security: newline and `&` never hide a command (JEVADV-50).**
+  Done in d8679c4. v0.5.0 is affected.
+- [x] **T21 — Settings panel tabs (JEVADV-41).** Done in 9438b7d and ce4cb99.
+  RED 29,834px at 320px; every tab under the 8000px clamp.
+- [ ] **T7 — Release.** Version bump done (bcf73c4), README done. Version 0.5.1, README and changelog, `npm run
   check` with screenshots at 1440/768/390/320 in both themes, then the
   real-machine verification below.
 
@@ -239,8 +245,9 @@ touched.
 | `../orca-supervisor-lane-m` | `fabolivark/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-lane-g` | `fabolivark/release-0.5.1-push-own-branch` | Writer lane G (JEVADV-45) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-lane-s` | `fabolivark/release-0.5.1-skill-links` | Writer lane S (JEVADV-46) | Removed 2026-09-26 after merge |
-| `../orca-supervisor-lane-q` | `fabolivark/release-0.5.1-push-shapes` | Writer lane Q (real push shapes) | After merge |
-| `../orca-supervisor-lane-p` | `fabolivark/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | After merge |
+| `../orca-supervisor-lane-q` | `fabolivark/release-0.5.1-push-shapes` | Writer lane Q (real push shapes) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-{h,r,v,d}` | hotfix, policy safety, advise model, docs | Writer lanes | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-p` | `fabolivark/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | Removed 2026-09-26 after merge |
 | `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
 | `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | Removed after the scenario report was recorded |
 
@@ -337,7 +344,8 @@ touched.
 
 ## Next step
 
-Finish the scenario matrix, decide T19 from it, and implement it. Merge
-lane P (panel tabs) and lane Q (push shapes). Fix T17 and T18. Then the
-release verification (version bump, `npm run check` with screenshots, the
-update path) and report.
+Everything is merged at 9438b7d and pushed to draft PR #31 (suite 2711/2711,
+panels 61/61). Remaining: the owner reloads the dev plugin in Orca (computer
+use is blocked by macOS accessibility), then a live check of the Settings
+tabs, the board advise tag and the policy-kind status, then mark PR #31
+ready for review. Merge and marketplace publish are the owner's decisions.
