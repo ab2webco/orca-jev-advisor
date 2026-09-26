@@ -45,10 +45,10 @@ of a cent — not by a large model reasoning about your shell.
   git's own guarded delete/worktree operations, is allowed locally once no
   team policy is left that could still apply.
 - **Deploy and publish commands are never "local and cheap."**
-  `gh workflow run`, `npm publish`, `docker push`, a production
-  Vercel/Netlify/Fly deploy and similar are floored to at least an advice,
-  and the fact reaches Jev so a destination policy can still catch a real
-  one.
+  `gh workflow run`, `npm publish`, `docker push`, `vercel --prod`/
+  `vercel deploy`, `netlify deploy --prod`, `fly deploy` and similar are
+  floored to at least an advice, and the fact reaches Jev so a destination
+  policy can still catch a real one.
 - **The verdict cache now knows about your policies.** Its key
   fingerprints the policies that would apply and the destination's own
   ceiling override, so editing a policy invalidates any stale cached
@@ -80,15 +80,16 @@ npm test                          (silent)
 rm -rf node_modules                allowed — reversible, local and cheap
 git push --force origin main      jev · blocks: force push: rewrites the
                                    remote — anyone who already pulled breaks
-                                   (the MODEL is refused and told why; you
-                                   are only told that it happened)
+                                   (the same REFUSED text reaches the MODEL;
+                                   you see this short notice)
 gh workflow run deploy.yml        jev · advised the model: triggers a
                                    deployment workflow on GitHub Actions
                                    (one line for you; the model gets the
                                    full reason and decides)
-gh pr merge 812 --squash          jev · asks: forbidden by the team policy
-                                   client_always_asks (a person decides,
-                                   only because YOUR OWN policy names this)
+gh pr merge 812 --squash          jev · asks: client_always_asks requires
+                                   a person to decide (only because YOUR
+                                   OWN team policy names this — never the
+                                   risk judgement by itself)
 ```
 
 How often it stops a person depends entirely on what your agents do and
@@ -307,10 +308,10 @@ such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
 
 | Rule | Scope | Why |
 |------|-------|-----|
-| Force push (`--force`/`-f`, or a leading `+refspec`) | segment, mention vs command | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). A `+refspec` (`git push origin +main`) is a force push too — git's own forced-update syntax, scoped to one ref. `--force-with-lease`/`--force-if-includes` never match this rule at all: see "Local allow" below for what they qualify for instead, and a `--force-with-lease` aimed at a protected branch is still caught by the row right below. |
+| Force push (`--force`/`-f`, or a leading `+refspec`) | segment, mention vs command | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). A `+refspec` (`git push origin +main`) is a force push too — git's own forced-update syntax, scoped to one ref. `--force-with-lease`/`--force-if-includes` never match this rule at all — they don't qualify for the local allow below either, so they take the ordinary Jev path — and a `--force-with-lease` aimed at a protected branch is still caught by the row right below. |
 | Push to a protected branch (`main`/`master`/`production`) | segment, mention vs command, narrowed to a real shared remote | Same spanning-quantifier reason, plus the narrowing described further down: a push whose remote resolves to a local, non-shared repository isn't a shared-branch push at all. |
 | `rm -rf /` (or `~`/`$HOME`) | segment, mention vs command | Naming this phrase in a `grep` pattern, a quoted argument or a heredoc body is not running it — see "Three severities" below. |
-| Discarding uncommitted work (`git checkout`/`git restore`/`git reset --hard`/`git clean -f`) | command, two-level | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c`/`eval`/`su -c`/`script -c` bodies, `ssh`'s remote command and `watch`'s command first; pre-splitting again would break that extraction. `git reset --hard`/`git clean -f` used to be their own, separate, quote-blind regex — folded in here so all four subcommands get the same tokenizer and command-position discipline. The rule also reads each segment through the same mention-vs-command scan the rows above and below use, so a reset or clean spelled out through a non-shell interpreter (`python3 -c "...os.system('git reset --hard')..."`) is still caught even though the tokenizer only understands shell syntax. |
+| Discarding uncommitted work (`git checkout`/`git restore`/`git reset --hard`/`git clean -f`) | command, with a segment-level fallback | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c`/`eval`/`su -c`/`script -c` bodies, `ssh`'s remote command and `watch`'s command first; pre-splitting again would break that extraction. `git reset --hard`/`git clean -f` used to be their own, separate, quote-blind regex — folded in here so all four subcommands get the same tokenizer and command-position discipline. The rule also reads each segment through the same mention-vs-command scan the rows above and below use, so a reset or clean spelled out through a non-shell interpreter (`python3 -c "...os.system('git reset --hard')..."`) is still caught even though the tokenizer only understands shell syntax. |
 | `DROP`/`TRUNCATE TABLE`/`DATABASE`/`SCHEMA` | segment, mention vs command (a SQL client's own execute flag still denies) | `DROP TABLE` inside a `psql -c`/`mysql -e` argument is unambiguous SQL execution, not ambiguous interpreter code, so it keeps denying outright there — see "Three severities" below. |
 | `kubectl delete`/`drain` | segment, mention vs command | Same reasoning as `rm -rf` above: a mention in a script or a search pattern goes to Jev instead of stopping locally. |
 | `terraform`/`tofu apply` | segment, mention vs command | Same reasoning. |
@@ -445,20 +446,23 @@ and a team policy still gets the final say when one applies:
   `requires_human`/`prohibits` policy (*never write to main*, *a client's
   PR always needs a person*) still stops it.
 
-`--force`, `--force-with-lease` and every other push flag disqualify: they
-take the ordinary Jev path instead, where the protected-branch rule above
-still hard-stops anything aimed at `main`/`master`/`production` regardless
-of `--force-with-lease`.
+Only six push flags qualify at all — `-u`/`--set-upstream`, `-q`/`--quiet`,
+`-v`/`--verbose` — never a short cluster or a `--flag=value` form. `--force`,
+`--force-with-lease` and anything else (including `--no-verify`, which
+skips hooks) disqualify: they take the ordinary Jev path instead, where the
+protected-branch rule above still hard-stops anything aimed at
+`main`/`master`/`production`, `--force-with-lease` included.
 
 ## Deploy and publish: never "local and cheap"
 
 A command that triggers a deployment or publishes an artefact is floored
 to at least an advice, whatever the risk stage would otherwise have said.
 `gh workflow run`, `gh release create`, `npm`/`pnpm`/`yarn publish`,
-`twine upload`, `cargo publish`, `gem push`, `docker push`, a production
-Vercel/Netlify/Fly deploy, `eas submit`, a production `eas update`,
-`fastlane deliver`/`pilot`/`supply`, `helm install`/`upgrade` and
-`kubectl apply` are all recognised, in command position only — a mention
+`twine upload`, `cargo publish`, `gem push`, `docker push`, `vercel --prod`
+or `vercel deploy`, `netlify deploy --prod`, `fly deploy`, `eas submit`, an
+`eas update --branch production`, `fastlane deliver`/`pilot`/`supply`,
+`helm install`/`upgrade` and `kubectl apply` are all recognised, in
+command position only — a mention
 inside a grep pattern or a quoted argument never counts. The same fact is
 folded into the SAME state Jev already reads for the risk and policy
 questions, so a destination policy (e.g. *a client's site always asks a
