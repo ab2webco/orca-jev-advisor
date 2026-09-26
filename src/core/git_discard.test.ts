@@ -352,20 +352,53 @@ test("someSegmentMatches: a real shell/login/watch wrapper's command still denie
 // odd/tasks/release-0.5.1.md T10 (JEVADV-36): interpreter CODE strings
 // (python/node/ruby/perl/php/osascript's own "run this string" flag) commonly
 // shell out (os.system, execSync, `do shell script`, ...), so they stay
-// CODE, never data, even under the strictest ("command position only") scan
-// -- unlike a plain visible argument of some other, non-executing program,
-// which now resolves to the mention-only 'ask' tier instead (see below).
+// visible under the "command" scan, unlike a plain visible argument of some
+// other, non-executing program (the mention-only 'ask' tier, see below).
+//
+// The advise-model release changes what that severity level IS, not
+// whether the text is seen: a match that exists ONLY because this ambiguous
+// code string was visible -- gone under the STRICTEST ("command-strict")
+// scan, which hides it too -- resolves to `"code"`, not `"deny"`. The gate
+// genuinely cannot tell a real `os.system('git push --force ...')` call
+// apart from a regex classifier's own literal test string or a script
+// merely reading such a string from a file (both real false positives
+// measured live); gate-bash.ts turns `"code"` into an ADVICE to the coding
+// model rather than a hard stop, never a silent allow either.
 // ---------------------------------------------------------------------------
 
-test("someSegmentMatches: interpreter code strings deny -- they are code, not data, even though they are not shell syntax", () => {
+test("someSegmentMatches: interpreter code strings are ambiguous code, not data -- 'code' severity, not a hard 'deny'", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git push --force origin main')"`, forcePush), "deny");
-  assert.equal(someSegmentMatches(`python -c "import os; os.system('git push --force origin main')"`, forcePush), "deny");
-  assert.equal(someSegmentMatches(`node -e "require('child_process').execSync('git push --force origin main')"`, forcePush), "deny");
-  assert.equal(someSegmentMatches(`ruby -e "system('git push --force origin main')"`, forcePush), "deny");
-  assert.equal(someSegmentMatches(`perl -e "system('git push --force origin main')"`, forcePush), "deny");
-  assert.equal(someSegmentMatches(`php -r "system('git push --force origin main');"`, forcePush), "deny");
-  assert.equal(someSegmentMatches(`osascript -e "do shell script \\"git push --force origin main\\""`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git push --force origin main')"`, forcePush), "code");
+  assert.equal(someSegmentMatches(`python -c "import os; os.system('git push --force origin main')"`, forcePush), "code");
+  assert.equal(someSegmentMatches(`node -e "require('child_process').execSync('git push --force origin main')"`, forcePush), "code");
+  assert.equal(someSegmentMatches(`ruby -e "system('git push --force origin main')"`, forcePush), "code");
+  assert.equal(someSegmentMatches(`perl -e "system('git push --force origin main')"`, forcePush), "code");
+  assert.equal(someSegmentMatches(`php -r "system('git push --force origin main');"`, forcePush), "code");
+  assert.equal(someSegmentMatches(`osascript -e "do shell script \\"git push --force origin main\\""`, forcePush), "code");
+});
+
+test("someSegmentMatches: a LATER segment's real command-position match still outranks an earlier segment's 'code'", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  const command = `node -e "console.log('git push --force origin main')" && git push --force origin main`;
+  assert.equal(someSegmentMatches(command, forcePush), "deny");
+});
+
+test("someSegmentMatches: a SQL-exec position (psql -c / mysql -e) is never ambiguous -- it still denies outright", () => {
+  const dropTable = /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i;
+  assert.equal(someSegmentMatches('psql -c "DROP TABLE users"', dropTable), "deny");
+  assert.equal(someSegmentMatches('psql --command "DROP TABLE users"', dropTable), "deny");
+  assert.equal(someSegmentMatches('mysql -e "DROP TABLE users"', dropTable), "deny");
+  assert.equal(someSegmentMatches('mysql --execute "DROP TABLE users"', dropTable), "deny");
+});
+
+test("someSegmentMatches: a DROP TABLE phrase sitting in grep's own PATTERN argument is a known data position -- no match at all, not even a mention", () => {
+  const dropTable = /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i;
+  assert.equal(someSegmentMatches('grep -n "…DROP TABLE…" file', dropTable), null);
+});
+
+test("someSegmentMatches: a kubectl delete phrase sitting in grep -rn's own PATTERN argument is a known data position -- no match at all, not even a mention", () => {
+  const kubectlDelete = /kubectl\s+(delete|drain)\b/;
+  assert.equal(someSegmentMatches('grep -rn "kubectl delete" dir', kubectlDelete), null);
 });
 
 test("someSegmentMatches: a DATA position nested inside a real remote/login command still goes opaque", () => {

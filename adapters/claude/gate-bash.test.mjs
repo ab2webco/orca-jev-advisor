@@ -446,41 +446,36 @@ test('deny tier: terraform destroy is denied, not just asked', () => {
 // model and lets it pick another way. What must NOT change is the floor --
 // switching a rule off reaches `ask`, never `allow` -- so each of these now
 // asserts both halves.
-test('terraform apply denies by default, and drops to ask when its switch is off', () => {
+test('terraform apply denies by default, and drops to an advice (never a human ask) when its switch is off', () => {
   const home = makeHome()
   assert.equal(
     JSON.parse(run(home, 'terraform apply -auto-approve')).hookSpecificOutput.permissionDecision,
     'deny',
   )
   writeDenyTierConfig(home, { denyTerraformApply: false })
-  assert.equal(
-    JSON.parse(run(home, 'terraform apply -auto-approve')).hookSpecificOutput.permissionDecision,
-    'ask',
-    'switched off must reach ask, never allow',
-  )
+  const switchedOff = JSON.parse(run(home, 'terraform apply -auto-approve', { sessionId: 'session-terraform-toggle' }))
+  assert.equal(switchedOff.hookSpecificOutput.permissionDecision, 'deny', 'switched off must reach an advice, never allow')
+  assert.doesNotMatch(switchedOff.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'an advice is not a hard stop')
+  assert.match(switchedOff.hookSpecificOutput.permissionDecisionReason, /run the same command again unchanged and it will go through/)
 })
 
-test('a force push denies by default, and drops to ask when its switch is off', () => {
+test('a force push denies by default, and drops to an advice (never a human ask) when its switch is off', () => {
   const home = makeHome()
   assert.equal(
     JSON.parse(run(home, 'git push --force origin main')).hookSpecificOutput.permissionDecision,
     'deny',
   )
   writeDenyTierConfig(home, { denyForcePush: false })
-  assert.equal(
-    JSON.parse(run(home, 'git push --force origin feature/x')).hookSpecificOutput.permissionDecision,
-    'ask',
-    'switched off must reach ask, never allow',
-  )
+  const switchedOff = JSON.parse(run(home, 'git push --force origin feature/x'))
+  assert.equal(switchedOff.hookSpecificOutput.permissionDecision, 'deny', 'switched off must reach an advice, never allow')
+  assert.doesNotMatch(switchedOff.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'an advice is not a hard stop')
   // Every rule is evaluated before anything is emitted (review finding
   // R3-ask-short-circuits-later-deny): switching off the force-push rule
   // does not switch off the protected-branch rule, which still denies a
-  // push that names main.
-  assert.equal(
-    JSON.parse(run(home, 'git push --force origin main')).hookSpecificOutput.permissionDecision,
-    'deny',
-    'another rule that still denies must win over a switched-off one',
-  )
+  // push that names main -- as a real hard stop, REFUSED wording included.
+  const stillProtected = JSON.parse(run(home, 'git push --force origin main'))
+  assert.equal(stillProtected.hookSpecificOutput.permissionDecision, 'deny', 'another rule that still denies must win over a switched-off one')
+  assert.match(stillProtected.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'the still-denying rule is a real hard stop, not an advice')
 })
 
 // odd/tasks/release-0.5.1.md JEVADV-29: secret redaction (src/core/secret_
@@ -646,13 +641,18 @@ const SEGMENT_SCOPED_NOT_DENIED = [
   // any of `mentionsRatherThanRuns`' verbs saving it first).
   'gh pr comment 1 --body "we avoided git push --force"',
   'gh pr comment 1 --body "please do not push straight to main"',
+  // The advise-model release: `--force-with-lease` (bare, no remote/branch
+  // named at all, so pushProtectedRule cannot possibly catch it either) is
+  // normal rebase flow, not a forcePush hard stop -- it goes through the
+  // ordinary path instead. See the dedicated force-with-lease tests below
+  // for the feature-branch-vs-shared-branch distinction.
+  'git push --force-with-lease',
 ]
 
 const SEGMENT_SCOPED_DENIED = [
   'git push --force origin main',
   'git push -f origin main',
   'git push origin main --force',
-  'git push --force-with-lease',
   'git status && git push --force',
   'bash -c "git push --force"',
   // curlPipeShell is a mandatory `command`-scope rule (ADR-1): it matches
@@ -715,6 +715,62 @@ for (const command of SEGMENT_SCOPED_DENIED) {
     assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   })
 }
+
+// ---------------------------------------------------------------------------
+// The advise-model release, Part 2: `--force-with-lease` to your OWN
+// non-shared branch is normal rebase flow, never a forcePush hard stop;
+// pushProtectedRule (a SEPARATE rule, unrelated to which force variant is
+// used) still catches one aimed at a shared branch.
+// ---------------------------------------------------------------------------
+
+test('--force-with-lease to a feature branch is not a forcePush stop -- ordinary path, not refused', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push --force-with-lease origin feature/x'))
+  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('--force-with-lease=<ref> to a feature branch is also not a forcePush stop', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push --force-with-lease=refs/heads/feature/x origin feature/x'))
+  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('--force-with-lease to main is still stopped -- pushProtectedRule, unrelated to the force variant', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push --force-with-lease origin main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'a shared-branch push is still a real hard stop')
+})
+
+test('plain --force still hard-stops everywhere, unaffected by the --force-with-lease exception', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push --force origin feature/x'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i)
+})
+
+// ---------------------------------------------------------------------------
+// The advise-model release, Part 2: a match that comes ONLY from inline
+// interpreter code (node -e, python -c, ...) is an ADVICE, not a hard stop
+// -- the gate cannot tell executed code from data there.
+// ---------------------------------------------------------------------------
+
+test('node -e with dangerous-looking text is an advice, not a hard stop', () => {
+  const home = makeHome()
+  const command = `node -e "console.log('git push --force origin main')"`
+  const payload = JSON.parse(run(home, command, { sessionId: 'session-node-e' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'an advice is not a hard stop')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /run the same command again unchanged and it will go through/)
+})
+
+test('a real python3 -c hard reset is an advice, not a hard stop, now that interpreter code is ambiguous', () => {
+  const home = makeHome()
+  const command = `python3 -c "import os; os.system('git reset --hard')"`
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i)
+})
 
 // ---------------------------------------------------------------------------
 // forcePush: a leading `+` on a refspec IS a force push -- `git push origin
@@ -834,12 +890,13 @@ test('JEVADV-39: a remote whose url is local but whose pushurl is shared still d
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', "today's bug: reading url alone ignored pushurl, which is where this push actually goes")
 })
 
-test('deny tier: a rule switched off downgrades to ask, never to allow', () => {
+test('deny tier: a rule switched off downgrades to an advice, never to allow', () => {
   const home = makeHome()
   writeDenyTierConfig(home, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })
   const stdout = run(home, 'rm -rf /')
   const payload = JSON.parse(stdout)
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask', 'turning the switch off must downgrade to ask, never disappear into allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'turning the switch off must downgrade to an advice, never disappear into allow')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'an advice is not a hard stop')
 })
 
 test('deny tier: the other two switches are unaffected by turning one off', () => {
@@ -1086,11 +1143,14 @@ const NON_DISCARDING_COMMANDS = [
 ]
 
 for (const command of DISCARDING_COMMANDS) {
-  test(`discarding uncommitted work denies by default and drops to ask when its switch is off: ${command}`, () => {
+  test(`discarding uncommitted work denies by default and drops to an advice when its switch is off: ${command}`, () => {
     const home = makeHome()
     assert.equal(decisionFor(home, command), 'deny')
     writeDenyTierConfig(home, { denyResetClean: false })
-    assert.equal(decisionFor(home, command), 'ask', 'switched off must reach ask, never allow')
+    const stdout = run(home, command)
+    const payload = stdout === '' ? null : JSON.parse(stdout)
+    assert.equal(payload?.hookSpecificOutput.permissionDecision, 'deny', 'switched off must reach an advice, never allow')
+    assert.doesNotMatch(payload?.hookSpecificOutput.permissionDecisionReason ?? '', /REFUSED/i, 'an advice is not a hard stop')
   })
 }
 

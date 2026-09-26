@@ -560,7 +560,14 @@ function isRedirection(command: string, index: number): boolean {
 
 /** Which of the two allowlists scanSegment applies to a quoted, multi-word
  *  argument -- see the module note above. */
-type ScanMode = "command" | "visible";
+/**
+ * "command-strict" is new (the advise-model release): the same blanket
+ * hide-everything-quoted rule as "command", but WITHOUT interpreter-code
+ * positions' own exemption -- see isHiddenInMode and someSegmentMatches'
+ * own module note below for exactly why a third mode, rather than widening
+ * "command" itself.
+ */
+type ScanMode = "command" | "command-strict" | "visible";
 
 /**
  * Programs whose "run this string" flag makes its value CODE, not data --
@@ -581,6 +588,25 @@ const INTERPRETER_CODE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map
   ["osascript", new Set(["-e"])],
 ]);
 const INTERPRETER_CODE_PROGRAMS: ReadonlySet<string> = new Set(INTERPRETER_CODE_FLAGS.keys());
+
+/**
+ * Programs whose named flag's value is not code that MIGHT run a shell
+ * command (INTERPRETER_CODE_FLAGS' own ambiguity) but a SQL statement that
+ * unambiguously WILL execute, verbatim, the moment the client connects --
+ * `psql -c "..."`, `mysql -e "..."`. Unlike an interpreter's `-e`/`-c`
+ * string, there is no "maybe this is just a literal being classified or
+ * read as data" reading of a `-c`/`-e` SQL argument: the whole point of the
+ * flag is to run it. So these positions stay visible even under
+ * scanSegment's strictest ("command-strict") mode -- someSegmentMatches'
+ * dropTable rule (adapters/claude/gate-bash.ts) must keep denying
+ * `psql -c "DROP TABLE users"` outright, the same way it always has, not
+ * merely advise about it the way an ambiguous interpreter-code match does.
+ */
+const SQL_EXEC_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["psql", new Set(["-c", "--command"])],
+  ["mysql", new Set(["-e", "--execute"])],
+]);
+const SQL_EXEC_PROGRAMS: ReadonlySet<string> = new Set(SQL_EXEC_FLAGS.keys());
 
 /** One shell word of a scanned segment: its dequoted text, and whether ANY
  *  of its characters were drawn from inside a quote. */
@@ -923,11 +949,43 @@ function interpreterCodePositions(tokens: readonly ScanToken[]): ReadonlySet<num
   return positions;
 }
 
-/** Whether index `i` is hidden under `mode` -- see the module note on
- *  ScanMode above. An interpreter CODE position is never hidden, in either
- *  mode. Otherwise "command" mode hides every candidate (T8's original
- *  blanket rule); "visible" mode hides only a known DATA position. */
-function isHiddenInMode(i: number, mode: ScanMode, dataPositions: ReadonlySet<number>, codePositions: ReadonlySet<number>): boolean {
+/** The token indexes that are a SQL-exec position -- see SQL_EXEC_FLAGS' own doc comment above. Never opaque under ANY mode, including "command-strict". */
+function sqlExecPositions(tokens: readonly ScanToken[]): ReadonlySet<number> {
+  const plain = tokens.map((token) => token.text);
+  const { name: program, index: programIndex } = resolveProgram(plain, SQL_EXEC_PROGRAMS);
+  const positions = new Set<number>();
+  const flags = SQL_EXEC_FLAGS.get(program);
+  if (flags === undefined) return positions;
+  for (let j = programIndex + 1; j < plain.length; j += 1) {
+    if (flags.has(plain[j] ?? "") && j + 1 < tokens.length) positions.add(j + 1);
+  }
+  return positions;
+}
+
+/**
+ * Whether index `i` is hidden under `mode` -- see the module note on
+ * ScanMode above.
+ *   - A SQL-exec position (SQL_EXEC_FLAGS) is never hidden, in ANY mode --
+ *     not even "command-strict": there is no ambiguity to test for.
+ *   - An interpreter CODE position is never hidden under "command" or
+ *     "visible" (it really does run, just not as shell syntax), but IS
+ *     hidden under "command-strict" -- that is the whole point of the
+ *     third mode: it answers "does this pattern match even WITHOUT the
+ *     ambiguous code text", which is what tells someSegmentMatches apart a
+ *     genuine command-position match from one that exists only because an
+ *     interpreter's code string happened to spell it out.
+ *   - Otherwise "command"/"command-strict" hide every candidate (T8's
+ *     original blanket rule); "visible" hides only a known DATA position.
+ */
+function isHiddenInMode(
+  i: number,
+  mode: ScanMode,
+  dataPositions: ReadonlySet<number>,
+  codePositions: ReadonlySet<number>,
+  alwaysVisiblePositions: ReadonlySet<number>,
+): boolean {
+  if (alwaysVisiblePositions.has(i)) return false;
+  if (mode === "command-strict") return true;
   if (codePositions.has(i)) return false;
   return mode === "command" || dataPositions.has(i);
 }
@@ -960,7 +1018,8 @@ function scanTokenWithBodies(token: ScanToken, nextBody: () => string, isHidden:
 function scanTokens(tokens: readonly ScanToken[], nextBody: () => string, mode: ScanMode): string {
   const dataPositions = dataPositionIndexes(tokens);
   const codePositions = interpreterCodePositions(tokens);
-  return tokens.map((token, i) => scanTokenWithBodies(token, nextBody, isHiddenInMode(i, mode, dataPositions, codePositions))).join(" ");
+  const alwaysVisible = sqlExecPositions(tokens);
+  return tokens.map((token, i) => scanTokenWithBodies(token, nextBody, isHiddenInMode(i, mode, dataPositions, codePositions, alwaysVisible))).join(" ");
 }
 
 /**
@@ -1165,59 +1224,89 @@ export function cannotScanWithConfidence(command: string): boolean {
 }
 
 /** The result of scanning a command for one destructive pattern -- see
- *  someSegmentMatches below. `"deny"` is a match in COMMAND position (a real
- *  shell/interpreter would run it); `"ask"` is a match that exists ONLY
- *  because a quoted argument of some other, non-executing program stayed
- *  visible -- a mention, not a run, but not a KNOWN-safe data position
- *  either. `null` is no match at all (including every match sitting at a
- *  known data position, which is opaque in both scan modes and so never
- *  reaches either outcome).
+ *  someSegmentMatches below.
  *
- *  What a caller does with `"ask"` is the caller's own decision, not this
- *  module's: gate-bash.ts (JEVADV-37, odd/tasks/release-0.5.1.md) does NOT
- *  stop locally on it -- an unattended agent has nobody to answer a local
- *  ask -- it routes the command to the ordinary Jev path instead. The name
- *  stays `"ask"` here because at THIS module's level the fact being reported
- *  is still "a mention, not a run"; only the gate's response to that fact
- *  changed. */
-export type SegmentMatchSeverity = "deny" | "ask" | null;
+ *  `"deny"` is a match that survives even the strictest ("command-strict")
+ *  view: a real shell/interpreter position, or plain unquoted text, with no
+ *  dependency on an ambiguous interpreter-code string being visible.
+ *
+ *  `"code"` (the advise-model release) is a match that exists ONLY because
+ *  an interpreter-code position (INTERPRETER_CODE_FLAGS -- `node -e`,
+ *  `python -c`, ...) stayed visible: the gate cannot tell executed code from
+ *  data there (a regex classifier over literal test strings, a script that
+ *  merely reads such a string from a file, both look identical to a string
+ *  that really does shell out). Never for a SQL-exec position
+ *  (SQL_EXEC_FLAGS -- `psql -c`, `mysql -e`), which resolves to `"deny"`
+ *  exactly as before: there is no such ambiguity for a SQL client's own
+ *  execute flag.
+ *
+ *  `"ask"` is a match that exists ONLY because a quoted argument of some
+ *  other, non-executing program stayed visible -- a mention, not a run, but
+ *  not a KNOWN-safe data position either. `null` is no match at all
+ *  (including every match sitting at a known data position, which is opaque
+ *  in every scan mode and so never reaches any outcome).
+ *
+ *  What a caller does with `"code"`/`"ask"` is the caller's own decision,
+ *  not this module's: gate-bash.ts (odd/tasks/release-0.5.1.md JEVADV-37,
+ *  and the advise-model release) does NOT stop locally on either -- an
+ *  `"ask"` routes to the ordinary Jev path, and a `"code"` becomes an
+ *  advice to the coding model rather than a hard stop. */
+export type SegmentMatchSeverity = "deny" | "code" | "ask" | null;
 
 /**
  * Whether `pattern` matches `command`, and at what severity -- used by
- * gate-bash.ts's NEVER_SILENTLY loop for its two-level rules (forcePush,
- * pushProtected, resetClean; odd/tasks/release-0.5.1.md JEVADV-36). Each of
- * `command`'s segments (`splitOnCommandSeparators`) is read TWICE, once per
- * ScanMode: the strict "command" view (every quoted multi-word argument
- * hidden, except an interpreter code string) decides `"deny"`, and only when
- * that view found nothing is the looser "visible" view (today's T10
- * allowlist) checked for `"ask"`. `"visible"` never finds LESS than
- * `"command"` did (a known data position is a subset of "everything", and an
- * interpreter code position is excluded from both identically), so checking
- * "command" first and returning immediately on a hit is exact, not just an
- * optimisation.
+ * gate-bash.ts's NEVER_SILENTLY loop for its segment-scoped rules
+ * (odd/tasks/release-0.5.1.md JEVADV-36, and the advise-model release).
+ * Each of `command`'s segments (`splitOnCommandSeparators`) is read up to
+ * THREE times, once per ScanMode, from strictest to loosest:
+ *
+ *   1. "command-strict" (every quoted multi-word argument hidden, INCLUDING
+ *      an interpreter-code string): a match here is a real command-position
+ *      run with no dependency on ambiguous code text -- `"deny"`, returned
+ *      immediately (the strongest signal, so later segments cannot soften
+ *      it).
+ *   2. "command" (an interpreter-code string stays visible; a SQL-exec
+ *      position always does, in every mode): a match found HERE but not in
+ *      step 1 exists only because that ambiguous text was visible -- unless
+ *      it is a SQL-exec position, which already returned `"deny"` in step 1
+ *      (SQL_EXEC_FLAGS positions are never hidden, in ANY mode). This is
+ *      `"code"`: the segment contributes it, but scanning continues (a
+ *      LATER segment's real `"deny"` still outranks it).
+ *   3. "visible" (today's T10 allowlist: opaque only at a known DATA
+ *      position): a match found here but not in step 2 is a mention --
+ *      `"ask"`. Never checked once step 2 already found a match, since
+ *      "visible" can only find a SUPERSET of what "command" finds (a known
+ *      data position is the only extra thing "command" hides that "visible"
+ *      does not).
  *
  * A segment scanSegment cannot parse with confidence (an unbalanced quote,
  * see cannotScanWithConfidence) falls back to matching the RAW segment text
- * and resolves that match to `"deny"`, never `"ask"`: there is no position
- * to reason about at all when the parse itself failed, so this fails CLOSED
- * onto the more cautious of the two outcomes -- the same discipline
- * gate-bash.ts's own RESET_CLEAN_FALLBACK_PATTERN used to provide as a
- * separate, second disjunct; this makes that disjunct redundant (see its
- * removal in gate-bash.ts).
+ * and resolves that match to `"deny"`, never `"code"`/`"ask"`: there is no
+ * position to reason about at all when the parse itself failed, so this
+ * fails CLOSED onto the most cautious outcome.
  *
- * `pattern` is checked against every segment even after an `"ask"` is found
- * in an earlier one, because a LATER segment's `"deny"` still outranks it --
- * `severity` only ever moves from `null` to `"ask"` to `"deny"`, never back.
+ * `pattern` is checked against every segment even after a `"code"`/`"ask"`
+ * is found in an earlier one, because a LATER segment's `"deny"` still
+ * outranks it -- `severity` only ever moves up the ladder
+ * `null -> "ask" -> "code" -> "deny"`, never back down.
  */
 export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): SegmentMatchSeverity {
   let severity: SegmentMatchSeverity = null;
   for (const segment of splitOnCommandSeparators(command)) {
-    const commandView = scanSegment(segment, 0, "command");
-    if (commandView === null) {
+    const strictView = scanSegment(segment, 0, "command-strict");
+    if (strictView === null) {
       if (pattern.test(segment)) return "deny";
       continue;
     }
-    if (pattern.test(commandView)) return "deny";
+    if (pattern.test(strictView)) return "deny";
+    const commandView = scanSegment(segment, 0, "command") ?? strictView;
+    if (pattern.test(commandView)) {
+      severity = "code";
+      continue;
+    }
+    // Never downgrades an earlier segment's "code" back to "ask" -- the
+    // ladder only ever moves up (null -> ask -> code -> deny).
+    if (severity === "code") continue;
     const visibleView = scanSegment(segment, 0, "visible") ?? segment;
     if (pattern.test(visibleView)) severity = "ask";
   }

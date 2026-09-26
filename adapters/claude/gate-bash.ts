@@ -272,15 +272,19 @@ const RESET_CLEAN_RAW_PATTERN = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\
 
 /**
  * One rule's outcome: `'deny'` means "this rule's pattern matched in command
- * position" (still subject to the rule's own `denyToggle` below); `'ask'`
- * means "this rule's pattern matched, but ONLY as a mention" -- the
- * NEVER_SILENTLY loop below (JEVADV-37, odd/tasks/release-0.5.1.md) treats
- * that exactly like `null`: it is not a local-rule match at all, and the
- * command falls through to the ordinary Jev path instead of stopping
- * locally; `null` means no match at all. Both non-deny outcomes make the
+ * position" (still subject to the rule's own `denyToggle` below); `'code'`
+ * (the advise-model release) means "this rule's pattern matched, but ONLY
+ * because an ambiguous interpreter-code position was visible" -- the gate
+ * cannot tell executed code from data there, so this becomes an advice to
+ * the coding model, never a hard stop, whatever the rule's own `denyToggle`
+ * says; `'ask'` means "this rule's pattern matched, but ONLY as a mention"
+ * -- the NEVER_SILENTLY loop below (JEVADV-37, odd/tasks/release-0.5.1.md)
+ * treats that exactly like `null`: it is not a local-rule match at all, and
+ * the command falls through to the ordinary Jev path instead of stopping
+ * locally; `null` means no match at all. Every non-deny outcome makes the
  * loop move on to the next rule.
  */
-type RuleOutcome = 'deny' | 'ask' | null
+type RuleOutcome = 'deny' | 'code' | 'ask' | null
 
 /**
  * What a NEVER_SILENTLY rule's `evaluate` actually needs: the command text
@@ -431,20 +435,31 @@ const NEVER_SILENTLY: readonly {
   readonly why: GateKey
   readonly denyToggle: DenyToggleKey
 }[] = [
-  // Two-level rules (odd/tasks/release-0.5.1.md JEVADV-36): read through
-  // someSegmentMatches, which is what can return 'ask' as well as 'deny' --
-  // see segmentRule's own doc comment above.
-  { evaluate: segmentRule(/git\s+push\b.*(?:(?:--force|-f)\b|(?:^|\s)\+\S)/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
+  // Two-level rules (odd/tasks/release-0.5.1.md JEVADV-36, and the
+  // advise-model release): read through someSegmentMatches, which is what
+  // can return 'code' or 'ask' as well as 'deny' -- see segmentRule's own
+  // doc comment above. A leading `--force` NOT followed by `-with-lease`/
+  // `-if-includes`: a `--force-with-lease` rebase against your OWN,
+  // non-shared branch is normal rebase flow (pushProtectedRule below still
+  // catches one aimed at a shared branch), and plain `--force`/`-f`/a
+  // `+refspec` are unaffected.
+  { evaluate: segmentRule(/git\s+push\b.*(?:(?:--force(?!-with-lease|-if-includes)\b|-f\b)|(?:^|\s)\+\S)/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
   { evaluate: pushProtectedRule, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
-  // filesystem root.
-  { evaluate: commandRule(/rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/), why: 'rule.rmRf', denyToggle: 'denyRmRf' },
+  // filesystem root. Segment-scoped (odd/tasks, the advise-model release):
+  // a phrase inside a grep pattern, a quoted argument or a heredoc body is
+  // data, not a command -- the same mention-vs-command treatment forcePush/
+  // pushProtected/resetClean already had.
+  { evaluate: segmentRule(/rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/), why: 'rule.rmRf', denyToggle: 'denyRmRf' },
   { evaluate: resetCleanRule, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
-  // Irrecoverable without a backup nobody can assume exists.
-  { evaluate: commandRule(/\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
-  { evaluate: commandRule(/kubectl\s+(delete|drain)\b/), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
-  { evaluate: commandRule(/\b(terraform|tofu)\s+apply\b/), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
-  { evaluate: commandRule(/\b(terraform|tofu)\s+destroy\b/), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
+  // Irrecoverable without a backup nobody can assume exists. `DROP TABLE`
+  // inside a `psql -c`/`mysql -e` argument is unambiguous SQL execution, not
+  // ambiguous interpreter code -- see git_discard.ts's SQL_EXEC_FLAGS -- so
+  // it keeps denying outright, never softening to 'code'/advice.
+  { evaluate: segmentRule(/\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
+  { evaluate: segmentRule(/kubectl\s+(delete|drain)\b/), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
+  { evaluate: segmentRule(/\b(terraform|tofu)\s+apply\b/), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
+  { evaluate: segmentRule(/\b(terraform|tofu)\s+destroy\b/), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
   // This rule matches ACROSS a pipe by design -- the whole point is
   // catching a curl piped into a shell -- so it stays a plain whole-command
   // regex, never someSegmentMatches (which would silently disable it: a
@@ -1335,7 +1350,7 @@ async function main(): Promise<void> {
   // that a LATER rule denies in the same command (review finding
   // R3-ask-short-circuits-later-deny). A deny with its switch on wins
   // outright; otherwise the first downgraded-to-ask rule found speaks.
-  let firstAsk: { readonly why: GateKey } | null = null
+  let firstAdvice: { readonly why: GateKey } | null = null
   for (const { evaluate, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
     const outcome = evaluate({ command: inspected, cwd })
@@ -1351,28 +1366,42 @@ async function main(): Promise<void> {
     // `mentionOnly` guard above). A COMMAND-position match is unaffected: it
     // is still 'deny' here, never 'ask'.
     if (outcome === 'ask') continue
+    // The advise-model release: a match that exists ONLY because an
+    // interpreter-code position was visible (someSegmentMatches' own
+    // 'code' severity) is never a hard stop, whatever this rule's own
+    // deny-tier toggle says -- the gate genuinely cannot tell executed code
+    // from data there (a regex classifier over literal test strings, a
+    // script reading such a string from a file -- both real false
+    // positives). It becomes an advice, exactly like a toggled-off rule
+    // below: the FIRST rule found in NEVER_SILENTLY's own order wins,
+    // whether it got there via 'code' or via a toggled-off 'deny'.
+    if (outcome === 'code') {
+      if (firstAdvice === null) firstAdvice = { why }
+      continue
+    }
     if (readDenyTierConfig()[denyToggle]) {
       appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
       emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }))
       return
     }
-    if (firstAsk === null) firstAsk = { why }
+    if (firstAdvice === null) firstAdvice = { why }
   }
-  if (firstAsk !== null) {
-    const { why } = firstAsk
-    // A rule that would deny but whose switch was deliberately turned off
-    // drops to 'ask' -- never to 'allow'. readDenyTierConfig() fails CLOSED,
-    // so an unreadable config denies (above) exactly as a fresh install does.
-    // Recorded like any other stop, with no scores: a local rule needs no
-    // model and no threshold, so there is nothing here to calibrate -- but
-    // whether the person accepted the interruption is still worth knowing.
-    // A refusal is read by the MODEL and an ask by a PERSON, so they resolve
-    // in different languages on purpose: the ask follows the developer's
-    // chosen locale, the refusal (above) is always English.
-    appendGateRecord(cwd, command, 'local-rule', 'ask', null, 'local-rule', null)
-    appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
-    emit('ask', t('localRule', { why: t(why) }))
+  if (firstAdvice !== null) {
+    const { why } = firstAdvice
+    // The advise-model release: a rule that would deny but whose switch was
+    // deliberately turned off, or whose only match was an ambiguous
+    // interpreter-code position, is now an ADVICE to the coding model --
+    // never 'ask' (a person stopped and waiting), never 'allow'.
+    // readDenyTierConfig() fails CLOSED, so an unreadable config still
+    // denies (above) exactly as a fresh install does. resolveAdviceOutcome
+    // checks the retry pass first, same choke point every advice goes
+    // through (fresh Jev risk stage included).
+    resolveAdviceOutcome({
+      command, cwd, sessionId, toolUseId,
+      reasonsEnglish: [tEnglish(why)],
+      source: 'local-rule', stopReason: 'local-rule',
+    })
     return
   }
 
