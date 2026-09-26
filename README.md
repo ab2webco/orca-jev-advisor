@@ -86,15 +86,20 @@ command text is masked first: an `export TOKEN=…` / `NAME=value` assignment
 whose name mentions key, token, secret, password, auth, credential, private,
 sig or signature; an `Authorization: Bearer …` header; the password half of a
 `user:pass@host` URL or a `curl -u user:pass`; a known token prefix (`sk-`,
-`ghp_`, `AKIA…`, and similar); a URL's own `token=`/`access_token=`/
-`api_key=`/`password=`/`secret=`/`sig=`/`signature=` query parameter (`key=`
-only when its value also looks like a credential — long and mixed in case,
-digits or base64 punctuation, since a bare `key=` is one of the most common,
-least secret-shaped query names in ordinary traffic); and other long,
-random-looking strings that are their own standalone token. Only the value is
-replaced with a fixed marker — variable names, flags, hosts and paths stay
-exactly as written, because that structure is what the judgement reasons
-about.
+`ghp_`, `AKIA…`, `npm_`, `hf_`, `pypi-`, `shpat_`, `sq0atp-`, `rk_live_`,
+`sk_live_`, `whsec_`, `dop_v1_`, `SG.`, and similar); a webhook token embedded
+in a URL *path* (a Slack `hooks.slack.com/services/T…/B…/<token>`, a Discord
+`/api/webhooks/<id>/<token>`, a Microsoft Teams `webhook.office.com/…`) — the
+host and every id segment survive, only the token segment is masked; a URL's
+own `token=`/`access_token=`/`api_key=`/`password=`/`secret=`/`sig=`/
+`signature=` query parameter (`key=` only when its value also looks like a
+credential — long and mixed in case, digits or base64 punctuation, since a
+bare `key=` is one of the most common, least secret-shaped query names in
+ordinary traffic); an AWS secret-access-key-shaped value or a base64
+credential, even one containing a `/`; and other long, random-looking strings
+that are their own standalone token. Only the value is replaced with a fixed
+marker — variable names, flags, hosts and paths stay exactly as written,
+because that structure is what the judgement reasons about.
 
 **Precision (JEVADV-29):** a token or path segment that sits inside a
 filesystem path or a URL (a long opaque id after `/Volumes/.../claude-501/`,
@@ -102,12 +107,23 @@ Claude's own `-Users-name-Projects-repo` session-folder naming, a
 `claude.ai/code/artifact/<id>` URL) is never masked, even when it would
 otherwise look exactly like a high-entropy secret — only an explicit
 secret-named query parameter inside a URL still is. A `<word>_<uuid>` or
-`<word>_<hex>` id (`term_<uuid>`, `toolu_…`, `rctx2_<hex>`) is never masked
-either: an id references something, it does not grant access to it. Measured
-over the owner's own 70,300-command corpus, these two classes — plus URL path
-segments — accounted for the large majority of a 13.7% overall mask rate that
-was mostly false positives; `src/core/secret_redaction.test.ts` reports the
-before/after rate over a synthetic set instead of that real corpus.
+`<word>_<hex>` id (`term_<uuid>`, `rctx2_<hex>`) is never masked either: an id
+references something, it does not grant access to it.
+
+**Precision, continued (JEVADV-37):** two of those exemptions had themselves
+gone too far. A value containing a `/` is no longer assumed to be a path or
+URL just because it contains one — an AWS secret access key and a base64
+credential commonly do too, and are now masked unless the value actually
+starts with a path/URL marker (`/`, `~`, a Windows `\`, a URL scheme) or reads
+as real path segments rather than base64. And the `<word>_<alnum>` id
+exemption above now requires the suffix to actually be a UUID or lowercase
+hex — narrow enough that a real npm/Hugging Face token (also shaped
+`word_<long-mixed-case-run>`) is masked instead of exempted, at the accepted
+cost of one further false positive: a mixed-case-and-digit id that is neither
+hex nor a UUID (an Anthropic tool-call id fabricated past 32 characters) is
+now masked too, though a real one (30 characters) never reaches the
+high-entropy floor in the first place. `src/core/secret_redaction.test.ts`
+covers both classes with a synthetic set (never the owner's own corpus).
 
 This masking runs only on the copy sent to Jev. The local rules that refuse
 a force push, a recursive delete or a dropped table always judge the real,

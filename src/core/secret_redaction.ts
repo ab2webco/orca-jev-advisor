@@ -39,11 +39,21 @@
 //     real secrets shaped the same way -- a real credential glued to a path
 //     separator (an npm `sha512-...==` integrity string is the canonical
 //     example: it is never masked, even though its value is exactly the
-//     high-entropy shape this rule exists to catch) or to a short word
-//     prefix (`word_<hexstring>`) is a known, accepted false NEGATIVE --
-//     see this module's own test file, and JEVADV-29 (odd/tasks/release-
-//     0.5.1.md), which measured and fixed the opposite, over-masking
-//     direction this same lean used to still produce for both cases.
+//     high-entropy shape this rule exists to catch) is a known, accepted
+//     false NEGATIVE -- see this module's own test file.
+//   - JEVADV-37 (odd/tasks/release-0.5.1.md) found the opposite lean had
+//     itself gone too far in two places: `looksLikePathOrUrl`'s "contains a
+//     `/` anywhere" carve-out also exempted an AWS secret access key and a
+//     base64 credential that merely contain one without being a path
+//     (fixed by looksLikeBase64OrAwsSecretWithSlash, checked first), and
+//     `looksLikePrefixedId`'s "any word_<alnum-run>" exemption also
+//     exempted a real npm_/Hugging Face token, indistinguishable in shape
+//     from a genuine `word_<id>` reference (fixed by narrowing that
+//     exemption to a UUID or lowercase-hex suffix, and by masking npm_/hf_/
+//     etc. as KNOWN prefixes before that exemption ever runs). Each fix
+//     accepts one further narrow, documented false negative in exchange --
+//     see those two functions' own doc comments -- rather than reopening
+//     the over-masking this module exists to avoid.
 
 const MARKER = "[REDACTED]";
 
@@ -255,8 +265,49 @@ function redactMysqlInlinePassword(text: string): RedactSecretsResult {
 // completely rather than leaving its own tail exposed.
 // ---------------------------------------------------------------------------
 
-const KNOWN_PREFIXES = ["sk-ant-", "sk-", "ghp_", "gho_", "github_pat_", "xox[bp]-", "AKIA", "AIza", "glpat-"];
-const KNOWN_PREFIX_PATTERN = new RegExp(`\\b(?:${KNOWN_PREFIXES.join("|")})[A-Za-z0-9_-]*`, "g");
+/** Prefixes unambiguous by themselves: nothing else in an ordinary command
+ *  starts a token with one of these, so every character after the prefix
+ *  belongs to the token, whatever it is. */
+const LEGACY_KNOWN_PREFIXES = ["sk-ant-", "sk-", "ghp_", "gho_", "github_pat_", "xox[bp]-", "AKIA", "AIza", "glpat-"];
+
+/**
+ * JEVADV-37 precision fix (odd/tasks/release-0.5.1.md): unlike the legacy
+ * prefixes above, `npm_`/`hf_`/`pypi-` in particular are also ordinary NAME
+ * prefixes in real commands (`npm_config_registry`, `npm_package_version`,
+ * `hf_cache`) -- reusing LEGACY_KNOWN_PREFIXES' permissive "anything after
+ * the prefix" tail here would mask the NAME itself, corrupting exactly the
+ * structure this module exists to preserve (see the module header's
+ * STRUCTURE-SURVIVES rule, and this module's own tests). Each of these
+ * instead requires the LENGTH a real token of that shape actually has right
+ * after its prefix, with no separator allowed in the run: an ordinary name
+ * never has that many un-separated alphanumeric characters in a row, so the
+ * length alone -- not any character-class cleverness -- is what tells the
+ * two apart. Real shapes this closes, and the id-exemption hole each used to
+ * slip through (looksLikePrefixedId below, before it was narrowed): npm's
+ * own granular access token (`npm_` + 36), Hugging Face (`hf_` + 34), PyPI
+ * (`pypi-` + a long base64url upload token), Shopify (`shpat_` + 32 hex),
+ * Square (`sq0atp-` + ~22), Stripe restricted/secret live keys
+ * (`rk_live_`/`sk_live_` + 24), a Stripe/Svix webhook signing secret
+ * (`whsec_` + ~32), a DigitalOcean v1 PAT (`dop_v1_` + 64 hex), and a
+ * SendGrid key (`SG.<22>.<43>`, its own two-part shape).
+ */
+const SHAPED_KNOWN_PREFIXES = [
+  "npm_[A-Za-z0-9]{30,}",
+  "hf_[A-Za-z0-9]{30,}",
+  "pypi-[A-Za-z0-9_-]{40,}",
+  "shpat_[A-Za-z0-9]{30,}",
+  "sq0atp-[A-Za-z0-9_-]{20,}",
+  "rk_live_[A-Za-z0-9]{20,}",
+  "sk_live_[A-Za-z0-9]{20,}",
+  "whsec_[A-Za-z0-9]{20,}",
+  "dop_v1_[A-Za-z0-9]{30,}",
+  "SG\\.[A-Za-z0-9_-]{20,}\\.[A-Za-z0-9_-]{30,}",
+];
+
+const KNOWN_PREFIX_PATTERN = new RegExp(
+  `\\b(?:(?:${LEGACY_KNOWN_PREFIXES.join("|")})[A-Za-z0-9_-]*|${SHAPED_KNOWN_PREFIXES.join("|")})`,
+  "g",
+);
 
 function redactKnownPrefixTokens(text: string): RedactSecretsResult {
   let redactedCount = 0;
@@ -281,6 +332,36 @@ function redactJwtShapedStrings(text: string): RedactSecretsResult {
     redactedCount += 1;
     return MARKER;
   });
+  return { text: result, redactedCount };
+}
+
+// ---------------------------------------------------------------------------
+// Webhook tokens embedded in a URL PATH (JEVADV-37, odd/tasks/release-
+// 0.5.1.md, R1/R3-url-path-secrets-unmasked): Slack, Discord and Microsoft
+// Teams each carry the actual secret as one path SEGMENT rather than a query
+// param or an Authorization header, so none of the rules above ever see it,
+// and looksLikePathOrUrl's own carve-out (further down) would otherwise
+// leave the whole URL, secret included, untouched. Unlike that blanket
+// carve-out, the host and every structural id segment here survive; only
+// the trailing secret segment is replaced.
+// ---------------------------------------------------------------------------
+
+const SLACK_WEBHOOK_PATTERN = /(hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/)([A-Za-z0-9]{16,})/g;
+/** Discord's own webhook path shape (`discord(app).com/api/webhooks/<id>/<token>`)
+ *  and the same generic `/api/webhooks/<id>/<token>` shape other providers
+ *  reuse -- one pattern covers both, since neither cares which host it is. */
+const GENERIC_WEBHOOK_PATH_PATTERN = /(\/api\/webhooks\/[^/\s]+\/)([A-Za-z0-9_-]{20,})/g;
+const TEAMS_WEBHOOK_PATTERN = /(webhook\.office\.com\/webhookb2\/[^/\s]+\/IncomingWebhook\/)([0-9a-fA-F]{20,})/g;
+
+function redactWebhookTokens(text: string): RedactSecretsResult {
+  let redactedCount = 0;
+  let result = text;
+  for (const pattern of [SLACK_WEBHOOK_PATTERN, GENERIC_WEBHOOK_PATH_PATTERN, TEAMS_WEBHOOK_PATTERN]) {
+    result = result.replace(pattern, (_match, prefix: string) => {
+      redactedCount += 1;
+      return `${prefix}${MARKER}`;
+    });
+  }
   return { text: result, redactedCount };
 }
 
@@ -325,18 +406,55 @@ const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
  * (`token=`, `sig=`, ...) are redacted earlier, by redactAssignments, before
  * this fallback ever runs -- see that function and SECRET_NAME_SEGMENTS.
  *
- * KNOWN, ACCEPTED trade-off (unchanged direction, wider now): a base64
- * value that happens to include a `/` character (an npm `sha512-...==`
- * integrity string is the canonical example, see this module's own test
- * file) is no longer masked either. Before this fix that was a documented,
- * accepted false POSITIVE (over-masking); this is the same lean the module
- * header already commits to -- missing a real secret shaped like a path is
- * judged safer than corrupting a real path's meaning for the judgment
- * reading it -- just applied consistently instead of only at the token's
- * own start.
+ * JEVADV-37 precision fix (odd/tasks/release-0.5.1.md): this used to be the
+ * WHOLE story for anything containing a `/` -- accepted as a documented,
+ * over-masking-averse trade-off. That went too far: an AWS secret access key
+ * (40 characters of `[A-Za-z0-9/+]`) and a base64 credential both commonly
+ * contain a `/` without being a path at all, and both slipped through
+ * unmasked as a result. `looksLikeBase64OrAwsSecretWithSlash` below now runs
+ * FIRST and catches exactly that narrower shape (no `-`/`_`/`.`, no
+ * all-lowercase path-like segment, still mixed-case-and-digit); this
+ * function is what still protects an actual path or URL from it, checked
+ * ONLY once that shape check has already said no. The npm `sha512-...==`
+ * integrity string this module's own tests names stays unmasked for the
+ * same reason it always did: its leading `sha512-` disqualifies it from the
+ * new shape check (a hyphen is not in `[A-Za-z0-9+/]`), so it still falls
+ * through to here.
  */
 function looksLikePathOrUrl(value: string): boolean {
   return value.includes("/") || value.includes("\\");
+}
+
+/**
+ * JEVADV-37 (odd/tasks/release-0.5.1.md): whether a whole,
+ * already-assignment-stripped token is an AWS-secret/base64-shaped
+ * credential that merely CONTAINS a `/`, rather than a path or URL --
+ * checked before looksLikePathOrUrl's own blanket carve-out above, which
+ * this narrower rule must win against for a real secret, and lose against
+ * for a real path.
+ *
+ * A token that itself STARTS with a path/URL marker (`/`, `~`, `.`, a
+ * Windows `\`, or a URL scheme's own `scheme://`) is always a path or URL,
+ * whatever it contains after that -- checked first, so a real path is never
+ * at risk of being reclassified by the shape check below. Otherwise the
+ * WHOLE token (not a `/`-delimited run within it) must look like base64/an
+ * AWS secret: only `[A-Za-z0-9+/]` characters (no `-`, `_` or `.` -- the npm
+ * `sha512-...==` integrity value in this module's own tests fails this on
+ * its own leading `sha512-`, same as before this fix), at least 32 of them,
+ * at most two trailing `=` padding characters, and no `/`-delimited segment
+ * that is ENTIRELY lowercase letters -- a real path's own segments
+ * (`Volumes`, `uploads`, a mangled `-Users-name-Projects-repo-` run) are
+ * separator-rich, word-like text; real base64/an AWS secret mixes case and
+ * digits WITHIN a run, never reads as a dictionary word per segment. It
+ * still has to clear hasMixedCharacterClasses, same as every other
+ * high-entropy candidate.
+ */
+function looksLikeBase64OrAwsSecretWithSlash(candidate: string): boolean {
+  if (!candidate.includes("/")) return false;
+  if (/^[/~.\\]/.test(candidate) || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(candidate)) return false;
+  if (!/^[A-Za-z0-9+/]{32,}={0,2}$/.test(candidate)) return false;
+  if (candidate.split("/").some((segment) => /^[a-z]+$/.test(segment))) return false;
+  return hasMixedCharacterClasses(candidate);
 }
 
 function hasMixedCharacterClasses(candidate: string): boolean {
@@ -366,27 +484,38 @@ function looksLikeHyphenatedIdentifier(candidate: string): boolean {
 
 /**
  * JEVADV-29 precision fix, item (b): a short alnum WORD prefix, an
- * underscore, then an id-shaped suffix -- `term_<uuid>`, `toolu_<id>`,
- * `rctx2_<hex>` -- reads as a REFERENCE to something (a terminal, a tool
- * call, a request context), not a credential: an id names a thing, it does
- * not grant access to it. Measured at ~4,700 commands in the owner's own
- * corpus, the second-largest false-positive class after path segments.
+ * underscore, then an id-shaped suffix -- `term_<uuid>`, `rctx2_<hex>` --
+ * reads as a REFERENCE to something (a terminal, a request context), not a
+ * credential: an id names a thing, it does not grant access to it. Measured
+ * at ~4,700 commands in the owner's own corpus, the second-largest
+ * false-positive class after path segments.
  *
- * The suffix check is deliberately permissive (any run of letters/digits,
- * not just hex/uuid): `candidate` only ever reaches this function already
- * having cleared HIGH_ENTROPY_RUN's own 32-character floor, so a prefix
- * capped at 16 characters still leaves a substantial, structurally
- * consistent suffix -- there is little left to distinguish "some other
- * word-prefixed id shape" from the hex/uuid cases the task names by
- * example. KNOWN, ACCEPTED false negative (same lean as looksLikePathOrUrl
- * above): a real secret that happens to be shaped `word_hexstring` is
- * missed. Prefer over-matching structure to corrupting a real id's meaning.
+ * JEVADV-37 precision fix (odd/tasks/release-0.5.1.md): narrowed from "any
+ * run of letters/digits/hyphens" to only a REAL id shape -- a UUID, or a run
+ * of lowercase hex at least 8 characters long. The old, permissive suffix
+ * check could not tell `term_<uuid>`/`rctx2_<hex>` apart from
+ * `npm_<36 mixed-case chars>`/`hf_<34 mixed-case chars>` (a genuine
+ * credential) -- both are "word, underscore, alnum run" -- so a real npm/
+ * Hugging Face token slipped through this exemption unmasked. A real secret
+ * format must win that ambiguity: KNOWN_PREFIX_PATTERN above now masks
+ * npm_/hf_/etc. outright, BEFORE this function ever runs, and this
+ * exemption only covers the two id shapes the task actually names.
+ *
+ * ACCEPTED REGRESSION: a mixed-case-and-digit id that is neither hex nor a
+ * UUID (`toolu_<mixed-case alnum>`) no longer clears this bar either -- see
+ * this module's own test file for why that specific shape is judged
+ * indistinguishable from a real credential once the exemption is this
+ * narrow, and why a real Anthropic tool-call id (`toolu_01` + 22 = 30
+ * characters) is unaffected regardless: it never reaches HIGH_ENTROPY_RUN's
+ * own 32-character floor in the first place, so only a longer fabrication
+ * of that shape is masked.
  */
 function looksLikePrefixedId(candidate: string): boolean {
   const match = /^[A-Za-z][A-Za-z0-9]{0,15}_(.+)$/.exec(candidate);
   if (match === null) return false;
   const suffix = match[1] ?? "";
-  return suffix.length > 0 && /^[A-Za-z0-9-]+$/.test(suffix);
+  if (suffix.length === 0) return false;
+  return UUID_SHAPE.test(suffix) || (suffix.length >= 8 && /^[0-9a-f]+$/.test(suffix));
 }
 
 /**
@@ -409,6 +538,13 @@ function splitLeadingAssignment(token: string): { readonly prefix: string; reado
 function redactHighEntropyInToken(token: string): { readonly token: string; readonly redactedCount: number } {
   if (isAlreadyRedacted(token)) return { token, redactedCount: 0 };
   const { prefix, rest } = splitLeadingAssignment(token);
+  // JEVADV-37 (odd/tasks/release-0.5.1.md): checked BEFORE looksLikePathOrUrl
+  // below, on the same already-assignment-stripped `rest` -- an AWS secret
+  // access key or a base64 credential containing a `/` must win against the
+  // path/URL carve-out that would otherwise exempt it outright. See
+  // looksLikeBase64OrAwsSecretWithSlash's own doc comment for the shape and
+  // why a real path is never at risk of being reclassified by it.
+  if (looksLikeBase64OrAwsSecretWithSlash(rest)) return { token: `${prefix}${MARKER}`, redactedCount: 1 };
   // Checked on `rest`, AFTER the assignment prefix is split off: a path or
   // URL value on a named flag (`--cwd=/Volumes/...`) would otherwise still
   // start with the flag's own text, never `/`, `~` or a backslash -- see
@@ -457,6 +593,7 @@ const RULES: readonly ((text: string) => RedactSecretsResult)[] = [
   redactMysqlInlinePassword,
   redactKnownPrefixTokens,
   redactJwtShapedStrings,
+  redactWebhookTokens,
   redactHighEntropyTokens,
 ];
 

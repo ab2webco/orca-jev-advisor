@@ -170,6 +170,114 @@ test("known prefixes: each documented prefix is redacted as a whole token", () =
 });
 
 // ===========================================================================
+// JEVADV-37 precision fix (odd/tasks/release-0.5.1.md): looksLikePrefixedId's
+// old, permissive suffix check exempted npm_/hf_ real credentials the same
+// way it exempted a genuine reference id -- a real secret format must win
+// that ambiguity. Each new prefix below needs a length-gated tail (not the
+// legacy prefixes' "anything after it" tail): npm_/hf_/pypi- are also
+// ordinary NAME prefixes in real commands, and a shorter, mundane name must
+// never be swallowed along with a genuine token.
+// ===========================================================================
+
+test("known prefixes: npm_/hf_/pypi-/shpat_/sq0atp-/rk_live_/sk_live_/whsec_/dop_v1_/SG. are redacted as a whole token", () => {
+  const cases: readonly [string, string][] = [
+    ["mytool --token npm_aBcDeFGhIjKlMnOpQrStUvWxYzAbCdEfGhIj", "npm_"],
+    ["mytool --auth h" + "f_aBcDeFGhIjKlMnOpQrStUvWxYzAbCdEfGh", "hf_"],
+    ["pip install --index-url https://pypi.org/simple pypi-AgEIcHlwaS5vcmcCJDAxMjM0NTY3LWFiY2QtZWZnaC1pams", "pypi-"],
+    ["mytool --token shp" + "at_0123456789abcdef0123456789abcdef", "shpat_"],
+    ["mytool --token sq0" + "atp-0123456789AbCdEfGhIjKl", "sq0atp-"],
+    ["curl -H 'Authorization: Bearer rk_live_0123456789AbCdEfGhIjKl'", "rk_live_"],
+    ["curl -H 'Authorization: Bearer sk_live_0123456789AbCdEfGhIjKl'", "sk_live_"],
+    ["mytool --webhook-secret whsec_0123456789AbCdEfGhIjKlMnOp", "whsec_"],
+    ["mytool --token dop_v1_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcd", "dop_v1_"],
+    ["mytool --token SG.aBcDeFGhIjKlMnOpQrStUv.aBcDeFGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQr", "SG."],
+  ];
+  for (const [command, prefix] of cases) {
+    const result = text(command);
+    assert.ok(result.includes(MARKER), `expected a marker in the output for prefix ${prefix}: ${result}`);
+    assert.ok(!new RegExp(prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[A-Za-z0-9]").test(result), `expected the ${prefix} token to be fully replaced, not just partially, in: ${result}`);
+  }
+});
+
+test("known prefixes negative: a structural NAME using the same prefix as a real credential survives untouched", () => {
+  // npm_config_registry/npm_package_version/npm_lifecycle_event are ordinary
+  // npm-set environment variable names, not credentials; hf_cache is an
+  // ordinary Hugging Face cache directory name. Neither has anywhere near a
+  // real token's own length right after the prefix -- exactly what
+  // distinguishes them from npm_/hf_'s own KNOWN_PREFIX_PATTERN rule.
+  assert.equal(text("npm_config_registry=https://registry.npmjs.org/"), "npm_config_registry=https://registry.npmjs.org/");
+  assert.equal(text("echo $npm_package_version"), "echo $npm_package_version");
+  assert.equal(text("ls hf_cache/models"), "ls hf_cache/models");
+  assert.equal(count("npm_config_registry=https://registry.npmjs.org/"), 0);
+  assert.equal(count("ls hf_cache/models"), 0);
+});
+
+// ===========================================================================
+// JEVADV-37: an AWS secret access key and a base64 credential both commonly
+// contain a `/`, without being a path at all -- looksLikePathOrUrl's old
+// blanket "contains a slash anywhere" carve-out let both through unmasked.
+// ===========================================================================
+
+test("entropy: an AWS-secret-access-key-shaped positional argument (containing '/') is masked", () => {
+  // AWS's own published EXAMPLE secret key (never a real, live credential),
+  // used here only for its shape: 40 characters of [A-Za-z0-9/+].
+  const command = "aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+  assert.equal(text(command), "aws configure set aws_secret_access_key [REDACTED]");
+  assert.equal(count(command), 1);
+});
+
+test("entropy: a base64 credential containing '/' (not sitting in a path) is masked", () => {
+  const command = "mytool --token aB3xK9mQ7pL2vN8wZ4tY6rD1sF5g/H0jC3kM9nP2qR7sT5uV8wX1yZ3";
+  assert.equal(text(command), "mytool --token [REDACTED]");
+  assert.equal(count(command), 1);
+});
+
+test("entropy: an AWS-secret-shaped value behind a --flag=value assignment is still masked, the flag name survives", () => {
+  const command = "mytool --secret-key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+  assert.equal(text(command), "mytool --secret-key=[REDACTED]");
+});
+
+test("entropy negative: the sha512- integrity value (leading hyphen) still fails the new base64/AWS shape check the same way it fails the old one", () => {
+  const integrity = "sha512-oIPzksC78K18u7fj2CqQCu3RWH+iuZzuVaOFm4/n/Y3hoRJhqxwj5CTdMxqOWx6mp5PU2SBn/JLDLZ7SkRvzow==";
+  const command = `npm install --save foo@1.0.0 --integrity=${integrity}`;
+  assert.equal(text(command), command);
+  assert.equal(count(command), 0);
+});
+
+test("entropy negative: a Windows backslash path with a high-entropy segment is still never masked (no forward slash at all)", () => {
+  const command = "type C:\\Users\\example\\AppData\\Local\\some-app\\aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7.log";
+  assert.equal(text(command), command);
+  assert.equal(count(command), 0);
+});
+
+// ===========================================================================
+// JEVADV-37: webhook tokens embedded in a URL PATH (Slack, Discord/generic,
+// Microsoft Teams) -- none of the rules above ever see these, since the
+// secret is a path segment, not a query param or an Authorization header.
+// The host and every structural id segment survive; only the token segment
+// is replaced.
+// ===========================================================================
+
+test("webhook: a Slack incoming-webhook URL is masked, the team/bot id segments survive", () => {
+  const command = "curl -X POST https://hooks.slack" + ".com/services/T00000000/B00000000/aBcDeFGhIjKlMnOpQrStUvWx";
+  assert.equal(text(command), "curl -X POST https://hooks.slack" + ".com/services/T00000000/B00000000/[REDACTED]");
+  assert.equal(count(command), 1);
+});
+
+test("webhook: a Discord webhook URL (/api/webhooks/<id>/<token>) is masked, the numeric id survives", () => {
+  const command = "curl -X POST https://discord.com/api/webhooks/123456789012345678/aBcDeFGhIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOp1234567890";
+  assert.equal(text(command), "curl -X POST https://discord.com/api/webhooks/123456789012345678/[REDACTED]");
+  assert.equal(count(command), 1);
+});
+
+test("webhook: a Microsoft Teams incoming-webhook URL is masked", () => {
+  const command = "curl -X POST https://webhook.office.com/webhookb2/abc-123@def-456/IncomingWebhook/0123456789abcdef0123456789abcdef/00000000-0000-0000-0000-000000000000";
+  const result = text(command);
+  assert.ok(result.includes(MARKER), `expected a marker in: ${result}`);
+  assert.ok(!result.includes("0123456789abcdef0123456789abcdef"), `expected the token segment to be replaced in: ${result}`);
+});
+
+// ===========================================================================
 // JWT-shaped strings (three base64url segments, header starting eyJ)
 // ===========================================================================
 
@@ -310,10 +418,20 @@ test("id negative: a word-prefixed uuid id (term_<uuid>) is never masked", () =>
   assert.equal(count(command), 0);
 });
 
-test("id negative: a mixed alnum prefixed id (toolu_...) is never masked", () => {
+test("id regression (JEVADV-37, accepted): a mixed alnum prefixed id (toolu_...) is now masked", () => {
+  // Before this task, ANY <word>_<alnum-run> shape was exempted -- exactly
+  // what let a real npm_/hf_ credential (word prefix + a long mixed-case-
+  // and-digit run) through unmasked (see the npm_/hf_ tests below, and this
+  // module's own header). looksLikePrefixedId now exempts only a REAL id
+  // shape -- a UUID, or a run of lowercase hex -- and a mixed-case alnum
+  // suffix like this one is indistinguishable, in general, from a real
+  // credential once the exemption is narrowed that far. This is a deliberate,
+  // accepted trade-off, not an oversight: a real Anthropic tool-call id
+  // (`toolu_01` + 22 chars = 30 total) never reaches HIGH_ENTROPY_RUN's own
+  // 32-character floor in the first place, so real ids of that shape are
+  // unaffected -- only a fabrication this long is.
   const command = "orca tool trace toolu_01AbCdEfGhIjKlMnOpQrStUvWx";
-  assert.equal(text(command), command);
-  assert.equal(count(command), 0);
+  assert.ok(count(command) > 0, "accepted regression: this shape is no longer distinguishable from a real credential");
 });
 
 test("id negative: a plain UUID (already covered before this fix) still is not masked", () => {
@@ -380,10 +498,17 @@ test("url: a compound *_KEY/KEY_* name is unaffected by the bare key= nuance -- 
 });
 
 // ---------------------------------------------------------------------------
-// Synthetic before/after masked-command rate (never the owner's corpus).
+// Synthetic corpus (never the owner's corpus). R2-001 (odd/tasks/release-
+// 0.5.1.md): this used to also assert a "before/after masked-command rate"
+// with `beforeRate` hardcoded to `total / total` -- a tautology that could
+// never fail regardless of what the module actually did. Removed rather than
+// repaired honestly: this file has no access to 4d5ebe2's actual behaviour to
+// compare against (only to today's), so the only honest claim left to make
+// is the one the two loops below already make directly -- every real secret
+// is masked, every false-positive class is not.
 // ---------------------------------------------------------------------------
 
-test("synthetic corpus: every real secret is still masked, every false-positive class is not -- reports the before/after rate", () => {
+test("synthetic corpus: every real secret is still masked, every false-positive class is not", () => {
   const secrets = [
     "export TOKEN=abc123456789",
     "curl -H 'Authorization: Bearer aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7'",
@@ -392,15 +517,23 @@ test("synthetic corpus: every real secret is still masked, every false-positive 
     "mysql -uroot -pSuperSecret123 mydb",
     "export TOKEN=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789",
     "curl https://example.com/x?sig=aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7",
+    // JEVADV-37 additions: real secret formats a permissive id/path exemption used to let through.
+    "mytool --token npm_aBcDeFGhIjKlMnOpQrStUvWxYzAbCdEfGhIj",
+    "mytool --auth h" + "f_aBcDeFGhIjKlMnOpQrStUvWxYzAbCdEfGh",
+    "aws configure set aws_secret_access_key wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    "curl -X POST https://hooks.slack" + ".com/services/T00000000/B00000000/aBcDeFGhIjKlMnOpQrStUvWx",
   ];
   const falsePositives = [
     "cat /Volumes/Data/claude-tmp/claude-501/aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7/output.log",
     "cat ~/Library/Application/Support/orca/projects/-Users-example-Projects-some-repo-name/memory/MEMORY.md",
     "orca session resume rctx2_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
-    "orca tool trace toolu_01AbCdEfGhIjKlMnOpQrStUvWx",
     "docker inspect 6ba7b810-9dad-11d1-80b4-00c04fd430c8",
     "curl https://claude.ai/code/artifact/aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7",
     "curl https://example.com/search?ref=aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7",
+    // JEVADV-37: a structural NAME using the same prefix a real credential
+    // uses must survive -- see the npm_/hf_ tests below for the mechanism.
+    "npm_config_registry=https://registry.npmjs.org/",
+    "ls hf_cache/models",
   ];
   for (const command of secrets) {
     assert.ok(count(command) > 0, `expected a real secret to still be masked: ${command}`);
@@ -408,17 +541,6 @@ test("synthetic corpus: every real secret is still masked, every false-positive 
   for (const command of falsePositives) {
     assert.equal(count(command), 0, `expected no masking on a false-positive-class command: ${command}`);
   }
-  // BEFORE this fix, every one of these false positives was ALSO masked
-  // (that is the bug this task closes) -- so the "before" rate over this
-  // same synthetic set is 100%: all 14 commands had something replaced.
-  // AFTER: only the 7 real secrets do.
-  const total = secrets.length + falsePositives.length;
-  const afterMaskedCount = [...secrets, ...falsePositives].filter((c) => count(c) > 0).length;
-  assert.equal(afterMaskedCount, secrets.length, "after the fix, only the real secrets are masked");
-  const beforeRate = total / total; // every command in this set used to trigger a rule
-  const afterRate = afterMaskedCount / total;
-  assert.equal(beforeRate, 1);
-  assert.equal(afterRate, secrets.length / total);
 });
 
 // ===========================================================================
