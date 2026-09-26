@@ -62,13 +62,26 @@
  * a `<tool_relevance>` block -- it never blocks, rewrites or removes a
  * tool call, and fails open the same way. There is no listing to withhold
  * for tools, so this path never touches `pendingListingWithheld`.
+ *
+ * JEVADV-43 -- mod-skills had never actually loaded on any machine: the
+ * engine only follows `$` into a function DECLARED AT THE TOP OF THIS SAME
+ * FILE, never across an import, so every function that receives `$` lives
+ * here now, as a top-level `function` declaration, even the ones that used
+ * to live in ./runtime.ts (still imported below for the plain, `$`-free
+ * helpers it kept: computeHomePaths, parseEnvFile, and their types). The
+ * engine also requires a NAMED `export function register(on, options)`,
+ * never a default export -- see this file's own export below -- and
+ * `resolveActiveMode`/`resolveActiveToolMode` used to be closures declared
+ * INSIDE register, which is exactly the "not at the top of the file" shape
+ * the engine refuses; they are top-level functions now too, taking their
+ * cache explicitly instead of closing over it.
  */
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, On, PluginOptions, Register } from 'claude-code'
 import { callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
-import type { OrcaContext } from '../../../../src/core/orca_context.ts'
+import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import { listSkillInventory, stripSkillFrontmatter } from '../../../../src/core/skill_inventory.ts'
-import type { SkillSummary } from '../../../../src/core/skill_inventory.ts'
+import type { SkillFs, SkillFsEntry, SkillSummary } from '../../../../src/core/skill_inventory.ts'
 import {
   DEFAULT_FITS_THRESHOLD,
   DEFAULT_GATE_THRESHOLD,
@@ -83,10 +96,10 @@ import {
   shortlistOf,
 } from '../../../../src/core/skill_decisions.ts'
 import type { FitResult, SkillCandidate, SkillCandidateDetail, WideResult } from '../../../../src/core/skill_decisions.ts'
-import { buildDecisionRecord, buildObservationRecord, serializeRecord } from '../../../../src/core/skill_measurement.ts'
+import { buildDecisionRecord, buildObservationRecord, computeComparableStats, serializeRecord } from '../../../../src/core/skill_measurement.ts'
 import { shouldSamplePrompt } from '../../../../src/core/mod_skills_sampling.ts'
 import { listToolInventory } from '../../../../src/core/tool_inventory.ts'
-import type { ToolSummary } from '../../../../src/core/tool_inventory.ts'
+import type { ToolLister, ToolSummary } from '../../../../src/core/tool_inventory.ts'
 import {
   DEFAULT_FITS_THRESHOLD as TOOL_DEFAULT_FITS_THRESHOLD,
   DEFAULT_GATE_THRESHOLD as TOOL_DEFAULT_GATE_THRESHOLD,
@@ -102,13 +115,21 @@ import {
 } from '../../../../src/core/tool_decisions.ts'
 import type { FitResult as ToolFitResult, ToolCandidate, ToolCandidateDetail, WideResult as ToolWideResult } from '../../../../src/core/tool_decisions.ts'
 import { buildDecisionRecord as buildToolDecisionRecord, buildObservationRecord as buildToolObservationRecord, serializeRecord as serializeToolRecord } from '../../../../src/core/tool_measurement.ts'
-import { translate } from '../../../../src/core/i18n.ts'
+import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../../../src/core/i18n.ts'
 import type { Locale } from '../../../../src/core/i18n.ts'
 import { MOD_SKILLS_CATALOG } from '../../../../src/core/i18n_mod_skills.ts'
 import type { ModSkillsKey } from '../../../../src/core/i18n_mod_skills.ts'
 import { TOOLS_CATALOG } from '../../../../src/core/i18n_tools.ts'
 import type { ToolsKey } from '../../../../src/core/i18n_tools.ts'
-import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, measurementDecisionsToday, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from './runtime.ts'
+import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig } from '../../../../src/core/mod_skills_config.ts'
+import type { ModSkillsSwitches } from '../../../../src/core/mod_skills_config.ts'
+import { DEFAULT_MOD_SKILLS_SAMPLING_CONFIG, parseModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
+import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
+import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
+import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
+import type { JevFetch, JevFetchResponse, JevSleep } from '../../../../src/core/jev.ts'
+import { computeHomePaths, parseEnvFile } from './runtime.ts'
+import type { ModHomePaths } from './runtime.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -122,7 +143,364 @@ const DEFAULT_TOOL_SHORTLIST = 3
 const DEFAULT_TOOL_SHORT_CHARS = 160
 const DEFAULT_TOOL_FULL_CHARS = 2000
 
-export default ((on, options) => {
+// =============================================================================
+// $-taking functions -- every one of these is declared at the TOP LEVEL of
+// THIS file, per the engine's own rule (see the module doc above). They used
+// to live in ./runtime.ts; only the plain, `$`-free helpers stayed there.
+// Nothing below decides anything specific to skills or tools -- it is
+// exactly the glue ./runtime.ts's own module doc used to describe.
+// =============================================================================
+
+async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null> {
+  const [home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome] = await Promise.all([
+    $.env.get('HOME'),
+    $.env.get('USERPROFILE'),
+    $.env.get('APPDATA'),
+    $.env.get('LOCALAPPDATA'),
+    $.env.get('XDG_CONFIG_HOME'),
+    $.env.get('XDG_CACHE_HOME'),
+  ])
+  return computeHomePaths({ home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome })
+}
+
+/** The home directory alone, for building a `~/.claude/...` path -- Claude Code's own convention, unrelated to this plugin's `.config`/`.cache` choice. */
+export async function resolveHomeDir($: EngineInterface): Promise<string | null> {
+  const paths = await resolveHomePaths($)
+  return paths?.home ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Locale: the config panel's own choice, mirrored as plain text next to the
+// API key's fallback file (see src/core/i18n.ts for why this is not Orca's
+// own `contributes.languagePacks`). A mod's `$.fs` reads any absolute path
+// -- unlike the Orca worker, a hooks module carries no permission sandbox
+// of its own here -- so this reads the file directly, no sidecar needed.
+// ---------------------------------------------------------------------------
+
+export async function resolveLocale($: EngineInterface): Promise<Locale> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return DEFAULT_LOCALE
+    const path = `${paths.configDir}/locale`
+    if (!(await $.fs.exists(path))) return DEFAULT_LOCALE
+    return parseLocaleFile(await $.fs.read(path))
+  } catch {
+    return DEFAULT_LOCALE
+  }
+}
+
+// ---------------------------------------------------------------------------
+// mod-skills' own `active`/`activeTools` switches -- see
+// src/core/mod_skills_config.ts's module note (T10,
+// odd/tasks/panel-worker-wakeup.md). Read from
+// `<configDir>/mod-skills-config.json`, the same self-contained way
+// resolveLocale reads the locale file above: no node:fs/node:path, best-
+// effort, and off on any missing file, unreachable home, malformed JSON, or
+// unexpected failure. `register` below only falls back to this when
+// `options` (Claude Code's own `userConfig` channel) does not actually
+// carry a boolean for the field in question -- see resolveActiveMode/
+// resolveActiveToolMode.
+// ---------------------------------------------------------------------------
+
+export async function resolveModSkillsSwitches($: EngineInterface): Promise<ModSkillsSwitches> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return DEFAULT_MOD_SKILLS_SWITCHES
+    const path = `${paths.configDir}/mod-skills-config.json`
+    if (!(await $.fs.exists(path))) return DEFAULT_MOD_SKILLS_SWITCHES
+    return parseModSkillsConfig(await $.fs.read(path))
+  } catch {
+    return DEFAULT_MOD_SKILLS_SWITCHES
+  }
+}
+
+// ---------------------------------------------------------------------------
+// mod-skills' own sampling switch (src/core/mod_skills_sampling.ts) --
+// measurement mode's two Jev calls per prompt, sampled rather than spent on
+// every prompt of every session indefinitely. Read from
+// `<configDir>/mod-skills-sampling-config.json`, the same self-contained way
+// resolveModSkillsSwitches reads mod-skills-config.json: best-effort, and
+// falls back to DEFAULT_MOD_SKILLS_SAMPLING_CONFIG (sampling ON at a
+// reduced rate, never the old unsampled behaviour) on any missing file,
+// unreachable home, malformed JSON, or unexpected failure.
+// ---------------------------------------------------------------------------
+
+export async function resolveModSkillsSamplingConfig($: EngineInterface): Promise<ModSkillsSamplingConfig> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
+    const path = `${paths.configDir}/mod-skills-sampling-config.json`
+    if (!(await $.fs.exists(path))) return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
+    return parseModSkillsSamplingConfig(await $.fs.read(path))
+  } catch {
+    return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
+  }
+}
+
+/**
+ * How many measurement-mode decisions one of this mod's own logs
+ * (`<fileName>` under the cache dir, see appendMeasurement/
+ * appendToolMeasurement below) already holds for `today` (UTC date, e.g.
+ * "2026-09-24"), so a sampling config's daily cap means "today", not
+ * "ever" -- same date-prefix technique as gate-bash.ts's own
+ * samplesQueuedToday over the AB-benchmark queue. Only `mode:
+ * "measurement"` decisions count: active mode never goes through the
+ * sampling gate this feeds. Best-effort: an unreadable or missing log, or a
+ * hand-edited/malformed line, reads as 0 (or is skipped) and never blocks a
+ * prompt.
+ *
+ * Shared by measurementDecisionsToday (skills) and
+ * toolMeasurementDecisionsToday (tools, JEVADV-4): the two logs are
+ * counted the same tolerant way, only the file name differs.
+ */
+async function measurementDecisionsTodayIn($: EngineInterface, fileName: string, today: string): Promise<number> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return 0
+    const path = `${paths.cacheDir}/${fileName}`
+    if (!(await $.fs.exists(path))) return 0
+    const content = await $.fs.read(path)
+    let count = 0
+    for (const line of content.split('\n')) {
+      if (line.length === 0) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (typeof parsed !== 'object' || parsed === null) continue
+      const record = parsed as Record<string, unknown>
+      if (record.type === 'decision' && record.mode === 'measurement' && typeof record.at === 'string' && record.at.startsWith(today)) count += 1
+    }
+    return count
+  } catch {
+    return 0
+  }
+}
+
+/** `measurementDecisionsTodayIn` over the skill-selection log (mod-skills-measurements.jsonl). */
+export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
+  return measurementDecisionsTodayIn($, 'mod-skills-measurements.jsonl', today)
+}
+
+/**
+ * `measurementDecisionsTodayIn` over the tool-selection log
+ * (mod-tools-measurements.jsonl) -- JEVADV-4's own sampling for the
+ * tool-relevance path, which had none before: see index.ts's shared
+ * sampling decision, computed once per prompt from
+ * `Math.max(measurementDecisionsToday, toolMeasurementDecisionsToday)` so
+ * one path being in active mode (and so never writing `mode:
+ * "measurement"` rows of its own) never starves the other path's daily cap
+ * of a real count.
+ */
+export async function toolMeasurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
+  return measurementDecisionsTodayIn($, 'mod-tools-measurements.jsonl', today)
+}
+
+// ---------------------------------------------------------------------------
+// mod-skills' own readiness check (src/core/mod_skills_readiness.ts) --
+// JEVADV-4: active mode no longer silently runs "below readiness" with no
+// trace of it. This reads the skill-selection measurement log in full (the
+// same file measurementDecisionsToday reads a slice of already) and folds
+// it with computeComparableStats (src/core/skill_measurement.ts, the pure
+// half of aggregateModSkills' own decision/observation join -- that
+// aggregator is Node-only and cannot be imported here). Best-effort: an
+// unreachable home or an unreadable log reads as null ("not recorded this
+// turn"), never a thrown error; a log that exists but is merely thin or
+// empty is a real, well-defined "not-enough-samples" verdict, not a
+// failure.
+// ---------------------------------------------------------------------------
+
+export async function resolveModSkillsReadiness($: EngineInterface): Promise<ModSkillsReadiness | null> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return null
+    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
+    const rows: unknown[] = []
+    if (await $.fs.exists(path)) {
+      const content = await $.fs.read(path)
+      for (const line of content.split('\n')) {
+        if (line.length === 0) continue
+        try {
+          rows.push(JSON.parse(line))
+        } catch {
+          continue
+        }
+      }
+    }
+    return evaluateModSkillsReadiness(computeComparableStats(rows), DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS)
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Jev transport: $.http.fetch and $.clock.sleep, adapted to jev.ts's shapes
+// ---------------------------------------------------------------------------
+//
+// $.http.fetch's HttpResponse.text is already a resolved string (not a
+// method) and HttpInit takes no `signal` -- so cancellation is best-effort
+// here: callJev still races the request against its own budget through
+// the injected sleep, which is what actually bounds the wait regardless of
+// whether the underlying transport can be aborted.
+
+export function makeJevFetch($: EngineInterface): JevFetch {
+  return async (url, init) => {
+    const response = await $.http.fetch(url, { method: init.method, headers: init.headers, body: init.body })
+    const result: JevFetchResponse = { ok: response.ok, status: response.status, text: () => Promise.resolve(response.text) }
+    return result
+  }
+}
+
+export function makeJevSleep($: EngineInterface): JevSleep {
+  return (ms) => $.clock.sleep(ms)
+}
+
+// ---------------------------------------------------------------------------
+// Skill filesystem: $.fs, adapted to SkillFs
+// ---------------------------------------------------------------------------
+
+export function makeSkillFs($: EngineInterface): SkillFs {
+  return {
+    exists: (path) => $.fs.exists(path),
+    list: async (path): Promise<readonly SkillFsEntry[]> => await $.fs.list(path),
+    read: (path) => $.fs.read(path),
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool inventory: $.tool.list, adapted to ToolLister
+// ---------------------------------------------------------------------------
+
+export function makeToolLister($: EngineInterface): ToolLister {
+  return () => $.tool.list()
+}
+
+// ---------------------------------------------------------------------------
+// Orca context: $.process.run, adapted to ProcessRun, with its own short
+// budget so a hung or missing `orca` binary can never hold up a prompt --
+// resolveOrcaContext's own try/catch turns this timeout into the cwd-only
+// fallback, same as a missing binary would.
+// ---------------------------------------------------------------------------
+
+const ORCA_PROCESS_BUDGET_MS = 300
+
+export function makeProcessRun($: EngineInterface): ProcessRun {
+  return async (argv): Promise<RunResult> => {
+    const result = await Promise.race([
+      $.process.run(argv),
+      $.clock.sleep(ORCA_PROCESS_BUDGET_MS).then((): never => {
+        throw new Error(`${argv[0]} didn't respond within ${ORCA_PROCESS_BUDGET_MS}ms`)
+      }),
+    ])
+    return { exitCode: result.exitCode, stdout: result.stdout }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// API key resolution
+// ---------------------------------------------------------------------------
+//
+// src/core/secrets.ts cannot be imported here: it reads node:fs/promises,
+// node:os and node:path, none of which exist in a hooks module's
+// environment ("no DOM, no Node"). Its precedence is reproduced instead,
+// narrowed to what this environment actually has: the plugin's own option
+// (there is no `$.secrets` noun on this `$` to prefer over it), then
+// $.env.get (the process environment gate-bash.ts and the CLI tools also
+// read TYPESAFE_API_KEY from), then the same dev-only fallback file, read
+// through $.fs instead of node:fs.
+//
+// `$.env.get` is called with the LITERAL `'TYPESAFE_API_KEY'` rather than a
+// variable (JEVADV-43): the engine's own static analysis reports which env
+// vars a module reads, and it reads that name off the literal at the call
+// site, not by tracing a constant's value -- a variable here left this read
+// unrecognised. parseEnvFile (./runtime.ts) keeps its own equivalent
+// constant purely for the .env-file line scan, which never touches `$`.
+
+export async function resolveApiKey($: EngineInterface, options: PluginOptions): Promise<string | null> {
+  const fromOptions = options.typesafeApiKey
+  if (typeof fromOptions === 'string' && fromOptions.trim().length > 0) return fromOptions.trim()
+
+  const fromEnv = await $.env.get('TYPESAFE_API_KEY')
+  if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv.trim()
+
+  const paths = await resolveHomePaths($)
+  if (!paths) return null
+  const path = `${paths.configDir}/env`
+  try {
+    if (!(await $.fs.exists(path))) return null
+    return parseEnvFile(await $.fs.read(path))
+  } catch {
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Measurement logs: append-only JSONL under the user's cache dir
+// ---------------------------------------------------------------------------
+
+async function appendToFile($: EngineInterface, path: string, line: string): Promise<void> {
+  const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
+  await $.fs.write(path, existing + line)
+}
+
+export async function appendMeasurement($: EngineInterface, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/mod-skills-measurements.jsonl`, line)
+  } catch {
+    // Measurement is best-effort and must never block or fail a prompt.
+  }
+}
+
+/** Same shape as `appendMeasurement`, in its own file, for tool-selection records (src/core/tool_measurement.ts). */
+export async function appendToolMeasurement($: EngineInterface, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/mod-tools-measurements.jsonl`, line)
+  } catch {
+    // Measurement is best-effort and must never block or fail a prompt.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Active-mode switches -- hoisted out of `register` (JEVADV-43): the engine
+// refuses `$` passed into a closure declared INSIDE register, only a
+// top-level function. These take the option value already resolved from
+// `options` (null when `options` did not carry a boolean) and a small
+// mutable cache object explicitly, instead of closing over either -- the
+// cache is still created once per `register` call (once per session/reload,
+// exactly as before), just passed in rather than captured.
+// ---------------------------------------------------------------------------
+
+/** The per-session cache resolveActiveMode/resolveActiveToolMode share: `resolveModSkillsSwitches` reads the config file at most once per session, no matter how many prompts ask either question. `register` creates one fresh object per call (a fresh one on every reload, exactly like the module-level cache this replaces). */
+interface ModSkillsSwitchesCache {
+  value: ModSkillsSwitches | null;
+}
+
+async function resolveActiveMode($: EngineInterface, optionActive: boolean | null, cache: ModSkillsSwitchesCache): Promise<boolean> {
+  if (optionActive !== null) return optionActive
+  if (cache.value === null) cache.value = await resolveModSkillsSwitches($)
+  return cache.value.active
+}
+
+async function resolveActiveToolMode($: EngineInterface, optionActiveTools: boolean | null, cache: ModSkillsSwitchesCache): Promise<boolean> {
+  if (optionActiveTools !== null) return optionActiveTools
+  if (cache.value === null) cache.value = await resolveModSkillsSwitches($)
+  return cache.value.activeTools
+}
+
+// =============================================================================
+// register -- a NAMED export (JEVADV-43: the engine requires exactly this
+// shape, `export function register(on, options)`; a default export,
+// `satisfies Register`, is not enough). Everything below is orchestration:
+// which hooks exist, and in what order they call the functions above.
+// =============================================================================
+
+export function register(on: On, options: PluginOptions): void {
   const text = (key: string, fallback: string): string => (typeof options[key] === 'string' ? (options[key] as string) : fallback)
   const number = (key: string, fallback: number): number => (typeof options[key] === 'number' ? (options[key] as number) : fallback)
   const flag = (key: string, fallback: boolean): boolean => (typeof options[key] === 'boolean' ? (options[key] as boolean) : fallback)
@@ -133,28 +511,21 @@ export default ((on, options) => {
   //
   // `options.active`/`options.activeTools` only ever carry a value once a
   // manifest declares `userConfig` (see claude-code.d.ts's own note on
-  // `options`) -- nothing in this repo does, so `options` is always `{}`
-  // and these two were permanently unreachable (T10,
-  // odd/tasks/panel-worker-wakeup.md). `resolveActiveMode`/
-  // `resolveActiveToolMode` below add a second, actually-reachable source:
-  // the plugin's own config file (src/core/mod_skills_config.ts), read
-  // once per session and cached in `modSkillsSwitchesCache`. `options`
-  // still wins whenever it genuinely carries a boolean, so nothing
-  // regresses the day `userConfig` starts being populated for real.
+  // `options`) -- the manifest install-claude-integration.mjs generates for
+  // this plugin deliberately declares none (T10,
+  // odd/tasks/panel-worker-wakeup.md), so `options` is always `{}` here and
+  // these two are unreachable through it by design, not by oversight: the
+  // panel's own config file (src/core/mod_skills_config.ts, read by
+  // resolveModSkillsSwitches above) is the actual source of truth, and
+  // declaring `userConfig` for the same fields would let Claude Code's own
+  // config menu silently disagree with it. `resolveActiveMode`/
+  // `resolveActiveToolMode` above read that file once per session,
+  // cached in `modSkillsSwitchesCache` below. `options` still wins
+  // whenever it genuinely carries a boolean, so nothing regresses the day
+  // this changes.
   const optionActive = typeof options.active === 'boolean' ? (options.active as boolean) : null
   const optionActiveTools = typeof options.activeTools === 'boolean' ? (options.activeTools as boolean) : null
-  let modSkillsSwitchesCache: { active: boolean; activeTools: boolean } | null = null
-
-  const resolveActiveMode = async ($: EngineInterface): Promise<boolean> => {
-    if (optionActive !== null) return optionActive
-    if (modSkillsSwitchesCache === null) modSkillsSwitchesCache = await resolveModSkillsSwitches($)
-    return modSkillsSwitchesCache.active
-  }
-  const resolveActiveToolMode = async ($: EngineInterface): Promise<boolean> => {
-    if (optionActiveTools !== null) return optionActiveTools
-    if (modSkillsSwitchesCache === null) modSkillsSwitchesCache = await resolveModSkillsSwitches($)
-    return modSkillsSwitchesCache.activeTools
-  }
+  const modSkillsSwitchesCache: ModSkillsSwitchesCache = { value: null }
 
   const budgetMs = number('budgetMs', DEFAULT_BUDGET_MS)
   const gateThreshold = number('gateThreshold', DEFAULT_GATE_THRESHOLD)
@@ -286,7 +657,7 @@ export default ((on, options) => {
     // too -- absent whenever the branch never reached a decision).
     const skillOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
-        const activeMode = await resolveActiveMode($)
+        const activeMode = await resolveActiveMode($, optionActive, modSkillsSwitchesCache)
 
         // An unsampled measurement-mode prompt does nothing at all: no Jev
         // call, no record, exactly like today's missing-API-key branch
@@ -441,7 +812,7 @@ export default ((on, options) => {
 
     const toolOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
-        const activeToolMode = await resolveActiveToolMode($)
+        const activeToolMode = await resolveActiveToolMode($, optionActiveTools, modSkillsSwitchesCache)
 
         // JEVADV-4: the same shared roll the skill closure consults above,
         // not a second independent one -- see its own comment for why. An
@@ -597,4 +968,11 @@ export default ((on, options) => {
     }
     return next(e)
   })
-}) satisfies Register
+}
+
+// A type-level check, never executed: `register`'s own signature must keep
+// matching `Register` exactly (the engine's declared shape), so a future
+// edit that drifts from it fails typecheck here instead of failing silently
+// inside the engine.
+const _registerMatchesContract: Register = register
+void _registerMatchesContract

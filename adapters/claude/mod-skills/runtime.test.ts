@@ -14,13 +14,23 @@
 // no Node"). This is NOT run by `claude plugin test` (no fs/process there
 // either) and is NOT part of the `node --test src/core/*.test.ts` suite the
 // rest of this project's CI counts on -- it is a plain Node test file, run
-// separately, because computeHomePaths itself has no dependency on the
-// hooks sandbox.
+// separately.
+//
+// JEVADV-43: resolveModSkillsSwitches, resolveModSkillsSamplingConfig,
+// measurementDecisionsToday, toolMeasurementDecisionsToday and
+// resolveModSkillsReadiness all take `$` and moved to hooks/index.ts (the
+// engine only follows `$` into a function declared at the top of the same
+// file that receives it, never across an import) -- they are imported from
+// there now, by name, exactly as index.ts's own module doc promises. Only
+// computeHomePaths stayed in runtime.ts (it never touches `$`), so this
+// file now depends on the hooks sandbox's full module graph for its other
+// half; it is still a plain Node test file run the same way.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeHomePaths, measurementDecisionsToday, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from "./hooks/runtime.ts";
+import { computeHomePaths } from "./hooks/runtime.ts";
+import { measurementDecisionsToday, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from "./hooks/index.ts";
 
 test("returns null when neither HOME nor USERPROFILE is set", () => {
   assert.equal(computeHomePaths({}), null);

@@ -1,43 +1,34 @@
 /**
- * mod-skills — the glue between Claude Code's `$` and this mod's pure
- * `src/core` logic. Nothing here decides anything; it only adapts.
+ * mod-skills — pure, `$`-free helpers shared by hooks/index.ts.
  *
- * Kept separate from index.ts so the hook bodies read as orchestration,
- * not plumbing.
+ * Every function that takes the engine's `$` now lives in index.ts itself
+ * (JEVADV-43): the engine only follows `$` into a function declared at the
+ * TOP of the same file that receives it, never across an import, so a
+ * function taking `$` could never safely live here while index.ts called
+ * it with the real `$`. What remains here is exactly the opposite shape --
+ * plain data in, plain data out, nothing that ever sees `$` -- which is
+ * also why this file needs no `claude-code` import at all any more.
+ *
+ * Kept separate from index.ts purely for readability: these are the small
+ * pieces index.ts's own `$`-taking functions lean on (path arithmetic,
+ * quote-stripping, the `.env`-file line parser), not orchestration.
  */
-import type { EngineInterface, PluginOptions } from 'claude-code'
-import type { JevFetch, JevFetchResponse, JevSleep } from '../../../../src/core/jev.ts'
-import { DEFAULT_LOCALE, parseLocaleFile } from '../../../../src/core/i18n.ts'
-import type { Locale } from '../../../../src/core/i18n.ts'
-import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig } from '../../../../src/core/mod_skills_config.ts'
-import type { ModSkillsSwitches } from '../../../../src/core/mod_skills_config.ts'
-import { DEFAULT_MOD_SKILLS_SAMPLING_CONFIG, parseModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
-import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
-import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
-import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
-import { computeComparableStats } from '../../../../src/core/skill_measurement.ts'
-import type { ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
-import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory.ts'
-import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
 
 // ---------------------------------------------------------------------------
 // Home/config/cache directories, without node:os or node:path -- neither
-// exists in a hooks module's sandbox ("no DOM, no Node"), so this cannot
-// import src/core/paths.ts (it uses node:path) the way the Node-based
-// adapters do. `HOME` does not exist on Windows (`USERPROFILE` does); a
-// forward slash works as a path separator on Windows too, so no
-// platform-specific join is needed for the plain string concatenation
-// below -- only the `.config`/`.cache` vs `%APPDATA%`/`%LOCALAPPDATA%`/XDG
-// directory convention actually differs.
+// exists in a hooks module's sandbox ("no DOM, no Node"). `HOME` does not
+// exist on Windows (`USERPROFILE` does); a forward slash works as a path
+// separator on Windows too, so no platform-specific join is needed for the
+// plain string concatenation below -- only the `.config`/`.cache` vs
+// `%APPDATA%`/`%LOCALAPPDATA%`/XDG directory convention actually differs.
 //
 // `computeHomePaths` is the pure half (env in, paths out, no `$`), kept
-// separate from `resolveHomePaths` so it is unit-testable the same way
-// src/core/paths.ts is -- see ../runtime.test.ts, which drives it with
-// win32 and linux (XDG_* both set and unset) shapes directly, something
-// impossible while every branch here read `$.env.get(...)` itself.
+// unit-testable the same way src/core/paths.ts is -- see ../runtime.test.ts,
+// which drives it with win32 and linux (XDG_* both set and unset) shapes
+// directly.
 // ---------------------------------------------------------------------------
 
-interface ModHomePaths {
+export interface ModHomePaths {
   readonly home: string;
   readonly configDir: string;
   readonly cacheDir: string;
@@ -93,266 +84,13 @@ export function computeHomePaths(env: ModPathEnv): ModHomePaths | null {
   return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor` }
 }
 
-async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null> {
-  const [home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome] = await Promise.all([
-    $.env.get('HOME'),
-    $.env.get('USERPROFILE'),
-    $.env.get('APPDATA'),
-    $.env.get('LOCALAPPDATA'),
-    $.env.get('XDG_CONFIG_HOME'),
-    $.env.get('XDG_CACHE_HOME'),
-  ])
-  return computeHomePaths({ home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome })
-}
-
-/** The home directory alone, for building a `~/.claude/...` path -- Claude Code's own convention, unrelated to this plugin's `.config`/`.cache` choice. */
-export async function resolveHomeDir($: EngineInterface): Promise<string | null> {
-  const paths = await resolveHomePaths($)
-  return paths?.home ?? null
-}
-
 // ---------------------------------------------------------------------------
-// Locale: the config panel's own choice, mirrored as plain text next to the
-// API key's fallback file (see src/core/i18n.ts for why this is not Orca's
-// own `contributes.languagePacks`). A mod's `$.fs` reads any absolute path
-// -- unlike the Orca worker, a hooks module carries no permission sandbox
-// of its own here -- so this reads the file directly, no sidecar needed.
+// API key env-file fallback parsing -- pure text in, value out. index.ts's
+// own resolveApiKey reads `<configDir>/env` through `$.fs` and hands this
+// module the resulting text; nothing here ever touches `$`.
 // ---------------------------------------------------------------------------
 
-export async function resolveLocale($: EngineInterface): Promise<Locale> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return DEFAULT_LOCALE
-    const path = `${paths.configDir}/locale`
-    if (!(await $.fs.exists(path))) return DEFAULT_LOCALE
-    return parseLocaleFile(await $.fs.read(path))
-  } catch {
-    return DEFAULT_LOCALE
-  }
-}
-
-// ---------------------------------------------------------------------------
-// mod-skills' own `active`/`activeTools` switches -- see
-// src/core/mod_skills_config.ts's module note (T10,
-// odd/tasks/panel-worker-wakeup.md). Read from
-// `<configDir>/mod-skills-config.json`, the same self-contained way
-// resolveLocale reads the locale file above: no node:fs/node:path, best-
-// effort, and off on any missing file, unreachable home, malformed JSON, or
-// unexpected failure. `index.ts` only falls back to this when `options`
-// (Claude Code's own `userConfig` channel) does not actually carry a
-// boolean for the field in question -- see its
-// resolveActiveMode/resolveActiveToolMode.
-// ---------------------------------------------------------------------------
-
-export async function resolveModSkillsSwitches($: EngineInterface): Promise<ModSkillsSwitches> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return DEFAULT_MOD_SKILLS_SWITCHES
-    const path = `${paths.configDir}/mod-skills-config.json`
-    if (!(await $.fs.exists(path))) return DEFAULT_MOD_SKILLS_SWITCHES
-    return parseModSkillsConfig(await $.fs.read(path))
-  } catch {
-    return DEFAULT_MOD_SKILLS_SWITCHES
-  }
-}
-
-// ---------------------------------------------------------------------------
-// mod-skills' own sampling switch (src/core/mod_skills_sampling.ts) --
-// measurement mode's two Jev calls per prompt, sampled rather than spent on
-// every prompt of every session indefinitely. Read from
-// `<configDir>/mod-skills-sampling-config.json`, the same self-contained way
-// resolveModSkillsSwitches reads mod-skills-config.json: best-effort, and
-// falls back to DEFAULT_MOD_SKILLS_SAMPLING_CONFIG (sampling ON at a
-// reduced rate, never the old unsampled behaviour) on any missing file,
-// unreachable home, malformed JSON, or unexpected failure.
-// ---------------------------------------------------------------------------
-
-export async function resolveModSkillsSamplingConfig($: EngineInterface): Promise<ModSkillsSamplingConfig> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
-    const path = `${paths.configDir}/mod-skills-sampling-config.json`
-    if (!(await $.fs.exists(path))) return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
-    return parseModSkillsSamplingConfig(await $.fs.read(path))
-  } catch {
-    return DEFAULT_MOD_SKILLS_SAMPLING_CONFIG
-  }
-}
-
-/**
- * How many measurement-mode decisions one of this mod's own logs
- * (`<fileName>` under the cache dir, see appendMeasurement/
- * appendToolMeasurement below) already holds for `today` (UTC date, e.g.
- * "2026-09-24"), so a sampling config's daily cap means "today", not
- * "ever" -- same date-prefix technique as gate-bash.ts's own
- * samplesQueuedToday over the AB-benchmark queue. Only `mode:
- * "measurement"` decisions count: active mode never goes through the
- * sampling gate this feeds. Best-effort: an unreadable or missing log, or a
- * hand-edited/malformed line, reads as 0 (or is skipped) and never blocks a
- * prompt.
- *
- * Shared by measurementDecisionsToday (skills) and
- * toolMeasurementDecisionsToday (tools, JEVADV-4): the two logs are
- * counted the same tolerant way, only the file name differs.
- */
-async function measurementDecisionsTodayIn($: EngineInterface, fileName: string, today: string): Promise<number> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return 0
-    const path = `${paths.cacheDir}/${fileName}`
-    if (!(await $.fs.exists(path))) return 0
-    const content = await $.fs.read(path)
-    let count = 0
-    for (const line of content.split('\n')) {
-      if (line.length === 0) continue
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(line)
-      } catch {
-        continue
-      }
-      if (typeof parsed !== 'object' || parsed === null) continue
-      const record = parsed as Record<string, unknown>
-      if (record.type === 'decision' && record.mode === 'measurement' && typeof record.at === 'string' && record.at.startsWith(today)) count += 1
-    }
-    return count
-  } catch {
-    return 0
-  }
-}
-
-/** `measurementDecisionsTodayIn` over the skill-selection log (mod-skills-measurements.jsonl). */
-export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
-  return measurementDecisionsTodayIn($, 'mod-skills-measurements.jsonl', today)
-}
-
-/**
- * `measurementDecisionsTodayIn` over the tool-selection log
- * (mod-tools-measurements.jsonl) -- JEVADV-4's own sampling for the
- * tool-relevance path, which had none before: see index.ts's shared
- * sampling decision, computed once per prompt from
- * `Math.max(measurementDecisionsToday, toolMeasurementDecisionsToday)` so
- * one path being in active mode (and so never writing `mode:
- * "measurement"` rows of its own) never starves the other path's daily cap
- * of a real count.
- */
-export async function toolMeasurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
-  return measurementDecisionsTodayIn($, 'mod-tools-measurements.jsonl', today)
-}
-
-// ---------------------------------------------------------------------------
-// mod-skills' own readiness check (src/core/mod_skills_readiness.ts) --
-// JEVADV-4: active mode no longer silently runs "below readiness" with no
-// trace of it. This reads the skill-selection measurement log in full (the
-// same file measurementDecisionsToday reads a slice of already) and folds
-// it with computeComparableStats (src/core/skill_measurement.ts, the pure
-// half of aggregateModSkills' own decision/observation join -- that
-// aggregator is Node-only and cannot be imported here). Best-effort: an
-// unreachable home or an unreadable log reads as null ("not recorded this
-// turn"), never a thrown error; a log that exists but is merely thin or
-// empty is a real, well-defined "not-enough-samples" verdict, not a
-// failure.
-// ---------------------------------------------------------------------------
-
-export async function resolveModSkillsReadiness($: EngineInterface): Promise<ModSkillsReadiness | null> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return null
-    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
-    const rows: unknown[] = []
-    if (await $.fs.exists(path)) {
-      const content = await $.fs.read(path)
-      for (const line of content.split('\n')) {
-        if (line.length === 0) continue
-        try {
-          rows.push(JSON.parse(line))
-        } catch {
-          continue
-        }
-      }
-    }
-    return evaluateModSkillsReadiness(computeComparableStats(rows), DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS)
-  } catch {
-    return null
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Jev transport: $.http.fetch and $.clock.sleep, adapted to jev.ts's shapes
-// ---------------------------------------------------------------------------
-//
-// $.http.fetch's HttpResponse.text is already a resolved string (not a
-// method) and HttpInit takes no `signal` -- so cancellation is best-effort
-// here: callJev still races the request against its own budget through
-// the injected sleep, which is what actually bounds the wait regardless of
-// whether the underlying transport can be aborted.
-
-export function makeJevFetch($: EngineInterface): JevFetch {
-  return async (url, init) => {
-    const response = await $.http.fetch(url, { method: init.method, headers: init.headers, body: init.body })
-    const result: JevFetchResponse = { ok: response.ok, status: response.status, text: () => Promise.resolve(response.text) }
-    return result
-  }
-}
-
-export function makeJevSleep($: EngineInterface): JevSleep {
-  return (ms) => $.clock.sleep(ms)
-}
-
-// ---------------------------------------------------------------------------
-// Skill filesystem: $.fs, adapted to SkillFs
-// ---------------------------------------------------------------------------
-
-export function makeSkillFs($: EngineInterface): SkillFs {
-  return {
-    exists: (path) => $.fs.exists(path),
-    list: async (path): Promise<readonly SkillFsEntry[]> => await $.fs.list(path),
-    read: (path) => $.fs.read(path),
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tool inventory: $.tool.list, adapted to ToolLister
-// ---------------------------------------------------------------------------
-
-export function makeToolLister($: EngineInterface): ToolLister {
-  return () => $.tool.list()
-}
-
-// ---------------------------------------------------------------------------
-// Orca context: $.process.run, adapted to ProcessRun, with its own short
-// budget so a hung or missing `orca` binary can never hold up a prompt --
-// resolveOrcaContext's own try/catch turns this timeout into the cwd-only
-// fallback, same as a missing binary would.
-// ---------------------------------------------------------------------------
-
-const ORCA_PROCESS_BUDGET_MS = 300
-
-export function makeProcessRun($: EngineInterface): ProcessRun {
-  return async (argv): Promise<RunResult> => {
-    const result = await Promise.race([
-      $.process.run(argv),
-      $.clock.sleep(ORCA_PROCESS_BUDGET_MS).then((): never => {
-        throw new Error(`${argv[0]} didn't respond within ${ORCA_PROCESS_BUDGET_MS}ms`)
-      }),
-    ])
-    return { exitCode: result.exitCode, stdout: result.stdout }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// API key resolution
-// ---------------------------------------------------------------------------
-//
-// src/core/secrets.ts cannot be imported here: it reads node:fs/promises,
-// node:os and node:path, none of which exist in a hooks module's
-// environment ("no DOM, no Node"). Its precedence is reproduced instead,
-// narrowed to what this environment actually has: the plugin's own option
-// (there is no `$.secrets` noun on this `$` to prefer over it), then
-// $.env.get (the process environment gate-bash.ts and the CLI tools also
-// read TYPESAFE_API_KEY from), then the same dev-only fallback file, read
-// through $.fs instead of node:fs.
-
+/** The one key this dev-only fallback file ever looks for. Not `$`-reaching, so this stays a plain constant here rather than moving to index.ts with everything that calls `$.env.get` directly. */
 const ENV_VAR_NAME = 'TYPESAFE_API_KEY'
 
 function stripMatchingQuotes(value: string): string {
@@ -361,7 +99,7 @@ function stripMatchingQuotes(value: string): string {
   return isDoubleQuoted || isSingleQuoted ? value.slice(1, -1) : value
 }
 
-function parseEnvFile(content: string): string | null {
+export function parseEnvFile(content: string): string | null {
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trim()
     if (line.length === 0 || line.startsWith('#')) continue
@@ -373,52 +111,4 @@ function parseEnvFile(content: string): string | null {
     return value.length > 0 ? value : null
   }
   return null
-}
-
-export async function resolveApiKey($: EngineInterface, options: PluginOptions): Promise<string | null> {
-  const fromOptions = options.typesafeApiKey
-  if (typeof fromOptions === 'string' && fromOptions.trim().length > 0) return fromOptions.trim()
-
-  const fromEnv = await $.env.get(ENV_VAR_NAME)
-  if (fromEnv !== undefined && fromEnv.trim().length > 0) return fromEnv.trim()
-
-  const paths = await resolveHomePaths($)
-  if (!paths) return null
-  const path = `${paths.configDir}/env`
-  try {
-    if (!(await $.fs.exists(path))) return null
-    return parseEnvFile(await $.fs.read(path))
-  } catch {
-    return null
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Measurement logs: append-only JSONL under the user's cache dir
-// ---------------------------------------------------------------------------
-
-async function appendToFile($: EngineInterface, path: string, line: string): Promise<void> {
-  const existing = (await $.fs.exists(path)) ? await $.fs.read(path) : ''
-  await $.fs.write(path, existing + line)
-}
-
-export async function appendMeasurement($: EngineInterface, line: string): Promise<void> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return
-    await appendToFile($, `${paths.cacheDir}/mod-skills-measurements.jsonl`, line)
-  } catch {
-    // Measurement is best-effort and must never block or fail a prompt.
-  }
-}
-
-/** Same shape as `appendMeasurement`, in its own file, for tool-selection records (src/core/tool_measurement.ts). */
-export async function appendToolMeasurement($: EngineInterface, line: string): Promise<void> {
-  try {
-    const paths = await resolveHomePaths($)
-    if (!paths) return
-    await appendToFile($, `${paths.cacheDir}/mod-tools-measurements.jsonl`, line)
-  } catch {
-    // Measurement is best-effort and must never block or fail a prompt.
-  }
 }

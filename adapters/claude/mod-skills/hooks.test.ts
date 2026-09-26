@@ -28,7 +28,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import register from "./hooks/index.ts";
+import { register } from "./hooks/index.ts";
 
 // ---------------------------------------------------------------------------
 // A minimal fake of the Claude Code function-hooks host: only the `on`
