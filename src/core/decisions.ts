@@ -298,8 +298,36 @@ export function filterPoliciesForDestination(policies: readonly Policy[], destin
 /** The real members of PolicyScope, checked at runtime so an unrecognised
  *  value -- one this build predates, or one a validation gap upstream let
  *  through untouched -- resolves exactly like an absent field, never like a
- *  real, if unfamiliar, scope. */
+ *  real, if unfamiliar, scope.
+ *
+ *  This is the ONE runtime list of PolicyScope's members: policies.ts,
+ *  store.ts and gate_catalog_mirror.ts each used to carry their own copy of
+ *  it (four in total, odd/tasks/release-0.5.1.md JEVADV-36) -- every one of
+ *  them now imports {@link isPolicyScope} from here instead. */
 const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule"]);
+
+/** Whether `value` is one of PolicyScope's three real members -- the single
+ *  guard every reader of a raw, possibly-mistyped `scope` field should call,
+ *  instead of each keeping its own copy of the member list. */
+export function isPolicyScope(value: unknown): value is PolicyScope {
+  return (POLICY_SCOPE_VALUES as ReadonlySet<unknown>).has(value);
+}
+
+/**
+ * Strips an invalid `scope` from an already-shape-validated policy-like row,
+ * keeping every OTHER field untouched -- shared by every reader that
+ * resolves a row's scope (store.ts's getPolicies, gate_catalog_mirror.ts's
+ * parseMirroredPolicies, policy_seed.ts's parseSeedPolicies) instead of each
+ * rebuilding the row from its own fixed field list (id/rule/kind/
+ * destinations), which would silently drop any field added to Policy/
+ * PolicyRow later that isn't named there (odd/tasks/release-0.5.1.md
+ * JEVADV-36). A valid or absent `scope` returns `row` unchanged.
+ */
+export function withNormalizedPolicyScope<T extends { readonly scope?: PolicyScope }>(row: T): T {
+  if (row.scope === undefined || isPolicyScope(row.scope)) return row;
+  const { scope: _invalidScope, ...rest } = row;
+  return rest as T;
+}
 
 /**
  * The effective scope a policy resolves to: its own explicit `scope` when it
@@ -313,7 +341,7 @@ const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["com
  * the seed.
  */
 export function resolvePolicyScope(policy: Pick<Policy, "id" | "scope">, seedScopeById: ReadonlyMap<string, PolicyScope>): PolicyScope {
-  if (policy.scope !== undefined && POLICY_SCOPE_VALUES.has(policy.scope)) return policy.scope;
+  if (policy.scope !== undefined && isPolicyScope(policy.scope)) return policy.scope;
   return seedScopeById.get(policy.id) ?? "command";
 }
 
@@ -349,7 +377,14 @@ export function filterPoliciesForCommandScope(policies: readonly Policy[], seedS
 export function buildSeedScopeIndex(seedPolicies: readonly Pick<Policy, "id" | "scope">[]): ReadonlyMap<string, PolicyScope> {
   const byId = new Map<string, PolicyScope>();
   for (const policy of seedPolicies) {
-    if (policy.scope !== undefined) byId.set(policy.id, policy.scope);
+    // Re-checked here, not just trusted from the caller: policy_seed.ts's
+    // parseSeedPolicies already normalizes an invalid `scope` to absent
+    // (odd/tasks/release-0.5.1.md JEVADV-36), but this map is a public
+    // building block on its own -- a second, defensive check costs one line
+    // and means a caller that skips normalization degrades to "no seed scope
+    // for this id" (resolvePolicyScope's own `"command"` fallback) rather
+    // than propagating a typo'd value as though it were a real PolicyScope.
+    if (policy.scope !== undefined && isPolicyScope(policy.scope)) byId.set(policy.id, policy.scope);
   }
   return byId;
 }

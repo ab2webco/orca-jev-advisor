@@ -179,7 +179,7 @@ test("splitOutsideQuotes: unquoted parens split into segments", () => {
 
 test("someSegmentMatches: a pattern matching one segment does not match a command whose only match is in another segment", () => {
   const pattern = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches("git push origin --delete x && git branch -f main origin/main", pattern), false);
+  assert.equal(someSegmentMatches("git push origin --delete x && git branch -f main origin/main", pattern), null);
 });
 
 test("splitOnCommandSeparators: a substitution stays inside the command it feeds", () => {
@@ -212,13 +212,13 @@ test("splitOnCommandSeparators: separators split outside quotes only", () => {
 
 test("someSegmentMatches: a flag produced by a substitution still matches its push", () => {
   const pattern = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches("git push $(echo --force) origin", pattern), true);
-  assert.equal(someSegmentMatches("git push `echo -f` origin", pattern), true);
+  assert.equal(someSegmentMatches("git push $(echo --force) origin", pattern), "deny");
+  assert.equal(someSegmentMatches("git push `echo -f` origin", pattern), "deny");
 });
 
-test("someSegmentMatches: true when a segment matches", () => {
+test("someSegmentMatches: 'deny' when a segment matches in command position", () => {
   const pattern = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches("git status && git push --force origin main", pattern), true);
+  assert.equal(someSegmentMatches("git status && git push --force origin main", pattern), "deny");
 });
 
 test("startsWithGitDiscard only looks at the start of one segment", () => {
@@ -243,66 +243,69 @@ test("startsWithGitDiscard only looks at the start of one segment", () => {
 
 test("someSegmentMatches: a quoted sentence naming the pattern is not a match -- it is data, not a run", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('gh pr comment 1 --body "we avoided git push --force"', forcePush), false);
-  assert.equal(someSegmentMatches('git commit -m "build && test git push --force later"', forcePush), false);
+  assert.equal(someSegmentMatches('gh pr comment 1 --body "we avoided git push --force"', forcePush), null);
+  assert.equal(someSegmentMatches('git commit -m "build && test git push --force later"', forcePush), null);
 });
 
 test("someSegmentMatches: a quoted PROTECTED BRANCH sentence is not a match either", () => {
   const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
-  assert.equal(someSegmentMatches('gh pr comment 1 --body "please do not push straight to main"', pushProtected), false);
+  assert.equal(someSegmentMatches('gh pr comment 1 --body "please do not push straight to main"', pushProtected), null);
 });
 
-test("someSegmentMatches: a single quoted WORD still matches -- it is one word, never a sentence", () => {
+test("someSegmentMatches: a single quoted WORD still matches, in command position -- it is one word, never a sentence", () => {
   // `git push origin "main"` is still a push to main: quoting a bare branch
   // name or flag is ordinary shell usage, not descriptive text, and no
   // `\s`-spanning pattern can ever be spelled with one word alone.
   const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('git push origin "main"', pushProtected), true);
-  assert.equal(someSegmentMatches('git push origin "-f"', forcePush), true);
+  assert.equal(someSegmentMatches('git push origin "main"', pushProtected), "deny");
+  assert.equal(someSegmentMatches('git push origin "-f"', forcePush), "deny");
 });
 
-test("someSegmentMatches: the script argument of bash -c / sh -c / eval still matches, quoted or not", () => {
+test("someSegmentMatches: the script argument of bash -c / sh -c / eval still matches, quoted or not -- command position", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('bash -c "git push --force"', forcePush), true);
-  assert.equal(someSegmentMatches('sh -c "git push --force origin main"', forcePush), true);
-  assert.equal(someSegmentMatches('eval "git push --force"', forcePush), true);
+  assert.equal(someSegmentMatches('bash -c "git push --force"', forcePush), "deny");
+  assert.equal(someSegmentMatches('sh -c "git push --force origin main"', forcePush), "deny");
+  assert.equal(someSegmentMatches('eval "git push --force"', forcePush), "deny");
   // Wrapping in a subshell must not defeat the -c/eval recognition.
-  assert.equal(someSegmentMatches("(bash -c 'git push --force')", forcePush), true);
+  assert.equal(someSegmentMatches("(bash -c 'git push --force')", forcePush), "deny");
 });
 
 test("cannotScanWithConfidence: an unbalanced quote fails CLOSED onto the raw segment text", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
   assert.equal(cannotScanWithConfidence('git commit -m "git push --force'), true);
-  // Today's (quote-blind) behaviour: the raw text still matches.
-  assert.equal(someSegmentMatches('git commit -m "git push --force', forcePush), true);
+  // Unparseable input can never be resolved to the mention-only 'ask' tier
+  // (there is no reliable position to reason about at all): it fails CLOSED
+  // to 'deny', same discipline as before this task, just expressed as the
+  // stricter half of the new two-value outcome instead of a bare boolean.
+  assert.equal(someSegmentMatches('git commit -m "git push --force', forcePush), "deny");
   assert.equal(cannotScanWithConfidence("git push --force origin main"), false);
 });
 
-test("someSegmentMatches: a DOUBLE-QUOTED substitution still runs, so it stays visible", () => {
+test("someSegmentMatches: a DOUBLE-QUOTED substitution still runs, so it stays visible, in command position", () => {
   // Review finding R3: splicing the scanned body back in BEFORE tokenizing
   // left it inside the surrounding quotes, where the data placeholder
   // swallowed it -- a deny-tier bypass the old raw match never had.
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
   const pushProtected = /git\s+push\b.*\b(main|master|develop)\b/;
-  assert.equal(someSegmentMatches('git push origin "$(echo --force)"', forcePush), true);
-  assert.equal(someSegmentMatches('echo "$(git push --force origin main)"', forcePush), true);
-  assert.equal(someSegmentMatches('echo "`git push --force origin main`"', forcePush), true);
-  assert.equal(someSegmentMatches('echo "now: $(git push --force origin main) done"', forcePush), true);
-  assert.equal(someSegmentMatches('git push origin "$(printf main)"', pushProtected), true);
-  assert.equal(someSegmentMatches('bash -c "echo \\"$(git push --force)\\""', forcePush), true);
+  assert.equal(someSegmentMatches('git push origin "$(echo --force)"', forcePush), "deny");
+  assert.equal(someSegmentMatches('echo "$(git push --force origin main)"', forcePush), "deny");
+  assert.equal(someSegmentMatches('echo "`git push --force origin main`"', forcePush), "deny");
+  assert.equal(someSegmentMatches('echo "now: $(git push --force origin main) done"', forcePush), "deny");
+  assert.equal(someSegmentMatches('git push origin "$(printf main)"', pushProtected), "deny");
+  assert.equal(someSegmentMatches('bash -c "echo \\"$(git push --force)\\""', forcePush), "deny");
   // The sentence around a substitution is still data; only the body is a run.
-  assert.equal(someSegmentMatches('gh pr comment 1 --body "we avoided git push --force on $(date)"', forcePush), false);
+  assert.equal(someSegmentMatches('gh pr comment 1 --body "we avoided git push --force on $(date)"', forcePush), null);
 });
 
 test("someSegmentMatches: substitution and redirection tests above still hold with the new sanitizer", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches("git push $(echo x; echo --force) origin", forcePush), true);
-  assert.equal(someSegmentMatches("git push 2>&1 --force origin", forcePush), true);
+  assert.equal(someSegmentMatches("git push $(echo x; echo --force) origin", forcePush), "deny");
+  assert.equal(someSegmentMatches("git push 2>&1 --force origin", forcePush), "deny");
 });
 
 // ---------------------------------------------------------------------------
-// odd/tasks/release-0.5.1.md T10 (JEVADV-28): opacity is now an ALLOWLIST of
+// odd/tasks/release-0.5.1.md T10 (JEVADV-28): opacity is an ALLOWLIST of
 // known DATA positions, not every quoted multi-word argument. A command run
 // by ANOTHER program -- a remote shell, a login shell, an interpreter -- must
 // stay exactly as visible as it was in 0.5.0; only the specific arguments
@@ -312,16 +315,34 @@ test("someSegmentMatches: substitution and redirection tests above still hold wi
 // R4-quoted-remote-command-opaque.
 // ---------------------------------------------------------------------------
 
-test("someSegmentMatches: a quoted command run by another program stays visible, not opaque", () => {
+test("someSegmentMatches: a real shell/login/watch wrapper's command still denies -- command position", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
   const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
-  assert.equal(someSegmentMatches('ssh host "git push --force origin main"', forcePush), true);
-  assert.equal(someSegmentMatches('ssh host "git push origin main"', pushProtected), true);
-  assert.equal(someSegmentMatches('su -c "git push -f origin main"', forcePush), true);
-  assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git push --force origin main')"`, forcePush), true);
-  assert.equal(someSegmentMatches('watch "git push -f"', forcePush), true);
-  assert.equal(someSegmentMatches('script -c "git push -f"', forcePush), true);
-  assert.equal(someSegmentMatches(`node -e "require('child_process').execSync('git push --force origin main')"`, forcePush), true);
+  assert.equal(someSegmentMatches('ssh host "git push --force origin main"', forcePush), "deny");
+  assert.equal(someSegmentMatches('ssh host "git push origin main"', pushProtected), "deny");
+  assert.equal(someSegmentMatches('su -c "git push -f origin main"', forcePush), "deny");
+  assert.equal(someSegmentMatches('watch "git push -f"', forcePush), "deny");
+  assert.equal(someSegmentMatches('script -c "git push -f"', forcePush), "deny");
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md T10 (JEVADV-36): interpreter CODE strings
+// (python/node/ruby/perl/php/osascript's own "run this string" flag) commonly
+// shell out (os.system, execSync, `do shell script`, ...), so they stay
+// CODE, never data, even under the strictest ("command position only") scan
+// -- unlike a plain visible argument of some other, non-executing program,
+// which now resolves to the mention-only 'ask' tier instead (see below).
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: interpreter code strings deny -- they are code, not data, even though they are not shell syntax", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git push --force origin main')"`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`python -c "import os; os.system('git push --force origin main')"`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`node -e "require('child_process').execSync('git push --force origin main')"`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`ruby -e "system('git push --force origin main')"`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`perl -e "system('git push --force origin main')"`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`php -r "system('git push --force origin main');"`, forcePush), "deny");
+  assert.equal(someSegmentMatches(`osascript -e "do shell script \\"git push --force origin main\\""`, forcePush), "deny");
 });
 
 test("someSegmentMatches: a DATA position nested inside a real remote/login command still goes opaque", () => {
@@ -330,40 +351,121 @@ test("someSegmentMatches: a DATA position nested inside a real remote/login comm
   // making the outer wrapper visible would newly refuse an innocent commit
   // whose message happens to name this rule.
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('ssh host \'git commit -m "git push --force"\'', forcePush), false);
-  assert.equal(someSegmentMatches('su -c \'git commit -m "git push --force"\'', forcePush), false);
+  assert.equal(someSegmentMatches('ssh host \'git commit -m "git push --force"\'', forcePush), null);
+  assert.equal(someSegmentMatches('su -c \'git commit -m "git push --force"\'', forcePush), null);
 });
 
 test("someSegmentMatches: printf/echo text stays opaque (unchanged from T8)", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('printf \'%s\' "we should never git push --force"', forcePush), false);
-  assert.equal(someSegmentMatches("echo 'git push --force is not allowed here'", forcePush), false);
+  assert.equal(someSegmentMatches('printf \'%s\' "we should never git push --force"', forcePush), null);
+  assert.equal(someSegmentMatches("echo 'git push --force is not allowed here'", forcePush), null);
 });
 
 test("someSegmentMatches: a grep-family PATTERN argument stays opaque", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('grep -n "git push --force" README.md', forcePush), false);
-  assert.equal(someSegmentMatches('rg "git push --force" src', forcePush), false);
-  assert.equal(someSegmentMatches('grep -e "git push --force" README.md', forcePush), false);
-  // The FILE argument of grep is not a data position, but it is never
-  // quoted-multiword in practice, so this never matters in the other
-  // direction; a grep MENTION with no match still stands.
-  assert.equal(someSegmentMatches('grep -rn "restore" "git push --force src"', forcePush), true);
+  assert.equal(someSegmentMatches('grep -n "git push --force" README.md', forcePush), null);
+  assert.equal(someSegmentMatches('rg "git push --force" src', forcePush), null);
+  assert.equal(someSegmentMatches('grep -e "git push --force" README.md', forcePush), null);
+  // The FILE argument of grep is not a data position, and (odd/tasks/
+  // release-0.5.1.md JEVADV-36) is no longer command position either: it is
+  // a mention, so it now asks instead of denying.
+  assert.equal(someSegmentMatches('grep -rn "restore" "git push --force src"', forcePush), "ask");
 });
 
 test("someSegmentMatches: a data position is still recognised behind a leading subshell paren", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('(git commit -m "git push --force")', forcePush), false);
+  assert.equal(someSegmentMatches('(git commit -m "git push --force")', forcePush), null);
 });
 
 test("someSegmentMatches: ripgrep's own -t/-g/etc. value flags do not swallow the real pattern", () => {
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('rg -t ts "git push --force" src', forcePush), false);
+  assert.equal(someSegmentMatches('rg -t ts "git push --force" src', forcePush), null);
 });
 
-test("someSegmentMatches: an unrecognised program's quoted argument fails CLOSED (visible), matching 0.5.0", () => {
-  // The whole point of the allowlist inversion: an unknown program gets NO
-  // benefit of the doubt, exactly like 0.5.0.
+test("someSegmentMatches: an unrecognised program's quoted argument now ASKS instead of denying -- JEVADV-36", () => {
+  // Before this task, the allowlist inversion alone left an unknown program
+  // no benefit of the doubt and denied outright. That hard-denied a mention
+  // sitting in an argument nobody was ever going to run -- e.g. `git grep
+  // "git reset --hard"`, `sed -i 's/git reset --hard//' f` -- so it now
+  // resolves to the mention-only 'ask' tier: a person decides, instead of
+  // the model being refused outright.
   const forcePush = /git\s+push\b.*(--force|-f)\b/;
-  assert.equal(someSegmentMatches('some-unknown-tool "please never git push --force"', forcePush), true);
+  assert.equal(someSegmentMatches('some-unknown-tool "please never git push --force"', forcePush), "ask");
+});
+
+test("someSegmentMatches: sed's own script argument is a mention, not a run -- asks, JEVADV-36", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches("sed -i 's/git reset --hard//' f", resetClean), "ask");
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-36, item 1's second half: new known DATA
+// positions -- `git grep`'s pattern, `git log -S`/`-G`/`--grep`'s value, and
+// a generic set of text flags (--body/--title/--message/--description/
+// --comment/--text/--subject/--summary/--note, including their `=value`
+// forms) for ANY program, not just gh's own. `-m` stays scoped to where it
+// was already allowlisted (git commit/tag/notes, gh) -- it is far too
+// overloaded a flag letter to safely generalise.
+//
+// SPEC NOTE: this makes `git grep "git reset --hard"` and `git log -S
+// "git reset --hard"` resolve to ALLOW-or-Jev (no local-rule match at all),
+// not to the 'ask' tier -- see this task's own report for why: making them
+// a known data position and also asking about them is not a coherent
+// combination (a known-safe position is, by definition, never visible to
+// the pattern at all), and a bare top-level `grep`'s pattern already
+// resolved the same way before this task (see the "grep-family PATTERN
+// argument stays opaque" test above) -- treating `git grep` differently
+// from `grep` would have been the inconsistency.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: git grep's pattern is a known data position -- no match at all, not even ask", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('git grep "git reset --hard"', resetClean), null);
+});
+
+test("someSegmentMatches: git log -S/-G/--grep's value is a known data position", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('git log -S "git reset --hard"', resetClean), null);
+  assert.equal(someSegmentMatches('git log -G "git reset --hard"', resetClean), null);
+  assert.equal(someSegmentMatches('git log --grep "git reset --hard"', resetClean), null);
+});
+
+test("someSegmentMatches: a generic text flag on ANY program is a known data position, space-separated or =value", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('orca plane create --body "plan: run git reset --hard origin/main next"', resetClean), null);
+  assert.equal(someSegmentMatches('orca plane create --body="plan: run git reset --hard origin/main next"', resetClean), null);
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('gh issue create --title "avoid a force push"', forcePush), null);
+  for (const flag of ["--description", "--comment", "--text", "--subject", "--summary", "--note"]) {
+    assert.equal(
+      someSegmentMatches(`some-tool ${flag} "reminder: never git reset --hard here"`, resetClean),
+      null,
+      `expected ${flag} to be a known data position`,
+    );
+  }
+});
+
+test("someSegmentMatches: -m stays scoped to where it was already allowlisted -- not generalised to every program", () => {
+  // some-tool's -m is NOT one of git commit/tag/notes' or gh's own message
+  // flags, so it must stay visible (and therefore a mention, not silence).
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('some-tool -m "reminder: never git reset --hard here"', resetClean), "ask");
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-36, item 2: a wrapper name (`ssh`,
+// `watch`, `su`, `script`, a shell, `eval`) must be recognised only at a
+// segment's COMMAND position (the resolved program, following wrappers like
+// `sudo`/`env`) -- never as an arbitrary LATER token, e.g. a plain word
+// inside some other program's own argument.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: a wrapper NAME appearing only as another program's own argument is not treated as that wrapper", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  // "watch" here is grep's own (unquoted) search pattern argument, not a
+  // command -- it must not make grep's FOLLOWING argument (the actual
+  // destructive-looking text) look like watch's own command line. It is
+  // still a visible mention of the phrase, though, so this asks rather than
+  // silently allowing.
+  assert.equal(someSegmentMatches('grep -n watch "…git reset --hard…" f', resetClean), "ask");
 });

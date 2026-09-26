@@ -454,7 +454,54 @@ function isRedirection(command: string, index: number): boolean {
 // note for why (a command run by ANOTHER program, e.g. `ssh host "git push
 // --force origin main"`, looked identical to a shell running something
 // quoted, and T8's blanket rule hid it).
+//
+// JEVADV-36 (odd/tasks/release-0.5.1.md T10 review-3 follow-ups) refines
+// T10's binary opaque/visible split into three outcomes a caller can act on
+// differently: a match in COMMAND POSITION still denies; a match that
+// exists ONLY because a quoted argument of some OTHER, non-executing
+// program stayed visible (not a known data position, not code) now ASKS
+// instead -- a person decides, rather than the model being refused outright
+// for a phrase nobody was ever going to run; and a known data position stays
+// fully opaque (no match at all). `scanSegment` is scanned TWICE per
+// segment, once per `ScanMode`:
+//   - "command": the strict view -- every quoted multi-word argument is
+//     opaque (T8's original blanket rule), EXCEPT an interpreter CODE
+//     string (see INTERPRETER_CODE_FLAGS below), which commonly shells out
+//     and so stays visible even here.
+//   - "visible": today's T10 allowlist -- opaque only at a known DATA
+//     position (dataPositionIndexes), visible everywhere else.
+// A match surviving the strict "command" view is real command-position
+// text (recursion into `bash -c`/`eval`/`ssh`/`su -c`/`script -c`/`watch`
+// behaves identically in both modes, since that text really does run); a
+// match that only shows up under "visible" is a mention. Recursion depth,
+// substitution/quote-balance failures and everything else about WHETHER a
+// segment can be scanned at all does not depend on the mode -- only which
+// already-successfully-parsed tokens the mode hides.
 // ---------------------------------------------------------------------------
+
+/** Which of the two allowlists scanSegment applies to a quoted, multi-word
+ *  argument -- see the module note above. */
+type ScanMode = "command" | "visible";
+
+/**
+ * Programs whose "run this string" flag makes its value CODE, not data --
+ * `python3 -c '...'`, `node -e '...'`, `osascript -e '...'`, etc. These
+ * commonly shell out (`os.system`, `execSync`, `do shell script`, ...), so
+ * unlike a plain argument to some other, non-executing program, this stays
+ * visible even under the strictest ("command") scan mode -- it is not
+ * recursively re-parsed as shell syntax (it is not shell syntax), it is
+ * simply never hidden.
+ */
+const INTERPRETER_CODE_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["python", new Set(["-c"])],
+  ["python3", new Set(["-c"])],
+  ["node", new Set(["-e", "-p", "--eval"])],
+  ["ruby", new Set(["-e"])],
+  ["perl", new Set(["-e", "-E"])],
+  ["php", new Set(["-r"])],
+  ["osascript", new Set(["-e"])],
+]);
+const INTERPRETER_CODE_PROGRAMS: ReadonlySet<string> = new Set(INTERPRETER_CODE_FLAGS.keys());
 
 /** One shell word of a scanned segment: its dequoted text, and whether ANY
  *  of its characters were drawn from inside a quote. */
@@ -632,6 +679,14 @@ const GREP_OTHER_VALUE_FLAGS = new Set([
 const JQ_ONE_VALUE_FLAGS = new Set(["-f", "--from-file", "--slurpfile", "--rawfile"]);
 const JQ_TWO_VALUE_FLAGS = new Set(["--arg", "--argjson"]);
 
+/** `git log`'s own history-search flags: `-S<string>`/`-G<regex>` (the
+ *  pickaxe) and `--grep`, each read here in their SPACE-separated form
+ *  (`git log -S "text"`) -- the same shape GIT_COMMIT_MESSAGE_FLAGS already
+ *  reads, and the one the live false positive this closes was spelled with
+ *  (odd/tasks/release-0.5.1.md JEVADV-36). None of these ever run the text;
+ *  they search commit history/diffs for it. */
+const GIT_LOG_SEARCH_FLAGS = new Set(["-S", "-G", "--grep"]);
+
 /** The index, within `plain` starting at `from`, of the first token that is
  *  not one of `program`'s own flags and not a value one of `valueFlags`
  *  consumes -- i.e. `program`'s first true positional argument. Shared by
@@ -648,16 +703,68 @@ function firstPositionalIndex(plain: readonly string[], from: number, valueFlags
 }
 
 /**
+ * The grep-family's own "the pattern is `-e`/`--regexp`'s value, or else the
+ * first positional" rule, starting the search at `from` -- shared by a
+ * bare, top-level `grep`/`rg`/... invocation and by `git grep`, whose
+ * pattern-position rule is otherwise identical (odd/tasks/release-0.5.1.md
+ * JEVADV-36): both read the SAME flag grammar, just starting after a
+ * different program token.
+ */
+function grepPatternIndexes(plain: readonly string[], tokenCount: number, from: number): ReadonlySet<number> {
+  const data = new Set<number>();
+  for (let j = from; j < plain.length; j += 1) {
+    if (GREP_PATTERN_FLAGS.has(plain[j] ?? "") && j + 1 < tokenCount) {
+      data.add(j + 1);
+      return data;
+    }
+  }
+  const valueFlags = new Map<string, number>([...GREP_OTHER_VALUE_FLAGS].map((flag): [string, number] => [flag, 2]));
+  const pattern = firstPositionalIndex(plain, from, valueFlags);
+  if (pattern !== -1) data.add(pattern);
+  return data;
+}
+
+/** gh's text flags, and now a generic set for ANY program (odd/tasks/
+ *  release-0.5.1.md JEVADV-36): a PR/issue body, title, description,
+ *  comment, subject, summary or note -- none of these are ever RUN by the
+ *  program reading them, whichever program that is. `-m` deliberately stays
+ *  OUT of this generic set: it is too overloaded a flag letter across
+ *  unrelated tools (merge, mode, message, ...) to safely generalise, so it
+ *  stays scoped to where it was already allowlisted above (git commit/tag/
+ *  notes, gh). */
+const GENERIC_TEXT_FLAGS: ReadonlySet<string> = new Set([
+  "--body", "--title", "--message", "--description", "--comment", "--text", "--subject", "--summary", "--note",
+]);
+/** The same set's `=value` form (`--body=...`), glued into ONE shell token --
+ *  the whole token becomes the data position (see addGenericTextFlagPositions). */
+const GENERIC_TEXT_FLAG_ASSIGNMENT = /^--(?:body|title|message|description|comment|text|subject|summary|note)=/;
+
+/** Marks every generic-text-flag position in `plain`, for ANY program,
+ *  regardless of which (if any) program-specific branch below also runs --
+ *  mutates `data` rather than returning a fresh set, so it composes with
+ *  whatever the program-specific rules already added instead of requiring
+ *  every branch below to remember to include it. */
+function addGenericTextFlagPositions(plain: readonly string[], tokenCount: number, data: Set<number>): void {
+  for (let j = 0; j < plain.length; j += 1) {
+    const token = plain[j] ?? "";
+    if (GENERIC_TEXT_FLAGS.has(token) && j + 1 < tokenCount) data.add(j + 1);
+    else if (GENERIC_TEXT_FLAG_ASSIGNMENT.test(token)) data.add(j);
+  }
+}
+
+/**
  * The token indexes in `tokens` that are a known DATA position -- see the
  * module note above. `tokens` is always ONE already-resolved command's
  * tokens (scanSegment's recursion into `-c`/eval/ssh/su/watch has already
  * peeled away any wrapper's own command-line argument by the time this
- * runs), so only ONE program's rules ever apply here.
+ * runs), so only ONE program's rules ever apply here (plus the
+ * program-independent generic text flags, which apply regardless).
  */
 function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> {
   const plain = tokens.map((token) => token.text);
-  const { name: program, index: programIndex } = resolveProgram(plain, DATA_MARKING_PROGRAMS);
   const data = new Set<number>();
+  addGenericTextFlagPositions(plain, tokens.length, data);
+  const { name: program, index: programIndex } = resolveProgram(plain, DATA_MARKING_PROGRAMS);
 
   if (program === "printf" || program === "echo") {
     for (let i = programIndex + 1; i < tokens.length; i += 1) data.add(i);
@@ -670,6 +777,16 @@ function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> 
       i += GLOBAL_OPTIONS_WITH_VALUE.has(plain[i] ?? "") ? 2 : 1;
     }
     const subcommand = plain[i];
+    if (subcommand === "grep") {
+      for (const index of grepPatternIndexes(plain, tokens.length, i + 1)) data.add(index);
+      return data;
+    }
+    if (subcommand === "log") {
+      for (let j = i + 1; j < plain.length; j += 1) {
+        if (GIT_LOG_SEARCH_FLAGS.has(plain[j] ?? "") && j + 1 < tokens.length) data.add(j + 1);
+      }
+      return data;
+    }
     const messageFlags =
       subcommand === "commit" ? GIT_COMMIT_MESSAGE_FLAGS :
       subcommand === "tag" ? GIT_SINGLE_M_FLAG :
@@ -691,15 +808,7 @@ function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> 
   }
 
   if (GREP_FAMILY.has(program)) {
-    for (let j = programIndex + 1; j < plain.length; j += 1) {
-      if (GREP_PATTERN_FLAGS.has(plain[j] ?? "") && j + 1 < tokens.length) {
-        data.add(j + 1);
-        return data;
-      }
-    }
-    const valueFlags = new Map<string, number>([...GREP_OTHER_VALUE_FLAGS].map((flag): [string, number] => [flag, 2]));
-    const pattern = firstPositionalIndex(plain, programIndex + 1, valueFlags);
-    if (pattern !== -1) data.add(pattern);
+    for (const index of grepPatternIndexes(plain, tokens.length, programIndex + 1)) data.add(index);
     return data;
   }
 
@@ -716,8 +825,36 @@ function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> 
   return data;
 }
 
-function scanToken(token: ScanToken, isDataPosition: boolean): string {
-  return isDataPosition && token.quoted && /\s/.test(token.text) ? SCAN_DATA_PLACEHOLDER : token.text;
+/**
+ * The token indexes in `tokens` that are an interpreter CODE string -- see
+ * INTERPRETER_CODE_FLAGS' own doc comment. Unlike dataPositionIndexes, this
+ * is never opaque: it exists so scanTokens' "command" mode can EXCLUDE these
+ * positions from its blanket hide-everything-quoted rule, because this text
+ * really does run (just not as shell syntax).
+ */
+function interpreterCodePositions(tokens: readonly ScanToken[]): ReadonlySet<number> {
+  const plain = tokens.map((token) => token.text);
+  const { name: program, index: programIndex } = resolveProgram(plain, INTERPRETER_CODE_PROGRAMS);
+  const positions = new Set<number>();
+  const flags = INTERPRETER_CODE_FLAGS.get(program);
+  if (flags === undefined) return positions;
+  for (let j = programIndex + 1; j < plain.length; j += 1) {
+    if (flags.has(plain[j] ?? "") && j + 1 < tokens.length) positions.add(j + 1);
+  }
+  return positions;
+}
+
+/** Whether index `i` is hidden under `mode` -- see the module note on
+ *  ScanMode above. An interpreter CODE position is never hidden, in either
+ *  mode. Otherwise "command" mode hides every candidate (T8's original
+ *  blanket rule); "visible" mode hides only a known DATA position. */
+function isHiddenInMode(i: number, mode: ScanMode, dataPositions: ReadonlySet<number>, codePositions: ReadonlySet<number>): boolean {
+  if (codePositions.has(i)) return false;
+  return mode === "command" || dataPositions.has(i);
+}
+
+function scanToken(token: ScanToken, isHidden: boolean): string {
+  return isHidden && token.quoted && /\s/.test(token.text) ? SCAN_DATA_PLACEHOLDER : token.text;
 }
 
 /**
@@ -725,42 +862,46 @@ function scanToken(token: ScanToken, isDataPosition: boolean): string {
  * spliced in AFTER tokenizing, never before: a `$(...)` inside double quotes
  * still runs, and splicing it into the quoted text first let the data
  * placeholder swallow it (review finding R3). Only the literal text around
- * the markers is judged as data; every body is always emitted.
+ * the markers is judged as hidden; every body is always emitted, regardless
+ * of mode -- a substitution really does run.
  */
-function scanTokenWithBodies(token: ScanToken, nextBody: () => string, isDataPosition: boolean): string {
-  if (!token.text.includes(SCAN_SUBSTITUTION_MARKER)) return scanToken(token, isDataPosition);
+function scanTokenWithBodies(token: ScanToken, nextBody: () => string, isHidden: boolean): string {
+  if (!token.text.includes(SCAN_SUBSTITUTION_MARKER)) return scanToken(token, isHidden);
   const parts = token.text.split(SCAN_SUBSTITUTION_MARKER);
   const bodies = parts.slice(1).map(() => nextBody());
   const literal = parts.join("");
-  if (isDataPosition && token.quoted && /\s/.test(literal)) return [SCAN_DATA_PLACEHOLDER, ...bodies].join(" ");
+  if (isHidden && token.quoted && /\s/.test(literal)) return [SCAN_DATA_PLACEHOLDER, ...bodies].join(" ");
   return parts.reduce((out, part, at) => (at === 0 ? part : `${out} ${bodies[at - 1] ?? ""} ${part}`), "");
 }
 
 /** Maps every token in `tokens` through scanTokenWithBodies, resolving DATA
- *  positions once for the whole list rather than per token -- a position is
- *  always decided by where a token sits relative to the OTHERS in the same
- *  command, never in isolation. */
-function scanTokens(tokens: readonly ScanToken[], nextBody: () => string): string {
-  const data = dataPositionIndexes(tokens);
-  return tokens.map((token, i) => scanTokenWithBodies(token, nextBody, data.has(i))).join(" ");
+ *  and interpreter-code positions once for the whole list rather than per
+ *  token -- a position is always decided by where a token sits relative to
+ *  the OTHERS in the same command, never in isolation. */
+function scanTokens(tokens: readonly ScanToken[], nextBody: () => string, mode: ScanMode): string {
+  const dataPositions = dataPositionIndexes(tokens);
+  const codePositions = interpreterCodePositions(tokens);
+  return tokens.map((token, i) => scanTokenWithBodies(token, nextBody, isHiddenInMode(i, mode, dataPositions, codePositions))).join(" ");
 }
 
 /**
  * `segment` reduced to the text someSegmentMatches' patterns are allowed to
- * read -- see the module note above for the rule and why it exists. Returns
- * null when `segment` cannot be read with confidence: an unbalanced quote,
- * an unterminated substitution, or nesting deep enough to suggest either.
- * Failing closed here means the caller falls back to the RAW segment text,
- * which is what matched before this fix existed -- matching MORE freely on
- * a parse this function could not finish, never less.
+ * read under `mode` -- see the module note above for the rule and why it
+ * exists. Returns null when `segment` cannot be read with confidence: an
+ * unbalanced quote, an unterminated substitution, or nesting deep enough to
+ * suggest either. Failing closed here means the caller falls back to the RAW
+ * segment text, which is what matched before this fix existed -- matching
+ * MORE freely on a parse this function could not finish, never less. Whether
+ * a segment parses at all never depends on `mode`: only which
+ * already-successfully-parsed tokens end up hidden does.
  */
-function scanSegment(segment: string, depth: number): string | null {
+function scanSegment(segment: string, depth: number, mode: ScanMode): string | null {
   if (depth > SCAN_MAX_DEPTH) return null;
   const extracted = extractSubstitutionsForScan(segment);
   if (extracted === null) return null;
   const scannedBodies: string[] = [];
   for (const body of extracted.bodies) {
-    const scanned = scanSegment(body, depth + 1);
+    const scanned = scanSegment(body, depth + 1, mode);
     if (scanned === null) return null;
     scannedBodies.push(scanned);
   }
@@ -774,42 +915,49 @@ function scanSegment(segment: string, depth: number): string | null {
   let bodyIndex = 0;
   const nextScannedBody = (): string => scannedBodies[bodyIndex++] ?? "";
 
+  // The COMMAND-position program this segment resolves to (odd/tasks/
+  // release-0.5.1.md JEVADV-36, item 2): resolveProgram already knows how to
+  // walk PAST a wrapper's own flags (sudo/env/nice/...) to the program it
+  // actually runs, and how to skip a leading `NAME=value` assignment -- the
+  // exact discipline resolveProgram gives gitDiscardsFrom elsewhere in this
+  // file. Checking only the ONE resolved program (rather than looping over
+  // every token looking for a name that happens to equal a wrapper's own)
+  // is what stops a wrapper's NAME appearing as a plain, unrelated argument
+  // of some other program (`grep -n watch "..." f`) from being misread as
+  // that wrapper's own command.
   const plainTexts = tokens.map((token) => token.text);
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index] as ScanToken;
-    const name = programName(stripLeadingGroupers(token.text));
-    const isEval = name === "eval";
-    const takesDashC = SHELLS.has(name) || DASH_C_COMMAND_PROGRAMS.has(name);
-    const flagIndex = takesDashC
-      ? tokens.findIndex((candidate, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(candidate.text))
-      : -1;
-    const isSsh = name === "ssh";
-    const isWatch = name === "watch";
-    const scriptStart = isEval
-      ? index + 1
-      : flagIndex !== -1
-        ? flagIndex + 1
-        : isSsh
-          ? afterOwnOptions(plainTexts, index + 1, SSH_OPTIONS_WITH_VALUE) + 1
-          : isWatch
-            ? afterOwnOptions(plainTexts, index + 1, WATCH_OPTIONS_WITH_VALUE)
-            : -1;
-    if (scriptStart !== -1 && tokens[scriptStart] !== undefined) {
-      const before = scanTokens(tokens.slice(0, scriptStart), nextScannedBody);
-      // The script is scanned again as a whole, so its substitutions go back
-      // in as their ORIGINAL `$(...)` text, in the same order, for that
-      // recursive scan to extract and read on its own.
-      const script = tokens
-        .slice(scriptStart)
-        .map((candidate) => candidate.text.split(SCAN_SUBSTITUTION_MARKER).reduce((out, part, at) => (at === 0 ? part : `${out}$(${extracted.bodies[bodyIndex++] ?? ""})${part}`), ""))
-        .join(" ");
-      const scanned = scanSegment(script, depth + 1);
-      if (scanned === null) return null;
-      return [before, scanned].join(" ");
-    }
+  const { name, index } = resolveProgram(plainTexts, RECURSIVE_COMMAND_PROGRAMS);
+  const isEval = name === "eval";
+  const takesDashC = SHELLS.has(name) || DASH_C_COMMAND_PROGRAMS.has(name);
+  const flagIndex = takesDashC
+    ? tokens.findIndex((candidate, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(candidate.text))
+    : -1;
+  const isSsh = name === "ssh";
+  const isWatch = name === "watch";
+  const scriptStart = isEval
+    ? index + 1
+    : flagIndex !== -1
+      ? flagIndex + 1
+      : isSsh
+        ? afterOwnOptions(plainTexts, index + 1, SSH_OPTIONS_WITH_VALUE) + 1
+        : isWatch
+          ? afterOwnOptions(plainTexts, index + 1, WATCH_OPTIONS_WITH_VALUE)
+          : -1;
+  if (scriptStart !== -1 && tokens[scriptStart] !== undefined) {
+    const before = scanTokens(tokens.slice(0, scriptStart), nextScannedBody, mode);
+    // The script is scanned again as a whole, so its substitutions go back
+    // in as their ORIGINAL `$(...)` text, in the same order, for that
+    // recursive scan to extract and read on its own.
+    const script = tokens
+      .slice(scriptStart)
+      .map((candidate) => candidate.text.split(SCAN_SUBSTITUTION_MARKER).reduce((out, part, at) => (at === 0 ? part : `${out}$(${extracted.bodies[bodyIndex++] ?? ""})${part}`), ""))
+      .join(" ");
+    const scanned = scanSegment(script, depth + 1, mode);
+    if (scanned === null) return null;
+    return [before, scanned].join(" ");
   }
 
-  return scanTokens(tokens, nextScannedBody);
+  return scanTokens(tokens, nextScannedBody, mode);
 }
 
 /**
@@ -821,28 +969,63 @@ function scanSegment(segment: string, depth: number): string | null {
  *   - a `$(...)`/backtick substitution that never closes;
  *   - nesting deep enough (SCAN_MAX_DEPTH) to suggest either of the above
  *     rather than a real, deeply-nested command.
- * Used by gate-bash.ts's resetClean rule: discardsUncommittedWork's own
- * tokenizer silently absorbs the rest of an unterminated quote into one
- * token instead of failing, which would hide a `git reset --hard` sitting
- * after it -- exactly the case the resetClean rule's old, quote-blind regex
- * never missed. That regex is kept as this rule's own fail-CLOSED fallback
- * for exactly this one case; see NEVER_SILENTLY in gate-bash.ts.
+ * Whether a segment can be scanned at all never depends on ScanMode (see
+ * scanSegment's own doc comment), so this reads it under either one --
+ * "visible" here is an arbitrary, inconsequential choice.
  */
 export function cannotScanWithConfidence(command: string): boolean {
-  return scanSegment(command, 0) === null;
+  return scanSegment(command, 0, "visible") === null;
 }
 
+/** The result of scanning a command for one destructive pattern -- see
+ *  someSegmentMatches below. `"deny"` is a match in COMMAND position (a real
+ *  shell/interpreter would run it); `"ask"` is a match that exists ONLY
+ *  because a quoted argument of some other, non-executing program stayed
+ *  visible -- a mention, not a run, but not a KNOWN-safe data position
+ *  either, so a person decides rather than the model being refused outright
+ *  or the mention passing through in silence. `null` is no match at all
+ *  (including every match sitting at a known data position, which is opaque
+ *  in both scan modes and so never reaches either outcome). */
+export type SegmentMatchSeverity = "deny" | "ask" | null;
+
 /**
- * True when `pattern` matches at least one of `command`'s segments
- * (`splitOnCommandSeparators`), rather than the whole joined string. Used by
- * gate-bash.ts's NEVER_SILENTLY loop for rules whose `scope` is `'segment'`:
- * a `.*` inside `pattern` can then never span a separator (`&&`, `;`, `|`,
- * newline) and falsely implicate a command its own match never touched,
- * while a flag produced by a substitution still counts for its command. As
- * of T8 (JEVADV-24), each segment is also read through scanSegment first, so
- * quoted DATA can no longer satisfy a pattern meant for a command a shell
- * actually runs -- see the module note above.
+ * Whether `pattern` matches `command`, and at what severity -- used by
+ * gate-bash.ts's NEVER_SILENTLY loop for its two-level rules (forcePush,
+ * pushProtected, resetClean; odd/tasks/release-0.5.1.md JEVADV-36). Each of
+ * `command`'s segments (`splitOnCommandSeparators`) is read TWICE, once per
+ * ScanMode: the strict "command" view (every quoted multi-word argument
+ * hidden, except an interpreter code string) decides `"deny"`, and only when
+ * that view found nothing is the looser "visible" view (today's T10
+ * allowlist) checked for `"ask"`. `"visible"` never finds LESS than
+ * `"command"` did (a known data position is a subset of "everything", and an
+ * interpreter code position is excluded from both identically), so checking
+ * "command" first and returning immediately on a hit is exact, not just an
+ * optimisation.
+ *
+ * A segment scanSegment cannot parse with confidence (an unbalanced quote,
+ * see cannotScanWithConfidence) falls back to matching the RAW segment text
+ * and resolves that match to `"deny"`, never `"ask"`: there is no position
+ * to reason about at all when the parse itself failed, so this fails CLOSED
+ * onto the more cautious of the two outcomes -- the same discipline
+ * gate-bash.ts's own RESET_CLEAN_FALLBACK_PATTERN used to provide as a
+ * separate, second disjunct; this makes that disjunct redundant (see its
+ * removal in gate-bash.ts).
+ *
+ * `pattern` is checked against every segment even after an `"ask"` is found
+ * in an earlier one, because a LATER segment's `"deny"` still outranks it --
+ * `severity` only ever moves from `null` to `"ask"` to `"deny"`, never back.
  */
-export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): boolean {
-  return splitOnCommandSeparators(command).some((segment) => pattern.test(scanSegment(segment, 0) ?? segment));
+export function someSegmentMatches(command: string, pattern: { test(segment: string): boolean }): SegmentMatchSeverity {
+  let severity: SegmentMatchSeverity = null;
+  for (const segment of splitOnCommandSeparators(command)) {
+    const commandView = scanSegment(segment, 0, "command");
+    if (commandView === null) {
+      if (pattern.test(segment)) return "deny";
+      continue;
+    }
+    if (pattern.test(commandView)) return "deny";
+    const visibleView = scanSegment(segment, 0, "visible") ?? segment;
+    if (pattern.test(visibleView)) severity = "ask";
+  }
+  return severity;
 }

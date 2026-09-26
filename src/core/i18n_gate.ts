@@ -17,6 +17,7 @@ export type GateKey =
   | "verb.asks"
   | "localRule"
   | "localRuleDeny"
+  | "localRuleMention"
   | "cached"
   | "statusLine"
   | "authRejected"
@@ -50,6 +51,14 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // Deliberately identical to the English entry: this string is read by the
     // model, not by a person. See the note on the English one.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    // odd/tasks/release-0.5.1.md JEVADV-36: the mention-only tier of the
+    // two-level force-push/protected-branch/reset-clean rules -- the phrase
+    // sits inside a quoted argument of some OTHER program (not command
+    // position, and not a known-safe data position either), so a person
+    // decides rather than the model being refused outright. This is read by
+    // a PERSON (an 'ask', not a 'deny'), so it follows the developer's own
+    // locale, same as `localRule` above.
+    localRuleMention: "menciona {{why}} dentro de un argumento — confirma que no se está ejecutando",
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
@@ -89,6 +98,8 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // model that only learns "this was blocked" tends to try the same effect
     // by another route, which is the outcome the rule exists to prevent.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    // odd/tasks/release-0.5.1.md JEVADV-36: see the Spanish entry's comment.
+    localRuleMention: "mentions {{why}} inside an argument — confirm it is not run",
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     authRejected: "not judging: the key was rejected ({{status}})",

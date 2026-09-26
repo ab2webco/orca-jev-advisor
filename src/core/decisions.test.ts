@@ -25,6 +25,7 @@ import {
   GATE_CONSEQUENCE_CEILING,
   GATE_DECISION_RULES_VERSION,
   interpretDestinationPolicy,
+  isPolicyScope,
   resolvePolicyScope,
 } from "./decisions.ts";
 import type { Policy, PolicyScope } from "./decisions.ts";
@@ -308,6 +309,27 @@ test("filterPoliciesForCommandScope: an explicit 'command' scope keeps a policy 
     filtered.map((p) => p.id),
     ["no_force_push"],
   );
+});
+
+test("isPolicyScope: recognises exactly the three real members, nothing else", () => {
+  assert.equal(isPolicyScope("command"), true);
+  assert.equal(isPolicyScope("process"), true);
+  assert.equal(isPolicyScope("local-rule"), true);
+  assert.equal(isPolicyScope("proceso"), false);
+  assert.equal(isPolicyScope(undefined), false);
+  assert.equal(isPolicyScope(null), false);
+  assert.equal(isPolicyScope(3), false);
+});
+
+test("buildSeedScopeIndex: an unrecognised scope value is never carried into the map, even if a caller forgot to normalize it first -- JEVADV-36", () => {
+  // parseSeedPolicies (policy_seed.ts) now normalizes an invalid `scope` to
+  // absent before this ever runs, but this map is a public building block
+  // in its own right: it must not blindly trust a caller's claimed
+  // `PolicyScope` typing, the same way resolvePolicyScope itself does not
+  // trust a row's own `scope` field above.
+  const leaked = { id: "own_branch", scope: "proceso" } as unknown as Pick<Policy, "id" | "scope">;
+  const byId = buildSeedScopeIndex([leaked]);
+  assert.equal(byId.has("own_branch"), false, "an invalid scope value must never reach the map");
 });
 
 // ===========================================================================

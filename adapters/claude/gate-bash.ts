@@ -84,7 +84,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { cannotScanWithConfidence, discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
+import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -226,30 +226,98 @@ type Decision = 'allow' | 'deny' | 'ask'
  */
 
 /**
- * resetClean's own fail-CLOSED fallback -- see its NEVER_SILENTLY entry
- * below and cannotScanWithConfidence's doc comment (src/core/git_discard.ts).
- * Quote-blind on purpose: it exists ONLY for the one input
- * discardsUncommittedWork's tokenizer cannot parse with confidence, so
- * matching more freely there is the safe direction to err in.
- */
-const RESET_CLEAN_FALLBACK_PATTERN = /git\s+(reset\s+--hard|clean\s+-[a-z]*f)/
-
-/**
  * resetClean's raw-text-over-SCANNED-segment check (T10, JEVADV-28): read
  * through someSegmentMatches, so it only ever sees a segment reduced to the
  * text a shell -- or the program that segment names -- would actually treat
  * as a run (see git_discard.ts's module note on the allowlist inversion).
- * Unlike RESET_CLEAN_FALLBACK_PATTERN this is not quote-blind and is not
- * gated on unparseable input: it exists for a command that IS parseable but
- * is not shell syntax at all, e.g. `python3 -c "...os.system('git reset
- * --hard')..."` -- discardsUncommittedWork's tokenizer only understands
- * shell grammar, so it cannot look inside a Python string, but the string's
- * own text is visible (python3's `-c` argument is not a known DATA
- * position) and this pattern only needs to find it there. Allows a flag or
- * two between `reset` and `--hard` (`git reset --quiet --hard`), same as
- * discardsUncommittedWork's own args-not-order reading of --hard.
+ * It exists for a command that IS parseable but is not shell syntax at all,
+ * e.g. `python3 -c "...os.system('git reset --hard')..."` --
+ * discardsUncommittedWork's tokenizer only understands shell grammar, so it
+ * cannot look inside a Python string, but the string's own text is visible
+ * (python3's `-c` argument is a known CODE position, never hidden -- see
+ * git_discard.ts's INTERPRETER_CODE_FLAGS) and this pattern only needs to
+ * find it there. Allows a flag or two between `reset` and `--hard` (`git
+ * reset --quiet --hard`), same as discardsUncommittedWork's own
+ * args-not-order reading of --hard.
  */
 const RESET_CLEAN_RAW_PATTERN = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/
+
+/**
+ * One rule's outcome: `'deny'`/`'ask'` mean "this rule's pattern matched, at
+ * this severity" (still subject to the rule's own `denyToggle` below);
+ * `null` means no match at all, so the NEVER_SILENTLY loop moves on to the
+ * next rule.
+ */
+type RuleOutcome = 'deny' | 'ask' | null
+
+/**
+ * forcePush, pushProtected and resetClean read the command through
+ * git_discard.ts's someSegmentMatches (odd/tasks/release-0.5.1.md JEVADV-36):
+ * a match in COMMAND POSITION (including a real shell/interpreter wrapper's
+ * own command, `$(...)`/backticks, or an interpreter CODE string) resolves
+ * to `'deny'`; a match that exists ONLY because a quoted argument of some
+ * OTHER, non-executing program stayed visible resolves to `'ask'` instead --
+ * a person decides, rather than the model being refused outright for a
+ * phrase nobody was ever going to run. See someSegmentMatches' own doc
+ * comment (src/core/git_discard.ts) for exactly how the two scan passes
+ * decide this.
+ */
+function segmentRule(pattern: { test(segment: string): boolean }): (command: string) => RuleOutcome {
+  return (command) => someSegmentMatches(command, pattern)
+}
+
+/** A plain whole-command regex, for the six rules with no spanning
+ *  quantifier and no two-level model: any match is `'deny'`, never `'ask'`. */
+function commandRule(pattern: RegExp): (command: string) => RuleOutcome {
+  return (command) => (pattern.test(command) ? 'deny' : null)
+}
+
+/**
+ * `git reset --hard` and `git clean -f` throw away uncommitted work with no
+ * reflog behind them -- the closest call of the nine, since the blast
+ * radius is one working tree. The same loss through `git checkout --
+ * <path>`, `git checkout .`, `git checkout -f` or `git restore <path>`: the
+ * working tree is overwritten and uncommitted changes are gone. This form
+ * discarded an agent's work in a real session while reset/clean did not
+ * know it. A branch switch, `-b`/`-B`, `git switch` and `git restore
+ * --staged` are not matched -- see src/core/git_discard.ts for each reason.
+ * All four subcommands share `rule.resetClean` on purpose: that text
+ * ("discards uncommitted work -- nothing to recover it from") names the
+ * effect, not the command.
+ *
+ * discardsUncommittedWork already segments the command on its own and
+ * extracts `$(...)`/backticks/`bash -c`/`eval` first, so this reads the
+ * WHOLE command, never a pre-split segment -- pre-splitting here would
+ * break its substitution extraction. Until T8 (odd/tasks/release-0.5.1.md,
+ * JEVADV-24) reset/clean were matched by their OWN separate, quote-blind
+ * regex here -- a `printf` whose double-quoted argument merely SPELLED OUT
+ * `git reset --hard` was refused as if that command had run. Folding
+ * reset/clean into discardsUncommittedWork's tokenizer fixed that, and T10
+ * (JEVADV-28) added someSegmentMatches(RESET_CLEAN_RAW_PATTERN) as a second
+ * check reading each segment through the SAME visibility rules forcePush/
+ * pushProtected already use, so a command spelled out through a non-shell
+ * interpreter is still caught even though discardsUncommittedWork's
+ * tokenizer, which only understands real shell syntax, cannot see into it.
+ *
+ * There used to be a THIRD disjunct here -- `cannotScanWithConfidence(command)
+ * && RESET_CLEAN_FALLBACK_PATTERN.test(command)`, a second, quote-blind
+ * regex kept as an explicit fallback for the one input someSegmentMatches'
+ * own scan cannot parse with confidence (an unbalanced quote). It is
+ * removed (odd/tasks/release-0.5.1.md JEVADV-36, review-3 follow-up on
+ * this rule's dead-fallback question): someSegmentMatches now performs that
+ * exact fallback ITSELF, per segment, matching the raw segment text and
+ * resolving it to 'deny' whenever its own scan fails -- see its doc comment
+ * in src/core/git_discard.ts. A second copy of the same fallback, gated on
+ * `cannotScanWithConfidence` over the WHOLE unsplit command rather than one
+ * segment, added no case this one does not already cover, and reading the
+ * unsplit command risked the opposite mistake (treating an unrelated
+ * segment's own unterminated quote as reason to fall back for a segment
+ * that parsed just fine).
+ */
+function resetCleanRule(command: string): RuleOutcome {
+  if (discardsUncommittedWork(command)) return 'deny'
+  return someSegmentMatches(command, RESET_CLEAN_RAW_PATTERN)
+}
 
 /**
  * Tier 1b: the rules that never run unannounced. `why` is a catalog key,
@@ -260,86 +328,38 @@ const RESET_CLEAN_RAW_PATTERN = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\
  * another approach, while `ask` stops the person and waits. Running with
  * permission prompts off is a deliberate choice that agents should not sit
  * waiting on a human, and an `ask` quietly puts that waiting back. Turning a
- * switch off downgrades that one rule to `ask` -- never to `allow`.
+ * switch off downgrades that one rule's OWN `'deny'` outcome to `'ask'` --
+ * never to `'allow'`, and never touches a rule's own `'ask'` outcome (see
+ * the NEVER_SILENTLY loop below: the switch only ever matters once a rule
+ * has already decided `'deny'`).
  *
  * Only the agent is refused. The person can always run the command in a
  * terminal, which is what the deny message tells them.
  */
 const NEVER_SILENTLY: readonly {
-  readonly pattern: { test(command: string): boolean }
+  readonly evaluate: (command: string) => RuleOutcome
   readonly why: GateKey
   readonly denyToggle: DenyToggleKey
-  // 'segment' tests the pattern against each of the command's quote-aware
-  // segments (splitOutsideQuotes) independently, so a `.*` inside the
-  // pattern can never span a `&&`/`;`/`|`/newline/paren separator and
-  // falsely implicate an unrelated segment (ADR-1). 'command' keeps
-  // whole-string matching, for rules with no spanning quantifier and for
-  // curlPipeShell, which matches ACROSS a pipe by design.
-  readonly scope: 'segment' | 'command'
 }[] = [
-  { pattern: /git\s+push\b.*(--force|-f)\b/, why: 'rule.forcePush', denyToggle: 'denyForcePush', scope: 'segment' },
-  { pattern: /git\s+push\b.*\b(main|master|production)\b/, why: 'rule.pushProtected', denyToggle: 'denyPushProtected', scope: 'segment' },
+  // Two-level rules (odd/tasks/release-0.5.1.md JEVADV-36): read through
+  // someSegmentMatches, which is what can return 'ask' as well as 'deny' --
+  // see segmentRule's own doc comment above.
+  { evaluate: segmentRule(/git\s+push\b.*(--force|-f)\b/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
+  { evaluate: segmentRule(/git\s+push\b.*\b(main|master|production)\b/), why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root.
-  { pattern: /rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/, why: 'rule.rmRf', denyToggle: 'denyRmRf', scope: 'command' },
-  // `git reset --hard` and `git clean -f` throw away uncommitted work with
-  // no reflog behind them -- the closest call of the nine, since the blast
-  // radius is one working tree. The same loss through `git checkout --
-  // <path>`, `git checkout .`, `git checkout -f` or `git restore <path>`:
-  // the working tree is overwritten and uncommitted changes are gone. This
-  // form discarded an agent's work in a real session while reset/clean did
-  // not know it. A branch switch, `-b`/`-B`, `git switch` and `git restore
-  // --staged` are not matched -- see src/core/git_discard.ts for each
-  // reason. All four subcommands share `rule.resetClean` on purpose: that
-  // text ("discards uncommitted work -- nothing to recover it from") names
-  // the effect, not the command.
-  //
-  // `command` scope: discardsUncommittedWork already segments on its own
-  // and extracts `$(...)`/backticks/`bash -c`/`eval` first; pre-splitting
-  // here would break its substitution extraction.
-  //
-  // Until T8 (odd/tasks/release-0.5.1.md, JEVADV-24) reset/clean were
-  // matched by their OWN separate, quote-blind regex here -- a `printf`
-  // whose double-quoted argument merely SPELLED OUT `git reset --hard` was
-  // refused as if that command had run. Folding reset/clean into
-  // discardsUncommittedWork's tokenizer fixes that, but its tokenizer fails
-  // in the opposite direction on a genuinely unparseable command (an
-  // unbalanced quote): it silently swallows the rest of the line into one
-  // token instead of raising, which would hide a real `git reset --hard`
-  // sitting after it. RESET_CLEAN_FALLBACK_PATTERN is the OLD regex, kept
-  // as this rule's own fail-CLOSED fallback for exactly that one case --
-  // see cannotScanWithConfidence's doc comment.
-  //
-  // T10 (odd/tasks/release-0.5.1.md, JEVADV-28) added a second disjunct:
-  // someSegmentMatches(command, RESET_CLEAN_RAW_PATTERN) reads each segment
-  // through the SAME visibility rules forcePush/pushProtected already use
-  // (see git_discard.ts's module note on the allowlist inversion), so a
-  // command spelled out through a non-shell interpreter -- `python3 -c
-  // "...os.system('git reset --hard')..."` -- is still caught even though
-  // discardsUncommittedWork's tokenizer, which only understands real shell
-  // syntax, cannot see into it. It also subsumes the old
-  // cannotScanWithConfidence-gated fallback below (someSegmentMatches falls
-  // back to the raw segment text on the same null), which stays as an
-  // explicit, cheap second guarantee for the one case this rule can least
-  // afford to get wrong -- see RESET_CLEAN_FALLBACK_PATTERN's own comment.
-  {
-    pattern: {
-      test: (command) =>
-        discardsUncommittedWork(command) ||
-        someSegmentMatches(command, RESET_CLEAN_RAW_PATTERN) ||
-        (cannotScanWithConfidence(command) && RESET_CLEAN_FALLBACK_PATTERN.test(command)),
-    },
-    why: 'rule.resetClean', denyToggle: 'denyResetClean', scope: 'command',
-  },
+  { evaluate: commandRule(/rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/), why: 'rule.rmRf', denyToggle: 'denyRmRf' },
+  { evaluate: resetCleanRule, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
   // Irrecoverable without a backup nobody can assume exists.
-  { pattern: /\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i, why: 'rule.dropTable', denyToggle: 'denyDropTable', scope: 'command' },
-  { pattern: /kubectl\s+(delete|drain)\b/, why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete', scope: 'command' },
-  { pattern: /\b(terraform|tofu)\s+apply\b/, why: 'rule.terraformApply', denyToggle: 'denyTerraformApply', scope: 'command' },
-  { pattern: /\b(terraform|tofu)\s+destroy\b/, why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy', scope: 'command' },
-  // Mandatory 'command' scope: this rule matches ACROSS a pipe by design.
-  // splitOutsideQuotes splits on `|`, so segment scope would silently
-  // disable it; `[^|]*` already bounds the curl side of the match.
-  { pattern: /curl[^|]*\|\s*(bash|sh|zsh)\b/, why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell', scope: 'command' },
+  { evaluate: commandRule(/\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
+  { evaluate: commandRule(/kubectl\s+(delete|drain)\b/), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
+  { evaluate: commandRule(/\b(terraform|tofu)\s+apply\b/), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
+  { evaluate: commandRule(/\b(terraform|tofu)\s+destroy\b/), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
+  // This rule matches ACROSS a pipe by design -- the whole point is
+  // catching a curl piped into a shell -- so it stays a plain whole-command
+  // regex, never someSegmentMatches (which would silently disable it: a
+  // segment split on `|` would separate the curl from the shell it feeds).
+  { evaluate: commandRule(/curl[^|]*\|\s*(bash|sh|zsh)\b/), why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
 ]
 
 type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null }
@@ -997,31 +1017,45 @@ async function main(): Promise<void> {
   // read by a shell keeps its text, because there it really is commands.
   const inspected = withoutHeredocBodies(command)
   const mentionOnly = mentionsRatherThanRuns(inspected)
-  for (const { pattern, why, denyToggle, scope } of NEVER_SILENTLY) {
+  for (const { evaluate, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
-    if (scope === 'segment' ? someSegmentMatches(inspected, pattern) : pattern.test(inspected)) {
-      // Every rule denies unless its switch was deliberately turned off, in
-      // which case it drops to 'ask' -- never to 'allow'. readDenyTierConfig()
-      // fails CLOSED, so an unreadable config denies exactly as a fresh
-      // install does.
-      const decision: Decision = readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
-      appendGateRecord(cwd, command, 'local-rule', decision, null, 'local-rule', null)
-      // Recorded like any other stop, with no scores: a local rule needs no
-      // model and no threshold, so there is nothing here to calibrate -- but
-      // whether the person accepted the interruption is still worth knowing.
+    const outcome = evaluate(inspected)
+    if (outcome === null) continue
+    if (outcome === 'ask') {
+      // The mention-only tier (odd/tasks/release-0.5.1.md JEVADV-36): the
+      // phrase sits inside a quoted argument of some OTHER, non-executing
+      // program, not command position -- this was never going to deny, so
+      // the rule's own denyToggle plays no part here (there is no 'deny' to
+      // downgrade FROM). Recorded the same way a deny-tier stop is: a local
+      // rule needs no model and no threshold, so there are no scores to
+      // calibrate, but whether the person accepted the interruption is
+      // still worth knowing.
+      appendGateRecord(cwd, command, 'local-rule', 'ask', null, 'local-rule', null)
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
-      // A refusal is read by the MODEL and an ask is read by a PERSON, so
-      // they resolve in different languages on purpose: the ask follows the
-      // developer's chosen locale, the refusal is always English, including
-      // the interpolated reason. Half-translating it -- an English sentence
-      // carrying a Spanish clause -- would be worse than either.
-      if (decision === 'deny') {
-        emit(decision, tEnglish('localRuleDeny', { why: tEnglish(why) }))
-      } else {
-        emit(decision, t('localRule', { why: t(why) }))
-      }
+      emit('ask', t('localRuleMention', { why: t(why) }))
       return
     }
+    // outcome === 'deny': every rule denies unless its switch was
+    // deliberately turned off, in which case it drops to 'ask' -- never to
+    // 'allow'. readDenyTierConfig() fails CLOSED, so an unreadable config
+    // denies exactly as a fresh install does.
+    const decision: Decision = readDenyTierConfig()[denyToggle] ? 'deny' : 'ask'
+    appendGateRecord(cwd, command, 'local-rule', decision, null, 'local-rule', null)
+    // Recorded like any other stop, with no scores: a local rule needs no
+    // model and no threshold, so there is nothing here to calibrate -- but
+    // whether the person accepted the interruption is still worth knowing.
+    appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
+    // A refusal is read by the MODEL and an ask is read by a PERSON, so
+    // they resolve in different languages on purpose: the ask follows the
+    // developer's chosen locale, the refusal is always English, including
+    // the interpolated reason. Half-translating it -- an English sentence
+    // carrying a Spanish clause -- would be worse than either.
+    if (decision === 'deny') {
+      emit(decision, tEnglish('localRuleDeny', { why: tEnglish(why) }))
+    } else {
+      emit(decision, t('localRule', { why: t(why) }))
+    }
+    return
   }
 
   const apiKey = await resolveApiKey()

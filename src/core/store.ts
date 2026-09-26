@@ -14,7 +14,7 @@
 // `host.storage`) and from a CLI/test harness with a fake in-memory host.
 
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
-import { migratePolicyKind } from "./decisions.ts";
+import { migratePolicyKind, withNormalizedPolicyScope } from "./decisions.ts";
 import type { PolicyKind, PolicyScope } from "./decisions.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
@@ -170,19 +170,17 @@ function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null;
 }
 
-/** The runtime list of PolicyScope's members, same technique as isPolicyKind above. */
-const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process", "local-rule"];
-
-function isPolicyScope(value: unknown): value is PolicyScope {
-  return (POLICY_SCOPES as readonly unknown[]).includes(value);
-}
+// isPolicyScope (PolicyScope's own runtime member check) is imported from
+// decisions.ts, the one shared list every reader uses instead of its own
+// copy (odd/tasks/release-0.5.1.md JEVADV-36).
 
 /**
  * Exported so the seed reader validates rows against this exact shape rather
  * than a second, drifting copy of it.
  *
  * Deliberately silent on `scope`'s VALUE (only its presence matters here) --
- * see withNormalizedScope below for why. Before T10 (odd/tasks/release-
+ * see decisions.ts's withNormalizedPolicyScope, which getPolicies below
+ * applies to every row this returns, for why. Before T10 (odd/tasks/release-
  * 0.5.1.md, JEVADV-28, R4) this rejected the whole row on an unrecognised
  * `scope`, which is MORE permissive on what is probably just a typo or a
  * value this build predates: a policy that should still cover its rule
@@ -192,22 +190,6 @@ export function isPolicyRow(value: unknown): value is PolicyRow {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false;
   if ("destinations" in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false;
   return true;
-}
-
-/**
- * A row already known to satisfy isPolicyRow, with an unrecognised `scope`
- * resolved to ABSENT instead of costing the whole row -- see isPolicyRow's
- * own comment. Absent is what resolvePolicyScope (decisions.ts) already
- * knows how to fall back from: the shipped seed's own scope for this id, or
- * `"command"`. `isPolicyRow`'s type predicate already declares `scope` as
- * `PolicyScope | undefined`; this is the one place that actually makes that
- * true, the same way `kind`'s Spanish/English resolution is deferred to
- * migratePolicyKind rather than settled at the shape check above.
- */
-function withNormalizedScope(row: PolicyRow): PolicyRow {
-  if (row.scope === undefined || isPolicyScope(row.scope)) return row;
-  const { id, rule, kind, destinations } = row;
-  return destinations !== undefined ? { id, rule, kind, destinations } : { id, rule, kind };
 }
 
 const DEFAULT_POLICIES: readonly PolicyRow[] = [];
@@ -240,7 +222,7 @@ export async function getPolicies(host: StorageHost): Promise<readonly PolicyRow
     return [...DEFAULT_POLICIES];
   }
   if (raw === undefined || raw === null || !Array.isArray(raw)) return [...DEFAULT_POLICIES];
-  return raw.filter(isPolicyRow).map(withNormalizedScope);
+  return raw.filter(isPolicyRow).map(withNormalizedPolicyScope);
 }
 
 export async function setPolicies(host: StorageHost, policies: readonly PolicyRow[]): Promise<void> {

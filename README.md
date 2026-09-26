@@ -167,10 +167,10 @@ such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
 
 | Rule | Scope | Why |
 |------|-------|-----|
-| Force push (`--force`/`-f`) | segment | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). |
-| Push to a protected branch (`main`/`master`/`production`) | segment | Same spanning-quantifier reason. |
+| Force push (`--force`/`-f`) | segment, two-level | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). |
+| Push to a protected branch (`main`/`master`/`production`) | segment, two-level | Same spanning-quantifier reason. |
 | `rm -rf /` (or `~`/`$HOME`) | command | No spanning quantifier; matching the whole command is already precise. |
-| Discarding uncommitted work (`git checkout`/`git restore`/`git reset --hard`/`git clean -f`) | command | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c`/`eval`/`su -c`/`script -c` bodies, `ssh`'s remote command and `watch`'s command first; pre-splitting again would break that extraction. `git reset --hard`/`git clean -f` used to be their own, separate, quote-blind regex — folded in here so all four subcommands get the same tokenizer and command-position discipline. The rule also reads each segment through the same visible-by-default scan the force-push/protected-branch rows use below, so a reset or clean spelled out through a non-shell interpreter (`python3 -c "...os.system('git reset --hard')..."`) is still caught even though the tokenizer only understands shell syntax. The old regex survives only as this rule's own extra fail-closed fallback for the one input the scan itself cannot read with confidence (an unbalanced quote). |
+| Discarding uncommitted work (`git checkout`/`git restore`/`git reset --hard`/`git clean -f`) | command, two-level | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c`/`eval`/`su -c`/`script -c` bodies, `ssh`'s remote command and `watch`'s command first; pre-splitting again would break that extraction. `git reset --hard`/`git clean -f` used to be their own, separate, quote-blind regex — folded in here so all four subcommands get the same tokenizer and command-position discipline. The rule also reads each segment through the same two-level scan the force-push/protected-branch rows use below, so a reset or clean spelled out through a non-shell interpreter (`python3 -c "...os.system('git reset --hard')..."`) is still caught even though the tokenizer only understands shell syntax. |
 | `DROP`/`TRUNCATE TABLE`/`DATABASE`/`SCHEMA` | command | No spanning quantifier. |
 | `kubectl delete`/`drain` | command | No spanning quantifier. |
 | `terraform`/`tofu apply` | command | No spanning quantifier. |
@@ -181,32 +181,59 @@ A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
 exactly as a shell would read it.
 
-Within a segment, the force-push, protected-branch and discard rules also
-read a quoted argument the way a shell does: a *single quoted word*
-(`"main"`, `"-f"`) is still an ordinary argument and counts. A quoted
-argument *with whitespace in it* — a commit message, a PR body — is opaque
-to the pattern ONLY when the program reading it is known to treat that
-argument as data, never as something to run: `printf`/`echo`'s own
-arguments; `git commit -m`/`--message`/`-F`, `git tag -m`, `git notes add
--m`; `gh`'s `--body`/`-b`/`--title`/`-t`/`--subject`/`--message`/`-m`,
-whatever the subcommand; the PATTERN argument of
-`grep`/`egrep`/`fgrep`/`rg`/`ag` (its first non-flag argument, or the value
-of `-e`/`--regexp`); and `jq`'s filter argument. Everywhere else — including
-an unrecognised program — a quoted argument stays visible, exactly like it
-did before quote-opacity existed: fail closed for the unknown case, rather
-than assume the best. A `$(...)`/backtick substitution stays visible
-regardless of quoting (its source text still becomes part of the enclosing
-command's own arguments at runtime), and so does the script argument of
-`bash -c`/`sh -c`/`zsh -c`/`eval`/`su -c`/`script -c`, `ssh`'s remote command
-(everything after the host) and `watch`'s command, wherever it sits — a real
-command a shell will run, read RECURSIVELY through the same allowlist, so a
-data position inside a wrapped command (`ssh host 'git commit -m "git push
---force"'`) still goes opaque rather than the whole wrapped line becoming
-visible. This closes two live false positives on opposite ends: a `printf`
-whose double-quoted text merely spelled out a hard reset was refused as if
-that command had run, and a command actually run by another program (`ssh
-host "git push --force origin main"`, `su -c "git push -f origin main"`) was
-waved through as if it were merely descriptive text.
+**Two-level rules: a run denies, a mention asks.** Force push,
+protected-branch and discard are all read through the SAME two-level model
+(`someSegmentMatches`, `src/core/git_discard.ts`): a match in **command
+position** — the segment's own command, `$(...)`/backtick substitutions, a
+real shell/login/watch wrapper's command (`bash -c`/`sh -c`/`zsh -c`/`eval`/
+`su -c`/`script -c`/`ssh`'s remote command/`watch`'s command, recognised only
+at the segment's resolved command position, never as an arbitrary later
+token — `grep -n watch "…" f` must not read `watch` as a command just
+because the word appears in grep's own argument), or an **interpreter CODE
+string** (`python`/`python3 -c`, `node -e`/`-p`/`--eval`, `ruby -e`, `perl
+-e`/`-E`, `php -r`, `osascript -e` — these commonly shell out, so they stay
+code, never data, even though they are not shell syntax) — still **denies**.
+A match that exists ONLY because a quoted argument of some OTHER,
+non-executing program stayed visible now **asks** instead: a person decides,
+rather than the model being refused outright for a phrase nobody was ever
+going to run (`git grep`'s own pattern and `sed`'s script argument are
+programs reading data, not commands). A rule's own on/off switch (the panel's
+deny-tier toggles) only ever matters once a rule has already decided to deny:
+turning it off downgrades that `deny` to `ask`, exactly as before; it never
+touches a match that had already resolved to `ask` on its own.
+
+Within a segment, a quoted argument is read the way a shell does: a *single
+quoted word* (`"main"`, `"-f"`) is still an ordinary argument and counts as
+command position. A quoted argument *with whitespace in it* — a commit
+message, a PR body — is opaque to the pattern (no match at all, not even a
+mention) ONLY when the program reading it is known to treat that argument as
+data, never as something to run: `printf`/`echo`'s own arguments; `git commit
+-m`/`--message`/`-F`, `git tag -m`, `git notes add -m`; `git grep`'s pattern
+and `git log`'s `-S`/`-G`/`--grep`; `gh`'s `--body`/`-b`/`--title`/`-t`/
+`--subject`/`--message`/`-m`, whatever the subcommand; the PATTERN argument
+of `grep`/`egrep`/`fgrep`/`rg`/`ag` (its first non-flag argument, or the value
+of `-e`/`--regexp`); `jq`'s filter argument; and, for ANY program, a generic
+set of text flags — `--body`/`--title`/`--message`/`--description`/
+`--comment`/`--text`/`--subject`/`--summary`/`--note`, space-separated or
+`=value` (`-m` deliberately stays OUT of this generic set: it is too
+overloaded a flag letter across unrelated tools to safely generalise, so it
+stays scoped to where it was already allowlisted above). Everywhere else —
+including an unrecognised program — a quoted argument stays visible and now
+resolves to a mention (`ask`), never silently allowed and never denied
+outright. A `$(...)`/backtick substitution stays visible regardless of
+quoting (its source text still becomes part of the enclosing command's own
+arguments at runtime, so it is always command position), and so does the
+script argument of a real shell/login/watch wrapper, read RECURSIVELY
+through the same allowlist, so a data position inside a wrapped command
+(`ssh host 'git commit -m "git push --force"'`) still goes opaque rather
+than the whole wrapped line becoming visible. This closes three live false
+positives: a `printf` whose double-quoted text merely spelled out a hard
+reset was refused as if that command had run; a command actually run by
+another program (`ssh host "git push --force origin main"`, `su -c "git push
+-f origin main"`) was waved through as if it were merely descriptive text;
+and a mention sitting in a program's own argument (`git grep "git reset
+--hard"`, `sed -i 's/git reset --hard//' f`) was hard-denied instead of
+asked about.
 
 ## Models
 

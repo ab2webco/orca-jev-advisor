@@ -63,6 +63,19 @@ test("the old bare-array shape this file has always shipped as still parses", ()
   assert.equal(parseSeedVersion(bareArray), 0, "a bare array carries no version, and 0 must not be guessed higher");
 });
 
+test("a row with an unrecognised scope value has it stripped, not passed through as if valid -- JEVADV-36", () => {
+  // isPolicyRow (store.ts) only validates id/rule/kind, deliberately silent
+  // on scope's VALUE (see its own doc comment) -- so a row with a typo'd
+  // scope still survives the filter, but used to come out of this function
+  // carrying that invalid string as if it satisfied PolicyScope. store.ts's
+  // getPolicies already normalizes this at read time (T10, JEVADV-28, R4);
+  // this is the seed reader doing the same, so every reader of a
+  // possibly-scopeless-or-mistyped row is consistent.
+  const parsed = parseSeedPolicies([{ id: "typo-scope", kind: "prohibits", rule: "invalid scope value", scope: "proceso" }]);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.scope, undefined, "an invalid scope must be stripped, not passed through");
+});
+
 test("the versioned { version, policies } object parses both halves", () => {
   const versioned = {
     version: 3,

@@ -575,6 +575,79 @@ test('deny tier: an unreadable config file (a directory instead of a file) keeps
 })
 
 // ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-36: the two-level model for forcePush/
+// pushProtected/resetClean. A match in COMMAND POSITION still denies; a
+// match that exists ONLY because a quoted argument of some OTHER,
+// non-executing program stayed visible now ASKS instead of denying outright.
+// One ask-mention case and one wrapper-still-denies case, exercised at the
+// real subprocess level (not just git_discard.ts's unit tests).
+// ---------------------------------------------------------------------------
+
+test('real subprocess, ASKS (not denies): sed\'s own script argument merely mentions a hard reset', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, "sed -i 's/git reset --hard//' f"))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /confirm it is not run/)
+})
+
+test('real subprocess, ASKS (not denies): an unrecognised program\'s quoted argument merely mentions a force push', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'some-unknown-tool "please never git push --force"'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+test('real subprocess, still DENIES: a wrapper (su -c) really running a hard reset stays command position', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'su -c "git reset --hard"'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('a mention-ask stop is still recorded as stopReason "local-rule", same as a deny', () => {
+  const home = makeHome()
+  run(home, "sed -i 's/git reset --hard//' f", { apiKey: 'unused' })
+  const lines = readFileSync(gateLogPath(home), 'utf8').trim().split('\n')
+  const record = JSON.parse(lines[lines.length - 1])
+  assert.equal(record.stopReason, 'local-rule')
+  assert.equal(record.verdict, 'ask')
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-36: new known DATA positions resolve to
+// the ordinary Jev/allow path, not even the mention-only ask tier -- see
+// the "SPEC NOTE" in git_discard.ts's own someSegmentMatches tests for why
+// this, and not 'ask', is the right outcome for `git grep`/`git log -S`.
+// ---------------------------------------------------------------------------
+
+test('real subprocess, not stopped by a local rule at all: git grep\'s pattern is a known data position', () => {
+  const home = makeHome()
+  const decision = decisionFor(home, 'git grep "git reset --hard"')
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+})
+
+test('real subprocess, not stopped by a local rule at all: a generic --body flag on an unrecognised program is a known data position', () => {
+  const home = makeHome()
+  const decision = decisionFor(home, 'orca plane create --body "plan: run git reset --hard origin/main next"')
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-36, item 2: a wrapper name must be
+// recognised only at a segment's command position, never as an arbitrary
+// later token belonging to some other program's own argument.
+// ---------------------------------------------------------------------------
+
+test('real subprocess, ASKS (not denies): a wrapper NAME sitting inside another program\'s own argument is not treated as that wrapper', () => {
+  const home = makeHome()
+  // Not "grep": that leading verb is mentionsRatherThanRuns' own MENTION_ONLY
+  // fast path (a separate, earlier guard), which would exit this command
+  // silently before it ever reaches the NEVER_SILENTLY loop this test means
+  // to exercise -- see git_discard.test.ts's own unit-level version of this
+  // same case for that one instead.
+  const payload = JSON.parse(run(home, 'some-tool -n watch "…git reset --hard…" f'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+// ---------------------------------------------------------------------------
 // AB benchmark sampling (appendAbBenchmarkSample) -- only its NEGATIVE case
 // is testable here. The real 'jev' verdict path (the only source this
 // benchmark samples) needs a live network response from Jev's fixed

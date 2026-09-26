@@ -8,7 +8,8 @@
 // share one implementation instead of three.
 
 import { readFile } from "node:fs/promises";
-import type { Policy, PolicyKind, PolicyScope } from "./decisions.ts";
+import type { Policy, PolicyKind } from "./decisions.ts";
+import { isPolicyScope } from "./decisions.ts";
 import { isRecord, isString } from "../guards.ts";
 
 /** Reserved: never usable as a real policy id, since Jev's coverage question uses it to mean "none of these apply". */
@@ -21,12 +22,9 @@ function isPolicyKind(value: unknown): value is PolicyKind {
   return isString(value) && (POLICY_KINDS as readonly string[]).includes(value);
 }
 
-/** The only valid values for a policy row's optional `scope` -- see PolicyScope in decisions.ts. */
-const POLICY_SCOPES: readonly PolicyScope[] = ["command", "process", "local-rule"];
-
-function isPolicyScope(value: unknown): value is PolicyScope {
-  return isString(value) && (POLICY_SCOPES as readonly string[]).includes(value);
-}
+// The only valid values for a policy row's optional `scope` -- see
+// isPolicyScope in decisions.ts, the one runtime member list every reader
+// shares (odd/tasks/release-0.5.1.md JEVADV-36) instead of its own copy.
 
 function isPolicyRow(value: unknown, index: number): Policy {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule)) {
@@ -48,7 +46,7 @@ function isPolicyRow(value: unknown, index: number): Policy {
   // but a PRESENT, invalid value is still a typo the operator needs to see,
   // same discipline as `kind` above.
   if ("scope" in value && value.scope !== undefined && !isPolicyScope(value.scope)) {
-    throw new Error(`La politica en la posicion ${index} ('${value.id}') tiene un 'scope' invalido; debe ser uno de: ${POLICY_SCOPES.join(", ")}`);
+    throw new Error(`La politica en la posicion ${index} ('${value.id}') tiene un 'scope' invalido; debe ser uno de: command, process, local-rule`);
   }
   return {
     id: value.id,
