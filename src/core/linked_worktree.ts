@@ -208,6 +208,35 @@ export function resolveGitDirForConfig(cwd: string): string | null {
 }
 
 /**
+ * The `.git` directory that actually holds `HEAD` -- i.e. the current
+ * branch -- for whatever repository `cwd` sits inside. Deliberately NOT the
+ * same resolution as {@link resolveGitDirForConfig}: remotes are shared
+ * commondir state, but `HEAD` is PER-WORKTREE -- each linked worktree has its
+ * own current branch, held in its own admin directory
+ * (`<main>/.git/worktrees/<name>/HEAD`), never the main checkout's. Reading
+ * `resolveGitDirForConfig`'s own result for this would resolve every linked
+ * worktree's push to the MAIN checkout's branch instead of its own (see
+ * push_own_branch.ts, odd/tasks/release-0.5.1-push-own-branch.md, which
+ * needs the worktree cwd is actually IN, not the one its remotes live in).
+ *
+ * For an ordinary checkout this is simply its own `.git` directory, exactly
+ * like resolveGitDirForConfig. For a linked worktree it is the verified
+ * `gitdir:` target itself (the per-worktree admin directory), never the
+ * commondir it points back to. Null when `cwd` is not inside any git
+ * repository this module can positively resolve -- same fail-to-null
+ * discipline as every other step in this file.
+ */
+export function resolveGitDirForHead(cwd: string): string | null {
+  const entry = findGitEntry(cwd);
+  if (entry === null) return null;
+  if (entry.isDirectory) return entry.path;
+  const gitdir = parseGitdirFile(entry.path);
+  if (gitdir === null) return null;
+  if (!verifyBackPointer(entry.path, gitdir)) return null;
+  return gitdir;
+}
+
+/**
  * What matchDestinationForCwd resolved: which destination's rules apply, and
  * which physical root the command actually runs against.
  *

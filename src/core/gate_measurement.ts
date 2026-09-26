@@ -36,6 +36,13 @@ export type GateVerdict = "allow" | "ask" | "deny";
  *   "policy"     -- a team policy's `prohibits`/`requires_human` matched
  *                    (see GateDecisionRecord.policyId below for which one).
  *   "local-rule"  -- one of gate-bash.ts's own NEVER_SILENTLY patterns.
+ *   "local-allow" -- a command that never needed judging at all: a plain
+ *                    push of the agent's own non-shared branch, or a git
+ *                    guarded delete (see push_own_branch.ts,
+ *                    odd/tasks/release-0.5.1-push-own-branch.md) --
+ *                    allowed without ever calling Jev, distinct from
+ *                    "local-rule" (which only ever denies or asks; this is
+ *                    the one local stage that ever produces "allow").
  *   "risk"        -- decideAction's reversible/external/consequence axes.
  *   "unreachable" -- Jev was asked but never answered (source: "none");
  *                    the verdict is still a truthful "allow" (failing open
@@ -47,9 +54,12 @@ export type GateVerdict = "allow" | "ask" | "deny";
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
  * thing -- only the "jev" bucket needed splitting, into "policy" and "risk",
- * and "none" is renamed to the reader-facing "unreachable".
+ * and "none" is renamed to the reader-facing "unreachable". "local-allow"
+ * shares GateSource's own "local-rule" bucket (both are decided locally, with
+ * no cache and no network) but gets its own, more specific stopReason so an
+ * "allow" it produces is never confused with a NEVER_SILENTLY deny/ask.
  */
-export type GateStopReason = "policy" | "local-rule" | "risk" | "unreachable" | "cache";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -264,7 +274,7 @@ function isGateVerdict(value: unknown): value is GateVerdict {
 }
 
 function isGateStopReason(value: unknown): value is GateStopReason {
-  return value === "policy" || value === "local-rule" || value === "risk" || value === "unreachable" || value === "cache";
+  return value === "policy" || value === "local-rule" || value === "local-allow" || value === "risk" || value === "unreachable" || value === "cache";
 }
 
 function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {

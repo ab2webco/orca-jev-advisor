@@ -1018,3 +1018,242 @@ for (const command of ALREADY_NOT_DENIED_BEFORE_T8) {
     assert.notEqual(decision, 'deny')
   })
 }
+
+// ---------------------------------------------------------------------------
+// Own-branch-push local allow -- odd/tasks/release-0.5.1-push-own-branch.md.
+// Real evidence: the owner's gate log showed five identical
+// `git push -u origin fabolivark/release-0.5.1` runs (four allowed, one
+// asked) all through Jev's risk stage, purely from repeat-call noise on the
+// consequence axis. A plain, non-force push of the agent's own non-shared
+// branch cannot destroy anything, so it now allows locally -- but only once
+// the deny tier AND any destination policy have both had their say.
+//
+// Every "allowed by the new path" test below runs with NO API key at all
+// (this file never reaches the real Jev endpoint -- see the module header):
+// the discriminator for "Jev was never even reachable, and the hook still
+// emitted a verdict" is that the emitted `permissionDecisionReason` carries
+// this feature's own reason text (never shown for the ordinary no-key
+// fallback, which either writes a DIFFERENT notice on the very first
+// command of a session, or nothing at all on a later one), AND a matching
+// row lands in gate-decisions.jsonl with source:"local-rule",
+// stopReason:"local-allow" -- a shape only this stage ever writes.
+// ---------------------------------------------------------------------------
+
+function gateLogRecords (home) {
+  if (!existsSync(gateLogPath(home))) return []
+  return readFileSync(gateLogPath(home), 'utf8').trim().split('\n').filter((l) => l.length > 0).map((l) => JSON.parse(l))
+}
+
+const OWN_BRANCH_PUSH_REASON_TEXT = 'pushes your own branch, with no force and no shared branch'
+
+/** Runs `command` with no API key and asserts it was allowed by THIS
+ *  stage specifically -- not by the ordinary no-key fallback, which would
+ *  never carry this reason text or write this log shape. */
+function assertAllowedByOwnBranchPush (home, command, cwd) {
+  const stdout = run(home, command, { cwd })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, OWN_BRANCH_PUSH_REASON_TEXT)
+  assert.equal(payload.systemMessage, undefined, 'an allow is never announced with a systemMessage')
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].source, 'local-rule')
+  assert.equal(records[0].stopReason, 'local-allow')
+  assert.equal(records[0].verdict, 'allow')
+}
+
+/** Runs `command` with no API key and asserts it was NOT allowed by this
+ *  stage: either the ordinary no-key notice fired (first command in a fresh
+ *  home), or the deny tier already stopped it -- either way, no
+ *  "local-allow" row and never this feature's own reason text. */
+function assertNotAllowedByOwnBranchPush (home, command, cwd) {
+  const stdout = run(home, command, { cwd })
+  if (stdout.length > 0) {
+    const payload = JSON.parse(stdout)
+    if (payload.hookSpecificOutput.permissionDecision === 'allow') {
+      assert.notEqual(payload.hookSpecificOutput.permissionDecisionReason, OWN_BRANCH_PUSH_REASON_TEXT)
+    }
+  }
+  const records = gateLogRecords(home)
+  assert.equal(records.some((r) => r.stopReason === 'local-allow'), false, 'must not have taken the own-branch-push shortcut')
+}
+
+function repoOnBranch (prefix, branch) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), prefix)))
+  const root = join(base, 'repo')
+  initRepo(root)
+  git(['checkout', '-q', '-b', branch], root)
+  return root
+}
+
+test('own-branch push: git push -u origin feature/x is allowed with no Jev call', () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'git push -u origin feature/x', home)
+})
+
+test('own-branch push: bare `git push` on branch feature/x is allowed with no Jev call', () => {
+  const home = makeHome()
+  const repo = repoOnBranch('push-own-branch-bare-', 'feature/x')
+  assertAllowedByOwnBranchPush(home, 'git push', repo)
+})
+
+test('own-branch push: git push origin HEAD on branch feature/x is allowed with no Jev call', () => {
+  const home = makeHome()
+  const repo = repoOnBranch('push-own-branch-head-', 'feature/x')
+  assertAllowedByOwnBranchPush(home, 'git push origin HEAD', repo)
+})
+
+test('own-branch push: cd repo && git push -u origin feature/x is allowed with no Jev call', () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'cd repo && git push -u origin feature/x', home)
+})
+
+test("own-branch push: the owner's own real shape, git push -u origin fabolivark/release-0.5.1, is allowed with no Jev call", () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'git push -u origin fabolivark/release-0.5.1', home)
+})
+
+// -- Still denied by the (unchanged) local deny rules -----------------------
+
+test('own-branch push: a real force push is still denied, not allowed by the new path', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push --force origin feature/x'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// odd/tasks/release-0.5.1-push-own-branch.md: the brief's own example of a
+// command "still denied by the local rules" (`git push origin +feature/x`)
+// does NOT actually deny today -- verified directly against
+// someSegmentMatches with the real forcePush pattern (`/(--force|-f)\b/`):
+// "+feature/x" contains no "-f"/"--force" token, so it never matches. This
+// is a genuine discrepancy in the brief, reported rather than silently
+// "fixed" by widening the deny tier (out of scope: the deny tier is
+// unchanged). This module's own refspec rule ("no leading +") still keeps
+// it from qualifying for the NEW allow path either, so the net behavior is
+// unchanged: it falls through to the ordinary Jev/no-key path exactly as
+// before this feature existed.
+test('own-branch push: git push origin +feature/x is NOT denied by forcePush today (a leading + has no -f/--force token) -- but also not allowed by the new path', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push origin +feature/x'))
+  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assertNotAllowedByOwnBranchPush(home, 'git push origin +feature/x')
+})
+
+// -- Not allowed by the new path (falls through to the ordinary path) -------
+
+test('own-branch push: git push origin main is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push origin main')
+})
+
+test('own-branch push: bare `git push` on branch main is not allowed by the new path -- pushProtectedRule\'s own text regex never sees "main" here', () => {
+  const home = makeHome()
+  const repo = repoOnBranch('push-own-branch-onmain-', 'temp')
+  git(['branch', '-M', 'main'], repo)
+  assertNotAllowedByOwnBranchPush(home, 'git push', repo)
+})
+
+test('own-branch push: git push origin feature/x:main is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push origin feature/x:main')
+})
+
+test('own-branch push: git push origin :feature/x is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push origin :feature/x')
+})
+
+test('own-branch push: git push --delete origin feature/x is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push --delete origin feature/x')
+})
+
+test('own-branch push: git push --tags is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push --tags')
+})
+
+test('own-branch push: git push --no-verify origin feature/x is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push --no-verify origin feature/x')
+})
+
+test('own-branch push: detached HEAD with git push origin HEAD is not allowed by the new path', () => {
+  const home = makeHome()
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'push-own-branch-detached-')))
+  const repo = join(base, 'repo')
+  initRepo(repo)
+  const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+  git(['checkout', '-q', sha], repo)
+  assertNotAllowedByOwnBranchPush(home, 'git push origin HEAD', repo)
+})
+
+test('own-branch push: a chained command after the push is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git push origin feature/x && rm -rf build')
+})
+
+test('own-branch push: a mention inside echo is not allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'echo "git push origin feature/x"')
+})
+
+// -- A destination policy that still needs a human wins over the shortcut --
+
+function writePoliciesMirror (home, policies) {
+  const path = join(home, '.config', 'orca-supervisor', 'policies.json')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(policies))
+}
+
+test('own-branch push: a global requires_human command-scoped policy still blocks the shortcut, falling through to the ordinary path', () => {
+  const home = makeHome()
+  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
+  // No API key: with the shortcut correctly blocked, this reaches the
+  // ordinary apiKey check and takes the well-established no-key path
+  // instead -- proof the command was NOT resolved locally by this feature.
+  const stdout = run(home, 'git push -u origin feature/x')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'fails open on no key, same as any other command')
+  assert.match(payload.systemMessage, /jev/i, 'must be the ordinary no-key notice, not this feature\'s own silent reason')
+  assert.equal(gateLogRecords(home).length, 0, 'the no-key path writes no gate-decision record at all')
+})
+
+test('own-branch push: a process-scoped requires_human policy does not block the shortcut -- it is not a command the text can be judged against', () => {
+  const home = makeHome()
+  writePoliciesMirror(home, [{ id: 'ticket_first', rule: 'Work is linked to its ticket before opening the PR.', kind: 'requires_human', scope: 'process' }])
+  assertAllowedByOwnBranchPush(home, 'git push -u origin feature/x', home)
+})
+
+test('own-branch push: a requires_human policy scoped to a DIFFERENT destination does not block the shortcut here', () => {
+  const home = makeHome()
+  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command', destinations: ['some-other-destination'] }])
+  // No catalog mirror at all here, so cwd matches no destination -- a
+  // destination-scoped policy naming ANOTHER id must not apply.
+  assertAllowedByOwnBranchPush(home, 'git push -u origin feature/x', home)
+})
+
+// -- A stale cache entry for the same shape never gets consulted -----------
+
+test('own-branch push: a pre-existing cached "ask" for this exact shape does not survive -- the shortcut runs before the cache is ever read', () => {
+  const home = makeHome()
+  const cwd = home
+  const key = expectedCacheKey('git push -u origin feature/x', cwd, home)
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [key]: { decision: 'ask', reason: 'a stale pre-feature ask for this exact shape', at: Date.now() - 1000 },
+  }))
+
+  // A real-looking API key is supplied here on purpose: if the shortcut did
+  // NOT run before the cache read, this would hit the pre-populated cache
+  // entry and return 'ask' with the stale reason below -- it must not.
+  const stdout = run(home, 'git push -u origin feature/x', { cwd, apiKey: 'test-key-unused-if-shortcut-fires-first' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, OWN_BRANCH_PUSH_REASON_TEXT)
+  assert.doesNotMatch(payload.systemMessage ?? '', /stale pre-feature ask/)
+
+  const persistedCache = JSON.parse(readFileSync(cachePath, 'utf8'))
+  assert.ok(Object.hasOwn(persistedCache, key), 'the stale entry is left on disk untouched -- this stage never reads or writes the cache at all')
+})

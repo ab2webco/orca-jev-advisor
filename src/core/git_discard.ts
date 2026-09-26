@@ -156,8 +156,8 @@ export function splitOutsideQuotes(command: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-/** Shell words of one segment, with quotes removed and a quoted argument kept whole. */
-function tokenize(segment: string): string[] {
+/** Shell words of one segment, with quotes removed and a quoted argument kept whole. Exported for push_own_branch.ts (odd/tasks/release-0.5.1-push-own-branch.md), which needs the exact same shell-word reading this file already uses elsewhere -- never a second, drifting tokenizer. */
+export function tokenize(segment: string): string[] {
   const tokens: string[] = [];
   let current = "";
   let inToken = false;
@@ -393,17 +393,32 @@ export function startsWithGitDiscard(segment: string): boolean {
 }
 
 /**
- * Splits on the shell's command separators (`;`, `&&`, `||`, `|`, `&`,
- * newline) outside quotes, backticks and parentheses. Unlike
- * `splitOutsideQuotes` it never splits on a parenthesis: a `$(...)`
- * substitution is part of the arguments of the command it feeds, so
- * `git push $(echo --force) origin` stays one segment. A plain `( ... )`
- * subshell also stays whole, which errs toward matching (a deny rule may
- * see two of its commands together), never toward missing one. A
- * redirection (`2>&1`, `&>`, `>|`) is part of its command, not a separator.
+ * The result of {@link splitOnCommandSeparatorsDetailed}: the same segments
+ * `splitOnCommandSeparators` returns, alongside the exact top-level joiner
+ * text immediately preceding each one -- `null` for the first segment (or
+ * for one preceded only by a stray/leading separator with nothing real
+ * before it).
  */
-export function splitOnCommandSeparators(command: string): string[] {
-  const parts: string[] = [];
+export interface CommandSeparatorSplit {
+  readonly segments: readonly string[];
+  /** `joiners[i]` is the joiner text before `segments[i]`; `joiners[0]` is always `null`. Consecutive separator characters (e.g. the two `&` of `&&`) are concatenated into one joiner string, so a real `&&` reads as `"&&"`, not two separate `"&"` entries. */
+  readonly joiners: readonly (string | null)[];
+}
+
+/**
+ * Same scan as `splitOnCommandSeparators` (quotes, backticks and paren depth
+ * respected, a redirection never mistaken for a separator), but also reports
+ * the joiner text between consecutive segments -- needed by
+ * push_own_branch.ts (odd/tasks/release-0.5.1-push-own-branch.md) to tell a
+ * real `&&`/`;` sequence apart from one joined by `|`, `||`, a bare `&` or a
+ * newline, which `splitOnCommandSeparators` alone cannot distinguish (it
+ * only ever returns the segments, never what joined them). `joiners[0]` is
+ * always `null`: a caller that requires a clean, non-degenerate sequence
+ * (nothing before the first real segment) checks that itself.
+ */
+export function splitOnCommandSeparatorsDetailed(command: string): CommandSeparatorSplit {
+  const rawParts: string[] = [];
+  const rawSeparators: string[] = [];
   let current = "";
   let single = false;
   let double = false;
@@ -422,14 +437,44 @@ export function splitOnCommandSeparators(command: string): string[] {
     else if (char === "(" && !single && !double) depth += 1;
     else if (char === ")" && !single && !double && depth > 0) depth -= 1;
     if (!single && !double && !backtick && depth === 0 && /[;&|\n]/.test(char) && !isRedirection(command, index)) {
-      parts.push(current);
+      rawParts.push(current);
+      rawSeparators.push(char);
       current = "";
       continue;
     }
     current += char;
   }
-  parts.push(current);
-  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
+  rawParts.push(current);
+
+  const segments: string[] = [];
+  const joiners: (string | null)[] = [];
+  let pendingJoiner: string | null = null;
+  for (let i = 0; i < rawParts.length; i += 1) {
+    const trimmed = (rawParts[i] ?? "").trim();
+    if (trimmed.length > 0) {
+      segments.push(trimmed);
+      joiners.push(pendingJoiner);
+      pendingJoiner = null;
+    }
+    if (i < rawSeparators.length) {
+      pendingJoiner = (pendingJoiner ?? "") + (rawSeparators[i] ?? "");
+    }
+  }
+  return { segments, joiners };
+}
+
+/**
+ * Splits on the shell's command separators (`;`, `&&`, `||`, `|`, `&`,
+ * newline) outside quotes, backticks and parentheses. Unlike
+ * `splitOutsideQuotes` it never splits on a parenthesis: a `$(...)`
+ * substitution is part of the arguments of the command it feeds, so
+ * `git push $(echo --force) origin` stays one segment. A plain `( ... )`
+ * subshell also stays whole, which errs toward matching (a deny rule may
+ * see two of its commands together), never toward missing one. A
+ * redirection (`2>&1`, `&>`, `>|`) is part of its command, not a separator.
+ */
+export function splitOnCommandSeparators(command: string): string[] {
+  return [...splitOnCommandSeparatorsDetailed(command).segments];
 }
 
 /**

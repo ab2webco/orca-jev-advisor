@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { after, test } from "node:test";
 
-import { matchDestinationForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout } from "./linked_worktree.ts";
+import { matchDestinationForCwd, resolveGitDirForConfig, resolveGitDirForHead, resolveLinkedWorktreeMainCheckout } from "./linked_worktree.ts";
 import type { MatchableDestination } from "./destination_match.ts";
 
 /** Every temp root this file creates, removed once after every test has run. */
@@ -287,4 +287,48 @@ test("resolveGitDirForConfig: nothing findable resolves to null, never throws", 
 
   assert.doesNotThrow(() => resolveGitDirForConfig(plain));
   assert.equal(resolveGitDirForConfig(plain), null);
+});
+
+// ===========================================================================
+// resolveGitDirForHead -- odd/tasks/release-0.5.1-push-own-branch.md: unlike
+// resolveGitDirForConfig (remotes are shared commondir state), HEAD is
+// PER-WORKTREE, so push_own_branch.ts must read a linked worktree's OWN
+// admin directory, never the main checkout's.
+// ===========================================================================
+
+test("resolveGitDirForHead: an ordinary checkout resolves to its own .git directory, same as resolveGitDirForConfig", () => {
+  const base = makeTempRoot("push-own-branch-head-ordinary-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+
+  assert.equal(resolveGitDirForHead(main), join(main, ".git"));
+});
+
+test("resolveGitDirForHead: a linked worktree resolves to ITS OWN admin directory, not the main checkout's -- its HEAD is a different branch", () => {
+  const base = makeTempRoot("push-own-branch-head-worktree-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+  // Whatever git's own default branch name is (compiled default or a
+  // developer's init.defaultBranch), read back rather than assumed -- this
+  // test's own point is the SIBLING resolving to its own, DIFFERENT branch,
+  // not any particular name for main's.
+  const mainBranch = readFileSync(join(main, ".git", "HEAD"), "utf8").trim();
+  const sibling = join(base, "main-repo-sibling");
+  git(["worktree", "add", "-q", sibling, "-b", "cin-985"], main);
+
+  const headDir = resolveGitDirForHead(sibling);
+  assert.notEqual(headDir, join(main, ".git"), "the sibling's own HEAD must never be read from the main checkout's .git directory");
+  assert.equal(readFileSync(join(headDir ?? "", "HEAD"), "utf8").trim(), "ref: refs/heads/cin-985");
+
+  // The main checkout's own HEAD, read the same way, is untouched by the worktree.
+  assert.equal(readFileSync(join(resolveGitDirForHead(main) ?? "", "HEAD"), "utf8").trim(), mainBranch);
+});
+
+test("resolveGitDirForHead: nothing findable resolves to null, never throws", () => {
+  const base = makeTempRoot("push-own-branch-head-none-");
+  const plain = join(base, "just-a-folder");
+  mkdirSync(plain, { recursive: true });
+
+  assert.doesNotThrow(() => resolveGitDirForHead(plain));
+  assert.equal(resolveGitDirForHead(plain), null);
 });

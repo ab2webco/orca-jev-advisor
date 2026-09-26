@@ -31,7 +31,8 @@ export type GateKey =
   | "reason.breaksSomethingImportant"
   | "reason.needsCleanupAfter"
   | "reason.tooCloseToTheLine"
-  | "reason.noDestinationMatched";
+  | "reason.noDestinationMatched"
+  | "reason.ownBranchPush";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -65,6 +66,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.needsCleanupAfter": "si sale mal, habrá que limpiar después",
     "reason.tooCloseToTheLine": "quedó justo en el límite, así que prefiere confirmarlo contigo antes que dejarlo pasar solo",
     "reason.noDestinationMatched": "este directorio no corresponde a ningún destino del catálogo, así que se usaron los umbrales globales",
+    "reason.ownBranchPush": "sube tu propia rama, sin force y sin tocar ramas compartidas",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -104,5 +106,6 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.needsCleanupAfter": "if it's wrong, there's cleanup to do afterward",
     "reason.tooCloseToTheLine": "right at the limit, so it checks with you instead of letting it through on its own",
     "reason.noDestinationMatched": "this directory doesn't match any catalog destination, so the global thresholds were used",
+    "reason.ownBranchPush": "pushes your own branch, with no force and no shared branch",
   },
 };

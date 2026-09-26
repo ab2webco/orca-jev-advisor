@@ -65,7 +65,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
@@ -73,6 +73,8 @@ import { commandShape } from '../../src/core/command_shape.ts'
 import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
 import { matchDestinationForCwd } from '../../src/core/linked_worktree.ts'
+import { PROTECTED_BRANCH_NAMES } from '../../src/core/push_remote.ts'
+import { qualifiesForOwnBranchPush } from '../../src/core/push_own_branch.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -291,7 +293,11 @@ function commandRule(pattern: RegExp): (ctx: RuleContext) => RuleOutcome {
   return (ctx) => (pattern.test(ctx.command) ? 'deny' : null)
 }
 
-const PUSH_PROTECTED_PATTERN = /git\s+push\b.*\b(main|master|production)\b/
+// Built from push_remote.ts's own PROTECTED_BRANCH_NAMES -- the ONE
+// shared/protected-branch list, so this rule and push_own_branch.ts's
+// own-branch-push allow (odd/tasks/release-0.5.1-push-own-branch.md) can
+// never drift apart into two different notions of "shared".
+const PUSH_PROTECTED_PATTERN = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANCH_NAMES.join('|')})\\b`)
 
 /**
  * pushProtected's own two-level match (segmentRule, same as forcePush above)
@@ -1110,6 +1116,44 @@ async function main(): Promise<void> {
     return
   }
 
+  // The catalog/policies mirror is read here, once, and reused below for the
+  // cache key -- the same reads askJev makes on its own later, but resolving
+  // the destination here lets the own-branch-push stage right after this
+  // run BEFORE any network call or cache lookup even happens.
+  const catalogMirror = readCatalogMirror()
+  const catalogMatch = catalogMirror !== null ? matchDestinationForCwd(cwd, catalogMirror.destinations) : null
+  const matchedDestination = catalogMatch?.destination ?? null
+  const policiesMirror = readPoliciesMirror()
+  const commandScopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+
+  // Own-branch-push local allow (odd/tasks/release-0.5.1-push-own-branch.md):
+  // a plain, non-force push of the agent's own, non-shared branch cannot
+  // destroy anything, so it never needs Jev's judgment -- but only once
+  // everything above (the deny tier) AND everything a destination policy
+  // could still say about it have both had their say.
+  //
+  // A policy can only make the gate MORE careful (decisions.ts's own
+  // decideGateAction composes it this way too): a `permits` match can never
+  // turn Jev's own risk-based 'ask' into 'allow' on its own (it falls
+  // through to the risk rule instead of short-circuiting it), so its mere
+  // presence cannot change what THIS shortcut would otherwise decide either.
+  // Only `requires_human`/`prohibits` can, and this module has no local way
+  // to know whether such a policy's own coverage question would actually
+  // match THIS command -- that judgment is Jev's (`same_kind`), which this
+  // whole stage exists to avoid calling. So any surviving `requires_human`/
+  // `prohibits` policy, whatever its own rule text is about, blocks the
+  // shortcut and falls through to the ordinary path below -- conservative on
+  // purpose, never a guess at whether it would really have covered this one.
+  const hasBlockingCommandPolicy = commandScopedPolicies.some((policy) => {
+    const kind = migratePolicyKind(policy.kind)
+    return kind === 'requires_human' || kind === 'prohibits'
+  })
+  if (!mentionOnly && !hasBlockingCommandPolicy && qualifiesForOwnBranchPush({ command, cwd })) {
+    appendGateRecord(cwd, command, 'local-rule', 'allow', null, 'local-allow', null)
+    emit('allow', t('reason.ownBranchPush'))
+    return
+  }
+
   const apiKey = await resolveApiKey()
   const previouslyWarnedNoKey = readNoKeyWarned()
   const noKeyNotice = decideNoKeyNotice(apiKey !== null, previouslyWarnedNoKey)
@@ -1133,9 +1177,9 @@ async function main(): Promise<void> {
   // target as out-of-tree (see MatchedDestinationForCwd's own comment,
   // linked_worktree.ts) -- the exact class of bug this project's Windows
   // path audit already fixed once, for a different cause.
-  const cachedCatalog = readCatalogMirror()
-  const cachedMatch = cachedCatalog !== null ? matchDestinationForCwd(cwd, cachedCatalog.destinations) : null
-  const key = cacheKey(command, context, cwd, cachedMatch?.destination.id ?? null, cachedMatch?.treeRoot ?? null)
+  // catalogMatch/matchedDestination were already resolved above, before the
+  // own-branch-push check -- reused here rather than read a second time.
+  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null)
   const cache = key === null ? {} : readCache()
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
@@ -1147,7 +1191,7 @@ async function main(): Promise<void> {
       // is the honest, complete stopReason on its own -- it does not know,
       // and does not claim to know, which sub-reason produced the original
       // verdict it is replaying.
-      appendPendingApproval(toolUseId, cwd, command, key, cachedMatch?.destination.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
+      appendPendingApproval(toolUseId, cwd, command, key, matchedDestination?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
     }
     emit(hit.decision, t('cached', { reason: hit.reason }))
     return

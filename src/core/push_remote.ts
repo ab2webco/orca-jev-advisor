@@ -22,6 +22,17 @@ import { readFileSync } from "node:fs";
 import { resolveGitDirForConfig } from "./linked_worktree.ts";
 
 /**
+ * The exact branch names gate-bash.ts's pushProtectedRule treats as
+ * shared/protected -- the ONE list, so push_own_branch.ts (the own-branch
+ * push allow, odd/tasks/release-0.5.1-push-own-branch.md) checks a resolved
+ * or explicit branch name against the same notion of "shared" rather than a
+ * second, independently maintained one. Lowercase and exact, matching
+ * pushProtectedRule's own case-sensitive regex: "Main" or "MAIN" is not
+ * caught by either.
+ */
+export const PROTECTED_BRANCH_NAMES: readonly string[] = ["main", "master", "production"];
+
+/**
  * Extracts the push command's own remote argument: the first token after
  * `git push` that does not start with `-`, taken from the same segment only
  * (stopping at the next `;`, `&&`, `||`, `|` or newline, so a compound
@@ -53,8 +64,8 @@ export function extractPushRemoteArg(command: string): string | null {
   return "";
 }
 
-/** A bare git remote NAME: letters, digits, `.`, `_` and `-` only -- no `/` or `:`, so it can never be mistaken for a path or a URL (see isLocalRemoteReference below, which handles everything else). */
-function isBareRemoteName(ref: string): boolean {
+/** A bare git remote NAME: letters, digits, `.`, `_` and `-` only -- no `/` or `:`, so it can never be mistaken for a path or a URL (see isLocalRemoteReference below, which handles everything else). Exported for push_own_branch.ts: a remote positional that is not a bare name (a URL or a path given directly) does not qualify for the own-branch push allow -- conservative on purpose, never a reason to widen what qualifies. */
+export function isBareRemoteName(ref: string): boolean {
   return ref.length > 0 && /^[A-Za-z0-9._-]+$/.test(ref);
 }
 
