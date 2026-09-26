@@ -243,10 +243,14 @@ type Decision = 'allow' | 'deny' | 'ask'
 const RESET_CLEAN_RAW_PATTERN = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/
 
 /**
- * One rule's outcome: `'deny'`/`'ask'` mean "this rule's pattern matched, at
- * this severity" (still subject to the rule's own `denyToggle` below);
- * `null` means no match at all, so the NEVER_SILENTLY loop moves on to the
- * next rule.
+ * One rule's outcome: `'deny'` means "this rule's pattern matched in command
+ * position" (still subject to the rule's own `denyToggle` below); `'ask'`
+ * means "this rule's pattern matched, but ONLY as a mention" -- the
+ * NEVER_SILENTLY loop below (JEVADV-37, odd/tasks/release-0.5.1.md) treats
+ * that exactly like `null`: it is not a local-rule match at all, and the
+ * command falls through to the ordinary Jev path instead of stopping
+ * locally; `null` means no match at all. Both non-deny outcomes make the
+ * loop move on to the next rule.
  */
 type RuleOutcome = 'deny' | 'ask' | null
 
@@ -257,10 +261,10 @@ type RuleOutcome = 'deny' | 'ask' | null
  * own command, `$(...)`/backticks, or an interpreter CODE string) resolves
  * to `'deny'`; a match that exists ONLY because a quoted argument of some
  * OTHER, non-executing program stayed visible resolves to `'ask'` instead --
- * a person decides, rather than the model being refused outright for a
- * phrase nobody was ever going to run. See someSegmentMatches' own doc
- * comment (src/core/git_discard.ts) for exactly how the two scan passes
- * decide this.
+ * a MENTION, which the NEVER_SILENTLY loop below (JEVADV-37) routes to the
+ * ordinary Jev path rather than stopping locally to ask a person who may not
+ * be there to answer. See someSegmentMatches' own doc comment
+ * (src/core/git_discard.ts) for exactly how the two scan passes decide this.
  */
 function segmentRule(pattern: { test(segment: string): boolean }): (command: string) => RuleOutcome {
   return (command) => someSegmentMatches(command, pattern)

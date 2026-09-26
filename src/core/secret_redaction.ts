@@ -442,10 +442,14 @@ function looksLikePathOrUrl(value: string): boolean {
  * `sha512-...==` integrity value in this module's own tests fails this on
  * its own leading `sha512-`, same as before this fix), at least 32 of them,
  * at most two trailing `=` padding characters, and no `/`-delimited segment
- * that is ENTIRELY lowercase letters -- a real path's own segments
- * (`Volumes`, `uploads`, a mangled `-Users-name-Projects-repo-` run) are
- * separator-rich, word-like text; real base64/an AWS secret mixes case and
- * digits WITHIN a run, never reads as a dictionary word per segment. It
+ * that reads as a single ORDINARY WORD -- either all-lowercase (`uploads`)
+ * or a single Capitalized word (`Documents`, `Volumes`) -- a real path's own
+ * segments are separator-rich, word-like text, and a TitleCase directory
+ * name (`Documents/Projects/ClientWork/Frontend`) is exactly as ordinary a
+ * path as an all-lowercase one, even though it is ALSO, letter for letter,
+ * inside `[A-Za-z0-9+/]`; real base64/an AWS secret mixes case and digits
+ * WITHIN a run (`wJalrXUtnFEMI`, `K7MDENG` -- neither is a single
+ * Capitalized word), never reads as one dictionary word per segment. It
  * still has to clear hasMixedCharacterClasses, same as every other
  * high-entropy candidate.
  */
@@ -453,7 +457,7 @@ function looksLikeBase64OrAwsSecretWithSlash(candidate: string): boolean {
   if (!candidate.includes("/")) return false;
   if (/^[/~.\\]/.test(candidate) || /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(candidate)) return false;
   if (!/^[A-Za-z0-9+/]{32,}={0,2}$/.test(candidate)) return false;
-  if (candidate.split("/").some((segment) => /^[a-z]+$/.test(segment))) return false;
+  if (candidate.split("/").some((segment) => /^[A-Z]?[a-z]+$/.test(segment))) return false;
   return hasMixedCharacterClasses(candidate);
 }
 

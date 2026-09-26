@@ -250,6 +250,18 @@ test("entropy negative: a Windows backslash path with a high-entropy segment is 
   assert.equal(count(command), 0);
 });
 
+test("entropy negative: a TitleCase relative path with no separators is never masked, even though every character is [A-Za-z] and it contains '/'", () => {
+  // Real directory names (macOS/Windows) are commonly TitleCase with no
+  // hyphen/underscore/dot at all -- looksLikeBase64OrAwsSecretWithSlash's own
+  // "no all-lowercase segment" check must not require EVERY letter in a
+  // segment to be lowercase, or a path this ordinary reads as base64/an AWS
+  // secret (all of [A-Za-z0-9+/], 38 characters, mixed upper/lower across
+  // segments) purely because none of its segments happens to be all-lowercase.
+  const command = "some-tool Documents/Projects/ClientWork/Frontend";
+  assert.equal(text(command), command);
+  assert.equal(count(command), 0);
+});
+
 // ===========================================================================
 // JEVADV-37: webhook tokens embedded in a URL PATH (Slack, Discord/generic,
 // Microsoft Teams) -- none of the rules above ever see these, since the
