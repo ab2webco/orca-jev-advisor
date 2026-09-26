@@ -44,8 +44,10 @@ import {
   buildPolicyQuestions,
   decideDestination,
   GATE_CONSEQUENCE_CEILING,
-  interpretDestinationPolicy
+  interpretDestinationPolicy,
+  migratePolicyKind
 } from '../../src/core/decisions.ts'
+import { auditPoliciesWithoutKind } from '../../src/core/policy_kind_audit.ts'
 import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
 import { deriveCatalogProposals } from '../../src/core/catalog_proposals.ts'
 import { resolveLinkedWorktreeMainCheckout } from '../../src/core/linked_worktree.ts'
@@ -361,6 +363,95 @@ async function seedPoliciesIfEmpty (orca, storageHost) {
     orca.log(`policy seed planted: ${seeded.length} row(s)`)
   } catch (error) {
     orca.log(`initial policy seeding failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// JEVADV-49 -- a config-panel save, run before a panel fix for legacy
+// Spanish kinds (permite/prohibe/pregunta) was loaded, left 20 of 23 stored
+// policies with no `kind` at all. src/core/store.ts's own getPolicies
+// silently excludes any row with a missing or unrecognised `kind` from the
+// policy stage -- correct for THAT function (never guessing a kind for a
+// row that has none), but nothing told the owner it had happened.
+//
+// Two separate fixes, both worked over the RAW stored array (never
+// getPolicies' own filtered view -- that filtering is exactly what makes a
+// kind-less row invisible):
+//   a. migrateLegacyPolicyKinds converts a row still carrying a pre-rename
+//      Spanish kind to its English equivalent, ONCE, persisted -- so the
+//      gate's policy stage (and every panel) reads English going forward
+//      without depending on migratePolicyKind re-running at every read.
+//   b. publishPoliciesWithoutKindStatus counts and names the rows that
+//      genuinely have no recognisable kind at all (never guessed, never
+//      touched) so a panel -- or, absent one, this log line -- can finally
+//      say so instead of silently judging nothing for them.
+// ---------------------------------------------------------------------------
+
+/** Migrates every stored policy row still carrying a pre-rename Spanish
+ *  `kind` (permite/prohibe/pregunta) to its English equivalent, using
+ *  decisions.ts's own migratePolicyKind -- the same mapping the gate already
+ *  applies at judgment time (interpretDestinationPolicy), just persisted so
+ *  it stops depending on that migration re-running on every read. Never
+ *  touches a row already in English, and never guesses a kind for a row
+ *  that has none at all -- publishPoliciesWithoutKindStatus (below) is what
+ *  surfaces THOSE, without ever inventing a value for them. Idempotent: a
+ *  second activation finds nothing left to convert and writes nothing. Never
+ *  throws -- this must not block activation any more than seedPoliciesIfEmpty
+ *  does. */
+async function migrateLegacyPolicyKinds (orca, storageHost) {
+  try {
+    const raw = await storageHost.get('policies')
+    if (!Array.isArray(raw)) return
+    let convertedCount = 0
+    const migrated = raw.map((row) => {
+      if (!isRecord(row) || typeof row.kind !== 'string') return row
+      // Already English (the overwhelmingly common case): left byte-for-byte
+      // alone, not just value-equal, so an untouched row never causes a
+      // spurious re-write.
+      if (row.kind === 'permits' || row.kind === 'requires_human' || row.kind === 'prohibits') return row
+      const mappedKind = migratePolicyKind(row.kind)
+      // migratePolicyKind returns null for both "no kind at all" (never true
+      // here, typeof row.kind === 'string' already) and "a kind string this
+      // build doesn't recognise" -- either way, not this migration's job to
+      // guess. Left exactly as stored.
+      if (mappedKind === null) return row
+      convertedCount += 1
+      return { ...row, kind: mappedKind }
+    })
+    if (convertedCount === 0) return
+    await storageHost.set('policies', migrated)
+    orca.log(`policy kind migration: ${convertedCount} row(s) converted from a legacy Spanish kind to English`)
+  } catch (error) {
+    orca.log(`policy kind migration failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+/** What the panels read for JEVADV-49's own audit -- `{count, ids, at}`,
+ *  same shape discipline as POLICY_SEED_NOTICE_STATUS_KEY just below: only
+ *  computed data, never raw storage access from a panel. See
+ *  publishPoliciesWithoutKindStatus. */
+const POLICIES_WITHOUT_KIND_STATUS_KEY = 'policiesWithoutKindStatus'
+
+/** Publishes JEVADV-49's own audit -- how many stored policy rows (after
+ *  migrateLegacyPolicyKinds above has already run, so a merely-legacy kind
+ *  is never counted here) still have no kind at all, and which ids -- for
+ *  the panels to render and, until (or unless) one does, at least one place
+ *  the owner can find it: this log line, once per call, every activation and
+ *  every config-panel save (see attendCatalogPolicyMirrorRequest, which
+ *  calls this too). Reads the RAW stored array, deliberately never
+ *  getPolicies' own filtered view -- that filtering is the exact silence
+ *  this closes. Never throws -- must not block activation. */
+async function publishPoliciesWithoutKindStatus (orca, storageHost) {
+  try {
+    const raw = await storageHost.get('policies')
+    const rows = Array.isArray(raw) ? raw : []
+    const audit = auditPoliciesWithoutKind(rows)
+    await storageHost.set(POLICIES_WITHOUT_KIND_STATUS_KEY, { count: audit.count, ids: audit.ids, at: new Date().toISOString() })
+    orca.log(audit.count > 0
+      ? `policies without a kind: ${audit.count} row(s) -- ${audit.ids.join(', ')}`
+      : 'policies without a kind: 0 row(s)')
+  } catch (error) {
+    orca.log(`policies-without-kind status publish failed: ${String(error?.message ?? error).slice(0, 160)}`)
   }
 }
 
@@ -1570,12 +1661,17 @@ async function attendDenyTierConfigRequest (orca, storageHost, options = {}) {
 const CATALOG_POLICY_MIRROR_REQUEST_KEY = 'catalog-policy-mirror-request'
 
 /** Re-mirrors the catalog and policies only when the panel's trigger value
- *  has changed since the last tick that looked at it. */
+ *  has changed since the last tick that looked at it. Also refreshes
+ *  JEVADV-49's own kind-less-policy status right after: a config-panel save
+ *  is exactly the real incident this closes (20 of 23 rows losing their
+ *  kind on a save made before a panel fix was loaded), so the count must
+ *  not wait for the next worker activation to catch up. */
 async function attendCatalogPolicyMirrorRequest (orca, storageHost, lastSeen) {
   const request = await storageHost.get(CATALOG_POLICY_MIRROR_REQUEST_KEY)
   if (typeof request !== 'string' || request.length === 0 || request === lastSeen.value) return
   lastSeen.value = request
   await mirrorCatalogAndPolicies(orca, storageHost)
+  await publishPoliciesWithoutKindStatus(orca, storageHost)
 }
 
 // ---------------------------------------------------------------------------
@@ -2053,8 +2149,17 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial catalog derivation failed: ${error.message}`))
     .then(() => seedPoliciesIfEmpty(orca, storageHost))
     .catch((error) => orca.log(`initial policy seeding failed: ${error.message}`))
+    // JEVADV-49: migrated BEFORE the mirror below, so a freshly-converted
+    // English kind reaches policies.json on this same activation, same
+    // convergence guarantee as seeding/deriving above.
+    .then(() => migrateLegacyPolicyKinds(orca, storageHost))
+    .catch((error) => orca.log(`initial policy kind migration failed: ${error.message}`))
     .then(() => mirrorCatalogAndPolicies(orca, storageHost))
     .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
+    // JEVADV-49: computed AFTER the migration above, so a row merely
+    // carrying a legacy Spanish kind is never reported as kind-less.
+    .then(() => publishPoliciesWithoutKindStatus(orca, storageHost))
+    .catch((error) => orca.log(`initial policies-without-kind status failed: ${error.message}`))
     .then(() => publishPolicySeedNoticeStatus(orca, storageHost))
     .catch((error) => orca.log(`initial policy seed notice status failed: ${error.message}`))
     // JEVADV-11: computed after the catalog bootstrap above, so a
@@ -2172,8 +2277,10 @@ export {
   LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
   LOCALE_STATUS_KEY,
+  migrateLegacyPolicyKinds,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
+  POLICIES_WITHOUT_KIND_STATUS_KEY,
   POLICY_SEED_DISMISS_RESULT_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
   POLICY_SEED_NOTICE_STATUS_KEY,
@@ -2182,6 +2289,7 @@ export {
   publishGateDefaults,
   publishLocaleStatus,
   publishModSkillsStatus,
+  publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,

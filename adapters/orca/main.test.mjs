@@ -56,8 +56,10 @@ const {
   LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
   LOCALE_STATUS_KEY,
+  migrateLegacyPolicyKinds,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
+  POLICIES_WITHOUT_KIND_STATUS_KEY,
   POLICY_SEED_DISMISS_RESULT_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
   POLICY_SEED_NOTICE_STATUS_KEY,
@@ -66,6 +68,7 @@ const {
   publishGateDefaults,
   publishLocaleStatus,
   publishModSkillsStatus,
+  publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
@@ -927,6 +930,139 @@ test('a storage that throws is survived rather than propagated, because this mus
   await seedPoliciesIfEmpty(orca, host)   // must not reject
 
   assert.ok(orca._logs.some((line) => line.includes('policy seeding failed')), 'the failure was not logged')
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-49 -- a config-panel save (run before a panel fix for legacy
+// Spanish kinds was loaded) left 20 of 23 stored policies with no `kind` at
+// all, and store.ts's own getPolicies silently excluded every one of them
+// from the policy stage. Two fixes: migrateLegacyPolicyKinds converts a row
+// still spelled permite/prohibe/pregunta to English, once, persisted;
+// publishPoliciesWithoutKindStatus counts and names whatever genuinely has
+// no kind left, so it is never silent again.
+// ---------------------------------------------------------------------------
+
+test('migrateLegacyPolicyKinds: a legacy-kind stored set is converted to English kinds, in place', async () => {
+  const orca = fakeOrca()
+  const legacy = [
+    { id: 'p1', rule: 'permite rule', kind: 'permite' },
+    { id: 'p2', rule: 'prohibe rule', kind: 'prohibe' },
+    { id: 'p3', rule: 'pregunta rule', kind: 'pregunta' },
+  ]
+  const host = fakeStorageHost({ policies: legacy })
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, [
+    { id: 'p1', rule: 'permite rule', kind: 'permits' },
+    { id: 'p2', rule: 'prohibe rule', kind: 'prohibits' },
+    { id: 'p3', rule: 'pregunta rule', kind: 'requires_human' },
+  ])
+  assert.ok(orca._logs.some((line) => line.includes('policy kind migration') && line.includes('3')), 'the conversion was not logged')
+})
+
+test('migrateLegacyPolicyKinds: a row already in English is left byte-for-byte untouched', async () => {
+  const orca = fakeOrca()
+  const english = [{ id: 'p1', rule: 'already english', kind: 'permits', destinations: ['d1'] }]
+  const host = fakeStorageHost({ policies: english })
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, english)
+  assert.equal(host._store.policies[0], english[0], 'an unchanged row must be the SAME object, never a copy')
+})
+
+test('migrateLegacyPolicyKinds: a row with no kind at all, or an unrecognised kind, is left exactly as stored -- never guessed', async () => {
+  const orca = fakeOrca()
+  const noKind = [
+    { id: 'p1', rule: 'no kind here' },
+    { id: 'p2', rule: 'bogus kind', kind: 'not-a-real-kind' },
+  ]
+  const host = fakeStorageHost({ policies: noKind })
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, noKind)
+})
+
+test('migrateLegacyPolicyKinds is idempotent: a second run over an already-migrated set converts nothing and writes nothing again', async () => {
+  const orca = fakeOrca()
+  const legacy = [{ id: 'p1', rule: 'permite rule', kind: 'permite' }]
+  const host = fakeStorageHost({ policies: legacy })
+
+  await migrateLegacyPolicyKinds(orca, host)
+  const afterFirst = host._store.policies
+  let setCalls = 0
+  const originalSet = host.set.bind(host)
+  host.set = async (key, value) => { setCalls += 1; return originalSet(key, value) }
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, afterFirst)
+  assert.equal(setCalls, 0, 'a second, no-op migration must never write to storage again')
+})
+
+test('migrateLegacyPolicyKinds: a storage that throws is survived rather than propagated', async () => {
+  const orca = fakeOrca()
+  const host = {
+    async get () { throw new Error('storage is down') },
+    async set () { throw new Error('storage is down') }
+  }
+
+  await migrateLegacyPolicyKinds(orca, host)   // must not reject
+
+  assert.ok(orca._logs.some((line) => line.includes('policy kind migration failed')), 'the failure was not logged')
+})
+
+test('publishPoliciesWithoutKindStatus: a kind-less stored set reports the count and ids, and leaves those rows untouched', async () => {
+  const orca = fakeOrca()
+  const stored = [
+    { id: 'has-kind', rule: 'r0', kind: 'permits' },
+    { id: 'no-kind-1', rule: 'r1' },
+    { id: 'no-kind-2', rule: 'r2' },
+  ]
+  const host = fakeStorageHost({ policies: stored })
+
+  await publishPoliciesWithoutKindStatus(orca, host)
+
+  const status = host._store[POLICIES_WITHOUT_KIND_STATUS_KEY]
+  assert.equal(status.count, 2)
+  assert.deepEqual([...status.ids].sort(), ['no-kind-1', 'no-kind-2'])
+  assert.equal(typeof status.at, 'string')
+  // Never touched: this function only reports, it never migrates or drops.
+  assert.deepEqual(host._store.policies, stored)
+  assert.ok(orca._logs.some((line) => line.includes('policies without a kind') && line.includes('2')), 'the count was not logged')
+})
+
+test('publishPoliciesWithoutKindStatus: a fully-kinded set reports zero, not silence', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({ policies: [{ id: 'p1', rule: 'r', kind: 'permits' }] })
+
+  await publishPoliciesWithoutKindStatus(orca, host)
+
+  assert.deepEqual(host._store[POLICIES_WITHOUT_KIND_STATUS_KEY].count, 0)
+  assert.deepEqual(host._store[POLICIES_WITHOUT_KIND_STATUS_KEY].ids, [])
+})
+
+test('publishPoliciesWithoutKindStatus: a legacy-kind row (not yet migrated) is NOT reported -- migratePolicyKind still recognises it', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({ policies: [{ id: 'p1', rule: 'r', kind: 'pregunta' }] })
+
+  await publishPoliciesWithoutKindStatus(orca, host)
+
+  assert.deepEqual(host._store[POLICIES_WITHOUT_KIND_STATUS_KEY], { count: 0, ids: [], at: host._store[POLICIES_WITHOUT_KIND_STATUS_KEY].at })
+})
+
+test('publishPoliciesWithoutKindStatus: a storage that throws is survived rather than propagated', async () => {
+  const orca = fakeOrca()
+  const host = {
+    async get () { throw new Error('storage is down') },
+    async set () { throw new Error('storage is down') }
+  }
+
+  await publishPoliciesWithoutKindStatus(orca, host)   // must not reject
+
+  assert.ok(orca._logs.some((line) => line.includes('policies-without-kind status publish failed')), 'the failure was not logged')
 })
 
 // ---------------------------------------------------------------------------

@@ -363,6 +363,7 @@
           'status.unjudged': '{{n}} pasaron sin juicio en esta ventana',
           'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'sin latencia de Jev medida en esta ventana',
+          'status.policiesWithoutKind': '{{n}} políticas del equipo no tienen tipo y no se aplican: {{ids}}. Abre Configuración → Políticas del equipo y elige un tipo.',
           'toll.heading': '¿Qué me cuesta?',
           'toll.unit': 'decisiones en esta ventana',
           'toll.avoided': 'Las reglas locales y la caché resolvieron {{n}} sin llamar a la red.',
@@ -475,6 +476,7 @@
           'status.unjudged': '{{n}} passed unjudged in this window',
           'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'no Jev latency measured in this window',
+          'status.policiesWithoutKind': '{{n}} team policies have no kind and are not applied: {{ids}}. Open Settings → Team policies and pick a kind.',
           'toll.heading': 'What does it cost?',
           'toll.unit': 'decisions in this window',
           'toll.avoided': 'Local rules and the cache settled {{n}} of them without a network call.',
@@ -721,6 +723,9 @@
       // for why this is a hand-copy rather than an import.
       var WORKER_HEARTBEAT_KEY = 'workerHeartbeat'
       var WORKER_HEARTBEAT_STALE_MS = 40 * 1000
+      // JEVADV-49: mirrors main.mjs's POLICIES_WITHOUT_KIND_STATUS_KEY --
+      // same hand-copy rule as WORKER_HEARTBEAT_KEY above.
+      var POLICIES_WITHOUT_KIND_STATUS_KEY = 'policiesWithoutKindStatus'
       function isHeartbeatFresh (heartbeat, nowMs, staleAfterMs) {
         if (!heartbeat || typeof heartbeat !== 'object' || typeof heartbeat.at !== 'string') return false
         var at = Date.parse(heartbeat.at)
@@ -823,6 +828,10 @@
       }
 
       var lastStats = null
+      // JEVADV-49: the last published policiesWithoutKindStatus read, `{count,
+      // ids, at}` or null before the first successful read -- see reload()
+      // and renderStats() below.
+      var lastPoliciesWithoutKind = null
 
       /** Shows `body`, or hides it and shows `emptyText` in its place.
        *  Every card on this board goes through here so that "nothing yet"
@@ -921,7 +930,7 @@
       })
 
       // ---------- the four questions -------------------------------------
-      function renderStatus (health, w) {
+      function renderStatus (health, w, policiesWithoutKind) {
         var chips = []
         if (health.lastJevAt) chips.push(chip(t('status.jevAnswered', { age: ago(health.lastJevAt) }), ''))
         else chips.push(chip(t('status.jevNever'), ''))
@@ -935,6 +944,12 @@
         chips.push(latency.sampleCount > 0
           ? chip(t('status.latency', { p50: ms(latency.medianMs), p95: ms(latency.p95Ms) }), '')
           : chip(t('status.latencyNone'), ''))
+        // JEVADV-49: a stored team policy with no kind is invisible to the
+        // gate (store.ts's getPolicies excludes it) and, until now, invisible
+        // to the owner too -- see main.mjs's publishPoliciesWithoutKindStatus.
+        if (policiesWithoutKind && policiesWithoutKind.count > 0) {
+          chips.push(chip(t('status.policiesWithoutKind', { n: num(policiesWithoutKind.count), ids: policiesWithoutKind.ids.join(', ') }), 'alarm'))
+        }
         el('status-body').innerHTML = chips.join('')
       }
       function chip (text, cls, title) {
@@ -1165,8 +1180,9 @@
         show('card-live', hasMeasurements || entries.length > 0)
       }
 
-      function renderStats (summary) {
+      function renderStats (summary, policiesWithoutKind) {
         lastStats = summary
+        lastPoliciesWithoutKind = policiesWithoutKind || null
         var ok = !!(summary && summary.ok)
         var gate = (ok && summary.gate) || {}
         var mod = (ok && summary.modSkills) || {}
@@ -1176,13 +1192,19 @@
         var hasSpeed = (ab.sampleCount || 0) > 0
         var hasSkills = (mod.totalDecisions || 0) > 0
         hasMeasurements = hasGate || hasSpeed || hasSkills
+        // JEVADV-49: at least one stored team policy has no kind (a config-
+        // panel save can silently strip it -- see main.mjs's own
+        // publishPoliciesWithoutKindStatus). This must be visible even on a
+        // machine with no gate decisions measured yet, so it gets its own
+        // reason to show the status card, independent of hasGate.
+        var kindIssue = !!(lastPoliciesWithoutKind && lastPoliciesWithoutKind.count > 0)
 
         // An empty log gets one card that says why, never a column of empty
         // sections and never a zero standing in for "nothing yet".
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
         show('windows', hasGate)
-        show('card-status', hasGate)
+        show('card-status', hasGate || kindIssue)
         show('card-recent', hasGate)
         show('card-projects', hasGate || hasSkills)
         show('card-speed', hasMeasurements)
@@ -1195,13 +1217,20 @@
         show('top', hasGate && w.totalDecisions > 0)
         if (hasGate) {
           renderWindowPicker(windows, key)
-          renderStatus(gate.health || {}, w)
+          renderStatus(gate.health || {}, w, lastPoliciesWithoutKind)
           if (w.totalDecisions > 0) {
             renderToll(w)
             renderInterventions(w)
             renderApprovals(w.approvals || {})
           }
           renderRecent(gate)
+        } else if (kindIssue) {
+          // No gate decisions measured at all, but the kind-less-policy
+          // warning still has to render somewhere -- the same chips
+          // function, with no gate health to report (its own no-data chips
+          // are truthful either way: "Jev has not answered a call yet" is
+          // exactly what "no gate data" means here).
+          renderStatus({}, {}, lastPoliciesWithoutKind)
         }
         if (hasMeasurements) {
           renderUnmeasured()
@@ -1272,10 +1301,11 @@
         return Promise.all([
           read('board', usuario),
           read('measurementsSummary', usuario),
-          read(WORKER_HEARTBEAT_KEY, false)
+          read(WORKER_HEARTBEAT_KEY, false),
+          read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null })
         ]).then(function (results) {
           render(results[0] || { entries: [] })
-          renderStats(results[1])
+          renderStats(results[1], results[3])
           renderWorkerNote(results[2])
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
