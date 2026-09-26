@@ -762,6 +762,11 @@ test('node -e with dangerous-looking text is an advice, not a hard stop', () => 
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'an advice is not a hard stop')
   assert.match(payload.hookSpecificOutput.permissionDecisionReason, /run the same command again unchanged and it will go through/)
+  // The gate genuinely cannot tell code from data here -- the reason must
+  // say so as a CONDITIONAL ("if it ran, it would..."), never assert the
+  // rule's effect as settled fact the way a toggled-off rule's own advice does.
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /may be data rather than a command/)
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /if it ran, it would:/)
 })
 
 test('a real python3 -c hard reset is an advice, not a hard stop, now that interpreter code is ambiguous', () => {

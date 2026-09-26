@@ -1372,7 +1372,7 @@ async function main(): Promise<void> {
   // that a LATER rule denies in the same command (review finding
   // R3-ask-short-circuits-later-deny). A deny with its switch on wins
   // outright; otherwise the first downgraded-to-ask rule found speaks.
-  let firstAdvice: { readonly why: GateKey } | null = null
+  let firstAdvice: { readonly why: GateKey; readonly kind: 'code' | 'toggle-off' } | null = null
   for (const { evaluate, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
     const outcome = evaluate({ command: inspected, cwd })
@@ -1398,7 +1398,7 @@ async function main(): Promise<void> {
     // below: the FIRST rule found in NEVER_SILENTLY's own order wins,
     // whether it got there via 'code' or via a toggled-off 'deny'.
     if (outcome === 'code') {
-      if (firstAdvice === null) firstAdvice = { why }
+      if (firstAdvice === null) firstAdvice = { why, kind: 'code' }
       continue
     }
     if (readDenyTierConfig()[denyToggle]) {
@@ -1407,10 +1407,10 @@ async function main(): Promise<void> {
       emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }))
       return
     }
-    if (firstAdvice === null) firstAdvice = { why }
+    if (firstAdvice === null) firstAdvice = { why, kind: 'toggle-off' }
   }
   if (firstAdvice !== null) {
-    const { why } = firstAdvice
+    const { why, kind } = firstAdvice
     // The advise-model release: a rule that would deny but whose switch was
     // deliberately turned off, or whose only match was an ambiguous
     // interpreter-code position, is now an ADVICE to the coding model --
@@ -1419,9 +1419,23 @@ async function main(): Promise<void> {
     // denies (above) exactly as a fresh install does. resolveAdviceOutcome
     // checks the retry pass first, same choke point every advice goes
     // through (fresh Jev risk stage included).
+    //
+    // A 'code' match is phrased as a CONDITIONAL, never asserted as fact:
+    // the whole reason this severity exists is that the gate cannot tell
+    // whether the text is a real command or merely data (a regex
+    // classifier's own literal test string, a script reading such a string
+    // from a file) -- stating the rule's effect outright ("force push:
+    // rewrites the remote...") would tell the model something the gate does
+    // not actually know here. A toggled-off rule carries no such doubt: its
+    // match WAS a real command-position run, only the operator's own switch
+    // decided not to hard-stop it.
+    const reasonEnglish =
+      kind === 'code'
+        ? `this text appears only inside inline interpreter code, which may be data rather than a command; if it ran, it would: ${tEnglish(why)}`
+        : tEnglish(why)
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
-      reasonsEnglish: [tEnglish(why)],
+      reasonsEnglish: [reasonEnglish],
       source: 'local-rule', stopReason: 'local-rule',
     })
     return
