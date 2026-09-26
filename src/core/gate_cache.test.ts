@@ -48,6 +48,34 @@ test("reasonKey is optional, for localizing an advise entry's person-facing summ
   );
 });
 
+// 0.5.3: reasonKey only ever carried the risk stage's FIRST reason, so a
+// person-facing effect line replayed from the cache could only ever see one
+// axis even when Jev cited several -- reasonKeys (a list) replaces it going
+// forward; reasonKey stays valid, read-only, for an entry written before
+// this field existed.
+test("reasonKeys is optional, and carries every risk-stage reason key -- not just the first", () => {
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "needs cleanup after · cannot be undone", reasonKeys: ["reason.needsCleanupAfter", "reason.cannotUndo"], at: 1 }),
+    true,
+    "a well-shaped reasonKeys list is valid",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKeys: [], at: 1 }),
+    true,
+    "an empty list is still well-shaped",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKeys: "reason.cannotUndo", at: 1 }),
+    false,
+    "reasonKeys, when present, must be an array",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKeys: ["reason.cannotUndo", 5], at: 1 }),
+    false,
+    "every element of reasonKeys must be a string",
+  );
+});
+
 test("an entry younger than the TTL is fresh", () => {
   const now = 1_000_000_000_000;
   const entry = { decision: "allow" as const, reason: "x", at: now - 1 };

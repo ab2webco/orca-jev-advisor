@@ -217,27 +217,53 @@ function isDestinationReasonKey(key: string): key is DestinationKey {
   return Object.prototype.hasOwnProperty.call(DESTINATION_CATALOG.en, key)
 }
 
-/** True when `key` is one of this file's own GATE_CATALOG keys -- used to validate a cache-read `reasonKey` (an arbitrary string off disk, possibly stale or hand-edited) before it is ever handed to `t()`. */
+/** True when `key` is one of this file's own GATE_CATALOG keys -- used to validate a cache-read `reasonKey`/`reasonKeys` entry (an arbitrary string off disk, possibly stale or hand-edited) before it is ever handed to `t()`. */
 function isGateCatalogKey(key: string): key is GateKey {
   return Object.prototype.hasOwnProperty.call(GATE_CATALOG.en, key)
 }
 
 /**
- * The first reason's own GateKey, when there is one -- carried alongside a
- * risk-stage advice (fresh or cached) so its person-facing summary can be
- * localized to whatever locale is ACTIVE WHEN IT IS SHOWN, never frozen to
- * whichever locale (or, before this, language -- the bug this closes) first
- * produced it. `reasons` empty, or its first entry a DESTINATION_CATALOG
- * citation instead, never actually happens for the isRiskAdvice case this
- * feeds (see decideGateAction: a policy citation implies a non-null
- * policyId, which isRiskAdvice already excludes) -- both return null rather
- * than assume it never will.
+ * An `"advise"` cache entry's own risk-reason keys, for resolvePersonEffect
+ * (gate_person_effect.ts) -- tolerating three shapes actually found on disk:
+ * `reasonKeys` (a list, written from 0.5.3 on -- every reason Jev cited),
+ * `reasonKey` (0.5.1's single-key predecessor, from an entry written before
+ * `reasonKeys` existed), or neither (an entry written before either field
+ * existed). Every raw string is validated against GATE_CATALOG's own keys
+ * before ever reaching resolvePersonEffect -- a stale or hand-edited value
+ * is silently dropped, never crashes; an entry left with nothing
+ * recognisable resolves through resolvePersonEffect's own floor
+ * (effect.uncertain) rather than an empty status line.
  */
-function firstGateReasonKey(reasons: readonly GateActionReason[]): GateKey | null {
-  const first = reasons[0]
-  if (first === undefined) return null
-  if (isDestinationReasonKey(first.key)) return null
-  return first.key
+function cachedRiskReasonKeys(hit: GateCacheEntry): readonly GateKey[] | undefined {
+  if (hit.reasonKeys !== undefined) return hit.reasonKeys.filter(isGateCatalogKey)
+  if (hit.reasonKey !== undefined && isGateCatalogKey(hit.reasonKey)) return [hit.reasonKey]
+  return undefined
+}
+
+/**
+ * Every reason's own GateKey, in order -- carried alongside a risk-stage
+ * advice (fresh or cached) so its person-facing summary can be localized to
+ * whatever locale is ACTIVE WHEN IT IS SHOWN, never frozen to whichever
+ * locale (or, before 0.5.2, language) first produced it.
+ *
+ * 0.5.3: this used to keep only the FIRST reason (firstGateReasonKey), so a
+ * person-facing effect line (gate_person_effect.ts) could only ever see one
+ * axis even when Jev cited several -- the field-test defect this closes: an
+ * advised `rm -rf tmp/` cited [needsCleanupAfter, cannotUndo], and only the
+ * first (which carries no concrete fact of its own) ever reached the effect
+ * resolver, which then fell back to a claim ("someone else will notice")
+ * the SECOND reason (cannotUndo) never supported either, but the actual
+ * situation did. Every reason now reaches the resolver, which scans them in
+ * its own fixed priority order -- never this array's own order.
+ *
+ * A DESTINATION_CATALOG citation among `reasons` never actually happens for
+ * the isRiskAdvice case this feeds (see decideGateAction: a policy citation
+ * implies a non-null policyId, which isRiskAdvice already excludes) -- such
+ * an entry is filtered out defensively rather than assumed it never will
+ * occur.
+ */
+function gateReasonKeys(reasons: readonly GateActionReason[]): readonly GateKey[] {
+  return reasons.filter((reason) => !isDestinationReasonKey(reason.key)).map((reason) => reason.key as GateKey)
 }
 
 /** Resolves a decideGateAction reason through whichever catalog its key actually belongs to. */
@@ -1377,8 +1403,8 @@ type JevOutcome =
       readonly isRiskAdvice: boolean
       /** The risk stage's own reasons, resolved in ENGLISH, model-facing text -- only meaningful when isRiskAdvice is true; empty otherwise. */
       readonly riskAdviceReasonsEnglish: readonly string[]
-      /** The first of those reasons' own GateKey -- carried so the caller (and, through the cache, a later hit) can resolve a LOCALIZED person-facing summary, never the English text above. Null only when isRiskAdvice is false, or in the defensive case firstGateReasonKey's own doc names. */
-      readonly riskAdviceFirstReasonKey: GateKey | null
+      /** EVERY one of those reasons' own GateKey, in order -- carried so the caller (and, through the cache, a later hit) can resolve a LOCALIZED person-facing summary that considers every axis Jev cited, never just the English text above and never just the first (see gateReasonKeys's own doc). Empty when isRiskAdvice is false. */
+      readonly riskAdviceReasonKeys: readonly GateKey[]
       /**
        * Part 3(b)'s own local floor: non-null only when `decision` is
        * 'allow' AND src/core/deploy_publish.ts detected this command as a
@@ -1495,7 +1521,7 @@ async function askJev(apiKey: string, command: string, context: string, localGit
       viaLocalAllow,
       isRiskAdvice,
       riskAdviceReasonsEnglish: isRiskAdvice ? gate.reasons.map(resolveGateActionReasonEnglish) : [],
-      riskAdviceFirstReasonKey: isRiskAdvice ? firstGateReasonKey(gate.reasons) : null,
+      riskAdviceReasonKeys: isRiskAdvice ? gateReasonKeys(gate.reasons) : [],
       // Part 3(b): a command this local floor recognises as a deploy/publish
       // action must never resolve to a SILENT allow -- named here whenever
       // the final verdict would otherwise be exactly that, whatever decided
@@ -1803,26 +1829,24 @@ async function main(): Promise<void> {
     // fresh -- see buildAdviceForCommand/checkAdviceRetryPass's own module
     // notes. hit.reason for an 'advise' entry is the core ENGLISH reason
     // only (gate_cache.ts's own doc on GateCacheDecision), never
-    // locale-resolved and never the full composed text. hit.reasonKey (when
-    // present -- an entry written before this field existed has none) is
-    // resolved fresh, in whatever locale is active NOW, for the person-facing
+    // locale-resolved and never the full composed text. hit.reasonKeys (when
+    // present) or hit.reasonKey (its 0.5.1-shaped, one-element predecessor --
+    // an entry written before either field existed has neither) is resolved
+    // fresh, in whatever locale is active NOW, for the person-facing
     // summary; an absent or unrecognized key falls back to the stored
     // English reason rather than ever showing an empty status line.
     if (hit.decision === 'advise') {
       // The effect is resolved fresh, in whatever locale is active NOW, from
       // whichever of the two markers this entry actually carries --
       // deployPublishKind for the deploy/publish floor's own entries,
-      // reasonKey for the risk stage's own axis reasons. An entry written
-      // before either field existed (or one whose key/kind this build no
-      // longer recognises) carries neither, and resolvePersonEffect's own
-      // floor (gate_person_effect.ts) still resolves to the honest,
-      // non-vacuous "others will notice" rather than an empty status line.
+      // cachedRiskReasonKeys for the risk stage's own axis reasons. An entry
+      // written before any of these fields existed (or one whose keys/kind
+      // this build no longer recognises) carries none, and
+      // resolvePersonEffect's own floor (gate_person_effect.ts) still
+      // resolves to the honest, non-vacuous effect.uncertain rather than an
+      // empty status line.
       const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
-        hit.deployPublishKind !== undefined
-          ? { deployPublishKind: hit.deployPublishKind }
-          : hit.reasonKey !== undefined && isGateCatalogKey(hit.reasonKey)
-            ? { riskReasonKey: hit.reasonKey }
-            : {}
+        hit.deployPublishKind !== undefined ? { deployPublishKind: hit.deployPublishKind } : { riskReasonKeys: cachedRiskReasonKeys(hit) }
       resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk' })
       return
     }
@@ -1838,19 +1862,27 @@ async function main(): Promise<void> {
     }
     // A cached deny/ask can only ever have been a policy verdict (see
     // askJev's own note: the risk stage never returns 'deny', and its own
-    // 'ask' always becomes an 'advise' entry instead) -- policyId/policyRule
-    // are what let this hit rebuild the SAME person-facing hard-stop/ask
-    // line a fresh policy verdict would show, below. An entry written before
-    // either field existed falls back to the stored reason text rather than
-    // an empty line.
+    // 'ask' always becomes an 'advise' entry instead) -- policyId is what
+    // lets this hit rebuild the SAME person-facing hard-stop/ask line a
+    // fresh policy verdict would show, below. An entry written before that
+    // field existed falls back to the empty string rather than an empty
+    // line -- never to `hit.reason` or `hit.policyRule`, which are (or may
+    // carry) the team's own, often-English rule text: see policyBlockedLine
+    // / policyAskReason's own doc in i18n_gate.ts for the mixed-language
+    // line this replaces.
     const cacheHitSegment = jevSegmentFor(command)
+    // The person's own confirmation prompt for an 'ask' (permissionDecisionReason
+    // -- Claude Code shows this to the PERSON, not the model, for an 'ask'
+    // verdict) is rebuilt the same way as the systemMessage below, never
+    // replayed from `hit.reason` -- see policyAskReason's own doc.
+    const cacheHitReason = hit.decision === 'ask' ? t('policyAskReason', { policyId: hit.policyId ?? '', segment: cacheHitSegment }) : hit.reason
     const cacheHitSystemMessage =
       hit.decision === 'deny'
-        ? t('blockedLine', { segment: cacheHitSegment, rule: hit.policyRule ?? hit.reason })
+        ? t('policyBlockedLine', { segment: cacheHitSegment, policyId: hit.policyId ?? '' })
         : hit.decision === 'ask'
           ? t('policyAskLine', { policyId: hit.policyId ?? hit.reason, segment: cacheHitSegment })
           : undefined
-    emit(hit.decision, hit.reason, cacheHitSystemMessage)
+    emit(hit.decision, cacheHitReason, cacheHitSystemMessage)
     return
   }
 
@@ -1922,13 +1954,18 @@ async function main(): Promise<void> {
   // recomputed fresh rather than cached alongside it.
   if (resolved.isRiskAdvice) {
     if (key !== null) {
-      cache[key] = { decision: 'advise', reason: resolved.riskAdviceReasonsEnglish.join(' · '), reasonKey: resolved.riskAdviceFirstReasonKey ?? undefined, at: Date.now() }
+      cache[key] = {
+        decision: 'advise',
+        reason: resolved.riskAdviceReasonsEnglish.join(' · '),
+        reasonKeys: resolved.riskAdviceReasonKeys.length > 0 ? resolved.riskAdviceReasonKeys : undefined,
+        at: Date.now(),
+      }
       writeCache(cache)
     }
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
-      effectSource: { riskReasonKey: resolved.riskAdviceFirstReasonKey },
+      effectSource: { riskReasonKeys: resolved.riskAdviceReasonKeys },
       segment: jevSegmentFor(command),
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
     })
@@ -1981,18 +2018,24 @@ async function main(): Promise<void> {
     )
   }
   // A 'deny'/'ask' reaching here is always a policy verdict (see askJev's
-  // own note above jevStopReason) -- policyRule/policyId are always
-  // populated for those two, so the fallbacks below only ever guard a
-  // defensive edge case, never the ordinary path. A clean 'allow' shows
-  // nothing (silent, same as before 0.5.2).
+  // own note above jevStopReason) -- policyId is always populated for those
+  // two, so the fallback below only ever guards a defensive edge case,
+  // never the ordinary path. A clean 'allow' shows nothing (silent, same as
+  // before 0.5.2).
   const finalSegment = jevSegmentFor(command)
+  // The person's own confirmation prompt for an 'ask' (permissionDecisionReason)
+  // names only the policy and the command -- never DESTINATION_CATALOG's own
+  // policy.needsHuman text, which splices the team's own (often English)
+  // rule in after a locale-resolved lead-in. See policyAskReason's own doc
+  // in i18n_gate.ts.
+  const finalReason = resolved.decision === 'ask' ? t('policyAskReason', { policyId: resolved.policyId ?? '', segment: finalSegment }) : resolved.reason
   const finalSystemMessage =
     resolved.decision === 'deny'
-      ? t('blockedLine', { segment: finalSegment, rule: resolved.policyRule ?? '' })
+      ? t('policyBlockedLine', { segment: finalSegment, policyId: resolved.policyId ?? '' })
       : resolved.decision === 'ask'
         ? t('policyAskLine', { policyId: resolved.policyId ?? '', segment: finalSegment })
         : undefined
-  emit(resolved.decision, resolved.reason, finalSystemMessage)
+  emit(resolved.decision, finalReason, finalSystemMessage)
 }
 
 await main()

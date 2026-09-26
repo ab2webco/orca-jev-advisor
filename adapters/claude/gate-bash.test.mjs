@@ -2191,7 +2191,9 @@ test('es locale: a risk-stage cache-hit advice names the segment and a concrete 
 
   const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-es' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
-  assert.equal(payload.systemMessage, 'jev · avisó al modelo antes de `some-unmeasured-advisable-tool --flag`: lo verán otras personas')
+  // reason.tooCloseToTheLine carries no concrete fact of its own -- 0.5.3
+  // floors it to the honest effect.uncertain, never othersNotice.
+  assert.equal(payload.systemMessage, 'jev · avisó al modelo antes de `some-unmeasured-advisable-tool --flag`: Jev no está seguro de que sea inofensivo')
   assertNoAbstractPhrasing(payload.systemMessage)
 
   // The model-facing text is unaffected by locale, and never addresses "you".
@@ -2213,7 +2215,7 @@ test('en locale (the default): the same risk-stage cache-hit advice names the se
 
   const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-en' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
-  assert.equal(payload.systemMessage, 'jev · advised the model before `some-unmeasured-advisable-tool --flag`: other people will see it')
+  assert.equal(payload.systemMessage, "jev · advised the model before `some-unmeasured-advisable-tool --flag`: Jev isn't sure it's harmless")
   assertNoAbstractPhrasing(payload.systemMessage)
 
   const modelText = payload.hookSpecificOutput.permissionDecisionReason
@@ -2222,16 +2224,73 @@ test('en locale (the default): the same risk-stage cache-hit advice names the se
   assert.doesNotMatch(modelText, /your machine/i)
 })
 
-test('a cache-hit advice written before reasonKey existed still localizes -- falls back to the generic, non-vacuous effect, never crashes', () => {
+test('a cache-hit advice written before reasonKey/reasonKeys existed still localizes -- falls back to the honest, non-vacuous uncertain floor, never crashes', () => {
   const home = makeHome()
   writeLocale(home, 'es')
   const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
-  // Exactly the old (pre-0.5.2) shape: no reasonKey, no deployPublishKind.
+  // Exactly the old (pre-0.5.2) shape: no reasonKey/reasonKeys, no deployPublishKind.
   writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
 
   const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-legacy' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
-  assert.equal(payload.systemMessage, 'jev · avisó al modelo antes de `some-unmeasured-advisable-tool --flag`: lo verán otras personas')
+  assert.equal(payload.systemMessage, 'jev · avisó al modelo antes de `some-unmeasured-advisable-tool --flag`: Jev no está seguro de que sea inofensivo')
+})
+
+// 0.5.3: 0.5.1's reasonKey only ever kept the risk stage's FIRST reason, so
+// a person-facing effect line replayed from the cache could see only one
+// axis -- the field-test defect: an advised `rm -rf tmp/` cited
+// [needsCleanupAfter, cannotUndo, noDestinationMatched], and the person saw
+// "lo verán otras personas" (a claim neither reason supported) instead of
+// "no se puede deshacer" (which the second reason DID support). These two
+// tests prove the cache now carries every reason, and that the person-facing
+// line picks the fixed-priority winner from the WHOLE list, not just the
+// first.
+test('es locale: B6 -- a cache-hit advice with reasonKeys [needsCleanupAfter, cannotUndo, noDestinationMatched] names "no se puede deshacer", never "lo verán otras personas"', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'advise',
+    reason: 'if it is wrong, there is cleanup to do afterward · there is no automatic way to undo it · this directory does not match any catalog destination',
+    reasonKeys: ['reason.needsCleanupAfter', 'reason.cannotUndo', 'reason.noDestinationMatched'],
+    at: Date.now(),
+  })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-b6-es' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(payload.systemMessage, 'jev · avisó al modelo antes de `some-unmeasured-advisable-tool --flag`: no se puede deshacer')
+  assert.doesNotMatch(payload.systemMessage, /lo verán otras personas/)
+})
+
+test('en locale: the same B6 reasonKeys list names "cannot be undone", never "other people will see it"', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'advise',
+    reason: 'if it is wrong, there is cleanup to do afterward · there is no automatic way to undo it · this directory does not match any catalog destination',
+    reasonKeys: ['reason.needsCleanupAfter', 'reason.cannotUndo', 'reason.noDestinationMatched'],
+    at: Date.now(),
+  })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-b6-en' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(payload.systemMessage, 'jev · advised the model before `some-unmeasured-advisable-tool --flag`: cannot be undone')
+  assert.doesNotMatch(payload.systemMessage, /other people will see it/)
+})
+
+test('a legacy single reasonKey (0.5.1 shape) still resolves through the same priority scan -- [someoneElseWillNotice] alone still names othersNotice', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'advise',
+    reason: 'someone else is going to notice the effect',
+    reasonKey: 'reason.someoneElseWillNotice',
+    at: Date.now(),
+  })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-legacy-single-key' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(payload.systemMessage, 'jev · advised the model before `some-unmeasured-advisable-tool --flag`: other people will see it')
 })
 
 test('es locale: the deploy/publish floor advice names the segment and picks "dispara un deploy" for a deploy-shaped detection', () => {
@@ -2396,15 +2455,19 @@ test("the replay's own B38 shape: a routine commit on main under never_write_to_
 })
 
 // ---------------------------------------------------------------------------
-// 0.5.2 (Part 1): a `prohibits`/`requires_human` policy verdict carries its
-// own policyId/rule (gate_cache.ts's own GateCacheEntry fields), so its
-// person-facing line names the command and the rule/policy in plain words --
-// "jev · bloqueó `segment`: rule" for a hard stop, "jev · policyId pide que
-// decidas: `segment`" for a human ask -- instead of the model-facing REFUSED
-// text or the bare policy rationale.
+// 0.5.2 (Part 1) / 0.5.3 (Part 2): a `prohibits`/`requires_human` policy
+// verdict carries its own policyId (gate_cache.ts's own GateCacheEntry
+// fields), so its person-facing line names the command and the POLICY --
+// never the team's own configured rule text, which is arbitrary user
+// content, often English, and leaked a mixed-language line on a Spanish
+// locale ("jev · bloqueó `git add README.md`: Never write directly on main
+// or develop, not even a one-line fix."). "jev · bloqueó `segment`: lo
+// prohíbe la política policyId" for a hard stop, "jev · policyId pide que
+// decidas: `segment`" for a human ask -- never the model-facing REFUSED text
+// or the policy's own rule.
 // ---------------------------------------------------------------------------
 
-test('es locale: a fresh-shaped prohibits cache entry (policyId + policyRule stored) names the segment and the rule in plain words', () => {
+test('es locale: a fresh-shaped prohibits cache entry (policyId + policyRule stored) names the segment and the POLICY, never the rule text', () => {
   const home = makeHome()
   writeLocale(home, 'es')
   const command = 'git commit -am "docs: update header"'
@@ -2419,7 +2482,41 @@ test('es locale: a fresh-shaped prohibits cache entry (policyId + policyRule sto
   const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-prohibits-fresh-es' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^REFUSED/, 'the model-facing text is unaffected')
-  assert.equal(payload.systemMessage, 'jev · bloqueó `git commit -am "docs: update header"`: Never write directly on main or develop, not even a one-line fix.')
+  assert.equal(payload.systemMessage, 'jev · bloqueó `git commit -am "docs: update header"`: lo prohíbe la política never_write_to_main')
+  assert.doesNotMatch(payload.systemMessage, /Never write directly on main/, 'the team\'s own English rule text never reaches the person-facing line')
+})
+
+test('en locale: the same fresh-shaped prohibits cache entry, naming the policy in English', () => {
+  const home = makeHome()
+  const command = 'git commit -am "docs: update header"'
+  const key = expectedCacheKey(command, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'deny',
+    reason: 'REFUSED: forbidden by the team policy never_write_to_main (Never write directly on main or develop, not even a one-line fix.). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.',
+    policyId: 'never_write_to_main',
+    policyRule: 'Never write directly on main or develop, not even a one-line fix.',
+    at: Date.now(),
+  })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-prohibits-fresh-en' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(payload.systemMessage, 'jev · blocked `git commit -am "docs: update header"`: forbidden by the policy never_write_to_main')
+})
+
+test('a legacy prohibits cache entry with no policyId at all still never leaks English rule text into the person-facing line', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const command = 'git commit -am "docs: update header"'
+  const key = expectedCacheKey(command, home, home)
+  // Exactly the pre-0.5.2 shape: no policyId, no policyRule at all.
+  writeVerdictCacheEntry(home, key, {
+    decision: 'deny',
+    reason: 'REFUSED: forbidden by the team policy never_write_to_main (Never write directly on main or develop, not even a one-line fix.). You cannot run this command.',
+    at: Date.now(),
+  })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-prohibits-legacy-shape' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.doesNotMatch(payload.systemMessage, /Never write directly on main/)
+  assert.doesNotMatch(payload.systemMessage, /REFUSED/)
 })
 
 test('a requires_human policy ask names the policy id and the segment, in one short sentence', () => {
@@ -2438,6 +2535,15 @@ test('a requires_human policy ask names the policy id and the segment, in one sh
   const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-policy-ask-en' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
   assert.equal(payload.systemMessage, 'jev · client_always_asks asks you to decide: `some-client-scoped-command --flag`')
+  // 0.5.3: the person's own confirmation prompt (permissionDecisionReason
+  // for an 'ask') used to splice the team's own rule text in after a
+  // locale-resolved lead-in ("client_always_asks exige que decida una
+  // persona: Anything touching a client is confirmed with a human." -- a
+  // mixed-language line even in English's own case, it named the rule, not
+  // just the policy and the command). It now names only the policy and the
+  // segment.
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, 'The policy client_always_asks asks you to decide whether to run `some-client-scoped-command --flag`')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /Anything touching a client/)
 })
 
 test('es locale: the same requires_human policy ask, naming the policy id and segment in Spanish', () => {
@@ -2457,6 +2563,23 @@ test('es locale: the same requires_human policy ask, naming the policy id and se
   const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-policy-ask-es' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
   assert.equal(payload.systemMessage, 'jev · client_always_asks pide que decidas: `some-client-scoped-command --flag`')
+  // The exact defect a blind rerun of 0.5.2 caught: "producción exige que
+  // decida una persona: Deploying to production... no exception for
+  // urgency." spliced a Spanish lead-in with English rule text. The fix
+  // names only the policy and the command, entirely in Spanish.
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, 'La política client_always_asks pide que decidas si se ejecuta `some-client-scoped-command --flag`')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /Anything touching a client/)
+})
+
+test('a legacy requires_human ask cache entry with no policyId at all still never leaks the raw reason text into the confirmation prompt', () => {
+  const home = makeHome()
+  const command = 'some-policy-scoped-command --flag'
+  const key = expectedCacheKey(command, home, home)
+  // Exactly the pre-0.5.2 shape: no policyId, no policyRule at all.
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'a person needs to decide: client_always_asks', at: Date.now() })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-ask-legacy-shape' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, 'The policy  asks you to decide whether to run `some-policy-scoped-command --flag`')
 })
 
 // ---------------------------------------------------------------------------

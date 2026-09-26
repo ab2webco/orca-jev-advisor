@@ -35,13 +35,30 @@ export interface GateCacheEntry {
    * "reason.deployPublish"), when it came from exactly one well-known key --
    * added so a cache hit can localize the person-facing status line to
    * whatever locale is active NOW, not frozen to whichever locale (or
-   * language -- `reason` is always English) first wrote the entry. Absent
-   * on an entry written before this field existed, or whenever `reason`
-   * does not reduce to one key (the risk stage can cite several axes at
-   * once) -- a reader falls back to the stored English `reason` text
-   * itself in either case, never a crash.
+   * language -- `reason` is always English) first wrote the entry.
+   *
+   * 0.5.1-shaped, read-only from 0.5.3 on: it only ever carried the risk
+   * stage's FIRST reason, so a person-facing effect line replayed from this
+   * field alone could see only one axis even when Jev cited several -- see
+   * gate_person_effect.ts's own priority-scan fix. {@link reasonKeys}
+   * replaces it for every entry written from 0.5.3 on; this field is kept,
+   * validated, and read as a graceful one-element fallback for an entry
+   * written before {@link reasonKeys} existed. Absent on an entry written
+   * before EITHER field existed, or whenever `reason` does not reduce to
+   * one key at all (the risk stage can cite several axes at once) -- a
+   * reader falls back to the stored English `reason` text itself in either
+   * case, never a crash.
    */
   readonly reasonKey?: string;
+  /**
+   * Every risk-stage reason key `reason` was resolved from, in order --
+   * written from 0.5.3 on so a cache hit's person-facing effect line can
+   * scan every axis Jev actually cited (gate_person_effect.ts's own
+   * priority order), not just the first. Absent on an entry written before
+   * this field existed; see {@link reasonKey} for the one-element fallback
+   * a reader uses then.
+   */
+  readonly reasonKeys?: readonly string[];
   /**
    * The team policy that decided this verdict (0.5.2's own person-facing
    * hard-stop/ask line), present only for a `"deny"`/`"ask"` entry decided by
@@ -89,6 +106,7 @@ export function isValidGateCacheEntry(value: unknown): value is GateCacheEntry {
     VALID_DECISIONS.has(record.decision) &&
     typeof record.reason === "string" &&
     (record.reasonKey === undefined || typeof record.reasonKey === "string") &&
+    (record.reasonKeys === undefined || (Array.isArray(record.reasonKeys) && record.reasonKeys.every((k) => typeof k === "string"))) &&
     (record.policyId === undefined || typeof record.policyId === "string") &&
     (record.policyRule === undefined || typeof record.policyRule === "string") &&
     (record.deployPublishKind === undefined || record.deployPublishKind === "deploy" || record.deployPublishKind === "publish") &&

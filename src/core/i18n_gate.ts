@@ -19,7 +19,9 @@ export type GateKey =
   | "advisedLine"
   | "advisedRetryLine"
   | "blockedLine"
+  | "policyBlockedLine"
   | "policyAskLine"
+  | "policyAskReason"
   | "authRejected"
   | "noApiKey"
   | "jevUnreachable"
@@ -40,7 +42,8 @@ export type GateKey =
   | "effect.publish"
   | "effect.leavesMachine"
   | "effect.cannotUndo"
-  | "effect.othersNotice";
+  | "effect.othersNotice"
+  | "effect.uncertain";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -75,15 +78,37 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // silent success is indistinguishable from the model quietly doing
     // something else instead, so it is now its own visible line.
     advisedRetryLine: "jev · el modelo lo confirmó y se ejecutó: `{{segment}}`",
-    // A hard stop -- a local NEVER_SILENTLY rule, or a `prohibits` team
-    // policy -- names the command and the rule in plain words, never the
-    // model-facing REFUSED text (localRuleDeny/policyDeny stay English and
-    // keep talking to the model; this line is for the person watching).
+    // A LOCAL NEVER_SILENTLY rule's hard stop -- names the command and the
+    // rule in plain words, never the model-facing REFUSED text
+    // (localRuleDeny stays English and keeps talking to the model; this
+    // line is for the person watching). `{{rule}}` here is always
+    // GATE_CATALOG's own `rule.*` text, already translated for this locale
+    // -- never a team's own configured policy text (see policyBlockedLine
+    // below for that case).
     blockedLine: "jev · bloqueó `{{segment}}`: {{rule}}",
+    // 0.5.3: a `prohibits` team policy's own hard stop got its OWN key,
+    // separate from blockedLine above -- the defect this closes: a policy's
+    // `rule` is arbitrary, team-authored text (often English, e.g. "Never
+    // write directly on main or develop, not even a one-line fix."), and
+    // interpolating it here produced a mixed-language line even in `es`
+    // ("jev · bloqueó `git add README.md`: Never write directly on main or
+    // develop..."). This names only the command and the POLICY, entirely in
+    // the person's own locale, with no rule text at all.
+    policyBlockedLine: "jev · bloqueó `{{segment}}`: lo prohíbe la política {{policyId}}",
     // A `requires_human` policy still stops the person to decide -- but the
     // reason now names the policy and the command in one short sentence,
     // rather than only the policy's own rationale text.
     policyAskLine: "jev · {{policyId}} pide que decidas: `{{segment}}`",
+    // 0.5.3: the person's own confirmation prompt for a `requires_human`
+    // ask (Claude Code shows `permissionDecisionReason` to the PERSON for an
+    // 'ask', not the model) used to be DESTINATION_CATALOG's own
+    // `policy.needsHuman` text, which splices the team's own (often
+    // English) rule in after a locale-resolved lead-in -- the exact defect a
+    // blind rerun caught: "producción exige que decida una persona:
+    // Deploying to production, running production migrations or rotating
+    // credentials is decided by a person, always, no exception for
+    // urgency." Names only the policy and the command, never the rule.
+    policyAskReason: "La política {{policyId}} pide que decidas si se ejecuta `{{segment}}`",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
     noApiKey: "sin llave configurada: la mitad del gate que juzga con Jev no está corriendo — solo las reglas locales siguen activas. Configúrala en el panel de ajustes del plugin en Orca.",
     jevUnreachable: "no se pudo contactar a Jev: la mitad del gate que juzga con Jev no está corriendo ahora mismo — solo las reglas locales siguen activas. Se va a intentar de nuevo con el próximo comando.",
@@ -109,6 +134,11 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "effect.leavesMachine": "publica fuera de tu máquina",
     "effect.cannotUndo": "no se puede deshacer",
     "effect.othersNotice": "lo verán otras personas",
+    // 0.5.3: the honest floor for a risk reason that carries no concrete
+    // fact of its own (needsCleanupAfter, breaksSomethingImportant,
+    // tooCloseToTheLine) -- never othersNotice, which asserts something
+    // these reasons do not actually support (see gate_person_effect.ts).
+    "effect.uncertain": "Jev no está seguro de que sea inofensivo",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -135,7 +165,9 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     advisedLine: "jev · advised the model before `{{segment}}`: {{effect}}",
     advisedRetryLine: "jev · the model confirmed it and it ran: `{{segment}}`",
     blockedLine: "jev · blocked `{{segment}}`: {{rule}}",
+    policyBlockedLine: "jev · blocked `{{segment}}`: forbidden by the policy {{policyId}}",
     policyAskLine: "jev · {{policyId}} asks you to decide: `{{segment}}`",
+    policyAskReason: "The policy {{policyId}} asks you to decide whether to run `{{segment}}`",
     authRejected: "not judging: the key was rejected ({{status}})",
     noApiKey: "no key configured: the Jev-backed half of the gate is not running — only the local rules are still active. Set one in the plugin's settings panel in Orca.",
     jevUnreachable: "couldn't reach Jev: the Jev-backed half of the gate is not running right now — only the local rules are still active. It'll try again on the next command.",
@@ -157,5 +189,6 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "effect.leavesMachine": "reaches beyond this machine",
     "effect.cannotUndo": "cannot be undone",
     "effect.othersNotice": "other people will see it",
+    "effect.uncertain": "Jev isn't sure it's harmless",
   },
 };

@@ -104,6 +104,35 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   position — a grep pattern, an echoed sentence or a heredoc body naming
   the shape as data is never enough on its own.
 
+## What changed in 0.5.3
+
+- **The person-facing effect line now weighs every reason Jev cited, not
+  just the first.** An advised `rm -rf tmp/` on an untracked local dir with
+  no collaborators used to read "jev · avisó al modelo: lo verán otras
+  personas" — a claim nothing about that command supported. Every risk
+  reason is now checked, in a fixed priority order, and "other people will
+  see it" is reachable only through the one reason that actually says so;
+  everything else (a borderline score, an unspecified consequence) reads
+  "Jev no está seguro de que sea inofensivo" / "Jev isn't sure it's
+  harmless" instead of a claim it cannot back up.
+- **A policy's hard stop and human ask name the POLICY, never the team's
+  own rule text.** That text is arbitrary, often-English content, and
+  interpolating it produced a mixed-language line even on a Spanish locale
+  ("jev · bloqueó `git add README.md`: Never write directly on main or
+  develop, not even a one-line fix.") — and, worse, leaked into the
+  person's own confirmation prompt for a `requires_human` ask
+  ("producción exige que decida una persona: Deploying to production...").
+  Both now read "jev · bloqueó `<command>`: lo prohíbe la política `<id>`"
+  and "La política `<id>` pide que decidas si se ejecuta `<command>`" (or
+  their English equivalents) — the command and the policy, nothing else.
+- **The two "asking Jev" hook status messages are localized.** Claude Code
+  shows each hook's own status line while it runs; it was always English
+  regardless of your locale setting. The Bash gate and the Agent-matcher
+  model-reclassification hooks now read your locale the same way the gate
+  itself does. Reinstalling after a locale change updates the text in
+  place — an entry written under either locale is still recognised as
+  ours, so nothing is ever duplicated or orphaned.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.

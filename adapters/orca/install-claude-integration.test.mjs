@@ -94,6 +94,16 @@ function ownEntries (settings, event, marker, matcher = 'Bash') {
   return (group(settings, event, matcher)?.hooks ?? []).filter((h) => h.statusMessage === marker)
 }
 
+/** `<home>/.config/orca-supervisor/locale` -- the same mirror file the gate
+ *  hook itself reads (src/core/i18n.ts's own parseLocaleFile), pointed here
+ *  by `run()`'s own ORCA_SUPERVISOR_CONFIG_DIR override. Absent (every test
+ *  above this point) resolves to the default, "en". */
+function writeLocale (home, locale) {
+  const path = join(home, '.config', 'orca-supervisor', 'locale')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, locale)
+}
+
 const GATE_MARKER = 'orca-jev-advisor: asking Jev before running this command'
 const OUTCOME_MARKER = 'orca-jev-advisor: recording what you decided'
 const AGENT_MODEL_MARKER = 'orca-jev-advisor: asking Jev which model this subagent needs'
@@ -743,4 +753,101 @@ test('an upgrade from a state file written before Agent bookkeeping existed stil
   // group are emptied, the whole PreToolUse key is unwound, not left as an
   // empty array or with either group dangling.
   assert.equal(Object.prototype.hasOwnProperty.call(afterUninstall.hooks ?? {}, 'PreToolUse'), false)
+})
+
+// ---------------------------------------------------------------------------
+// 0.5.3: while a Bash/Agent PreToolUse hook runs, Claude Code shows its own
+// `statusMessage` -- always English, e.g. "orca-jev-advisor: asking Jev
+// before running this command", even on a Spanish locale. The installer now
+// writes this in the person's own locale, read the same way the gate hook
+// itself reads it (the `locale` mirror file, src/core/i18n.ts's own
+// parseLocaleFile). Only the two "asking Jev" hooks (Bash PreToolUse, Agent
+// PreToolUse) are localized -- the "recording..." outcome hooks stay
+// English, unchanged, on purpose (this release's own scope).
+//
+// The trap: ownership of a hook entry is decided by `findOwnHookIndex`
+// matching its OWN statusMessage -- if only the CURRENT locale's text
+// counted, a locale change would make install() blind to the entry it
+// already wrote (under the OTHER locale's text) and push a SECOND entry
+// instead of updating the first in place, and status/uninstall would
+// likewise stop recognising it. Every test below proves that never happens.
+// ---------------------------------------------------------------------------
+
+const GATE_MARKER_ES = 'orca-jev-advisor: Jev revisa el comando antes de ejecutarlo'
+const AGENT_MODEL_MARKER_ES = 'orca-jev-advisor: Jev elige el modelo para este subagente'
+
+test('es locale: a fresh install writes the Spanish "asking Jev" status messages, on both the Bash and Agent PreToolUse hooks', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const result = run('install', home)
+  assert.equal(result.ok, true)
+
+  const settings = readSettings(home)
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER_ES).length, 1)
+  assert.equal(ownEntries(settings, 'PreToolUse', AGENT_MODEL_MARKER_ES, 'Agent').length, 1)
+  // The "recording..." outcome hooks are unaffected by locale -- still English.
+  assert.equal(ownEntries(settings, 'PostToolUse', OUTCOME_MARKER).length, 1)
+  assert.equal(ownEntries(settings, 'PostToolUse', AGENT_OUTCOME_MARKER, 'Agent').length, 1)
+
+  const status = run('status', home)
+  assert.equal(status.hook.installed, true)
+  assert.equal(status.agentModelHook.installed, true)
+})
+
+test('en locale (the default, no locale file at all): the status messages are today\'s English text, unchanged', () => {
+  const home = makeHome()
+  const result = run('install', home)
+  assert.equal(result.ok, true)
+  const settings = readSettings(home)
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1)
+  assert.equal(ownEntries(settings, 'PreToolUse', AGENT_MODEL_MARKER, 'Agent').length, 1)
+})
+
+test('installing in English, then switching the locale to Spanish and reinstalling updates the text IN PLACE -- one entry each, not two', () => {
+  const home = makeHome()
+  run('install', home)
+  const afterEnglish = readSettings(home)
+  assert.equal(ownEntries(afterEnglish, 'PreToolUse', GATE_MARKER).length, 1)
+
+  writeLocale(home, 'es')
+  const result = run('install', home)
+  // The text changed, so this IS a real change -- never silently skipped.
+  assert.equal(result.changes.hook, true, 'the reinstall must report the statusMessage change, not silently no-op')
+  assert.equal(result.changes.agentModelHook, true)
+
+  const afterSpanish = readSettings(home)
+  // Exactly one Bash PreToolUse hook of ours, now carrying the Spanish text
+  // -- the English-authored entry was REPLACED in place, never left behind
+  // as a stale second entry alongside the new one.
+  const bashHooks = bashGroup(afterSpanish, 'PreToolUse').hooks
+  assert.equal(bashHooks.length, 1, 'exactly one of our own hooks -- the locale change must never duplicate the entry')
+  assert.equal(bashHooks[0].statusMessage, GATE_MARKER_ES)
+  assert.deepEqual(bashHooks[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-bash.ts')], 'the same hook, same path -- only its own status text changed')
+
+  const agentHooks = agentGroup(afterSpanish, 'PreToolUse').hooks
+  assert.equal(agentHooks.length, 1)
+  assert.equal(agentHooks[0].statusMessage, AGENT_MODEL_MARKER_ES)
+
+  const status = run('status', home)
+  assert.equal(status.hook.installed, true)
+  assert.equal(status.agentModelHook.installed, true)
+})
+
+test('status still reports the hook installed after a locale change with no reinstall yet -- the old-locale text is not orphaned', () => {
+  const home = makeHome()
+  run('install', home) // writes the ENGLISH text
+  writeLocale(home, 'es') // the person changes locale, but never reinstalls
+  const status = run('status', home)
+  assert.equal(status.hook.installed, true, 'the English-authored entry from before the locale change is still recognised as ours')
+  assert.equal(status.agentModelHook.installed, true)
+})
+
+test('uninstall removes the hook regardless of which locale wrote its status text, restoring the exact original state', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  run('install', home) // writes the SPANISH text
+  writeLocale(home, 'en') // the person switches back, without reinstalling
+  run('uninstall', home)
+  const raw = readFileSync(settingsPathFor(home), 'utf8')
+  assert.equal(raw, '{}\n', 'the Spanish-authored entry must still be found and removed even though the CURRENT locale is now English')
 })
