@@ -30,6 +30,18 @@ export type GateCacheDecision = "allow" | "deny" | "ask" | "advise";
 export interface GateCacheEntry {
   readonly decision: GateCacheDecision;
   readonly reason: string;
+  /**
+   * The catalog key `reason` was resolved from (e.g. "reason.tooCloseToTheLine",
+   * "reason.deployPublish"), when it came from exactly one well-known key --
+   * added so a cache hit can localize the person-facing status line to
+   * whatever locale is active NOW, not frozen to whichever locale (or
+   * language -- `reason` is always English) first wrote the entry. Absent
+   * on an entry written before this field existed, or whenever `reason`
+   * does not reduce to one key (the risk stage can cite several axes at
+   * once) -- a reader falls back to the stored English `reason` text
+   * itself in either case, never a crash.
+   */
+  readonly reasonKey?: string;
   readonly at: number;
 }
 
@@ -61,6 +73,7 @@ export function isValidGateCacheEntry(value: unknown): value is GateCacheEntry {
     typeof record.decision === "string" &&
     VALID_DECISIONS.has(record.decision) &&
     typeof record.reason === "string" &&
+    (record.reasonKey === undefined || typeof record.reasonKey === "string") &&
     typeof record.at === "number" &&
     Number.isFinite(record.at)
   );

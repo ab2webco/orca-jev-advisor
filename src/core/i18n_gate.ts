@@ -35,7 +35,9 @@ export type GateKey =
   | "reason.tooCloseToTheLine"
   | "reason.noDestinationMatched"
   | "reason.ownBranchPush"
-  | "reason.guardedGitDelete";
+  | "reason.guardedGitDelete"
+  | "reason.deployPublish"
+  | "reason.inlineInterpreterCode";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -80,6 +82,18 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.noDestinationMatched": "este directorio no corresponde a ningún destino del catálogo, así que se usaron los umbrales globales",
     "reason.ownBranchPush": "sube tu propia rama, sin force y sin tocar ramas compartidas",
     "reason.guardedGitDelete": "solo usa borrados que git mismo protege: se niega si hay trabajo sin guardar o sin integrar",
+    // The advise-model release: the deploy/publish floor's own person-facing
+    // summary -- one generic phrase for every pattern detect_deploy_publish.ts
+    // recognises, never the specific English description (that stays
+    // model-facing only, in reasonsEnglish). See gate-bash.ts's own
+    // resolveAdviceOutcome call for the local floor.
+    "reason.deployPublish": "dispara un deploy o publica un paquete",
+    // The advise-model release: the person-facing summary for a match found
+    // ONLY inside inline interpreter code (`{{what}}` is the matched rule's
+    // own already-localized text) -- never the model's own conditional
+    // sentence ("if it ran, it would..."), which stays English and
+    // model-facing only.
+    "reason.inlineInterpreterCode": "incluye código en línea que menciona {{what}}",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -123,5 +137,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.noDestinationMatched": "this directory doesn't match any catalog destination, so the global thresholds were used",
     "reason.ownBranchPush": "pushes your own branch, with no force and no shared branch",
     "reason.guardedGitDelete": "only uses deletes git itself guards: it refuses when there is unsaved or unmerged work",
+    "reason.deployPublish": "triggers a deployment or publishes a package",
+    "reason.inlineInterpreterCode": "includes inline code that mentions {{what}}",
   },
 };

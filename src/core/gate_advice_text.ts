@@ -28,9 +28,37 @@ import { splitOnCommandSeparators } from "./git_discard.ts";
 import { isSafeSegment } from "./gate_safe_command.ts";
 import { isProtectedRecoverabilityWhy } from "./git_recoverability.ts";
 import type { ClassifiedPath, RecoverabilitySegmentResult } from "./git_recoverability.ts";
+import type { GateKey } from "./i18n_gate.ts";
 
 const SEGMENT_MAX_CHARS = 80;
 const MAX_SEGMENTS_NAMED = 2;
+
+/**
+ * Model-facing phrasings for the risk stage's own six axis reasons (see
+ * src/core/decisions.ts's decideAction) -- the model reads these, never
+ * GATE_CATALOG.en's person-facing text for the same keys, which is written
+ * for a person watching a status line ("...checks with you...", "...leaves
+ * YOUR machine") and reads as a mistaken address when handed to the model
+ * instead. The defect this closes: the model-facing advice text used to
+ * reuse GATE_CATALOG.en verbatim, so the coding model was told the effect
+ * "leaves your machine" -- its own machine, in fact.
+ *
+ * Keyed by the exact GateKey the risk stage's own reason carries, so a
+ * caller can look a GateActionReason's key straight up here first, falling
+ * back to the person-facing English only for a key this map does not cover
+ * (e.g. reason.noDestinationMatched, which addresses nobody in particular
+ * to begin with). Never contains "you"/"your" (in the sense of the person)
+ * or the word REFUSED -- see this module's own top note on why modelText
+ * never contains it either.
+ */
+export const MODEL_RISK_REASON: Readonly<Partial<Record<GateKey, string>>> = {
+  "reason.tooCloseToTheLine": "Jev's risk score for this command is right at its limit",
+  "reason.cannotUndoAndLeavesMachine": "it cannot be undone and its effect leaves this machine",
+  "reason.cannotUndo": "there is no automatic way to undo it",
+  "reason.someoneElseWillNotice": "other people will notice the effect",
+  "reason.breaksSomethingImportant": "if it is wrong, it breaks something that matters to someone",
+  "reason.needsCleanupAfter": "if it is wrong, it needs cleanup afterwards",
+};
 
 function truncateSegment(text: string): string {
   const trimmed = text.trim();
@@ -98,12 +126,23 @@ export interface AdviceCompositionInput {
   readonly recoverability?: readonly RecoverabilitySegmentResult[];
   /** Whether an identical retry can actually pass -- false when the hook's own session_id was missing (see gate_advice_retry.ts). */
   readonly sessionEligibleForRetry: boolean;
+  /**
+   * Localized (the developer's own locale), short phrase for the
+   * person-facing status line -- see ComposedAdvice.effectSummary. Never
+   * the English `reasons` text: the defect this closes is exactly that
+   * mixup (a Spanish "jev · avisó al modelo:" line followed by an English
+   * reason). Every real caller (adapters/claude/gate-bash.ts) supplies
+   * this; omitting it (as this module's own unit tests do, having no
+   * locale to resolve against) falls back to the first English reason or
+   * affected segment, same as before this field existed.
+   */
+  readonly personEffectSummary?: string;
 }
 
 export interface ComposedAdvice {
   /** The full model-facing text -- always English, never contains the word REFUSED. */
   readonly modelText: string;
-  /** A short phrase for the person-facing status line (adapters/claude/gate-bash.ts's own i18n_gate.ts "advisedLine" template) -- the first reason, or the first affected segment when there is no reason text. */
+  /** A short phrase for the person-facing status line (adapters/claude/gate-bash.ts's own i18n_gate.ts "advisedLine" template) -- `input.personEffectSummary` when supplied, otherwise the first reason, or the first affected segment when there is no reason text. */
   readonly effectSummary: string;
 }
 
@@ -132,6 +171,6 @@ export function composeAdviceText(input: AdviceCompositionInput): ComposedAdvice
 
   return {
     modelText: lines.join("\n"),
-    effectSummary: reasons[0] ?? segments[0] ?? "this command",
+    effectSummary: input.personEffectSummary ?? reasons[0] ?? segments[0] ?? "this command",
   };
 }

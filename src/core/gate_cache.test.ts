@@ -30,6 +30,24 @@ test("malformed entries are never valid -- a corrupt cache is just a smaller cac
   assert.equal(isValidGateCacheEntry({ decision: "allow", reason: "x", at: Number.NaN }), false, "at must be finite");
 });
 
+test("reasonKey is optional, for localizing an advise entry's person-facing summary", () => {
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKey: "reason.cannotUndo", at: 1 }),
+    true,
+    "a well-shaped reasonKey is valid",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", at: 1 }),
+    true,
+    "an entry with no reasonKey at all -- written before this field existed -- stays valid",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKey: 5, at: 1 }),
+    false,
+    "reasonKey, when present, must be a string",
+  );
+});
+
 test("an entry younger than the TTL is fresh", () => {
   const now = 1_000_000_000_000;
   const entry = { decision: "allow" as const, reason: "x", at: now - 1 };

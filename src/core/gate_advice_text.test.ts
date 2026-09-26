@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { affectedSegments, composeAdviceText } from "./gate_advice_text.ts";
+import { affectedSegments, composeAdviceText, MODEL_RISK_REASON } from "./gate_advice_text.ts";
 import type { RecoverabilitySegmentResult } from "./git_recoverability.ts";
 
 test("never contains the word REFUSED -- the model must be able to tell an advice apart from a hard stop", () => {
@@ -131,4 +131,25 @@ test("empty reasons still produce a coherent, non-empty advice rather than an em
   const { modelText } = composeAdviceText({ command: "some-tool --flag", reasons: [], sessionEligibleForRetry: true });
   assert.ok(modelText.length > 0);
   assert.doesNotMatch(modelText, /Why: \.$/m);
+});
+
+test("personEffectSummary, when supplied, is what effectSummary carries -- never the English reasons text", () => {
+  const { effectSummary } = composeAdviceText({
+    command: "rm -rf dist",
+    reasons: ["it can't be undone"],
+    sessionEligibleForRetry: true,
+    personEffectSummary: "queda justo en el límite",
+  });
+  assert.equal(effectSummary, "queda justo en el límite");
+});
+
+test("MODEL_RISK_REASON: every phrasing is written for the model, never 'you'/'your' (the person), never REFUSED", () => {
+  for (const [key, phrasing] of Object.entries(MODEL_RISK_REASON)) {
+    assert.doesNotMatch(phrasing as string, /\byou\b|\byour\b/i, `${key} addresses "you"`);
+    assert.doesNotMatch(phrasing as string, /REFUSED/, `${key} contains REFUSED`);
+  }
+});
+
+test("MODEL_RISK_REASON covers the near-limit case with model-appropriate text", () => {
+  assert.match(MODEL_RISK_REASON["reason.tooCloseToTheLine"] as string, /Jev's risk score/);
 });

@@ -69,7 +69,7 @@ import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQ
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
-import { composeAdviceText } from '../../src/core/gate_advice_text.ts'
+import { affectedSegments, composeAdviceText, MODEL_RISK_REASON } from '../../src/core/gate_advice_text.ts'
 import { resolveRecoverabilityTargets } from '../../src/core/git_recoverability.ts'
 import type { GitStatusSets } from '../../src/core/git_recoverability.ts'
 import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
@@ -215,6 +215,29 @@ function isDestinationReasonKey(key: string): key is DestinationKey {
   return Object.prototype.hasOwnProperty.call(DESTINATION_CATALOG.en, key)
 }
 
+/** True when `key` is one of this file's own GATE_CATALOG keys -- used to validate a cache-read `reasonKey` (an arbitrary string off disk, possibly stale or hand-edited) before it is ever handed to `t()`. */
+function isGateCatalogKey(key: string): key is GateKey {
+  return Object.prototype.hasOwnProperty.call(GATE_CATALOG.en, key)
+}
+
+/**
+ * The first reason's own GateKey, when there is one -- carried alongside a
+ * risk-stage advice (fresh or cached) so its person-facing summary can be
+ * localized to whatever locale is ACTIVE WHEN IT IS SHOWN, never frozen to
+ * whichever locale (or, before this, language -- the bug this closes) first
+ * produced it. `reasons` empty, or its first entry a DESTINATION_CATALOG
+ * citation instead, never actually happens for the isRiskAdvice case this
+ * feeds (see decideGateAction: a policy citation implies a non-null
+ * policyId, which isRiskAdvice already excludes) -- both return null rather
+ * than assume it never will.
+ */
+function firstGateReasonKey(reasons: readonly GateActionReason[]): GateKey | null {
+  const first = reasons[0]
+  if (first === undefined) return null
+  if (isDestinationReasonKey(first.key)) return null
+  return first.key
+}
+
 /** Resolves a decideGateAction reason through whichever catalog its key actually belongs to. */
 function resolveGateActionReason(reason: GateActionReason): string {
   if (isDestinationReasonKey(reason.key)) {
@@ -227,13 +250,19 @@ function resolveGateActionReason(reason: GateActionReason): string {
  * Same as resolveGateActionReason, but always English -- for the advice
  * mechanism's own core reason, which is model-facing text and so must stay
  * in English regardless of the developer's chosen locale (same rule as
- * localRuleDeny/tEnglish above).
+ * localRuleDeny/tEnglish above). For the risk stage's own six axis reasons
+ * this reaches for MODEL_RISK_REASON's own model-facing phrasing first --
+ * GATE_CATALOG.en's text for the same keys is written for a PERSON ("...
+ * checks with you...", "...leaves your machine") and was, until this fix,
+ * handed to the model verbatim. Falls back to the person-facing English for
+ * any key MODEL_RISK_REASON does not cover (e.g. reason.noDestinationMatched,
+ * which addresses nobody in particular to begin with).
  */
 function resolveGateActionReasonEnglish(reason: GateActionReason): string {
   if (isDestinationReasonKey(reason.key)) {
     return translateReason(DESTINATION_CATALOG, 'en', { key: reason.key, params: reason.params })
   }
-  return translateReason(GATE_CATALOG, 'en', { key: reason.key as GateKey, params: reason.params })
+  return MODEL_RISK_REASON[reason.key as GateKey] ?? translateReason(GATE_CATALOG, 'en', { key: reason.key as GateKey, params: reason.params })
 }
 
 /**
@@ -735,10 +764,10 @@ function getGitStatusSetsForAdvice(repoRoot: string): GitStatusSets {
  * advice, cache hit or not, because the repository's own state can change
  * between two occurrences of the identical command SHAPE).
  */
-function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: readonly string[], sessionEligibleForRetry: boolean) {
+function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: readonly string[], sessionEligibleForRetry: boolean, personEffectSummary: string) {
   const repoRoot = getRepoRootForAdvice(cwd)
   const recoverability = repoRoot === null ? undefined : resolveRecoverabilityTargets(command, cwd, repoRoot, getGitStatusSetsForAdvice(repoRoot))
-  return composeAdviceText({ command, reasons: reasonsEnglish, recoverability, sessionEligibleForRetry })
+  return composeAdviceText({ command, reasons: reasonsEnglish, recoverability, sessionEligibleForRetry, personEffectSummary })
 }
 
 /**
@@ -805,14 +834,16 @@ function resolveAdviceOutcome(input: {
   readonly sessionId: string | null
   readonly toolUseId: string | null
   readonly reasonsEnglish: readonly string[]
+  /** Localized (the developer's own locale) short phrase for the person-facing status line -- see gate_advice_text.ts's own AdviceCompositionInput.personEffectSummary. Every call site supplies one; never the English reasons text. */
+  readonly personEffectSummary: string
   readonly source: GateSource
   readonly stopReason: GateStopReason
   readonly latencyMs?: number | null
 }): void {
-  const { command, cwd, sessionId, reasonsEnglish, source, stopReason } = input
+  const { command, cwd, sessionId, reasonsEnglish, personEffectSummary, source, stopReason } = input
   if (tryAdviceRetryPass(command, cwd, sessionId, source, input.latencyMs ?? null)) return
   const sessionEligible = sessionId !== null
-  const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible)
+  const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, personEffectSummary)
   appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null)
   recordAdviceIssued(sessionId, command)
   emitAdvice(advice.effectSummary, advice.modelText)
@@ -1213,8 +1244,10 @@ type JevOutcome =
        * isRiskAdvice false and stays a human ask, unchanged.
        */
       readonly isRiskAdvice: boolean
-      /** The risk stage's own reasons, resolved in ENGLISH -- only meaningful when isRiskAdvice is true; empty otherwise. */
+      /** The risk stage's own reasons, resolved in ENGLISH, model-facing text -- only meaningful when isRiskAdvice is true; empty otherwise. */
       readonly riskAdviceReasonsEnglish: readonly string[]
+      /** The first of those reasons' own GateKey -- carried so the caller (and, through the cache, a later hit) can resolve a LOCALIZED person-facing summary, never the English text above. Null only when isRiskAdvice is false, or in the defensive case firstGateReasonKey's own doc names. */
+      readonly riskAdviceFirstReasonKey: GateKey | null
       /**
        * Part 3(b)'s own local floor: non-null only when `decision` is
        * 'allow' AND src/core/deploy_publish.ts detected this command as a
@@ -1324,6 +1357,7 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       viaLocalAllow,
       isRiskAdvice,
       riskAdviceReasonsEnglish: isRiskAdvice ? gate.reasons.map(resolveGateActionReasonEnglish) : [],
+      riskAdviceFirstReasonKey: isRiskAdvice ? firstGateReasonKey(gate.reasons) : null,
       // Part 3(b): a command this local floor recognises as a deploy/publish
       // action must never resolve to a SILENT allow -- named here whenever
       // the final verdict would otherwise be exactly that, whatever decided
@@ -1483,9 +1517,15 @@ async function main(): Promise<void> {
       kind === 'code'
         ? `this text appears only inside inline interpreter code, which may be data rather than a command; if it ran, it would: ${tEnglish(why)}`
         : tEnglish(why)
+    // Localized for the person-facing status line only -- the model-facing
+    // reasonEnglish above stays exactly as it was. A 'code' match keeps the
+    // same conditional framing here, through its own catalog key rather than
+    // asserting the rule's effect as settled fact (see the comment above).
+    const personEffectSummary = kind === 'code' ? t('reason.inlineInterpreterCode', { what: t(why) }) : t(why)
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: [reasonEnglish],
+      personEffectSummary,
       source: 'local-rule', stopReason: 'local-rule',
     })
     return
@@ -1579,9 +1619,14 @@ async function main(): Promise<void> {
     // fresh -- see buildAdviceForCommand/checkAdviceRetryPass's own module
     // notes. hit.reason for an 'advise' entry is the core ENGLISH reason
     // only (gate_cache.ts's own doc on GateCacheDecision), never
-    // locale-resolved and never the full composed text.
+    // locale-resolved and never the full composed text. hit.reasonKey (when
+    // present -- an entry written before this field existed has none) is
+    // resolved fresh, in whatever locale is active NOW, for the person-facing
+    // summary; an absent or unrecognized key falls back to the stored
+    // English reason rather than ever showing an empty status line.
     if (hit.decision === 'advise') {
-      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], source: 'cache', stopReason: 'risk' })
+      const personEffectSummary = hit.reasonKey !== undefined && isGateCatalogKey(hit.reasonKey) ? t(hit.reasonKey) : hit.reason
+      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], personEffectSummary, source: 'cache', stopReason: 'risk' })
       return
     }
     appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null)
@@ -1666,12 +1711,19 @@ async function main(): Promise<void> {
   // recomputed fresh rather than cached alongside it.
   if (resolved.isRiskAdvice) {
     if (key !== null) {
-      cache[key] = { decision: 'advise', reason: resolved.riskAdviceReasonsEnglish.join(' · '), at: Date.now() }
+      cache[key] = { decision: 'advise', reason: resolved.riskAdviceReasonsEnglish.join(' · '), reasonKey: resolved.riskAdviceFirstReasonKey ?? undefined, at: Date.now() }
       writeCache(cache)
     }
+    // Localized for the person-facing status line, through the first
+    // reason's own key -- never the joined English reasons above. The
+    // defensive fallback (no key resolved at all) names a concrete,
+    // locale-neutral piece of the command instead of inventing English
+    // prose; see firstGateReasonKey's own doc on when this actually happens.
+    const personEffectSummary = resolved.riskAdviceFirstReasonKey !== null ? t(resolved.riskAdviceFirstReasonKey) : (affectedSegments(command)[0] ?? command)
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
+      personEffectSummary,
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
     })
     return
@@ -1682,15 +1734,20 @@ async function main(): Promise<void> {
   // point as the risk stage's own advice above, cached the same way (as
   // 'advise', never as 'allow'), so a future cache hit for this exact
   // command shape already replays through resolveAdviceOutcome's own
-  // cache-hit branch with no special-casing needed there.
+  // cache-hit branch with no special-casing needed there. The person-facing
+  // summary is always the one generic "reason.deployPublish" phrase,
+  // whichever of DEPLOY_PUBLISH_PATTERNS actually matched -- the specific
+  // English description (`resolved.deployPublishAdvice`) stays model-facing
+  // only.
   if (resolved.decision === 'allow' && resolved.deployPublishAdvice !== null) {
     if (key !== null) {
-      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, at: Date.now() }
+      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, reasonKey: 'reason.deployPublish', at: Date.now() }
       writeCache(cache)
     }
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: [resolved.deployPublishAdvice],
+      personEffectSummary: t('reason.deployPublish'),
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
     })
     return

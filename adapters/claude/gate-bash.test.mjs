@@ -420,6 +420,13 @@ function writeDenyTierConfig (home, value) {
   writeFileSync(path, JSON.stringify(value))
 }
 
+/** `<home>/.config/orca-supervisor/locale` -- gate-bash.ts's own LOCALE_PATH, the config panel's language choice mirrored to plain text (see src/core/i18n.ts). Absent (the default in every other test in this file) resolves to DEFAULT_LOCALE, "en". */
+function writeLocale (home, locale) {
+  const path = join(home, '.config', 'orca-supervisor', 'locale')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, locale)
+}
+
 test('deny tier: rm -rf / is denied, not just asked, with no config file present', () => {
   const home = makeHome()
   const stdout = run(home, 'rm -rf /')
@@ -1946,6 +1953,130 @@ test('a deploy command that Jev would silently allow is floored into an advice n
 
   const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
   assert.equal(record.verdict, 'advise')
+})
+
+// ---------------------------------------------------------------------------
+// Two defects observed live on 2026-09-26, both closed together:
+//
+//   1. The person-facing "jev · avisó al modelo: {{effect}}" line mixed
+//      languages -- the template was Spanish but {{effect}} was always the
+//      English risk reason. `personEffectSummary` (gate_advice_text.ts) and
+//      GateCacheEntry.reasonKey (gate_cache.ts) are what let every advice
+//      call site -- risk-stage cache hit, fresh risk-stage advice, the
+//      deploy/publish floor, and a local rule's own toggle-off/interpreter-
+//      code advice -- supply a summary in the DEVELOPER'S OWN locale instead.
+//   2. The model-facing text reused GATE_CATALOG.en's person-facing English
+//      reasons ("...checks with you...", "...leaves your machine") --
+//      MODEL_RISK_REASON (gate_advice_text.ts) replaces those with phrasing
+//      written for the model, never "you"/"your" in the sense of the person.
+// ---------------------------------------------------------------------------
+
+test('es locale: a risk-stage cache-hit advice is a fully Spanish status line, never mixing in the English reason', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'advise',
+    reason: "Jev's risk score for this command is right at its limit",
+    reasonKey: 'reason.tooCloseToTheLine',
+    at: Date.now(),
+  })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-es' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.systemMessage, /^jev · avisó al modelo:/, 'the status line stays in the person\'s own locale')
+  assert.match(payload.systemMessage, /justo en el límite/, 'the effect is said in plain Spanish words')
+  assert.doesNotMatch(payload.systemMessage, /right at the limit/i, 'never the raw English reason')
+  assert.doesNotMatch(payload.systemMessage, /checks with you/i, 'never the raw English reason')
+
+  // The model-facing text is unaffected by locale, and never addresses "you".
+  const modelText = payload.hookSpecificOutput.permissionDecisionReason
+  assert.match(modelText, /Jev's risk score/)
+  assert.doesNotMatch(modelText, /checks with you/i)
+  assert.doesNotMatch(modelText, /your machine/i)
+})
+
+test('en locale (the default): the same risk-stage cache-hit advice is a fully English status line', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'advise',
+    reason: "Jev's risk score for this command is right at its limit",
+    reasonKey: 'reason.tooCloseToTheLine',
+    at: Date.now(),
+  })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-en' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.systemMessage, /^jev · advised the model:/)
+  // The developer's own locale here IS English, so the person-facing line
+  // legitimately carries GATE_CATALOG.en's own person-facing phrasing for
+  // this reason -- "checks with you" addresses a person correctly when the
+  // person reading it is one. That phrasing must never leak into the
+  // MODEL-facing text below, whatever the locale.
+  assert.match(payload.systemMessage, /checks with you instead of letting it through on its own/)
+
+  const modelText = payload.hookSpecificOutput.permissionDecisionReason
+  assert.match(modelText, /Jev's risk score/)
+  assert.doesNotMatch(modelText, /checks with you/i)
+  assert.doesNotMatch(modelText, /your machine/i)
+})
+
+test('a cache-hit advice written before reasonKey existed still localizes -- falls back to the stored English reason, never crashes', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  // Exactly the old shape: no reasonKey at all.
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-legacy' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.systemMessage, /^jev · avisó al modelo:/, 'the template half stays Spanish even without a reasonKey')
+  assert.match(payload.systemMessage, /it can't be undone/, 'the English fallback, never an empty or crashing status line')
+})
+
+test('es locale: the deploy/publish floor advice uses the generic localized summary, not the specific English description', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const command = 'gh workflow run deploy-azure-dev.yml --ref release/0.3.1'
+  const key = expectedCacheKey(command, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'advise',
+    reason: 'triggers a deployment workflow on GitHub Actions',
+    reasonKey: 'reason.deployPublish',
+    at: Date.now(),
+  })
+
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-deploy-floor-es' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.systemMessage, /^jev · avisó al modelo:/)
+  assert.match(payload.systemMessage, /dispara un deploy o publica un paquete/)
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.match(reason, /triggers a deployment workflow on GitHub Actions/, 'the model-facing text keeps the specific English description')
+})
+
+test('es locale: a toggled-off local-rule advice is localized through the existing rule.* text, never REFUSED', () => {
+  const home = makeHome()
+  writeDenyTierConfig(home, { denyForcePush: false })
+  writeLocale(home, 'es')
+  const payload = JSON.parse(run(home, 'git push --force origin feature/x', { sessionId: 'session-toggle-off-es' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i)
+  assert.match(payload.systemMessage, /^jev · avisó al modelo:/)
+  assert.match(payload.systemMessage, /reescribe el remoto/, 'the Spanish rule.forcePush text, not the English one')
+  assert.doesNotMatch(payload.systemMessage, /rewrites the remote/i)
+})
+
+test('es locale: an interpreter-code advice localizes through the new "includes inline code" key', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  const command = `node -e "console.log('git push --force origin main')"`
+  const payload = JSON.parse(run(home, command, { sessionId: 'session-node-e-es' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.systemMessage, /^jev · avisó al modelo:/)
+  assert.match(payload.systemMessage, /incluye código en línea que menciona/)
+  // The model's own conditional sentence stays in the model-facing text, not the status line.
+  assert.doesNotMatch(payload.systemMessage, /may be data rather than a command/i)
 })
 
 // ---------------------------------------------------------------------------
