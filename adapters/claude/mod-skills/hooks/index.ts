@@ -109,7 +109,6 @@ import type { ModSkillsKey } from '../../../../src/core/i18n_mod_skills.ts'
 import { TOOLS_CATALOG } from '../../../../src/core/i18n_tools.ts'
 import type { ToolsKey } from '../../../../src/core/i18n_tools.ts'
 import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, measurementDecisionsToday, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from './runtime.ts'
-import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -205,24 +204,6 @@ export default ((on, options) => {
   // read) always leaves this false and the real listing goes through.
   let pendingListingWithheld = false
 
-  // The activation metric (src/core/mod_skills_readiness.ts), fetched at
-  // most once per session/process and reused after -- computing it folds
-  // the whole measurement log (resolveModSkillsReadiness), so this is the
-  // same "cache once, cheap after" shape as inventoryCache/orcaContextCache
-  // above. `readinessFetched` (rather than a null check alone) exists
-  // because a resolved-but-unavailable readiness (no resolvable home, an
-  // unreadable log) is itself `null` -- a legitimate cached answer, not "not
-  // fetched yet".
-  let readinessFetched = false
-  let readinessCache: ModSkillsReadiness | null = null
-  const resolveReadiness = async ($: EngineInterface): Promise<ModSkillsReadiness | null> => {
-    if (!readinessFetched) {
-      readinessCache = await resolveModSkillsReadiness($)
-      readinessFetched = true
-    }
-    return readinessCache
-  }
-
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
     // A subagent's own listing is left alone, since nothing here suggests
     // for a subagent (prompt.submit never fires for one). For the main
@@ -276,10 +257,25 @@ export default ((on, options) => {
     // injected) for whichever path runs it, so this roll never gates that
     // path at all -- only each closure's own measurement-mode branch below
     // consults `sampled`.
-    const samplingConfig = await resolveModSkillsSamplingConfig($)
-    const today = new Date(await $.clock.now()).toISOString().slice(0, 10)
-    const promptsSampledToday = Math.max(await measurementDecisionsToday($, today), await toolMeasurementDecisionsToday($, today))
-    const sampled = shouldSamplePrompt(samplingConfig, promptsSampledToday, Math.random())
+    // JEVADV-38 R3: the roll itself fails open, exactly like every Jev call
+    // below it -- a rejected $.clock.now, config read or counter read must
+    // never escape prompt.submit unhandled. `resolveModSkillsSamplingConfig`,
+    // `measurementDecisionsToday` and `toolMeasurementDecisionsToday` already
+    // catch their own errors, but `$.clock.now()` does not, so this used to
+    // sit outside every closure's own try/catch with nothing to catch it.
+    // "Not sampled" is the correct fallback either way: measurement mode
+    // treats it exactly like a real unsampled prompt (no Jev call, no
+    // record, listing delivered), and active mode is unaffected -- neither
+    // closure's active-mode branch consults `sampled` at all.
+    let sampled = false
+    try {
+      const samplingConfig = await resolveModSkillsSamplingConfig($)
+      const today = new Date(await $.clock.now()).toISOString().slice(0, 10)
+      const promptsSampledToday = Math.max(await measurementDecisionsToday($, today), await toolMeasurementDecisionsToday($, today))
+      sampled = shouldSamplePrompt(samplingConfig, promptsSampledToday, Math.random())
+    } catch {
+      sampled = false
+    }
 
     // Skill selection and tool selection each run in their own isolated
     // closure: a failure or timeout in one must never touch the other, and
@@ -400,7 +396,16 @@ export default ((on, options) => {
 
         const measurementId = crypto.randomUUID()
         const at = new Date(await $.clock.now()).toISOString()
-        const readiness = await resolveReadiness($)
+        // JEVADV-38 R3: recomputed fresh for THIS decision, not cached once
+        // per process. `resolveModSkillsReadiness` folds the whole
+        // measurement log -- caching it across a session's prompts (the same
+        // shape inventoryCache/orcaContextCache above use) reported a stale
+        // session-start snapshot: a decision made mid-session never saw an
+        // observation an earlier decision in the SAME session had already
+        // turned comparable. This is the honest per-decision value; the
+        // cost is one extra log read on a sampled/active decision, never on
+        // every prompt.
+        const readiness = await resolveModSkillsReadiness($)
         await appendMeasurement(
           $,
           serializeRecord(

@@ -154,6 +154,40 @@ test('modSkills.readiness: reflects real comparable/match data, still short of t
 })
 
 // ---------------------------------------------------------------------------
+// JEVADV-38 R3 (mod-skills follow-ups) -- board.html's own copy for this
+// stat is "Listing characters not sent": aggregateModSkills used to sum
+// `listingChars` over every decision, so a turn that actually DELIVERED the
+// listing (Jev picked nothing, or its SKILL.md failed to read --
+// `listingWithheld: false`) still counted its chars as "not sent". Only a
+// record with `listingWithheld === true` counts now; a record written
+// before JEVADV-4 added the field at all has no way to say either way, so
+// it keeps today's semantics (always counted) rather than being silently
+// dropped.
+// ---------------------------------------------------------------------------
+
+test('modSkills.listingChars: sums only decisions where listingWithheld === true; a delivered listing (false) is excluded', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [
+    { ...decisionRow('a', '2026-09-19T00:00:00.000Z'), listingChars: 100, listingWithheld: true },
+    { ...decisionRow('b', '2026-09-19T01:00:00.000Z'), listingChars: 50, listingWithheld: false },
+  ])
+  const result = run(home)
+  assert.equal(result.modSkills.listingCharsTotal, 100, "today's bug: summed both regardless of listingWithheld")
+  assert.equal(result.modSkills.listingCharsSampleCount, 1)
+  assert.equal(result.modSkills.listingCharsAvgPerPrompt, 100)
+})
+
+test('modSkills.listingChars: a record from before listingWithheld existed keeps being counted (documented backward-compat choice)', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [
+    decisionRow('a', '2026-09-19T00:00:00.000Z') // no listingWithheld field at all; listingChars: 120
+  ])
+  const result = run(home)
+  assert.equal(result.modSkills.listingCharsTotal, 120)
+  assert.equal(result.modSkills.listingCharsSampleCount, 1)
+})
+
+// ---------------------------------------------------------------------------
 // odd/tasks/panel-interventions-and-mod-copy.md T2/T3/T4 -- the gate
 // aggregate now carries pluginVersion breakdowns, p95 latency, per-family
 // interventions, and (derived from the separate approvals log) a per-family

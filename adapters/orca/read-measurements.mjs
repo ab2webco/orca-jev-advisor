@@ -434,7 +434,14 @@ async function aggregateModSkills () {
 
     if (isRecord(d.decision) && typeof d.decision.name === 'string') suggested += 1
 
-    if (typeof d.listingChars === 'number' && Number.isFinite(d.listingChars)) {
+    // board.html's own copy for this stat is "Listing characters not sent"
+    // -- only a decision that actually withheld the listing (JEVADV-4's own
+    // `listingWithheld: true`) counts. A record written before that field
+    // existed has no way to say either way; the documented choice is to
+    // keep counting it, exactly as every record was counted before this
+    // field existed at all, rather than silently dropping older history.
+    const countsAsNotSent = d.listingWithheld === undefined || d.listingWithheld === true
+    if (countsAsNotSent && typeof d.listingChars === 'number' && Number.isFinite(d.listingChars)) {
       listingCharsSum += d.listingChars
       listingCharsCount += 1
     }

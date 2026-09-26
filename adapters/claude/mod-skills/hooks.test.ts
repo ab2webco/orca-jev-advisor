@@ -81,6 +81,7 @@ const CONFIG_DIR = `${HOME}/.config/orca-supervisor`;
 const CACHE_DIR = `${HOME}/.cache/orca-supervisor`;
 const CWD = "/Users/dev/Projects/sandbox";
 const SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements.jsonl`;
+const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
 
 /** Builds a fake `$` (EngineInterface) backed by `host`'s mutable state. */
 function makeFakeEngine(host: FakeHost): unknown {
@@ -192,6 +193,30 @@ async function submitPrompt(handlers: Map<string, Hook>, engine: unknown, text: 
   const submit = handlers.get("prompt.submit");
   assert.ok(submit, "prompt.submit was never registered");
   await submit(engine, { text, wait: false, origin: { kind: "user" } }, promptSubmitNext);
+}
+
+/** Same as submitPrompt, but returns the (possibly context-carrying) event `next` actually received. */
+async function submitPromptCapture(handlers: Map<string, Hook>, engine: unknown, text: string): Promise<{ context?: readonly string[] }> {
+  const submit = handlers.get("prompt.submit");
+  assert.ok(submit, "prompt.submit was never registered");
+  let captured: { context?: readonly string[] } | undefined;
+  await submit(
+    engine,
+    { text, wait: false, origin: { kind: "user" } },
+    async (e: unknown) => {
+      captured = e as { context?: readonly string[] };
+      return e;
+    },
+  );
+  assert.ok(captured, "next(e) was never called");
+  return captured;
+}
+
+/** Fires `skill.prompt` (the model's own load, correlated by hooks/index.ts's `pendingMeasurementId`). */
+async function fireSkillPrompt(handlers: Map<string, Hook>, engine: unknown, skill: string): Promise<void> {
+  const skillPrompt = handlers.get("skill.prompt");
+  assert.ok(skillPrompt, "skill.prompt was never registered");
+  await skillPrompt(engine, { skill, origin: { kind: "user" } }, async (e: unknown) => e);
 }
 
 async function askAttachment(handlers: Map<string, Hook>, engine: unknown, realListing: string): Promise<{ text: string | null }> {
@@ -401,4 +426,217 @@ test("active mode with an empty measurement log: the decision records readiness.
   // injected its pick (readiness only records the state, per JEVADV-4's
   // own scope -- the panel owns whether the switch itself should be off).
   assert.equal(record.listingWithheld, true);
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-38 R3-shared-roll-outside-fail-open: the shared sampling roll
+// (samplingConfig/today/promptsSampledToday/sampled) must fail open like
+// everything else in this hook -- a rejected $.clock.now, config read or
+// counter read must never escape prompt.submit itself.
+// ---------------------------------------------------------------------------
+
+test("the shared sampling roll's own failure fails open as not sampled: no throw, no Jev call, listing delivered", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+
+  // The roll's own `$.clock.now()` call (building `today`) is the very
+  // first clock read of the whole prompt.submit run -- fail only that one
+  // call, so everything after the roll (timestamps inside the two
+  // closures, should either of them still run) keeps behaving normally.
+  const baseEngine = engine as { clock: { now: () => Promise<number> } };
+  const originalNow = baseEngine.clock.now.bind(baseEngine.clock);
+  let callCount = 0;
+  baseEngine.clock.now = async () => {
+    callCount += 1;
+    if (callCount === 1) throw new Error("clock unavailable");
+    return originalNow();
+  };
+
+  await assert.doesNotReject(
+    submitPrompt(handlers, engine, "what does this file do"),
+    "today's bug: a rejected clock read in the shared sampling roll escaped prompt.submit unhandled",
+  );
+  const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+
+  assert.deepEqual(attachment, { text: REAL_LISTING }, "a failed roll must fail open as 'not sampled', so measurement mode delivers the real listing");
+  assert.equal(host.fetchCalls.length, 0, "not sampled means neither closure spends a Jev call");
+  assert.equal(host.files.has(SKILL_MEASUREMENTS_PATH), false, "an unsampled prompt records nothing");
+  assert.equal(host.files.has(TOOL_MEASUREMENTS_PATH), false, "an unsampled prompt records nothing");
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-38 R3-readiness-cached-stale: readiness must be the honest
+// per-decision value, not a snapshot cached once at session start.
+// ---------------------------------------------------------------------------
+
+test("readiness reflects a decision recorded earlier in this same session, not a session-start snapshot", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const { handlers, engine } = loadHooks(host);
+
+  // First prompt: gate closes at stage 1 (skill not needed) -- one Jev
+  // call, decision.name stays null. The log is still empty at the moment
+  // this decision's own readiness is computed, so it must report the full
+  // shortfall.
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+  );
+  await submitPrompt(handlers, engine, "first prompt");
+  const firstRecord = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal((firstRecord.readiness as { comparableShortfall: number }).comparableShortfall, 1000);
+
+  // The model loads a skill on its own -- turns the first decision
+  // "comparable" (a decision + a same-id observation now both sit in the
+  // log), independently of what Jev picked.
+  await fireSkillPrompt(handlers, engine, "graft-helper");
+
+  // Second prompt: another measurement decision. Its own readiness
+  // snapshot must be recomputed from the log as it now stands (one
+  // comparable pair already on disk), not reuse the empty-log snapshot
+  // read for the FIRST decision.
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+  );
+  await submitPrompt(handlers, engine, "second prompt");
+  const secondRecord = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(
+    (secondRecord.readiness as { comparableShortfall: number }).comparableShortfall,
+    999,
+    "today's bug: readiness is cached once per process and never reflects a decision made earlier in the same session",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-38 R3-missing-mixed-mode-and-stale-flag-tests
+// ---------------------------------------------------------------------------
+
+test("mixed mode: skill active + tool measurement, both run independently in the same turn", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+
+  host.fetchQueue.push(
+    // Skill path (active): both stages, Jev picks graft-helper.
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.8 },
+    }),
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 },
+      "fits::graft-helper": { type: "noul", noul: 0.9 },
+    }),
+    // Tool path (measurement, sampled): gate closes at stage 1.
+    jevResponse({
+      which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 },
+      needsOneTool: { type: "noul", noul: 0.1 },
+    }),
+  );
+
+  await submitPrompt(handlers, engine, "how does the auth module work");
+  const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+
+  assert.equal(attachment.text, null, "skill active mode still withholds the listing for its own pick");
+  assert.equal(host.fetchCalls.length, 3, "both paths must have run: 2 skill calls + 1 tool call");
+
+  const skillRecord = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(skillRecord.mode, "active");
+  assert.equal((skillRecord.decision as { name: string | null }).name, "graft-helper");
+
+  const toolRecord = lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH);
+  assert.equal(toolRecord.mode, "measurement", "activeTools stayed false: the tool path must have recorded a measurement-mode decision, not active");
+  assert.equal((toolRecord.decision as { name: string | null }).name, null);
+});
+
+test("the reverse: skill measurement + tool active, both run independently in the same turn", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: true });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+
+  host.fetchQueue.push(
+    // Skill path (measurement, sampled): gate closes at stage 1.
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+    // Tool path (active): both stages, Jev picks Bash.
+    jevResponse({
+      which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.9 }, confidence: 0.9 },
+      needsOneTool: { type: "noul", noul: 0.8 },
+    }),
+    jevResponse({
+      which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.95 }, confidence: 0.9 },
+      "fits::Bash": { type: "noul", noul: 0.9 },
+    }),
+  );
+
+  const captured = await submitPromptCapture(handlers, engine, "run the build");
+  const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+
+  assert.deepEqual(attachment, { text: REAL_LISTING }, "skill path stayed in measurement mode: nothing to withhold the listing for");
+  assert.equal(host.fetchCalls.length, 3, "both paths must have run: 1 skill call + 2 tool calls");
+  assert.ok(
+    (captured.context ?? []).some((block) => block.includes("<tool_relevance>") && block.includes("Bash")),
+    "tool active mode must inject its pick as advice",
+  );
+
+  const skillRecord = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(skillRecord.mode, "measurement");
+
+  const toolRecord = lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH);
+  assert.equal(toolRecord.mode, "active");
+  assert.equal((toolRecord.decision as { name: string | null }).name, "Bash");
+});
+
+test("a withheld turn followed by a restored turn: pendingListingWithheld never leaks across turns", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+  const { handlers, engine } = loadHooks(host);
+
+  // Turn 1: Jev picks a skill -- the listing is withheld.
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.8 },
+    }),
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 },
+      "fits::graft-helper": { type: "noul", noul: 0.9 },
+    }),
+  );
+  await submitPrompt(handlers, engine, "how does the auth module work");
+  const firstAttachment = await askAttachment(handlers, engine, REAL_LISTING);
+  assert.equal(firstAttachment.text, null, "turn 1 must withhold: Jev picked a skill and its SKILL.md was read");
+
+  // Turn 2, same session (same registered hook instance, same closure
+  // state): Jev picks nothing this time -- the listing must be delivered,
+  // never withheld by a flag left over from turn 1.
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+  );
+  await submitPrompt(handlers, engine, "what time is it");
+  const secondAttachment = await askAttachment(handlers, engine, REAL_LISTING);
+  assert.deepEqual(secondAttachment, { text: REAL_LISTING }, "today's bug: a stale pendingListingWithheld from turn 1 would withhold turn 2's listing too");
 });
