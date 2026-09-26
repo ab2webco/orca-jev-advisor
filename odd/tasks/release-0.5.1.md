@@ -151,6 +151,42 @@ evolution" holds JEVADV-12..23.
   Route: delegated writer.
 - [x] **T9 — Leading env assignment leaks into commandFamily (JEVADV-25).**
   Done in 37b972f.
+- [x] **T12 — mod-skills really loads (JEVADV-43).** It had never loaded on
+  any machine; the engine refused it for five static reasons. Fixed in
+  f69af8e and c683593 (layout-mirrored installed copy with a generated
+  manifest, top-level `$` helpers, named `register`, literal env names,
+  content-digest marker). A real `claude plugin validate` test is in
+  `npm test`. Live: installed copies valid in all 5 config dirs; active mode
+  pattern false/true/false. Route: delegated writer.
+- [x] **T13 — Gate reasons in plain Spanish (JEVADV-44).** 9ebb862. A catalog
+  test rejects unaccented words and " -- ". Route: inline.
+- [x] **T14 — Own-branch push and git-guarded deletes (JEVADV-45).** cd8a870,
+  9f1145f, aec809e, 7e95457, 82c1d27 (+refspec is a force push), 8b88ca4 and
+  c6599b0. The policy stage stays authoritative (option D). Live: `git worktree
+  remove` and `git branch -d` allowed at stage `local-allow`. Route: delegated
+  writer.
+- [ ] **T15 — Real push shapes qualify (JEVADV-45 follow-up).** `cd <dir> &&`,
+  `2>&1` and pipes into safe readers. Lane Q, in progress. Route: delegated
+  writer.
+- [x] **T16 — mod-skills sees symlinked skills (JEVADV-46).** 3446994. Live:
+  candidates 62 → 76; the Plane prompt picks orca-plane (0.56). Route:
+  delegated writer.
+- [ ] **T17 — The cache honours policy changes (JEVADV-48).** Urgent.
+- [ ] **T18 — Policies never silently lose their kind (JEVADV-49).** Urgent.
+  On 2026-09-26 at 11:48Z a panel save (seed accept, before the JEVADV-42
+  fix was loaded) stripped the kind of 20 of 23 stored policies. The kinds
+  were restored by hand from values read earlier that day; the mirror was
+  rewritten with the plugin's own writer (23 policies); 136 cache entries
+  from the window were dropped.
+- [ ] **T19 — The gate advises the coding model (decision pending the
+  scenario matrix).** Evidence so far: 66 real asks and denies classified
+  (41 normal, 17 harmful, 8 unsure; 5 of 12 denies were text false
+  positives); a miss check found no harmful command allowed by a judgment on
+  0.5.1, and one on 0.5.0 (a client PR merge on cineco-frontend); the
+  advice experiment (30 real sessions) shows the model acts on a gate
+  message, never routes around it, and an advice costs one turn.
+  JEVADV-47 (human-facing message copy) is on hold until this decides the
+  audience.
 - [ ] **T7 — Release.** Version 0.5.1, README and changelog, `npm run
   check` with screenshots at 1440/768/390/320 in both themes, then the
   real-machine verification below.
@@ -200,7 +236,10 @@ touched.
 | `../orca-supervisor-lane-b` | `fabolivark/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-lane-c` | `fabolivark/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-review` | detached | Temporary native-review checkouts | Removed after each review |
-| `../orca-supervisor-lane-m` | `fabolivark/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | After merge |
+| `../orca-supervisor-lane-m` | `fabolivark/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-g` | `fabolivark/release-0.5.1-push-own-branch` | Writer lane G (JEVADV-45) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-s` | `fabolivark/release-0.5.1-skill-links` | Writer lane S (JEVADV-46) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-q` | `fabolivark/release-0.5.1-push-shapes` | Writer lane Q (real push shapes) | After merge |
 | `../orca-supervisor-lane-p` | `fabolivark/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | After merge |
 | `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
 | `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | Removed after the scenario report was recorded |
@@ -283,9 +322,22 @@ touched.
   preserved, and model reclassification measured with the real resolved
   models. One strictness finding became JEVADV-39.
 
+- 2026-09-26, afternoon. Draft PR #31 opened at the user's request. GitHub
+  push protection rejected fake provider-shaped tokens in
+  `secret_redaction.test.ts`; the unpushed history was rewritten to split
+  those literals (tests unchanged, 71/71). Merged and verified: T12, T13,
+  T14, T16. Suite on c6599b0: 2538/2538 unit, 55/55 panels. The dev plugin
+  runs at c6599b0.
+- The owner's direction, recorded as memory: protect real harm only, Jev
+  advises the coding model directly for speed and token savings, never ask a
+  person to approve a raw command, defaults must be right for every
+  developer running agents in bypass mode. Evidence reports:
+  `$CLAUDE_JOB_DIR/tmp/asks/report.md`, `misses/report.md`,
+  `advice-exp/report.md`; the scenario matrix replay is running.
+
 ## Next step
 
-Merge lane A after the independent verifier reports. Then run the live
-checks: dev plugin reload, the mod-skills attachment checklist and the
-locale mirror. Then run the release verification (JEVADV-7 replay, JEVADV-9:
-version bump, `npm run check`, the update path) and report.
+Finish the scenario matrix, decide T19 from it, and implement it. Merge
+lane P (panel tabs) and lane Q (push shapes). Fix T17 and T18. Then the
+release verification (version bump, `npm run check` with screenshots, the
+update path) and report.
