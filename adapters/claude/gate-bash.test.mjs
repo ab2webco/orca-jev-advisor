@@ -1222,6 +1222,32 @@ test('own-branch push: a global requires_human command-scoped policy still block
   assert.equal(gateLogRecords(home).length, 0, 'the no-key path writes no gate-decision record at all')
 })
 
+test('own-branch push: a requires_human policy still "asks" -- observed literally, not just inferred from the no-key notice', () => {
+  const home = makeHome()
+  const cwd = home
+  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
+  // Pre-populate the verdict cache with a literal 'ask' for this exact
+  // shape. If (and only if) the policy correctly blocked the local-allow
+  // shortcut, the command reaches the cache section and this entry is
+  // honoured verbatim -- a direct, unambiguous observation of "still asks",
+  // rather than inferring it from the ordinary no-key notice.
+  const key = expectedCacheKey('git push -u origin feature/x', cwd, home)
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [key]: { decision: 'ask', reason: 'a destination policy needs a human here', at: Date.now() - 1000 },
+  }))
+
+  const stdout = run(home, 'git push -u origin feature/x', { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.systemMessage, /a destination policy needs a human here/)
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].source, 'cache')
+  assert.equal(records[0].verdict, 'ask')
+})
+
 test('own-branch push: a process-scoped requires_human policy does not block the shortcut -- it is not a command the text can be judged against', () => {
   const home = makeHome()
   writePoliciesMirror(home, [{ id: 'ticket_first', rule: 'Work is linked to its ticket before opening the PR.', kind: 'requires_human', scope: 'process' }])
