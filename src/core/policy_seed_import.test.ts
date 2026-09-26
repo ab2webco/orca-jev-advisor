@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyPolicySeedChoices, mergePolicySeeds } from "./policy_seed_import.ts";
+import { applyPolicySeedChoices, mergePolicySeeds, resolvePolicySeedImport } from "./policy_seed_import.ts";
 
 test("mergePolicySeeds adds only ids not already present, appended after the existing rows", () => {
   const existing = [{ id: "a", rule: "rule a", kind: "permits" }];
@@ -268,6 +268,67 @@ test("applyPolicySeedChoices counts a duplicated accepted id only once", () => {
   const { result, replaced } = applyPolicySeedChoices(existing, seeds, ["a", "a"]);
   assert.deepEqual(result, [{ id: "a", rule: "new a", kind: "permits" }]);
   assert.equal(replaced, 1);
+});
+
+// ===========================================================================
+// resolvePolicySeedImport -- odd/tasks/release-0.5.1.md JEVADV-27. The one
+// question cmdImportPolicySeeds needs answered and mergePolicySeeds/
+// applyPolicySeedChoices alone cannot: after applying whatever the caller
+// accepted, is anything genuinely left differing? Additions are always
+// merged in regardless of acceptedIds, so `settled` can only ever be about
+// `differing` -- see this function's own doc.
+// ===========================================================================
+
+test("resolvePolicySeedImport: nothing accepted, a real difference stays reported and unsettled", () => {
+  const existing = [{ id: "a", rule: "my own edited rule", kind: "permits" }];
+  const seeds = [{ id: "a", rule: "seed rule", kind: "permits" }];
+  const resolution = resolvePolicySeedImport(existing, seeds, []);
+  assert.equal(resolution.replaced, 0);
+  assert.equal(resolution.settled, false);
+  assert.deepEqual(resolution.remaining.map((d) => d.id), ["a"]);
+  assert.deepEqual(resolution.policies, existing, "an unaccepted id must not be replaced");
+});
+
+test("resolvePolicySeedImport: accepting the only differing id settles the import", () => {
+  const existing = [{ id: "a", rule: "my own edited rule", kind: "permits" }];
+  const seeds = [{ id: "a", rule: "seed rule", kind: "permits" }];
+  const resolution = resolvePolicySeedImport(existing, seeds, ["a"]);
+  assert.equal(resolution.replaced, 1);
+  assert.equal(resolution.settled, true);
+  assert.deepEqual(resolution.remaining, []);
+  assert.deepEqual(resolution.policies, seeds);
+});
+
+test("resolvePolicySeedImport: accepting one of two differing ids leaves the other reported, unsettled", () => {
+  const existing = [
+    { id: "a", rule: "my own edited a", kind: "permits" },
+    { id: "b", rule: "my own edited b", kind: "permits" },
+  ];
+  const seeds = [
+    { id: "a", rule: "seed a", kind: "permits" },
+    { id: "b", rule: "seed b", kind: "permits" },
+  ];
+  const resolution = resolvePolicySeedImport(existing, seeds, ["a"]);
+  assert.equal(resolution.settled, false);
+  assert.deepEqual(resolution.remaining.map((d) => d.id), ["b"]);
+});
+
+test("resolvePolicySeedImport: pure additions with nothing differing settle immediately, even with acceptedIds empty", () => {
+  const existing: { id: string; rule: string; kind: string }[] = [];
+  const seeds = [{ id: "a", rule: "seed a", kind: "permits" }];
+  const resolution = resolvePolicySeedImport(existing, seeds, []);
+  assert.equal(resolution.added, 1);
+  assert.equal(resolution.settled, true);
+  assert.deepEqual(resolution.remaining, []);
+  assert.deepEqual(resolution.policies, seeds);
+});
+
+test("resolvePolicySeedImport: an accepted id that does not exist on either side changes nothing and stays unsettled if a real difference remains", () => {
+  const existing = [{ id: "a", rule: "my own edited rule", kind: "permits" }];
+  const seeds = [{ id: "a", rule: "seed rule", kind: "permits" }];
+  const resolution = resolvePolicySeedImport(existing, seeds, ["stale-panel-selection"]);
+  assert.equal(resolution.replaced, 0);
+  assert.equal(resolution.settled, false);
 });
 
 test("applyPolicySeedChoices preserves list order after a replacement", () => {

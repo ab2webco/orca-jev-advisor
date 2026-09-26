@@ -539,6 +539,12 @@ const BASELINE_NOTICE_DECISION = decidePolicySeedNotice({
   existing: BASELINE_EXISTING_POLICIES,
   shipped: SHIPPED_POLICIES,
 })
+// JEVADV-27 (odd/tasks/release-0.5.1.md): the worker now publishes the real
+// differing rows alongside the counts (main.mjs's computePolicySeedNoticeDecision),
+// and the panel renders the tick list straight from them while the notice is
+// due -- so the fixture must carry `differingItems` too, or this scenario's
+// screenshot would show the notice banner over an empty list.
+const BASELINE_DIFFERING_ITEMS = mergePolicySeeds(BASELINE_EXISTING_POLICIES, SHIPPED_POLICIES).differing
 
 // odd/tasks/model-reclassification.md T7's own baseline-notice fixture:
 // one shipped model this install never has (haiku, dropped below) and one
@@ -566,7 +572,7 @@ const MODEL_BASELINE_ITEMS = [
 const BASELINE = {
   ...READY,
   policies: BASELINE_EXISTING_POLICIES,
-  policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, at: iso },
+  policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, differingItems: BASELINE_DIFFERING_ITEMS, at: iso },
   models: MODEL_BASELINE_EXISTING,
   modelsSeedNotice: { ...MODEL_BASELINE_DECISION, items: MODEL_BASELINE_ITEMS, checkedAt: iso },
 }

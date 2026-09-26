@@ -48,7 +48,7 @@ import {
 } from '../../src/core/decisions.ts'
 import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeedPolicies } from '../../src/core/policy_seed.ts'
-import { applyPolicySeedChoices, mergePolicySeeds } from '../../src/core/policy_seed_import.ts'
+import { mergePolicySeeds, resolvePolicySeedImport } from '../../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice, parseOfferedVersion } from '../../src/core/policy_seed_notice.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
 import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
@@ -549,10 +549,11 @@ const POLICY_SEED_PATH = join(PLUGIN_ROOT, 'seed', 'policies.json')
  *
  *  `options.acceptedIds` is the only way a shared id already on this machine
  *  can be replaced by the seed's version -- see policy_seed_import.ts's
- *  applyPolicySeedChoices. Omitting it (the default, and the only behaviour
+ *  resolvePolicySeedImport. Omitting it (the default, and the only behaviour
  *  when this runs with no arguments) never replaces anything; the `differing`
- *  list in the result is how a panel finds out there is something to offer
- *  the developer in the first place. */
+ *  list in the result -- the rows STILL unresolved after this apply, never
+ *  the original pre-apply list -- is how a panel finds out there is
+ *  something left to offer the developer. */
 async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
   const seedPath = options.seedPath ?? POLICY_SEED_PATH
   const mirror = options.mirror ?? mirrorCatalogAndPolicies
@@ -565,18 +566,24 @@ async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
     const shippedVersion = parseSeedVersion(parsed)
     const existingRaw = await storageHost.get('policies')
     const existing = Array.isArray(existingRaw) ? existingRaw : []
-    const { merged, added, skipped, differing } = mergePolicySeeds(existing, seeds)
-    const { result: finalPolicies, replaced } = applyPolicySeedChoices(merged, seeds, acceptedIds)
+    const { policies: finalPolicies, added, skipped, replaced, remaining, settled } = resolvePolicySeedImport(existing, seeds, acceptedIds)
     if (added > 0 || replaced > 0) {
       await storageHost.set('policies', finalPolicies)
       await mirror(orca, storageHost)
     }
-    // A successful import -- whether it added rows, replaced some, or did
-    // neither -- means this install has now seen the shipped baseline at
-    // this version, so the notice must not keep offering it again even if a
-    // reported `differing` id was left unticked. See policy_seed_notice.ts.
-    await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: shippedVersion, at: new Date().toISOString() })
-      .catch((error) => orca.log(`policy seed offered-version marker publish failed: ${error.message}`))
+    // JEVADV-27 (odd/tasks/release-0.5.1.md) -- this used to mark the
+    // install offered unconditionally on every successful import, which
+    // silenced the notice the instant additions landed even if a reported
+    // `differing` row was left unticked (the offered marker is never
+    // lowered, so it stayed silent forever, or until the NEXT shipped
+    // version bump). Only `settled` -- nothing genuinely differing left,
+    // per resolvePolicySeedImport -- may advance the marker; an unresolved
+    // row must keep the notice due. See policy_seed_notice.ts.
+    if (settled) {
+      await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: shippedVersion, at: new Date().toISOString() })
+        .catch((error) => orca.log(`policy seed offered-version marker publish failed: ${error.message}`))
+    }
+    const differing = remaining
     await publishPolicySeedNoticeStatus(orca, storageHost, options)
     return { ok: true, added, skipped, differing, replaced }
   } catch (error) {
@@ -617,11 +624,17 @@ const POLICY_SEED_DISMISS_REQUEST_KEY = 'policySeedDismissRequest'
 const POLICY_SEED_DISMISS_RESULT_KEY = 'policySeedDismissResult'
 
 /** Computes the same decision decidePolicySeedNotice would report, from a
- *  fresh read of the shipped seed file and storage. Returns `null` (and
- *  logs) rather than throwing on any failure to read either -- the caller
- *  decides what "could not compute this tick" should mean: leaving a
- *  previous status in place (publishPolicySeedNoticeStatus) or skipping a
- *  poll tick outright (attendPolicySeedNoticeRefresh). */
+ *  fresh read of the shipped seed file and storage, PLUS the full
+ *  `mergePolicySeeds` differing rows (id/existing/seed/fields) that
+ *  `decision` itself only ever reduces to a count -- JEVADV-27
+ *  (odd/tasks/release-0.5.1.md): the panel needs the actual rows to render
+ *  the tick list from a stored status on every load, not only right after a
+ *  live import request/result round trip. Same split as models-worker.mjs's
+ *  computeModelsSeedNotice/decideModelSeedNotice. Returns `null` (and logs)
+ *  rather than throwing on any failure to read either -- the caller decides
+ *  what "could not compute this tick" should mean: leaving a previous status
+ *  in place (publishPolicySeedNoticeStatus) or skipping a poll tick outright
+ *  (attendPolicySeedNoticeRefresh). */
 async function computePolicySeedNoticeDecision (orca, storageHost, options = {}) {
   const seedPath = options.seedPath ?? POLICY_SEED_PATH
   try {
@@ -636,23 +649,29 @@ async function computePolicySeedNoticeDecision (orca, storageHost, options = {})
     ])
     const offeredVersion = parseOfferedVersion(offeredMarker)
     const existing = Array.isArray(existingRaw) ? existingRaw : []
-    return decidePolicySeedNotice({ shippedVersion, offeredVersion, existing, shipped })
+    const decision = decidePolicySeedNotice({ shippedVersion, offeredVersion, existing, shipped })
+    const items = mergePolicySeeds(existing, shipped).differing
+    return { decision, items }
   } catch (error) {
     orca.log(`policy seed notice computation failed: ${String(error?.message ?? error).slice(0, 160)}`)
     return null
   }
 }
 
-/** Writes a computed decision to storage: the status the panel reads (only
- *  the fields it renders), and -- when `decision.markOffered`, i.e. a newer
- *  baseline with nothing to say to THIS install -- the offered-version
+/** Writes a computed `{decision, items}` to storage: the status the panel
+ *  reads (only the fields it renders, now including the real differing
+ *  rows as `differingItems`), and -- when `decision.markOffered`, i.e. a
+ *  newer baseline with nothing to say to THIS install -- the offered-version
  *  marker, so the same no-op merge is not recomputed on every later tick.
  *  `markOffered` is false when the marker is already equal or ahead (a
  *  downgrade), so this never lowers it. Resolves true only when the status
  *  write itself landed, so a caller that dedupes can retry a failed one. */
-async function writePolicySeedNoticeDecision (orca, storageHost, decision) {
+async function writePolicySeedNoticeDecision (orca, storageHost, computed) {
+  const { decision, items } = computed
   const { due, added, differing, shippedVersion } = decision
-  const written = await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, { due, added, differing, shippedVersion, at: new Date().toISOString() })
+  const written = await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, {
+    due, added, differing, shippedVersion, differingItems: items, at: new Date().toISOString()
+  })
     .then(() => true, (error) => {
       orca.log(`policy seed notice status publish failed: ${error.message}`)
       return false
@@ -672,9 +691,9 @@ async function writePolicySeedNoticeDecision (orca, storageHost, decision) {
  *  whatever status was already published in place, rather than overwriting
  *  it with a guess. */
 async function publishPolicySeedNoticeStatus (orca, storageHost, options = {}) {
-  const decision = await computePolicySeedNoticeDecision(orca, storageHost, options)
-  if (decision === null) return
-  await writePolicySeedNoticeDecision(orca, storageHost, decision)
+  const computed = await computePolicySeedNoticeDecision(orca, storageHost, options)
+  if (computed === null) return
+  await writePolicySeedNoticeDecision(orca, storageHost, computed)
 }
 
 /** Poll-loop wrapper: recomputes the decision every tick -- a plain "Save
@@ -687,13 +706,18 @@ async function publishPolicySeedNoticeStatus (orca, storageHost, options = {}) {
  *  with the same due/added/differing/shippedVersion must count as
  *  unchanged even though `at` would differ. */
 async function attendPolicySeedNoticeRefresh (orca, storageHost, lastPublished, options = {}) {
-  const decision = await computePolicySeedNoticeDecision(orca, storageHost, options)
-  if (decision === null) return
-  const fingerprint = JSON.stringify([decision.due, decision.added, decision.differing, decision.shippedVersion])
+  const computed = await computePolicySeedNoticeDecision(orca, storageHost, options)
+  if (computed === null) return
+  const { decision, items } = computed
+  // The sorted id list, not just the count: two ticks can report the same
+  // `differing` COUNT with genuinely different ids (one row got fixed, a
+  // different one broke), and that must still republish.
+  const itemIds = items.map((item) => item.id).sort()
+  const fingerprint = JSON.stringify([decision.due, decision.added, decision.differing, decision.shippedVersion, itemIds])
   if (fingerprint === lastPublished.value) return
   // Remembered only once it is really on disk: a failed write must be
   // retried next tick, not deduped away while the panel reads a stale status.
-  if (await writePolicySeedNoticeDecision(orca, storageHost, decision)) lastPublished.value = fingerprint
+  if (await writePolicySeedNoticeDecision(orca, storageHost, computed)) lastPublished.value = fingerprint
 }
 
 /** Attends one pending "dismiss the baseline notice" request from the panel.
@@ -720,12 +744,12 @@ async function attendPolicySeedDismissRequest (orca, storageHost, options = {}) 
     return
   }
 
-  const decision = await computePolicySeedNoticeDecision(orca, storageHost, options)
+  const computed = await computePolicySeedNoticeDecision(orca, storageHost, options)
   let result
-  if (decision === null) {
+  if (computed === null) {
     result = { ok: false, reason: 'seed-unavailable', detail: 'the shipped seed could not be read to record the dismissed version.' }
   } else {
-    const marked = await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: decision.shippedVersion, at: new Date().toISOString() })
+    const marked = await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: computed.decision.shippedVersion, at: new Date().toISOString() })
       .then(() => true, (error) => {
         orca.log(`policy seed offered-version marker publish failed: ${error.message}`)
         return false

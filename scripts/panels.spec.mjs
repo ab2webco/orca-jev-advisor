@@ -37,6 +37,7 @@ process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(ISOLATED_ROOT, 'config')
 process.env.ORCA_SUPERVISOR_CACHE_DIR = join(ISOLATED_ROOT, 'cache')
 
 const { parseSeedPolicies, parseSeedVersion } = await import('../src/core/policy_seed.ts')
+const { mergePolicySeeds } = await import('../src/core/policy_seed_import.ts')
 const { decidePolicySeedNotice } = await import('../src/core/policy_seed_notice.ts')
 const { seedPoliciesIfEmpty } = await import('../adapters/orca/main.mjs')
 
@@ -98,6 +99,10 @@ const BASELINE_UPDATE_DECISION = decidePolicySeedNotice({
   existing: existingBeforeBaselineUpdate(),
   shipped: SHIPPED
 })
+// JEVADV-27 -- the real differing rows for the same scenario, the same shape
+// main.mjs's computePolicySeedNoticeDecision now publishes as
+// policySeedNoticeStatus.differingItems (never a hand-typed count).
+const BASELINE_UPDATE_DIFFERING_ITEMS = mergePolicySeeds(existingBeforeBaselineUpdate(), SHIPPED).differing
 
 /**
  * The storage a fresh install ends up with, produced by running the REAL
@@ -315,6 +320,65 @@ test('the baseline notice shows the worker\'s real counts when the status says i
     assert.ok(text.includes(String(BASELINE_UPDATE_DECISION.added)), `notice text "${text}" is missing the real added count`)
     assert.ok(text.includes(String(BASELINE_UPDATE_DECISION.differing)), `notice text "${text}" is missing the real differing count`)
     assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// JEVADV-27 -- odd/tasks/release-0.5.1.md. Before this fix, `#policy-diffs`
+// only ever got rendered as the side effect of a live import request/result
+// round trip (clicking "Review" or "Adopt ticked"); a plain panel reload
+// showed the notice banner's counts but never the tick list itself, even
+// though storage held the real rows all along in
+// policySeedImportResult.differing. This asserts the list renders straight
+// from the worker's stored status on load, with no click required.
+test('the differing-policy rows render on a plain reload, straight from the stored status -- no click required', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  assert.ok(BASELINE_UPDATE_DIFFERING_ITEMS.length > 0, 'the fixture scenario has nothing differing, so this proves nothing')
+  const { browser, page, errors } = await openPanel({
+    policies: existingBeforeBaselineUpdate(),
+    policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, differingItems: BASELINE_UPDATE_DIFFERING_ITEMS, at: new Date().toISOString() }
+  })
+  try {
+    const ids = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#policy-diffs input[data-policy-diff-id]')).map((box) => box.getAttribute('data-policy-diff-id')))
+    assert.deepEqual(ids.sort(), BASELINE_UPDATE_DIFFERING_ITEMS.map((d) => d.id).sort(),
+      'the differing rows were not rendered from the stored status on a plain load')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the differing-policy list stays empty on load when the notice is not due, even with differingItems present (a resolved/legacy install)', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    policies: existingBeforeBaselineUpdate(),
+    policySeedNoticeStatus: { due: false, added: 0, differing: BASELINE_UPDATE_DIFFERING_ITEMS.length, shippedVersion: SHIPPED_VERSION, differingItems: BASELINE_UPDATE_DIFFERING_ITEMS, at: new Date().toISOString() }
+  })
+  try {
+    const rows = await page.evaluate(() => document.querySelectorAll('#policy-diffs input[data-policy-diff-id]').length)
+    assert.equal(rows, 0, 'a not-due status still rendered a stale differing list')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the differing-policy list sits directly under the baseline notice, before the policies list itself', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    policies: existingBeforeBaselineUpdate(),
+    policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, differingItems: BASELINE_UPDATE_DIFFERING_ITEMS, at: new Date().toISOString() }
+  })
+  try {
+    const order = await page.evaluate(() => {
+      const ids = ['policy-seed-notice', 'policy-diffs', 'policies-list']
+      const positions = ids.map((id) => {
+        let node = document.getElementById(id)
+        let index = 0
+        while ((node = node.previousElementSibling) != null) index += 1
+        return index
+      })
+      return positions
+    })
+    assert.ok(order[0] < order[1] && order[1] < order[2], `expected notice < diffs < policies-list, got ${JSON.stringify(order)}`)
   } finally {
     await browser.close()
   }

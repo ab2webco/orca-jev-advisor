@@ -187,6 +187,59 @@ export interface PolicySeedApplyResult {
  * default here or anywhere else in core: the caller must pass explicit ids
  * for anything to change.
  */
+export interface PolicySeedImportResolution {
+  /** The policies to store -- `merged` with the accepted subset replaced,
+   *  same shape applyPolicySeedChoices already returns as `result`. */
+  readonly policies: readonly PolicySeedLike[];
+  readonly added: number;
+  readonly skipped: number;
+  readonly replaced: number;
+  /** Ids still genuinely differing after this apply -- never the ORIGINAL
+   *  pre-apply list. An id just accepted now matches the seed exactly and
+   *  drops out; an id left unticked (or named in `acceptedIds` but stale)
+   *  stays, so a caller can offer it again on the very next round. */
+  readonly remaining: readonly PolicySeedDifference[];
+  /** True only when `remaining` is empty -- nothing about the shipped
+   *  baseline is left for this install to see. `added` can never be the
+   *  reason this is false: additions are always merged into `policies`
+   *  above regardless of `acceptedIds` (mergePolicySeeds's own contract), so
+   *  a fresh comparison of `policies` against `seeds` can never report a
+   *  missing id, only a differing one. */
+  readonly settled: boolean;
+}
+
+/**
+ * The one question cmdImportPolicySeeds (main.mjs) needs answered that
+ * neither mergePolicySeeds nor applyPolicySeedChoices alone can: after
+ * applying whatever the caller explicitly accepted, is anything about the
+ * shipped baseline still left unresolved for this install?
+ *
+ * This is what makes JEVADV-27's fix possible without duplicating the merge
+ * logic in main.mjs: the caller used to bump its own "offered this version"
+ * marker unconditionally on every import, which silenced the notice the
+ * moment additions landed even if a differing row nobody ticked was still
+ * sitting there, unresolved, forever (the offered marker is never lowered).
+ * `settled` is the caller's single, correct condition for whether marking
+ * the shipped version as offered is honest.
+ */
+export function resolvePolicySeedImport(
+  existing: readonly PolicySeedLike[],
+  seeds: readonly PolicySeedLike[],
+  acceptedIds: readonly string[],
+): PolicySeedImportResolution {
+  const merge = mergePolicySeeds(existing, seeds);
+  const { result: policies, replaced } = applyPolicySeedChoices(merge.merged, seeds, acceptedIds);
+  const remaining = mergePolicySeeds(policies, seeds).differing;
+  return {
+    policies,
+    added: merge.added,
+    skipped: merge.skipped,
+    replaced,
+    remaining,
+    settled: remaining.length === 0,
+  };
+}
+
 export function applyPolicySeedChoices(
   existing: readonly PolicySeedLike[],
   seeds: readonly PolicySeedLike[],

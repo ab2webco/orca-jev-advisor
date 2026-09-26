@@ -278,6 +278,7 @@
             <button id="policy-seed-notice-dismiss" class="link" type="button" data-i18n="policies.seedNoticeDismiss"></button>
           </div>
         </div>
+        <div id="policy-diffs"></div>
         <div id="policies-list"></div>
         <div class="actions">
           <button id="add-policy-row" type="button" data-i18n="policies.add"></button>
@@ -285,7 +286,6 @@
           <span class="said" id="policy-import-said"></span>
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
-        <div id="policy-diffs"></div>
       </section>
 
       <section id="mod-skills-section">
@@ -1901,8 +1901,26 @@
         policySeedNoticeTextEl.textContent = t('policies.seedNoticeText', { added: String(added), differing: String(differing) })
       }
 
+      /** Renders both halves of the worker's POLICY_SEED_NOTICE_STATUS_KEY
+       *  mirror together: the banner, and -- while it is actually due --
+       *  the tick list straight from `status.differingItems`, the same
+       *  `{id, existing, seed, fields}` shape a live import's own
+       *  `result.differing` already carries. This is what keeps the list
+       *  visible on a plain panel reload, not only right after clicking
+       *  "Review"/"Adopt ticked": see main.mjs's computePolicySeedNoticeDecision
+       *  and the JEVADV-27 note there. Gated on `due`, not merely on the list
+       *  being non-empty: an install already marked offered (a resolved
+       *  notice, or one from before this fix existed) must not show a stale
+       *  list nobody asked to see again -- `runPolicySeedImport` below still
+       *  renders `result.differing` unconditionally right after a live
+       *  import, which is how that install can still review on request. */
+      function renderPolicySeedNoticeAndDiffs (status) {
+        renderPolicySeedNotice(status)
+        renderPolicySeedDiffs(status && status.due === true ? status.differingItems : [])
+      }
+
       function loadPolicySeedNoticeStatus () {
-        return read(POLICY_SEED_NOTICE_STATUS_KEY, false).then(renderPolicySeedNotice)
+        return read(POLICY_SEED_NOTICE_STATUS_KEY, false).then(renderPolicySeedNoticeAndDiffs)
       }
 
       el('policy-seed-notice-review').addEventListener('click', function () {
@@ -2406,7 +2424,7 @@
         fillThresholds({})
         fillModSkillsStatus(null)
         fillDenyTierStatus(null)
-        renderPolicySeedNotice(null)
+        renderPolicySeedNoticeAndDiffs(null)
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
@@ -2435,7 +2453,7 @@
           ;(results[2] || []).forEach(addPolicyRow)
           fillModSkillsStatus(results[4])
           fillDenyTierStatus(results[5])
-          renderPolicySeedNotice(results[6])
+          renderPolicySeedNoticeAndDiffs(results[6])
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
         })

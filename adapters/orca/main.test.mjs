@@ -764,15 +764,68 @@ test('cmdImportPolicySeeds: a failed import (unreadable seed) never marks this i
   assert.equal(await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY), null)
 })
 
-test('cmdImportPolicySeeds: republishes the notice status, which now reads not-due', async () => {
+// JEVADV-27 -- odd/tasks/release-0.5.1.md. Before this fix,
+// cmdImportPolicySeeds bumped POLICY_SEED_OFFERED_VERSION_KEY unconditionally
+// on every successful import, so a person who imported the additions but
+// left a differing row unticked (exactly what clicking the notice's "Review"
+// button does: runPolicySeedImport([]), i.e. this same call with
+// acceptedIds: []) silenced the notice for that row forever -- the offered
+// marker is never lowered, so it would never come back until the shipped
+// version bumped again. The three rows this observed live: "3 added" shown,
+// the 3 differing rows never seen again.
+test('cmdImportPolicySeeds: an unresolved differing row keeps the notice due, even though additions landed', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
     policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
   })
-  await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.ok(result.added > 0, 'the fixture must add something for this to prove anything')
   const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
-  assert.equal(status.due, false, 'the notice is still due right after the person just ran the import')
+  assert.equal(status.due, true, 'an unresolved differing row silently marked this install offered')
+  assert.equal(status.added, 0, 'the additions are already merged in by the time the status is read again')
+  assert.equal(status.differing, 1)
   assert.equal(status.shippedVersion, REAL_SEED_VERSION)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered, null, 'the offered marker must not move while a differing row is still unticked')
+})
+
+test('cmdImportPolicySeeds: accepting every differing id settles the notice and marks the install offered', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror, acceptedIds: ['read_and_test'] })
+  assert.equal(result.replaced, 1)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, false, 'every differing row was resolved, so nothing is left to show')
+  assert.equal(status.differing, 0)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION)
+})
+
+test('cmdImportPolicySeeds: result.differing reports only the rows still unresolved after this apply, not the original pre-apply list', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [
+      { id: 'read_and_test', rule: 'my own edited rule a', kind: 'prohibits' },
+      { id: 'own_branch', rule: 'my own edited rule b', kind: 'prohibits' }
+    ]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror, acceptedIds: ['read_and_test'] })
+  assert.equal(result.differing.some((d) => d.id === 'read_and_test'), false, 'an accepted, now-matching id must drop out of the reported list')
+  assert.ok(result.differing.some((d) => d.id === 'own_branch'), 'an unaccepted, still-differing id must stay reported')
+})
+
+test('attendPolicySeedImportRequest: reviewing with no accepted ids (the notice\'s Review button) leaves a real difference due', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }],
+    policySeedImportRequest: { id: 'psi-4', at: new Date().toISOString(), acceptedIds: [] }
+  })
+  await attendPolicySeedImportRequest(orca, storageHost, { mirror: noopMirror })
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, true, 'opening Review and accepting nothing must not silence the notice')
+  assert.equal(await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY), null)
 })
 
 test('publishPolicySeedNoticeStatus: an install offered nothing before, with real added counts, is due', async () => {
@@ -933,7 +986,25 @@ test('policySeedNoticeStatus carries only what the panel renders', async () => {
   const storageHost = fakeStorageHost({})
   await publishPolicySeedNoticeStatus(orca, storageHost)
   const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
-  assert.deepEqual(Object.keys(status).sort(), ['added', 'at', 'differing', 'due', 'shippedVersion'])
+  assert.deepEqual(Object.keys(status).sort(), ['added', 'at', 'differing', 'differingItems', 'due', 'shippedVersion'])
+})
+
+// JEVADV-27 -- the differing rows themselves, not just their count, so the
+// panel can render the tick list straight from this status on every load
+// instead of only right after a live import request/result round trip (the
+// only place they used to be available at all -- see config.html's
+// renderPolicySeedDiffs and its caller before this fix).
+test('policySeedNoticeStatus carries the real differing rows, not just their count', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.differing, 1)
+  assert.equal(status.differingItems.length, 1)
+  assert.equal(status.differingItems[0].id, 'read_and_test')
+  assert.ok(Array.isArray(status.differingItems[0].fields) && status.differingItems[0].fields.length > 0)
 })
 
 // ---------------------------------------------------------------------------
