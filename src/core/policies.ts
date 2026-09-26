@@ -9,7 +9,7 @@
 
 import { readFile } from "node:fs/promises";
 import type { Policy, PolicyKind } from "./decisions.ts";
-import { isPolicyScope } from "./decisions.ts";
+import { isPolicyScope, POLICY_SCOPE_VALUES } from "./decisions.ts";
 import { isRecord, isString } from "../guards.ts";
 
 /** Reserved: never usable as a real policy id, since Jev's coverage question uses it to mean "none of these apply". */
@@ -46,7 +46,11 @@ function isPolicyRow(value: unknown, index: number): Policy {
   // but a PRESENT, invalid value is still a typo the operator needs to see,
   // same discipline as `kind` above.
   if ("scope" in value && value.scope !== undefined && !isPolicyScope(value.scope)) {
-    throw new Error(`La politica en la posicion ${index} ('${value.id}') tiene un 'scope' invalido; debe ser uno de: command, process, local-rule`);
+    // JEVADV-37 (R2-002, odd/tasks/release-0.5.1.md): the allowed values are
+    // named from POLICY_SCOPE_VALUES (decisions.ts), the single runtime list
+    // isPolicyScope itself already checks against, rather than a second,
+    // hardcoded copy of the same three strings drifting out of sync with it.
+    throw new Error(`La politica en la posicion ${index} ('${value.id}') tiene un 'scope' invalido; debe ser uno de: ${[...POLICY_SCOPE_VALUES].join(", ")}`);
   }
   return {
     id: value.id,

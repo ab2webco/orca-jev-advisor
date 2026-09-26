@@ -963,7 +963,7 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
     : -1;
   const isSsh = name === "ssh";
   const isWatch = name === "watch";
-  const scriptStart = isEval
+  const resolvedScriptStart = isEval
     ? index + 1
     : flagIndex !== -1
       ? flagIndex + 1
@@ -972,6 +972,11 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
         : isWatch
           ? afterOwnOptions(plainTexts, index + 1, WATCH_OPTIONS_WITH_VALUE)
           : -1;
+  // JEVADV-37 item 3: nothing above recognised a runner for this segment at
+  // all -- the resolved program is some OTHER, unmodelled command (`parallel`,
+  // `flock`, `chroot`, ...). Fall back to a real shell `-c` pair found
+  // ANYWHERE in the segment -- see shellDashCAnywhereIndex's own doc comment.
+  const scriptStart = resolvedScriptStart !== -1 ? resolvedScriptStart : shellDashCAnywhereIndex(plainTexts);
   if (scriptStart !== -1 && tokens[scriptStart] !== undefined) {
     const before = scanTokens(tokens.slice(0, scriptStart), nextScannedBody, mode);
     // The script is scanned again as a whole, so its substitutions go back
@@ -1004,6 +1009,39 @@ function execHandOffIndex(texts: readonly string[], index: number, name: string)
   if (dashDash === -1) return -1;
   const next = texts[dashDash + 1];
   return next !== undefined && RECURSIVE_COMMAND_PROGRAMS.has(programName(stripLeadingGroupers(next))) ? dashDash + 1 : -1;
+}
+
+/**
+ * The index right after a real shell's `-c`-style flag, found ANYWHERE in
+ * `texts` -- not only at the segment's own resolved command position -- or
+ * -1. JEVADV-37 item 3 (odd/tasks/release-0.5.1.md): a real `sh -c`/
+ * `bash -c`/`zsh -c`/`dash -c`/`ksh -c` pair still runs its script whichever
+ * program precedes it (`parallel sh -c "…"`, `flock f sh -c "…"`, `chroot /
+ * sh -c "…"`), because none of those wrapping programs is modelled here the
+ * way WRAPPERS/RECURSIVE_COMMAND_PROGRAMS already model sudo/env/nice/etc. --
+ * this is the fallback for exactly that unmodelled case, only ever reached
+ * from scanSegment once resolveProgram's own forward search and
+ * execHandOffIndex have both already found no runner for this segment at
+ * all (a nice/ionice pair, or a `find -exec`/`--` hand-off, already resolves
+ * the shell without this).
+ *
+ * Deliberately narrower than resolveProgram's own forward search:
+ *   - it requires the `-c`-style flag IMMEDIATELY after the shell token, not
+ *     merely somewhere later in the segment;
+ *   - it only ever recognises a REAL shell name (SHELLS) -- never
+ *     ssh/watch/su/script, which stay limited to the segment's own command
+ *     position or a known exec hand-off (see RECURSIVE_COMMAND_PROGRAMS/
+ *     execHandOffIndex above). A bare later mention of one of those names as
+ *     some OTHER program's own argument (`grep -n watch "…git reset
+ *     --hard…" f`) must keep resolving to a mention, not a run (review-3 R3).
+ */
+function shellDashCAnywhereIndex(texts: readonly string[]): number {
+  for (let i = 0; i < texts.length - 1; i += 1) {
+    if (SHELLS.has(programName(stripLeadingGroupers(texts[i] ?? ""))) && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(texts[i + 1] ?? "")) {
+      return i + 2;
+    }
+  }
+  return -1;
 }
 
 /**

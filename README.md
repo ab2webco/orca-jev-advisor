@@ -218,26 +218,32 @@ A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
 exactly as a shell would read it.
 
-**Two-level rules: a run denies, a mention asks.** Force push,
-protected-branch and discard are all read through the SAME two-level model
-(`someSegmentMatches`, `src/core/git_discard.ts`): a match in **command
-position** — the segment's own command, `$(...)`/backtick substitutions, a
-real shell/login/watch wrapper's command (`bash -c`/`sh -c`/`zsh -c`/`eval`/
-`su -c`/`script -c`/`ssh`'s remote command/`watch`'s command, recognised only
-at the segment's resolved command position, never as an arbitrary later
-token — `grep -n watch "…" f` must not read `watch` as a command just
-because the word appears in grep's own argument), or an **interpreter CODE
-string** (`python`/`python3 -c`, `node -e`/`-p`/`--eval`, `ruby -e`, `perl
--e`/`-E`, `php -r`, `osascript -e` — these commonly shell out, so they stay
-code, never data, even though they are not shell syntax) — still **denies**.
-A match that exists ONLY because a quoted argument of some OTHER,
-non-executing program stayed visible now **asks** instead: a person decides,
-rather than the model being refused outright for a phrase nobody was ever
-going to run (`git grep`'s own pattern and `sed`'s script argument are
-programs reading data, not commands). A rule's own on/off switch (the panel's
-deny-tier toggles) only ever matters once a rule has already decided to deny:
-turning it off downgrades that `deny` to `ask`, exactly as before; it never
-touches a match that had already resolved to `ask` on its own.
+**Two-level rules: a run denies, a mention goes to Jev instead of stopping
+locally.** Force push, protected-branch and discard are all read through the
+SAME two-level model (`someSegmentMatches`, `src/core/git_discard.ts`): a
+match in **command position** — the segment's own command,
+`$(...)`/backtick substitutions, a real shell/login/watch wrapper's command
+(`bash -c`/`sh -c`/`zsh -c`/`dash -c`/`ksh -c`, whichever program precedes
+the shell (`parallel sh -c "…"`, `flock f sh -c "…"`) — `eval`/`su -c`/
+`script -c`/`ssh`'s remote command/`watch`'s command are recognised only at
+the segment's resolved command position, never as an arbitrary later token —
+`grep -n watch "…" f` must not read `watch` as a command just because the
+word appears in grep's own argument), or an **interpreter CODE string**
+(`python`/`python3 -c`, `node -e`/`-p`/`--eval`, `ruby -e`, `perl -e`/`-E`,
+`php -r`, `osascript -e` — these commonly shell out, so they stay code,
+never data, even though they are not shell syntax) — still **denies**. A
+match that exists ONLY because a quoted argument of some OTHER,
+non-executing program stayed visible is a **mention**, not a run: it is NOT a
+local-rule match at all (JEVADV-37) — the command continues to the ordinary
+Jev path (a real risk/policy judgment) exactly the way a command led by a
+mention-only verb (`grep`, `echo`, `sed`, …) already did before this, rather
+than stalling an unattended agent on a local question nobody is there to
+answer (`git grep`'s own pattern and `sed`'s script argument are programs
+reading data, not commands — neither ever ran the phrase they merely
+contain). A rule's own on/off switch (the panel's deny-tier toggles) only
+ever matters once a rule has already decided to deny: turning it off
+downgrades that `deny` to `ask`, exactly as before; a mention was never a
+`deny` to downgrade from, and always reaches Jev regardless of the switch.
 
 Within a segment, a quoted argument is read the way a shell does: a *single
 quoted word* (`"main"`, `"-f"`) is still an ordinary argument and counts as

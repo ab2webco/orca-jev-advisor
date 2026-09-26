@@ -482,3 +482,36 @@ test("someSegmentMatches: a shell reached through an exec-ing program still runs
   // A `--` that hands over arguments, not a program, changes nothing.
   assert.equal(someSegmentMatches('npm test -- --grep "git push --force"', forcePush), "ask");
 });
+
+// ---------------------------------------------------------------------------
+// JEVADV-37 item 3 (odd/tasks/release-0.5.1.md): a real `sh -c`/`bash -c`/
+// `zsh -c`/`dash -c`/`ksh -c` pair still runs its script whichever program
+// precedes it, not only a modelled wrapper (WRAPPERS) or a known hand-off
+// (execHandOffIndex's `find -exec`/`--`). `parallel`, `flock` and `chroot`
+// are not modelled anywhere in this file, so before this fix the shell pair
+// they precede was read as a plain, visible argument -- a mention, not a run.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: a shell -c pair behind an unmodelled exec-ing program still runs, so it still denies", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('parallel sh -c "git push --force"', forcePush), "deny");
+  assert.equal(someSegmentMatches('flock /tmp/l sh -c "git reset --hard"', resetClean), "deny");
+  // `nice`/`ionice` are already-modelled WRAPPERS, so a shell behind BOTH of
+  // them together was already denying before this fix (resolveProgram's own
+  // forward search already jumps past an unrecognised token like `ionice`'s
+  // own numeric flag value to find the shell) -- kept here as a regression
+  // guard, not a new case this fix introduces.
+  assert.equal(someSegmentMatches('nice -n 5 ionice sh -c "git push --force"', forcePush), "deny");
+  // A completely unmodelled wrapper, same shape.
+  assert.equal(someSegmentMatches('chroot / sh -c "git push --force"', forcePush), "deny");
+});
+
+test("someSegmentMatches: ssh/watch/su/script stay limited to command position or a known hand-off -- the new shell-anywhere case never widens THEM", () => {
+  // Review-3 R3: a bare, later mention of one of these names inside some
+  // OTHER program's own argument must stay a mention, not a run -- the new
+  // fallback only ever recognises a REAL shell name (sh/bash/zsh/dash/ksh)
+  // immediately followed by a `-c`-style flag, never ssh/watch/su/script.
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('grep -n watch "…git reset --hard…" f', resetClean), "ask");
+});

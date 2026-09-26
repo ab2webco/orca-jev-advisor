@@ -303,8 +303,12 @@ export function filterPoliciesForDestination(policies: readonly Policy[], destin
  *  This is the ONE runtime list of PolicyScope's members: policies.ts,
  *  store.ts and gate_catalog_mirror.ts each used to carry their own copy of
  *  it (four in total, odd/tasks/release-0.5.1.md JEVADV-36) -- every one of
- *  them now imports {@link isPolicyScope} from here instead. */
-const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule"]);
+ *  them now imports {@link isPolicyScope} from here instead. Exported
+ *  (JEVADV-37, R2-002) so a reader that needs to NAME the members -- e.g.
+ *  policies.ts's own "must be one of: ..." error message -- derives that
+ *  list from here too, instead of a fifth hardcoded copy drifting out of
+ *  sync with this one. */
+export const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule"]);
 
 /** Whether `value` is one of PolicyScope's three real members -- the single
  *  guard every reader of a raw, possibly-mistyped `scope` field should call,

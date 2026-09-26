@@ -525,6 +525,9 @@ const SEGMENT_SCOPED_DENIED = [
   'script -c "git push -f"',
   // The push-protected rule's own wrapper example named in the task.
   'ssh host "git push origin main"',
+  // odd/tasks/release-0.5.1.md JEVADV-37 item 3: a real shell -c pair still
+  // runs whichever program precedes it, not only a modelled wrapper.
+  'parallel sh -c "git push --force"',
 ]
 
 for (const command of SEGMENT_SCOPED_NOT_DENIED) {
@@ -741,6 +744,9 @@ const DISCARDING_COMMANDS = [
   // the deny tier ever got a look at the substitution's body.
   'echo "$(git reset --hard)"',
   'echo `git reset --hard`',
+  // odd/tasks/release-0.5.1.md JEVADV-37 item 3: a real shell -c pair still
+  // runs whichever program precedes it, not only a modelled wrapper.
+  'flock /tmp/l sh -c "git reset --hard"',
 ]
 
 const NON_DISCARDING_COMMANDS = [
