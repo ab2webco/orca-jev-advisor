@@ -646,10 +646,27 @@ export interface GateDestinationContext {
  * it is ever handed to this function, so they keep judging the real,
  * unredacted text.
  */
-export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext): Record<string, unknown> {
+/**
+ * `deployPublishSignal` is the advise-model release's own local
+ * deploy/publish floor (src/core/deploy_publish.ts, Part 3(a)): a plain
+ * English sentence fragment naming what gate-bash.ts's own local detection
+ * already knows for a fact ("triggers a deployment workflow on GitHub
+ * Actions", "publishes a package"), carried in the SAME state both the
+ * policy questions (`coverage`/`same_kind`) and the risk questions
+ * (`reversible`/`external`/`consequence`) read from -- one callJev call, so
+ * a destination policy like `client_always_asks` can recognise a real
+ * deploy/publish command instead of the risk axes alone ever seeing it.
+ * Omitted entirely when no such command was detected, exactly like
+ * `destination` above -- never an empty string, which would read as "we
+ * checked and found nothing" rather than "we didn't check this at all".
+ */
+export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext, deployPublishSignal?: string): Record<string, unknown> {
   const state: Record<string, unknown> = { proposed_command: redactSecretsForJev(command).text, context: context, note: NOTE };
   if (destination !== undefined) {
     state["destination"] = { kind: destination.kind, description: destination.label };
+  }
+  if (deployPublishSignal !== undefined) {
+    state["deployPublishSignal"] = deployPublishSignal;
   }
   return state;
 }

@@ -609,3 +609,17 @@ test("buildActionGateState: context and destination are unaffected by redaction 
   assert.equal(state.context, "repo context here");
   assert.deepEqual(state.destination, { kind: "client-site", description: "a client site" });
 });
+
+// The advise-model release, Part 3(a): the local deploy/publish floor's own
+// fact is carried in the SAME state both the policy and risk questions read
+// from one callJev call, so a policy like client_always_asks can recognise
+// it too.
+test("buildActionGateState: an omitted deployPublishSignal never adds the field at all", () => {
+  const state = buildActionGateState("npm test", "some context");
+  assert.equal("deployPublishSignal" in state, false);
+});
+
+test("buildActionGateState: a deployPublishSignal is carried through verbatim, in its own field", () => {
+  const state = buildActionGateState("gh workflow run deploy.yml", "some context", undefined, "triggers a deployment workflow on GitHub Actions");
+  assert.equal(state.deployPublishSignal, "triggers a deployment workflow on GitHub Actions");
+});

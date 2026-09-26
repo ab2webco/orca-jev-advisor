@@ -72,6 +72,7 @@ import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../..
 import { composeAdviceText } from '../../src/core/gate_advice_text.ts'
 import { resolveRecoverabilityTargets } from '../../src/core/git_recoverability.ts'
 import type { GitStatusSets } from '../../src/core/git_recoverability.ts'
+import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
@@ -1171,6 +1172,14 @@ type JevOutcome =
       readonly isRiskAdvice: boolean
       /** The risk stage's own reasons, resolved in ENGLISH -- only meaningful when isRiskAdvice is true; empty otherwise. */
       readonly riskAdviceReasonsEnglish: readonly string[]
+      /**
+       * Part 3(b)'s own local floor: non-null only when `decision` is
+       * 'allow' AND src/core/deploy_publish.ts detected this command as a
+       * deploy/publish action -- names it, so the caller floors what would
+       * otherwise be a silent allow into an advice instead. Null in every
+       * other case, including every non-'allow' decision.
+       */
+      readonly deployPublishAdvice: string | null
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
@@ -1225,7 +1234,13 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies) : {}),
     }
     const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
-    const response = await callJev(apiKey, buildActionGateState(command, context, destination), questions, { budgetMs: BUDGET_MS })
+    // The advise-model release, Part 3(a): a local, no-network fact ("this
+    // triggers a deployment workflow", "this publishes a package") is fed
+    // into the SAME state both the policy and risk questions read from, so
+    // a destination policy (client_always_asks, ...) can recognise it too --
+    // see decisions.ts's own doc on buildActionGateState's deployPublishSignal.
+    const deployPublish = detectDeployPublish(command)
+    const response = await callJev(apiKey, buildActionGateState(command, context, destination, deployPublish?.description), questions, { budgetMs: BUDGET_MS })
     const gate = decideGateAction({
       action: command,
       policies: commandScopedPolicies,
@@ -1259,6 +1274,13 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       viaLocalAllow,
       isRiskAdvice,
       riskAdviceReasonsEnglish: isRiskAdvice ? gate.reasons.map(resolveGateActionReasonEnglish) : [],
+      // Part 3(b): a command this local floor recognises as a deploy/publish
+      // action must never resolve to a SILENT allow -- named here whenever
+      // the final verdict would otherwise be exactly that, whatever decided
+      // it (the risk stage's own clean pass, Option D, or even a policy that
+      // permits it outright). Null whenever the verdict is anything but
+      // 'allow', or no such command was detected at all.
+      deployPublishAdvice: gate.verdict === 'allow' && deployPublish !== null ? deployPublish.description : null,
     }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
@@ -1569,6 +1591,25 @@ async function main(): Promise<void> {
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
+    })
+    return
+  }
+
+  // Part 3(b): a command the local deploy/publish floor recognises must
+  // never resolve to a SILENT allow -- reuses the exact same advice choke
+  // point as the risk stage's own advice above, cached the same way (as
+  // 'advise', never as 'allow'), so a future cache hit for this exact
+  // command shape already replays through resolveAdviceOutcome's own
+  // cache-hit branch with no special-casing needed there.
+  if (resolved.decision === 'allow' && resolved.deployPublishAdvice !== null) {
+    if (key !== null) {
+      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, at: Date.now() }
+      writeCache(cache)
+    }
+    resolveAdviceOutcome({
+      command, cwd, sessionId, toolUseId,
+      reasonsEnglish: [resolved.deployPublishAdvice],
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
     })
     return

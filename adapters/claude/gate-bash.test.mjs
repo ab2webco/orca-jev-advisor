@@ -1907,3 +1907,36 @@ test('requires_human policy stops stay a human ask, never an advice -- unaffecte
   const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-policy' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
 })
+
+// ---------------------------------------------------------------------------
+// The advise-model release, Part 3: the local deploy/publish floor. A
+// command this floor recognises must never resolve to a silent allow -- the
+// real miss this closes: `gh workflow run deploy-azure-dev.yml --ref
+// release/0.3.1` was allowed by Jev's risk stage as "reversible, local and
+// cheap" on a client repository. Detection itself (detectDeployPublish) and
+// its context-carrying (buildActionGateState's deployPublishSignal) are
+// unit-tested directly in src/core/deploy_publish.test.ts and
+// src/core/decisions.test.ts; this suite's harness has no fetch injection
+// point for a fresh Jev call (see the module note above), so the wiring
+// that floors an 'allow' verdict into an advice is exercised here the same
+// way Part 1's risk-stage advice is: pre-populating the verdict cache with
+// exactly the entry gate-bash.ts itself would have written after a real
+// Jev call answered 'allow' for a detected deploy/publish command.
+// ---------------------------------------------------------------------------
+
+test('a deploy command that Jev would silently allow is floored into an advice naming the deploy, not a silent allow', () => {
+  const home = makeHome()
+  const command = 'gh workflow run deploy-azure-dev.yml --ref release/0.3.1'
+  const key = expectedCacheKey(command, home, home)
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: 'triggers a deployment workflow on GitHub Actions', at: Date.now() })
+
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-deploy-floor' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'never a silent allow for a recognised deploy command')
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.doesNotMatch(reason, /REFUSED/i)
+  assert.match(reason, /triggers a deployment workflow on GitHub Actions/)
+  assert.match(reason, /run the same command again unchanged and it will go through/)
+
+  const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
+  assert.equal(record.verdict, 'advise')
+})
