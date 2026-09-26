@@ -13,6 +13,9 @@ import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig } from '../../../../s
 import type { ModSkillsSwitches } from '../../../../src/core/mod_skills_config.ts'
 import { DEFAULT_MOD_SKILLS_SAMPLING_CONFIG, parseModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
 import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
+import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
+import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
+import { computeComparableStats } from '../../../../src/core/skill_measurement.ts'
 import type { ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import type { SkillFs, SkillFsEntry } from '../../../../src/core/skill_inventory.ts'
 import type { ToolLister } from '../../../../src/core/tool_inventory.ts'
@@ -177,22 +180,26 @@ export async function resolveModSkillsSamplingConfig($: EngineInterface): Promis
 }
 
 /**
- * How many measurement-mode decisions this mod's own log
- * (mod-skills-measurements.jsonl, see appendMeasurement below) already
- * holds for `today` (UTC date, e.g. "2026-09-24"), so the sampling
- * config's daily cap means "today", not "ever" -- same date-prefix
- * technique as gate-bash.ts's own samplesQueuedToday over the AB-benchmark
- * queue, reused here rather than inventing a second counter file. Only
- * `mode: "measurement"` decisions count: active mode never goes through the
+ * How many measurement-mode decisions one of this mod's own logs
+ * (`<fileName>` under the cache dir, see appendMeasurement/
+ * appendToolMeasurement below) already holds for `today` (UTC date, e.g.
+ * "2026-09-24"), so a sampling config's daily cap means "today", not
+ * "ever" -- same date-prefix technique as gate-bash.ts's own
+ * samplesQueuedToday over the AB-benchmark queue. Only `mode:
+ * "measurement"` decisions count: active mode never goes through the
  * sampling gate this feeds. Best-effort: an unreadable or missing log, or a
  * hand-edited/malformed line, reads as 0 (or is skipped) and never blocks a
  * prompt.
+ *
+ * Shared by measurementDecisionsToday (skills) and
+ * toolMeasurementDecisionsToday (tools, JEVADV-4): the two logs are
+ * counted the same tolerant way, only the file name differs.
  */
-export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
+async function measurementDecisionsTodayIn($: EngineInterface, fileName: string, today: string): Promise<number> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return 0
-    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
+    const path = `${paths.cacheDir}/${fileName}`
     if (!(await $.fs.exists(path))) return 0
     const content = await $.fs.read(path)
     let count = 0
@@ -211,6 +218,62 @@ export async function measurementDecisionsToday($: EngineInterface, today: strin
     return count
   } catch {
     return 0
+  }
+}
+
+/** `measurementDecisionsTodayIn` over the skill-selection log (mod-skills-measurements.jsonl). */
+export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
+  return measurementDecisionsTodayIn($, 'mod-skills-measurements.jsonl', today)
+}
+
+/**
+ * `measurementDecisionsTodayIn` over the tool-selection log
+ * (mod-tools-measurements.jsonl) -- JEVADV-4's own sampling for the
+ * tool-relevance path, which had none before: see index.ts's shared
+ * sampling decision, computed once per prompt from
+ * `Math.max(measurementDecisionsToday, toolMeasurementDecisionsToday)` so
+ * one path being in active mode (and so never writing `mode:
+ * "measurement"` rows of its own) never starves the other path's daily cap
+ * of a real count.
+ */
+export async function toolMeasurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
+  return measurementDecisionsTodayIn($, 'mod-tools-measurements.jsonl', today)
+}
+
+// ---------------------------------------------------------------------------
+// mod-skills' own readiness check (src/core/mod_skills_readiness.ts) --
+// JEVADV-4: active mode no longer silently runs "below readiness" with no
+// trace of it. This reads the skill-selection measurement log in full (the
+// same file measurementDecisionsToday reads a slice of already) and folds
+// it with computeComparableStats (src/core/skill_measurement.ts, the pure
+// half of aggregateModSkills' own decision/observation join -- that
+// aggregator is Node-only and cannot be imported here). Best-effort: an
+// unreachable home or an unreadable log reads as null ("not recorded this
+// turn"), never a thrown error; a log that exists but is merely thin or
+// empty is a real, well-defined "not-enough-samples" verdict, not a
+// failure.
+// ---------------------------------------------------------------------------
+
+export async function resolveModSkillsReadiness($: EngineInterface): Promise<ModSkillsReadiness | null> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return null
+    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
+    const rows: unknown[] = []
+    if (await $.fs.exists(path)) {
+      const content = await $.fs.read(path)
+      for (const line of content.split('\n')) {
+        if (line.length === 0) continue
+        try {
+          rows.push(JSON.parse(line))
+        } catch {
+          continue
+        }
+      }
+    }
+    return evaluateModSkillsReadiness(computeComparableStats(rows), DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS)
+  } catch {
+    return null
   }
 }
 

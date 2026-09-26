@@ -304,6 +304,20 @@ Two honest limits:
   turning them on is not recommended yet — that record is what makes the
   numbers real instead of invented.
 
+### Active skill mode never leaves you with neither
+
+If you do turn skill advice on: the engine's own skill listing is withheld
+for a turn only when a skill was actually loaded in its place. Jev picking
+nothing, timing out, or its SKILL.md failing to read all fall back to the
+listing you'd see with the mod off — never to silence on both sides. The
+tool-relevance path is now sampled the same way skill selection already
+was, so measurement mode's cost stays bounded on both paths, not just one.
+Turning skill advice on before a week of measurement-mode data exists is
+still not recommended (see above); doing so anyway is recorded, not
+blocked — each decision carries whether the activation metric was actually
+met at the time, so an "active but uncalibrated" run stays visible in the
+data rather than silent.
+
 ## Not ready yet
 
 - Active skill/tool advice is off by default, for the reason above.

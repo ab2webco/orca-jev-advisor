@@ -13,17 +13,28 @@
  *
  * Two hooks:
  *   prompt.attachment on `skill_listing` -- observes the engine's listing;
- *     in active mode, withholds it (`{ text: null }`) for the main
- *     conversation only. In measurement mode (the default) it is a no-op:
- *     `next(e)` unchanged, so the listing is never touched.
- *   prompt.submit -- the two Jev stages run for every real prompt of the
- *     main conversation (prompt.submit never fires for a subagent's own
- *     prompt): stage 1 ranks every installed skill and gates on whether a
- *     skill is needed at all; stage 2 re-reads the top few with the
- *     opening of their SKILL.md and asks one atomic `fits` per candidate.
- *     Measurement mode records what Jev would have chosen and changes
- *     nothing else. Active mode additionally withholds the listing and
- *     injects the winner's SKILL.md as context the model reads.
+ *     withholds it (`{ text: null }`) for the main conversation ONLY on a
+ *     turn where `prompt.submit` (below), which always runs first, already
+ *     settled on injecting a skill in its place -- read from
+ *     `pendingListingWithheld`, the same "set once below, read once and
+ *     reset here" shape `pendingMeasurementId` already uses for
+ *     `skill.prompt`. Active mode with nothing picked, a failed SKILL.md
+ *     read, or measurement mode all leave the flag false, so the model
+ *     always gets either the real listing or a replacement, never neither
+ *     (JEVADV-4: this used to key off active mode alone, so a shortfall in
+ *     either of those left the model with nothing for that turn).
+ *   prompt.submit -- one shared sampling roll per prompt (below) gates
+ *     BOTH paths' own measurement-mode Jev calls; the two Jev stages then
+ *     run for every real prompt of the main conversation that clears it
+ *     (prompt.submit never fires for a subagent's own prompt): stage 1
+ *     ranks every installed skill and gates on whether a skill is needed
+ *     at all; stage 2 re-reads the top few with the opening of their
+ *     SKILL.md and asks one atomic `fits` per candidate. Measurement mode
+ *     records what Jev would have chosen and changes nothing else. Active
+ *     mode additionally withholds the listing and injects the winner's
+ *     SKILL.md as context the model reads -- but only once that
+ *     SKILL.md was actually read successfully (see `pendingListingWithheld`
+ *     above).
  *
  * skill.prompt is hooked purely to observe: whether the skill the model
  * actually loaded (typed, through the Skill tool, or preloaded into a
@@ -34,19 +45,23 @@
  * Fails open, always: any error, timeout or missing key leaves the prompt
  * exactly as it was. The two Jev calls never withhold anything by
  * themselves -- only active mode's own withhold/inject step does, and
- * only once a decision was actually reached.
+ * only once a decision was actually reached AND its SKILL.md was read.
  *
  * Tool selection follows the exact same shape, one level down: instead of
  * "which skill", it decides "which tool should the model reach for on this
  * turn" -- src/core/tool_inventory.ts, src/core/tool_decisions.ts and
  * src/core/tool_measurement.ts mirror the skill modules above one for one.
  * It runs from the same `prompt.submit` hook (its own try/catch, so a
- * failure in one never touches the other) and observes what the model
- * actually called through a new `tool.call` hook, the tool equivalent of
- * `skill.prompt`. Measurement mode is the default here too and changes
- * nothing observable; active mode (`options.activeTools`, off by default)
- * injects the winner as advice in a `<tool_relevance>` block -- it never
- * blocks, rewrites or removes a tool call, and fails open the same way.
+ * failure in one never touches the other), shares the same per-prompt
+ * sampling roll as the skill path (JEVADV-4: this path used to call Jev on
+ * every real prompt with no sampling at all, unlike the skill path), and
+ * observes what the model actually called through a new `tool.call` hook,
+ * the tool equivalent of `skill.prompt`. Measurement mode is the default
+ * here too and changes nothing observable; active mode
+ * (`options.activeTools`, off by default) injects the winner as advice in
+ * a `<tool_relevance>` block -- it never blocks, rewrites or removes a
+ * tool call, and fails open the same way. There is no listing to withhold
+ * for tools, so this path never touches `pendingListingWithheld`.
  */
 import type { EngineInterface, Register } from 'claude-code'
 import { callJev } from '../../../../src/core/jev.ts'
@@ -93,7 +108,8 @@ import { MOD_SKILLS_CATALOG } from '../../../../src/core/i18n_mod_skills.ts'
 import type { ModSkillsKey } from '../../../../src/core/i18n_mod_skills.ts'
 import { TOOLS_CATALOG } from '../../../../src/core/i18n_tools.ts'
 import type { ToolsKey } from '../../../../src/core/i18n_tools.ts'
-import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, measurementDecisionsToday, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsSamplingConfig, resolveModSkillsSwitches } from './runtime.ts'
+import { appendMeasurement, appendToolMeasurement, makeJevFetch, makeJevSleep, makeProcessRun, makeSkillFs, makeToolLister, measurementDecisionsToday, resolveApiKey, resolveHomeDir, resolveLocale, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from './runtime.ts'
+import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -180,23 +196,90 @@ export default ((on, options) => {
   // prompt is attributed to it.
   let pendingToolMeasurementId: string | null = null
 
+  // JEVADV-4: whether THIS turn's prompt.submit (below) actually injected a
+  // skill in place of the engine's own listing -- the only thing
+  // prompt.attachment (right below) may now withhold for. Reset at the top
+  // of every prompt.submit and set true only once a skill's SKILL.md was
+  // read successfully, so a turn that never gets that far (measurement
+  // mode, an unsampled prompt, no skill needed, nothing fit, or a failed
+  // read) always leaves this false and the real listing goes through.
+  let pendingListingWithheld = false
+
+  // The activation metric (src/core/mod_skills_readiness.ts), fetched at
+  // most once per session/process and reused after -- computing it folds
+  // the whole measurement log (resolveModSkillsReadiness), so this is the
+  // same "cache once, cheap after" shape as inventoryCache/orcaContextCache
+  // above. `readinessFetched` (rather than a null check alone) exists
+  // because a resolved-but-unavailable readiness (no resolvable home, an
+  // unreadable log) is itself `null` -- a legitimate cached answer, not "not
+  // fetched yet".
+  let readinessFetched = false
+  let readinessCache: ModSkillsReadiness | null = null
+  const resolveReadiness = async ($: EngineInterface): Promise<ModSkillsReadiness | null> => {
+    if (!readinessFetched) {
+      readinessCache = await resolveModSkillsReadiness($)
+      readinessFetched = true
+    }
+    return readinessCache
+  }
+
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
-    // Measurement mode changes nothing observable, ever -- including this
-    // attachment. Active mode only withholds for the main conversation:
-    // a subagent's own listing is left alone, since nothing here suggests
-    // for a subagent (prompt.submit never fires for one).
+    // A subagent's own listing is left alone, since nothing here suggests
+    // for a subagent (prompt.submit never fires for one). For the main
+    // conversation, withhold only when this exact turn's prompt.submit --
+    // which always runs first and settles this flag before the request for
+    // the same turn is assembled -- actually replaced the listing with a
+    // skill. Read once and reset immediately: a prompt queued mid-turn
+    // racing a second prompt.submit before this fires shares the same
+    // accepted correlation risk pendingMeasurementId already does for
+    // skill.prompt.
     if (e.agentId !== undefined) return next(e)
-    const activeMode = await resolveActiveMode($)
-    if (!activeMode) return next(e)
+    const withhold = pendingListingWithheld
+    pendingListingWithheld = false
+    if (!withhold) return next(e)
     return { text: null }
   })
 
   on('prompt.submit', async ($, e, next) => {
     const prompt = e.text.trim()
+    // Reset every turn, before anything below can set it: whatever exits
+    // this handler early (an empty prompt, a slash command, no API key, an
+    // unsampled measurement-mode prompt, a thrown error) must never leave a
+    // stale `true` from an earlier turn for prompt.attachment to read.
+    pendingListingWithheld = false
+
     // Nothing to route for an empty prompt or a typed slash command --
     // the latter already names its own skill (and, for tools, already
     // names its own action).
     if (prompt.length === 0 || prompt.startsWith('/')) return next(e)
+
+    // Shared sampling roll (src/core/mod_skills_sampling.ts): ONE coin flip
+    // per prompt, spent by whichever of the two closures below is actually
+    // in measurement mode -- not two independent draws. Measurement mode's
+    // Jev calls (rank every candidate + gate, then re-read the shortlist
+    // with more detail) exist purely for calibration data -- see
+    // src/core/mod_skills_readiness.ts for what "enough of that data" now
+    // means -- and spending them on every prompt of every session,
+    // indefinitely, is the bug this gate fixes for skills; JEVADV-4 gives
+    // the tool path the exact same gate, since it had none at all before
+    // this (every real prompt, unsampled, twice the calls skills already
+    // capped). One shared roll rather than two keeps "how many Jev-call
+    // pairs measurement mode spends today" one bounded, documented number
+    // (at most 4: skill wide+fit, tool wide+fit) instead of two
+    // uncorrelated budgets. `promptsSampledToday` reads the more active of
+    // the two logs (`Math.max`): a path currently in ACTIVE mode writes
+    // `mode: "active"` rows, which never count toward either log's
+    // measurement-mode total, so reading only one log would silently
+    // starve the other path's own daily cap the moment the switches
+    // diverge (skill active, tool measurement, or the reverse). Active
+    // mode's own decision is functionally load-bearing (it is what gets
+    // injected) for whichever path runs it, so this roll never gates that
+    // path at all -- only each closure's own measurement-mode branch below
+    // consults `sampled`.
+    const samplingConfig = await resolveModSkillsSamplingConfig($)
+    const today = new Date(await $.clock.now()).toISOString().slice(0, 10)
+    const promptsSampledToday = Math.max(await measurementDecisionsToday($, today), await toolMeasurementDecisionsToday($, today))
+    const sampled = shouldSamplePrompt(samplingConfig, promptsSampledToday, Math.random())
 
     // Skill selection and tool selection each run in their own isolated
     // closure: a failure or timeout in one must never touch the other, and
@@ -209,22 +292,10 @@ export default ((on, options) => {
       try {
         const activeMode = await resolveActiveMode($)
 
-        // Sampling (src/core/mod_skills_sampling.ts): measurement mode's
-        // two Jev calls below (rank every skill + gate, then re-read the
-        // shortlist with their SKILL.md) exist purely for calibration data
-        // -- see src/core/mod_skills_readiness.ts for what "enough of that
-        // data" now means. Spending them on every prompt of every session,
-        // indefinitely, is the bug this gate fixes; active mode's own
-        // decision is functionally load-bearing (it is what gets injected),
-        // so it is never sampled -- only measurement mode is. An unsampled
-        // prompt does nothing at all: no Jev call, no record, exactly like
-        // today's missing-API-key branch below.
-        if (!activeMode) {
-          const samplingConfig = await resolveModSkillsSamplingConfig($)
-          const today = new Date(await $.clock.now()).toISOString().slice(0, 10)
-          const promptsSampledToday = await measurementDecisionsToday($, today)
-          if (!shouldSamplePrompt(samplingConfig, promptsSampledToday, Math.random())) return { block: null, status: null }
-        }
+        // An unsampled measurement-mode prompt does nothing at all: no Jev
+        // call, no record, exactly like today's missing-API-key branch
+        // below.
+        if (!activeMode && !sampled) return { block: null, status: null }
 
         if (inventoryCache === null) {
           const cwd = await $.session.cwd()
@@ -300,9 +371,36 @@ export default ((on, options) => {
         }
 
         const decision = decideSkill(wide, fit, fitAttempted, fitsThreshold)
+        const status = decision.name ? t('status.skill', { name: decision.name }) : t('status.noSkill')
+
+        // JEVADV-4: the block is built BEFORE the measurement record below,
+        // not after, so `listingWithheld` -- what the record says happened
+        // -- and `pendingListingWithheld` -- what prompt.attachment
+        // actually withholds for this same turn -- can never disagree.
+        // Measurement mode never reaches this (block stays null): nothing
+        // observable changes beyond the status line above. Active mode
+        // injects the winner's own SKILL.md so it loads even where the
+        // engine's listing would not have offered it -- but only once that
+        // read actually succeeds; a missing winner or a failed read leaves
+        // `block` null, exactly like measurement mode, so the listing is
+        // never withheld for a skill that was never actually delivered.
+        let block: string | null = null
+        if (activeMode && decision.name !== null) {
+          const winner = inventory.find((skill) => skill.name === decision.name)
+          if (winner) {
+            try {
+              const markdown = stripSkillFrontmatter(await $.fs.read(winner.path)).trim()
+              block = ['<skill_relevance>', t('relevance.intro', { name: winner.name }), t('relevance.instructions'), `<skill name="${winner.name}">`, markdown, '</skill>', '</skill_relevance>'].join('\n')
+            } catch {
+              block = null
+            }
+          }
+        }
+        const listingWithheld = block !== null
 
         const measurementId = crypto.randomUUID()
         const at = new Date(await $.clock.now()).toISOString()
+        const readiness = await resolveReadiness($)
         await appendMeasurement(
           $,
           serializeRecord(
@@ -314,35 +412,24 @@ export default ((on, options) => {
               orcaContext: orcaState,
               candidateCount: candidates.length,
               listingChars: listingCharsFor(candidates),
+              listingWithheld,
               wide: wide === null ? null : { ranked: wide.ranked, gate: wide.gate, needsSkill: wide.needsSkill },
               fit: fit === null ? null : { winner: fit.winner, fits: fit.fits },
               decision: { name: decision.name, reason: decision.reason },
               latencyMs: { wide: wideLatencyMs, fit: fitLatencyMs },
+              readiness,
             }),
           ),
         )
         pendingMeasurementId = measurementId
+        pendingListingWithheld = listingWithheld
 
-        const status = decision.name ? t('status.skill', { name: decision.name }) : t('status.noSkill')
-
-        // Measurement mode stops here: nothing observable changes beyond
-        // the status line above. Active mode injects the winner's own
-        // SKILL.md so it loads even where the engine's listing would not
-        // have offered it.
-        if (!activeMode || decision.name === null) return { block: null, status }
-        const winner = inventory.find((skill) => skill.name === decision.name)
-        if (!winner) return { block: null, status }
-
-        try {
-          const markdown = stripSkillFrontmatter(await $.fs.read(winner.path)).trim()
-          const block = ['<skill_relevance>', t('relevance.intro', { name: winner.name }), t('relevance.instructions'), `<skill name="${winner.name}">`, markdown, '</skill>', '</skill_relevance>'].join('\n')
-          return { block, status }
-        } catch {
-          return { block: null, status }
-        }
+        return { block, status }
       } catch {
         // Fail open, always: any unexpected error leaves the prompt
-        // exactly as it was, with no partial measurement or injection.
+        // exactly as it was, with no partial measurement or injection, and
+        // nothing withheld (pendingListingWithheld was already reset to
+        // false at the top of prompt.submit, and nothing here sets it).
         return { block: null, status: null }
       }
     })()
@@ -350,6 +437,13 @@ export default ((on, options) => {
     const toolOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
         const activeToolMode = await resolveActiveToolMode($)
+
+        // JEVADV-4: the same shared roll the skill closure consults above,
+        // not a second independent one -- see its own comment for why. An
+        // unsampled measurement-mode prompt does nothing at all here
+        // either: no Jev call, no record.
+        if (!activeToolMode && !sampled) return { block: null, status: null }
+
         if (toolInventoryCache === null) {
           toolInventoryCache = await listToolInventory(makeToolLister($))
         }

@@ -20,7 +20,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeHomePaths, measurementDecisionsToday, resolveModSkillsSamplingConfig, resolveModSkillsSwitches } from "./hooks/runtime.ts";
+import { computeHomePaths, measurementDecisionsToday, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from "./hooks/runtime.ts";
 
 test("returns null when neither HOME nor USERPROFILE is set", () => {
   assert.equal(computeHomePaths({}), null);
@@ -326,4 +326,106 @@ test("measurementDecisionsToday: a read that throws reads as 0, never propagates
   };
   const result = await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24");
   assert.equal(result, 0);
+});
+
+// ---------------------------------------------------------------------------
+// toolMeasurementDecisionsToday -- JEVADV-4's own sampling for the
+// tool-relevance path. Same tolerant read as measurementDecisionsToday,
+// pointed at the tool-selection log instead (mod-tools-measurements.jsonl),
+// so the two logs never get counted against the wrong file.
+// ---------------------------------------------------------------------------
+
+function toolMeasurementLogPath(home: string): string {
+  return `${home}/.cache/orca-supervisor/mod-tools-measurements.jsonl`;
+}
+
+test("toolMeasurementDecisionsToday: no home resolvable reads as 0", async () => {
+  const engine = fakeEngine({}, {});
+  const result = await toolMeasurementDecisionsToday(engine as Parameters<typeof toolMeasurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 0);
+});
+
+test("toolMeasurementDecisionsToday: counts only measurement-mode decisions from today, in the tool log, not the skill log", async () => {
+  const toolLines = [
+    { type: "decision", id: "a", at: "2026-09-24T08:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "b", at: "2026-09-24T09:00:00.000Z", mode: "active" },
+  ];
+  const skillLines = [
+    { type: "decision", id: "c", at: "2026-09-24T08:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "d", at: "2026-09-24T08:00:00.000Z", mode: "measurement" },
+  ];
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    {
+      [toolMeasurementLogPath("/home/dev")]: toolLines.map((line) => `${JSON.stringify(line)}\n`).join(""),
+      [measurementLogPath("/home/dev")]: skillLines.map((line) => `${JSON.stringify(line)}\n`).join(""),
+    },
+  );
+  const result = await toolMeasurementDecisionsToday(engine as Parameters<typeof toolMeasurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 1, "must read the tool log's own count (1), not the skill log's (2)");
+});
+
+test("toolMeasurementDecisionsToday: a read that throws reads as 0, never propagates", async () => {
+  const engine: FakeEngine = {
+    env: { get: async (name: string) => (name === "HOME" ? "/home/dev" : undefined) },
+    fs: {
+      exists: async () => true,
+      read: async () => {
+        throw new Error("disk on fire");
+      },
+    },
+  };
+  const result = await toolMeasurementDecisionsToday(engine as Parameters<typeof toolMeasurementDecisionsToday>[0], "2026-09-24");
+  assert.equal(result, 0);
+});
+
+// ---------------------------------------------------------------------------
+// resolveModSkillsReadiness -- JEVADV-4: active mode's own activation
+// metric (src/core/mod_skills_readiness.ts), folded from the skill
+// measurement log with computeComparableStats
+// (src/core/skill_measurement.ts). Best-effort: an unreachable home or a
+// throwing read reads as null; a genuinely empty or missing log is a real
+// "not-enough-samples" verdict, not a failure.
+// ---------------------------------------------------------------------------
+
+test("resolveModSkillsReadiness: no home resolvable reads as null", async () => {
+  const engine = fakeEngine({}, {});
+  const result = await resolveModSkillsReadiness(engine as Parameters<typeof resolveModSkillsReadiness>[0]);
+  assert.equal(result, null);
+});
+
+test("resolveModSkillsReadiness: the log has never been written -- a real not-enough-samples verdict, not null", async () => {
+  const engine = fakeEngine({ HOME: "/home/dev" }, {});
+  const result = await resolveModSkillsReadiness(engine as Parameters<typeof resolveModSkillsReadiness>[0]);
+  assert.deepEqual(result, { ready: false, comparableShortfall: 1000, matchRateMet: null, reason: "not-enough-samples" });
+});
+
+test("resolveModSkillsReadiness: folds the real log through computeComparableStats and evaluateModSkillsReadiness", async () => {
+  const lines = [
+    { type: "decision", id: "a", mode: "measurement", decision: { name: "graft" } },
+    { type: "observation", id: "a", skill: "graft" },
+  ];
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { [measurementLogPath("/home/dev")]: lines.map((line) => `${JSON.stringify(line)}\n`).join("") },
+  );
+  const result = await resolveModSkillsReadiness(engine as Parameters<typeof resolveModSkillsReadiness>[0]);
+  // 1 comparable sample is nowhere near the 1000 threshold, but the fold
+  // itself (comparable=1, matched=1) must have actually run: matchRateMet
+  // stays null (count threshold not met), never a fabricated false.
+  assert.deepEqual(result, { ready: false, comparableShortfall: 999, matchRateMet: null, reason: "not-enough-samples" });
+});
+
+test("resolveModSkillsReadiness: a read that throws reads as null, never propagates", async () => {
+  const engine: FakeEngine = {
+    env: { get: async (name: string) => (name === "HOME" ? "/home/dev" : undefined) },
+    fs: {
+      exists: async () => true,
+      read: async () => {
+        throw new Error("disk on fire");
+      },
+    },
+  };
+  const result = await resolveModSkillsReadiness(engine as Parameters<typeof resolveModSkillsReadiness>[0]);
+  assert.equal(result, null);
 });
