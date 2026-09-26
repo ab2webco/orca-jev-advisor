@@ -186,6 +186,28 @@ export function resolveLinkedWorktreeMainCheckout(cwd: string): string | null {
 }
 
 /**
+ * The `.git` directory that actually holds `config` (and therefore
+ * `[remote ...]` sections) for whatever repository `cwd` sits inside --
+ * JEVADV-39 (odd/tasks/release-0.5.1.md T-lane-a). For an ordinary checkout
+ * this is simply its own `.git` directory; for a LINKED worktree, remotes
+ * are not per-worktree state -- they live in the shared commondir (the main
+ * checkout's own `.git` directory), the exact same resolution
+ * resolveLinkedWorktreeInfo already does for JEVADV-3, reused here rather
+ * than duplicated. Null when `cwd` is not inside any git repository this
+ * module can positively resolve -- same fail-to-null discipline as every
+ * other step in this file.
+ */
+export function resolveGitDirForConfig(cwd: string): string | null {
+  const entry = findGitEntry(cwd);
+  if (entry === null) return null;
+  if (entry.isDirectory) return entry.path;
+  const gitdir = parseGitdirFile(entry.path);
+  if (gitdir === null) return null;
+  if (!verifyBackPointer(entry.path, gitdir)) return null;
+  return resolveCommonGitDir(gitdir);
+}
+
+/**
  * What matchDestinationForCwd resolved: which destination's rules apply, and
  * which physical root the command actually runs against.
  *

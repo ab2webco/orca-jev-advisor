@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { after, test } from "node:test";
 
-import { matchDestinationForCwd, resolveLinkedWorktreeMainCheckout } from "./linked_worktree.ts";
+import { matchDestinationForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout } from "./linked_worktree.ts";
 import type { MatchableDestination } from "./destination_match.ts";
 
 /** Every temp root this file creates, removed once after every test has run. */
@@ -254,4 +254,37 @@ test("matchDestinationForCwd: a direct/nested match uses the destination's own w
   const result = matchDestinationForCwd(nested, [oss]);
   assert.equal(result?.destination, oss);
   assert.equal(result?.treeRoot, main);
+});
+
+// ===========================================================================
+// resolveGitDirForConfig -- JEVADV-39 (odd/tasks/release-0.5.1.md T-lane-a):
+// where push_remote.ts's resolvePushRemoteIsLocal reads `.git/config` from,
+// for whatever repository `cwd` sits inside.
+// ===========================================================================
+
+test("resolveGitDirForConfig: an ordinary checkout resolves to its own .git directory", () => {
+  const base = makeTempRoot("jevadv39-gitdir-ordinary-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+
+  assert.equal(resolveGitDirForConfig(main), join(main, ".git"));
+});
+
+test("resolveGitDirForConfig: a linked worktree resolves to the MAIN checkout's shared .git directory, not its own admin directory", () => {
+  const base = makeTempRoot("jevadv39-gitdir-worktree-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+  const sibling = join(base, "main-repo-sibling");
+  git(["worktree", "add", "-q", sibling, "-b", "feature-branch"], main);
+
+  assert.equal(resolveGitDirForConfig(sibling), join(main, ".git"));
+});
+
+test("resolveGitDirForConfig: nothing findable resolves to null, never throws", () => {
+  const base = makeTempRoot("jevadv39-gitdir-none-");
+  const plain = join(base, "just-a-folder");
+  mkdirSync(plain, { recursive: true });
+
+  assert.doesNotThrow(() => resolveGitDirForConfig(plain));
+  assert.equal(resolveGitDirForConfig(plain), null);
 });

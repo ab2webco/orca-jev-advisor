@@ -546,6 +546,68 @@ for (const command of SEGMENT_SCOPED_DENIED) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// JEVADV-39 (odd/tasks/release-0.5.1.md T-lane-a): a push naming
+// main/master/production is only a shared-branch push once its remote
+// actually resolves to somewhere shared. Real temp git repos throughout --
+// same discipline as the linked-sibling-worktree test above -- since the
+// whole point is reading the exact remote config `git remote add` writes.
+// ---------------------------------------------------------------------------
+
+test('JEVADV-39: a push naming main to the repo\'s own LOCAL bare remote is not a local-rule stop', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-push-local-remote-test-')))
+  const bareRemote = join(base, 'sandbox-remote.git')
+  git(['init', '-q', '--bare', bareRemote], base)
+  const repo = join(base, 'sandbox-app')
+  initRepo(repo)
+  git(['remote', 'add', 'origin', bareRemote], repo)
+
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push -u origin main', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'a fresh personal repo pushed to its own local bare remote must not be refused as a shared-branch push')
+})
+
+test('JEVADV-39: a push naming main to a github.com remote still denies', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-push-github-remote-test-')))
+  const repo = join(base, 'sandbox-app')
+  initRepo(repo)
+  git(['remote', 'add', 'origin', 'https://github.com/example/repo.git'], repo)
+
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push -u origin main', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('JEVADV-39: a push naming main whose remote name is not configured at all still denies (fails closed)', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-push-unresolvable-remote-test-')))
+  const repo = join(base, 'sandbox-app')
+  initRepo(repo)
+  // No `git remote add` at all: "origin" resolves to nothing this process can read.
+
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push -u origin main', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('JEVADV-39: force push to the SAME local bare remote still denies -- force push stays denied everywhere', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-push-local-force-test-')))
+  const bareRemote = join(base, 'sandbox-remote.git')
+  git(['init', '-q', '--bare', bareRemote], base)
+  const repo = join(base, 'sandbox-app')
+  initRepo(repo)
+  git(['remote', 'add', 'origin', bareRemote], repo)
+
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push --force origin main', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('JEVADV-39: a file:// URL given directly as the push argument is not a local-rule stop', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push file:///tmp/orca-jev-nonexistent-remote.git main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+})
+
 test('deny tier: a rule switched off downgrades to ask, never to allow', () => {
   const home = makeHome()
   writeDenyTierConfig(home, { denyRmRf: false, denyDropTable: true, denyTerraformDestroy: true })

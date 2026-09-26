@@ -85,6 +85,7 @@ import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
 import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
+import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -255,6 +256,20 @@ const RESET_CLEAN_RAW_PATTERN = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\
 type RuleOutcome = 'deny' | 'ask' | null
 
 /**
+ * What a NEVER_SILENTLY rule's `evaluate` actually needs: the command text
+ * (already de-heredoc'd) and the cwd the hook itself was invoked from.
+ * `cwd` exists only for pushProtectedRule below (JEVADV-39) -- every other
+ * rule ignores it -- but it is threaded through every rule uniformly rather
+ * than special-cased, so the array's own shape (`{ evaluate, why,
+ * denyToggle }[]`) never has to distinguish "rules that read cwd" from
+ * "rules that don't".
+ */
+interface RuleContext {
+  readonly command: string
+  readonly cwd: string
+}
+
+/**
  * forcePush, pushProtected and resetClean read the command through
  * git_discard.ts's someSegmentMatches (odd/tasks/release-0.5.1.md JEVADV-36):
  * a match in COMMAND POSITION (including a real shell/interpreter wrapper's
@@ -266,14 +281,42 @@ type RuleOutcome = 'deny' | 'ask' | null
  * be there to answer. See someSegmentMatches' own doc comment
  * (src/core/git_discard.ts) for exactly how the two scan passes decide this.
  */
-function segmentRule(pattern: { test(segment: string): boolean }): (command: string) => RuleOutcome {
-  return (command) => someSegmentMatches(command, pattern)
+function segmentRule(pattern: { test(segment: string): boolean }): (ctx: RuleContext) => RuleOutcome {
+  return (ctx) => someSegmentMatches(ctx.command, pattern)
 }
 
 /** A plain whole-command regex, for the six rules with no spanning
  *  quantifier and no two-level model: any match is `'deny'`, never `'ask'`. */
-function commandRule(pattern: RegExp): (command: string) => RuleOutcome {
-  return (command) => (pattern.test(command) ? 'deny' : null)
+function commandRule(pattern: RegExp): (ctx: RuleContext) => RuleOutcome {
+  return (ctx) => (pattern.test(ctx.command) ? 'deny' : null)
+}
+
+const PUSH_PROTECTED_PATTERN = /git\s+push\b.*\b(main|master|production)\b/
+
+/**
+ * pushProtected's own two-level match (segmentRule, same as forcePush above)
+ * plus one narrowing step (JEVADV-39, odd/tasks/release-0.5.1.md T-lane-a):
+ * a push naming main/master/production is only a shared-branch push once
+ * its remote actually resolves to somewhere shared. `git push -u origin
+ * main` in a brand-new personal repo whose `origin` is a LOCAL bare
+ * directory (or a `file://` URL given directly) is not that -- it downgrades
+ * a COMMAND-position match to `null`, not `'ask'`, so it takes the exact
+ * same ordinary-Jev-path route a mention already does, never a local stop
+ * either way. A MENTION-severity match is untouched: nothing about the
+ * remote matters for text that was never actually run.
+ *
+ * Deliberately narrow: resolvePushRemoteIsLocal (src/core/push_remote.ts)
+ * fails CLOSED (returns `false`) on anything it cannot positively resolve
+ * without the network -- an unknown remote name, an unreadable config, a
+ * GitHub/GitLab/SSH/HTTPS remote -- so every one of those keeps today's
+ * `'deny'` exactly as before. Force push stays denied everywhere, including
+ * to a local remote: that is forcePush's own rule above, untouched by this.
+ */
+function pushProtectedRule(ctx: RuleContext): RuleOutcome {
+  const outcome = someSegmentMatches(ctx.command, PUSH_PROTECTED_PATTERN)
+  if (outcome !== 'deny') return outcome
+  if (resolvePushRemoteIsLocal({ command: ctx.command, cwd: ctx.cwd })) return null
+  return 'deny'
 }
 
 /**
@@ -318,9 +361,9 @@ function commandRule(pattern: RegExp): (command: string) => RuleOutcome {
  * segment's own unterminated quote as reason to fall back for a segment
  * that parsed just fine).
  */
-function resetCleanRule(command: string): RuleOutcome {
-  if (discardsUncommittedWork(command)) return 'deny'
-  return someSegmentMatches(command, RESET_CLEAN_RAW_PATTERN)
+function resetCleanRule(ctx: RuleContext): RuleOutcome {
+  if (discardsUncommittedWork(ctx.command)) return 'deny'
+  return someSegmentMatches(ctx.command, RESET_CLEAN_RAW_PATTERN)
 }
 
 /**
@@ -341,7 +384,7 @@ function resetCleanRule(command: string): RuleOutcome {
  * terminal, which is what the deny message tells them.
  */
 const NEVER_SILENTLY: readonly {
-  readonly evaluate: (command: string) => RuleOutcome
+  readonly evaluate: (ctx: RuleContext) => RuleOutcome
   readonly why: GateKey
   readonly denyToggle: DenyToggleKey
 }[] = [
@@ -349,7 +392,7 @@ const NEVER_SILENTLY: readonly {
   // someSegmentMatches, which is what can return 'ask' as well as 'deny' --
   // see segmentRule's own doc comment above.
   { evaluate: segmentRule(/git\s+push\b.*(--force|-f)\b/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
-  { evaluate: segmentRule(/git\s+push\b.*\b(main|master|production)\b/), why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
+  { evaluate: pushProtectedRule, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root.
   { evaluate: commandRule(/rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/), why: 'rule.rmRf', denyToggle: 'denyRmRf' },
@@ -1029,7 +1072,7 @@ async function main(): Promise<void> {
   let firstAsk: { readonly why: GateKey } | null = null
   for (const { evaluate, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
-    const outcome = evaluate(inspected)
+    const outcome = evaluate({ command: inspected, cwd })
     if (outcome === null) continue
     // JEVADV-37 (odd/tasks/release-0.5.1.md): a MENTION -- a match found
     // only in the "visible" view of an unknown program's quoted argument,

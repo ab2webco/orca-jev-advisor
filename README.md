@@ -218,6 +218,18 @@ A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
 exactly as a shell would read it.
 
+**Push to a protected branch, narrowed to an actual shared branch.** A push
+naming `main`/`master`/`production` is only a shared-branch push once its
+remote resolves to somewhere shared. `git push -u origin main` in a
+brand-new personal repo whose `origin` is a local bare directory (or a
+`file://` URL given directly) is not that: the rule resolves `origin` from
+the repository's own `.git/config` (a linked worktree's shared commondir,
+never the network) and lets that one case continue to the ordinary Jev path
+instead of stopping locally. Anything it cannot positively resolve without
+the network — GitHub/GitLab/SSH/HTTPS remotes, an unknown remote name, an
+unreadable config — keeps denying exactly as before. Force push is
+unaffected and stays denied everywhere, including to a local remote.
+
 **Two-level rules: a run denies, a mention goes to Jev instead of stopping
 locally.** Force push, protected-branch and discard are all read through the
 SAME two-level model (`someSegmentMatches`, `src/core/git_discard.ts`): a
