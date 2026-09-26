@@ -262,6 +262,47 @@ test("entropy negative: a TitleCase relative path with no separators is never ma
   assert.equal(count(command), 0);
 });
 
+// odd/tasks/release-0.5.1.md T-lane-a task 4 (JEVADV-40): the previous test
+// is only saved by "Documents"/"Frontend" -- single-capitalised segments the
+// OLD per-segment check already recognised. A path whose EVERY segment is a
+// compound camel/PascalCase developer word (no plain single-cap segment
+// among them) had no segment left to save it, so it fell through to
+// hasMixedCharacterClasses and was masked as if it were a real credential.
+test("entropy negative: an all-compound-PascalCase path (no plain single-cap segment) is never masked", () => {
+  const command = "some-tool ClientWork/BackEnd/DataLayer/UserRepo";
+  assert.equal(text(command), command);
+  assert.equal(count(command), 0);
+});
+
+test("entropy negative: the same all-compound-PascalCase shape with a 5th segment is never masked", () => {
+  const command = "some-tool ClientWork/BackEnd/DataLayer/UserRepo/OrderService";
+  assert.equal(text(command), command);
+  assert.equal(count(command), 0);
+});
+
+test("entropy negative: an all-compound-camelCase path (lowercase-first hump) is never masked", () => {
+  const command = "some-tool clientWork/backEnd/dataLayer/userRepo";
+  assert.equal(text(command), command);
+  assert.equal(count(command), 0);
+});
+
+// The broadened per-segment check must still lose to a REAL secret: digits
+// anywhere in a segment, or two consecutive uppercase letters (no lowercase
+// run in between), are outside the new camel/PascalCase shape and must stay
+// exactly as maskable as before this fix.
+test("entropy: an AWS-like segment (digits, random case) mixed into an otherwise word-shaped path is still masked", () => {
+  const command = "some-tool ClientWork/BackEnd/aB3xK9mQ7pL2vN8wZ4tY6rD1sF5gH0jC3kM9nP2qR7/UserRepo";
+  const result = text(command);
+  assert.ok(result.includes(MARKER), `expected a marker in: ${result}`);
+  assert.equal(count(command), 1);
+});
+
+test("entropy: real base64/AWS-secret shape (case and digits mixed WITHIN a run, no path-like segment) is still masked", () => {
+  const command = "curl --data wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYUvNMhWXt/YExampleData https://example.com";
+  const result = text(command);
+  assert.ok(result.includes(MARKER), `expected a marker in: ${result}`);
+});
+
 // ===========================================================================
 // JEVADV-37: webhook tokens embedded in a URL PATH (Slack, Discord/generic,
 // Microsoft Teams) -- none of the rules above ever see these, since the

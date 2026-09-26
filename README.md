@@ -125,6 +125,17 @@ now masked too, though a real one (30 characters) never reaches the
 high-entropy floor in the first place. `src/core/secret_redaction.test.ts`
 covers both classes with a synthetic set (never the owner's own corpus).
 
+**Precision, continued (JEVADV-40):** the "reads as real path segments"
+exemption above only recognised a single lowercase word or a single
+Capitalized word, so a directory tree built entirely from compound
+camel/PascalCase developer names (`ClientWork/BackEnd/DataLayer/UserRepo`)
+had no plain segment left to save it and was masked as if it were a
+credential. Every `/`-delimited segment must now read as an ordinary word —
+all-lowercase, a single Capitalized word, or a camel/PascalCase compound of
+them — for the whole value to be waved through; one genuinely secret-shaped
+segment mixed among otherwise ordinary ones is still masked, since a single
+word-like neighbour can never vouch for it.
+
 This masking runs only on the copy sent to Jev. The local rules that refuse
 a force push, a recursive delete or a dropped table always judge the real,
 unredacted command, and — as already noted above — nothing written to this
