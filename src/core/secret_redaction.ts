@@ -35,9 +35,15 @@
 //     exists to do: judge the command correctly. So the high-entropy
 //     fallback in particular leans hard toward NOT touching anything that
 //     could plausibly be structural (a git SHA, a UUID, a file path, a
-//     base64 blob embedded IN a path) even at the cost of missing some real
-//     secrets shaped the same way (an npm `sha512-...==` integrity string is
-//     a known, accepted false positive -- see this module's own test file).
+//     path/URL segment, a word-prefixed id) even at the cost of missing some
+//     real secrets shaped the same way -- a real credential glued to a path
+//     separator (an npm `sha512-...==` integrity string is the canonical
+//     example: it is never masked, even though its value is exactly the
+//     high-entropy shape this rule exists to catch) or to a short word
+//     prefix (`word_<hexstring>`) is a known, accepted false NEGATIVE --
+//     see this module's own test file, and JEVADV-29 (odd/tasks/release-
+//     0.5.1.md), which measured and fixed the opposite, over-masking
+//     direction this same lean used to still produce for both cases.
 
 const MARKER = "[REDACTED]";
 
@@ -75,7 +81,44 @@ function isAlreadyRedacted(value: string): boolean {
  */
 const SECRET_NAME_SEGMENTS: ReadonlySet<string> = new Set([
   "KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PWD", "AUTH", "CREDENTIAL", "PRIVATE",
+  // JEVADV-29 precision fix (odd/tasks/release-0.5.1.md): a URL query
+  // string's `sig=`/`signature=` param is exactly the same "name=value" shape
+  // ASSIGNMENT_PATTERN already matches everywhere else in the text, and
+  // neither segment was on this list before -- a signed URL's signature
+  // leaked through unmasked. `isBareKeyName` below is what keeps the bare
+  // `KEY` entry from over-matching a mundane `?key=` the same way.
+  "SIG", "SIGNATURE",
 ]);
+
+/**
+ * True only for a standalone `key` name (no other segment) -- `API_KEY`,
+ * `MAPS_KEY` and every other compound name ending or starting with `KEY`
+ * keep the unconditional redaction below unchanged; only the BARE name gets
+ * the extra value-shape gate (looksLikeSecretValue) redactAssignments
+ * applies further down. A standalone `key=` is one of the most common,
+ * least secret-shaped query param names in ordinary traffic -- a Maps API's
+ * own `key=`, a cache/sort/locale key, a feature flag -- so JEVADV-29
+ * (odd/tasks/release-0.5.1.md) narrows it to "only when the value itself
+ * also looks like a credential", rather than dropping it from
+ * SECRET_NAME_SEGMENTS entirely, which would also stop catching a real,
+ * compound `*_KEY` secret.
+ */
+function isBareKeyName(name: string): boolean {
+  const segments = nameSegments(name);
+  return segments.length === 1 && segments[0] === "KEY";
+}
+
+/**
+ * Whether `value` looks like a real credential rather than a short, mundane
+ * reference -- required only for a bare `key=` (isBareKeyName above): long,
+ * and mixing case/digits/base64 punctuation, the same shape
+ * hasMixedCharacterClasses (defined with the high-entropy fallback below)
+ * already judges a high-entropy CANDIDATE by. A locale (`key=en`), a short
+ * cache/sort key or a single flag value never clears this bar.
+ */
+function looksLikeSecretValue(value: string): boolean {
+  return value.length >= 16 && hasMixedCharacterClasses(value);
+}
 
 /** A name segment that means "this holds a REFERENCE to the secret, not the secret itself" -- a path or filename. `PASSWORD_FILE=/path` and `TOKEN_PATH=/x` are never redacted, matching this project's own SYSTEM_PREFIXES-style path exceptions elsewhere (src/core/command_shape.ts). */
 const PATH_REFERENCE_SEGMENTS: ReadonlySet<string> = new Set(["FILE", "PATH", "DIR", "DIRECTORY"]);
@@ -118,8 +161,13 @@ function redactAssignments(text: string): RedactSecretsResult {
   let redactedCount = 0;
   const result = text.replace(ASSIGNMENT_PATTERN, (match, dashes: string | undefined, name: string, rawValue: string) => {
     if (rawValue.length === 0 || !looksLikeSecretName(name) || isAlreadyRedacted(rawValue)) return match;
+    const { inner, wrap } = unquote(rawValue);
+    // JEVADV-29 precision fix: a bare `key=` (never a compound `*_KEY`) is
+    // only a real hit when the VALUE also looks like a credential -- see
+    // isBareKeyName's own doc comment for why the name alone is not enough
+    // here, unlike every other segment on this list.
+    if (isBareKeyName(name) && !looksLikeSecretValue(inner)) return match;
     redactedCount += 1;
-    const { wrap } = unquote(rawValue);
     return `${dashes ?? ""}${name}=${wrap(MARKER)}`;
   });
   return { text: result, redactedCount };
@@ -248,25 +296,47 @@ const PURE_HEX = /^[0-9a-fA-F]+$/;
 const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /**
- * Same idea as command_shape.ts's own looksLikePath: a token that is
- * clearly a filesystem path is never entropy-scanned, which is also what
- * keeps a base64-looking PATH SEGMENT (`/uploads/<base64>/file.png`)
- * untouched -- the whole token is skipped, not just the slash-adjacent
- * characters.
+ * JEVADV-29 precision fix (odd/tasks/release-0.5.1.md): a token or SEGMENT
+ * that is part of a filesystem path or a URL is never entropy-scanned at
+ * all -- measured over the owner's own 70,300-command corpus, this was the
+ * single largest false-positive class (~5,300 commands): a long opaque
+ * segment after a real path prefix (`/Volumes/Data/claude-tmp/claude-501/
+ * <id>`), or a directory-mangling convention that replaces `/` with `-`
+ * (Claude's own `-Users-name-Projects-repo` session-folder naming), read
+ * exactly like a high-entropy secret once isolated from its surrounding
+ * path. `looksLikeHyphenatedIdentifier` below cannot save the second form:
+ * its segments mix case (`Users`, `Projects` are TitleCase, not all-lower or
+ * all-upper), which is exactly what real base64 does too, so there is no
+ * telling them apart by shape alone once the path separators are gone --
+ * the only reliable signal left is that a REAL separator was there in the
+ * first place.
  *
- * Deliberately prefix-based, not "contains a `/` anywhere": base64 itself
- * uses `/` as one of its own alphabet characters (an npm `sha512-...==`
- * integrity string routinely contains one), so a token that merely
- * CONTAINS a slash without actually starting like a path is not excluded
- * here -- excluding it would hide exactly the high-entropy value this rule
- * exists to catch. A real path -- one this project's judgment reasons
- * about as "the target of this command" -- overwhelmingly starts with one
- * of these prefixes or uses a backslash throughout (Windows); this is the
- * same tradeoff command_shape.ts's own looksLikePath makes with the same
- * boundary.
+ * Deliberately "contains a path separator ANYWHERE", not prefix-based: a
+ * quoted argument can arrive as a whitespace-broken FRAGMENT of a longer
+ * path (`"/Users/.../Application` / `Support/.../-Users-name-.../file"`,
+ * split by this module's own per-token scan, itself unaware of the shell's
+ * original quoting), so the fragment that actually carries the suspicious
+ * segment often does not itself START with `/`. Checking for a `/`
+ * anywhere -- or a backslash anywhere, for a Windows path -- catches both
+ * the clean and the fragment case identically. This also means a URL
+ * (`https://.../<id>`) is skipped the same way a path is (JEVADV-29's item
+ * (c): URL path/query parts are not secrets either), which is intentional:
+ * the explicit secret-named query params this module still MUST catch
+ * (`token=`, `sig=`, ...) are redacted earlier, by redactAssignments, before
+ * this fallback ever runs -- see that function and SECRET_NAME_SEGMENTS.
+ *
+ * KNOWN, ACCEPTED trade-off (unchanged direction, wider now): a base64
+ * value that happens to include a `/` character (an npm `sha512-...==`
+ * integrity string is the canonical example, see this module's own test
+ * file) is no longer masked either. Before this fix that was a documented,
+ * accepted false POSITIVE (over-masking); this is the same lean the module
+ * header already commits to -- missing a real secret shaped like a path is
+ * judged safer than corrupting a real path's meaning for the judgment
+ * reading it -- just applied consistently instead of only at the token's
+ * own start.
  */
-function looksLikePathToken(token: string): boolean {
-  return token.startsWith("/") || token.startsWith("./") || token.startsWith("../") || token.startsWith("~") || token.includes("\\");
+function looksLikePathOrUrl(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
 }
 
 function hasMixedCharacterClasses(candidate: string): boolean {
@@ -295,6 +365,31 @@ function looksLikeHyphenatedIdentifier(candidate: string): boolean {
 }
 
 /**
+ * JEVADV-29 precision fix, item (b): a short alnum WORD prefix, an
+ * underscore, then an id-shaped suffix -- `term_<uuid>`, `toolu_<id>`,
+ * `rctx2_<hex>` -- reads as a REFERENCE to something (a terminal, a tool
+ * call, a request context), not a credential: an id names a thing, it does
+ * not grant access to it. Measured at ~4,700 commands in the owner's own
+ * corpus, the second-largest false-positive class after path segments.
+ *
+ * The suffix check is deliberately permissive (any run of letters/digits,
+ * not just hex/uuid): `candidate` only ever reaches this function already
+ * having cleared HIGH_ENTROPY_RUN's own 32-character floor, so a prefix
+ * capped at 16 characters still leaves a substantial, structurally
+ * consistent suffix -- there is little left to distinguish "some other
+ * word-prefixed id shape" from the hex/uuid cases the task names by
+ * example. KNOWN, ACCEPTED false negative (same lean as looksLikePathOrUrl
+ * above): a real secret that happens to be shaped `word_hexstring` is
+ * missed. Prefer over-matching structure to corrupting a real id's meaning.
+ */
+function looksLikePrefixedId(candidate: string): boolean {
+  const match = /^[A-Za-z][A-Za-z0-9]{0,15}_(.+)$/.exec(candidate);
+  if (match === null) return false;
+  const suffix = match[1] ?? "";
+  return suffix.length > 0 && /^[A-Za-z0-9-]+$/.test(suffix);
+}
+
+/**
  * A leading `NAME=` or `--flag=` is kept verbatim; only what follows the `=`
  * is entropy-scanned. Without this, the name itself sits inside the SAME
  * character class as the value (letters, digits, `_`, `-`, joined by the
@@ -312,11 +407,23 @@ function splitLeadingAssignment(token: string): { readonly prefix: string; reado
 }
 
 function redactHighEntropyInToken(token: string): { readonly token: string; readonly redactedCount: number } {
-  if (looksLikePathToken(token) || isAlreadyRedacted(token)) return { token, redactedCount: 0 };
+  if (isAlreadyRedacted(token)) return { token, redactedCount: 0 };
   const { prefix, rest } = splitLeadingAssignment(token);
+  // Checked on `rest`, AFTER the assignment prefix is split off: a path or
+  // URL value on a named flag (`--cwd=/Volumes/...`) would otherwise still
+  // start with the flag's own text, never `/`, `~` or a backslash -- see
+  // looksLikePathOrUrl's own doc comment for why this must be "anywhere in
+  // the value", not just at its start.
+  if (looksLikePathOrUrl(rest)) return { token, redactedCount: 0 };
   let redactedCount = 0;
   const rewrittenRest = rest.replace(HIGH_ENTROPY_RUN, (candidate) => {
-    if (PURE_HEX.test(candidate) || UUID_SHAPE.test(candidate) || looksLikeHyphenatedIdentifier(candidate) || !hasMixedCharacterClasses(candidate)) {
+    if (
+      PURE_HEX.test(candidate) ||
+      UUID_SHAPE.test(candidate) ||
+      looksLikeHyphenatedIdentifier(candidate) ||
+      looksLikePrefixedId(candidate) ||
+      !hasMixedCharacterClasses(candidate)
+    ) {
       return candidate;
     }
     redactedCount += 1;

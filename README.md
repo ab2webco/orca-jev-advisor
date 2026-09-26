@@ -83,13 +83,31 @@ The command gate's risk and policy questions carry the proposed command
 itself — Jev has to read it to judge what it does. Before that request
 leaves this machine, anything that looks like a credential *value* in the
 command text is masked first: an `export TOKEN=…` / `NAME=value` assignment
-whose name mentions key, token, secret, password, auth, credential or
-private; an `Authorization: Bearer …` header; the password half of a
+whose name mentions key, token, secret, password, auth, credential, private,
+sig or signature; an `Authorization: Bearer …` header; the password half of a
 `user:pass@host` URL or a `curl -u user:pass`; a known token prefix (`sk-`,
-`ghp_`, `AKIA…`, and similar); and other long, random-looking strings. Only
-the value is replaced with a fixed marker — variable names, flags, hosts
-and paths stay exactly as written, because that structure is what the
-judgement reasons about.
+`ghp_`, `AKIA…`, and similar); a URL's own `token=`/`access_token=`/
+`api_key=`/`password=`/`secret=`/`sig=`/`signature=` query parameter (`key=`
+only when its value also looks like a credential — long and mixed in case,
+digits or base64 punctuation, since a bare `key=` is one of the most common,
+least secret-shaped query names in ordinary traffic); and other long,
+random-looking strings that are their own standalone token. Only the value is
+replaced with a fixed marker — variable names, flags, hosts and paths stay
+exactly as written, because that structure is what the judgement reasons
+about.
+
+**Precision (JEVADV-29):** a token or path segment that sits inside a
+filesystem path or a URL (a long opaque id after `/Volumes/.../claude-501/`,
+Claude's own `-Users-name-Projects-repo` session-folder naming, a
+`claude.ai/code/artifact/<id>` URL) is never masked, even when it would
+otherwise look exactly like a high-entropy secret — only an explicit
+secret-named query parameter inside a URL still is. A `<word>_<uuid>` or
+`<word>_<hex>` id (`term_<uuid>`, `toolu_…`, `rctx2_<hex>`) is never masked
+either: an id references something, it does not grant access to it. Measured
+over the owner's own 70,300-command corpus, these two classes — plus URL path
+segments — accounted for the large majority of a 13.7% overall mask rate that
+was mostly false positives; `src/core/secret_redaction.test.ts` reports the
+before/after rate over a synthetic set instead of that real corpus.
 
 This masking runs only on the copy sent to Jev. The local rules that refuse
 a force push, a recursive delete or a dropped table always judge the real,
