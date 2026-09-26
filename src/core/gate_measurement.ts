@@ -50,8 +50,14 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    push of the agent's own non-shared branch, or a git
  *                    guarded delete (see push_own_branch.ts) --
  *                    allowed without ever calling Jev, distinct from
- *                    "local-rule" (which only ever denies or asks; this is
- *                    the one local stage that ever produces "allow").
+ *                    "local-rule" (a NEVER_SILENTLY match): the
+ *                    advise-model release means a stopReason of
+ *                    "local-rule" now records a verdict of "deny" (its
+ *                    default) or "advise" (its own switch is off, or its
+ *                    only match was an ambiguous interpreter-code
+ *                    position) -- never "allow" on its own; an identical
+ *                    retry of a local-rule-driven advice records "allow"
+ *                    under "advice-retry" below instead.
  *   "risk"        -- decideAction's reversible/external/consequence axes.
  *   "unreachable" -- Jev was asked but never answered (source: "none");
  *                    the verdict is still a truthful "allow" (failing open

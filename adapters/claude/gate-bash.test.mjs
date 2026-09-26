@@ -1217,7 +1217,7 @@ test('real subprocess, refused: `su -c "git reset --hard"` -- a real shell, not 
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
-test('real subprocess, refused: a python3 -c string that runs a hard reset is not descriptive text either', () => {
+test('real subprocess, still stopped (now an advice, not a hard REFUSED): a python3 -c string that runs a hard reset is not descriptive text either', () => {
   const home = makeHome()
   const command = `python3 -c "import os; os.system('git reset --hard')"`
   const payload = JSON.parse(run(home, command))
