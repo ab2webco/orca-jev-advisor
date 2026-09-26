@@ -462,8 +462,8 @@ to at least an advice, whatever the risk stage would otherwise have said.
 or `vercel deploy`, `netlify deploy --prod`, `fly deploy`, `eas submit`, an
 `eas update --branch production`, `fastlane deliver`/`pilot`/`supply`,
 `helm install`/`upgrade` and `kubectl apply` are all recognised, in
-command position only — a mention
-inside a grep pattern or a quoted argument never counts. The same fact is
+command position only — a mention inside a grep pattern or a quoted
+argument never counts. The same fact is
 folded into the SAME state Jev already reads for the risk and policy
 questions, so a destination policy (e.g. *a client's site always asks a
 person*) can catch a real deploy/publish command too, not just the risk
