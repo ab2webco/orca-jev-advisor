@@ -75,3 +75,42 @@ for (const [label, source] of [['config.html', configHtml], ['board.html', board
     assert.equal(/substitutes/i.test(docMatch[0]), false, 'the stale claim that Orca substitutes the UI locale into <html lang> must be gone')
   })
 }
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-10 (T-lane-a task 3): this panel painted
+// ONLY from localeFromOrca's own navigator guess, ignoring that main.mjs's
+// publishLocaleStatus (JEVADV-10) may already know Orca's own EXPLICIT
+// uiLanguage setting -- a person who set Orca to Spanish while their OS
+// locale is English still saw this panel's OWN text in English. Same
+// extraction approach as localeFromOrca's own tests above: resolveEffective
+// Locale is pure (a status record in, a locale out), so it is lifted with
+// `new Function` and run directly rather than driving the whole sandboxed
+// panel.
+// ---------------------------------------------------------------------------
+
+function resolveEffectiveLocaleWith (source, status, navigatorGuess) {
+  const match = source.match(/function resolveEffectiveLocale \([\s\S]*?\n {6}\}/)
+  assert.ok(match, 'resolveEffectiveLocale not found -- update this test if it moved or was renamed')
+  const factory = new Function(`${match[0]}; return resolveEffectiveLocale`)
+  return factory()(status, navigatorGuess)
+}
+
+for (const [label, source] of [['config.html', configHtml], ['board.html', boardHtml]]) {
+  test(`${label}: resolveEffectiveLocale prefers the published status when its source is Orca's own explicit setting`, () => {
+    assert.equal(resolveEffectiveLocaleWith(source, { value: 'es', source: 'orca-setting' }, 'en'), 'es')
+    assert.equal(resolveEffectiveLocaleWith(source, { value: 'en', source: 'orca-setting' }, 'es'), 'en')
+  })
+
+  test(`${label}: resolveEffectiveLocale falls back to the navigator guess when the status is a mere mirrored guess, not Orca's own setting`, () => {
+    assert.equal(resolveEffectiveLocaleWith(source, { value: 'es', source: 'navigator' }, 'en'), 'en')
+  })
+
+  test(`${label}: resolveEffectiveLocale falls back to the navigator guess when there is no published status yet`, () => {
+    assert.equal(resolveEffectiveLocaleWith(source, null, 'en'), 'en')
+    assert.equal(resolveEffectiveLocaleWith(source, undefined, 'es'), 'es')
+  })
+
+  test(`${label}: resolveEffectiveLocale falls back to the navigator guess when the published status carries a malformed value`, () => {
+    assert.equal(resolveEffectiveLocaleWith(source, { value: 'fr', source: 'orca-setting' }, 'en'), 'en')
+  })
+}

@@ -55,6 +55,7 @@ const {
   GATE_DEFAULTS_KEY,
   LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
+  LOCALE_STATUS_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
   POLICY_SEED_DISMISS_RESULT_KEY,
@@ -63,6 +64,7 @@ const {
   POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
   publishGateDefaults,
+  publishLocaleStatus,
   publishModSkillsStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
@@ -291,6 +293,34 @@ test('applyOrcaUiLanguageAtActivation: a read failure leaves the existing marker
   })
   assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), 'es', 'a transient read failure must not flip a prior marker to defer')
   assert.deepEqual(saved, [])
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-10 (T-lane-b task 3): the published
+// locale status must carry a SOURCE marker -- LOCALE_ORCA_SETTING_KEY's own
+// concrete es/en means the published value is Orca's own explicit setting,
+// not merely this panel's navigator guess -- so config.html/board.html can
+// tell the two apart and paint with the explicit one instead of always
+// re-guessing from `navigator.language`. See config_html_locale.test.mjs's
+// own resolveEffectiveLocale tests for the panel side of this.
+// ---------------------------------------------------------------------------
+
+test('publishLocaleStatus: source is "orca-setting" when Orca has a concrete uiLanguage', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [LOCALE_ORCA_SETTING_KEY]: 'es' })
+  await publishLocaleStatus(orca, storageHost, { resolveLocale: async () => 'es' })
+  const status = await storageHost.get(LOCALE_STATUS_KEY)
+  assert.equal(status.value, 'es')
+  assert.equal(status.source, 'orca-setting')
+})
+
+test('publishLocaleStatus: source is "navigator" when Orca\'s own setting is deferred ("system"), missing, or malformed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  await publishLocaleStatus(orca, storageHost, { resolveLocale: async () => 'en' })
+  const status = await storageHost.get(LOCALE_STATUS_KEY)
+  assert.equal(status.value, 'en')
+  assert.equal(status.source, 'navigator')
 })
 
 test('attendCatalogRefreshRequest: an expired request publishes reason "expired"', async () => {

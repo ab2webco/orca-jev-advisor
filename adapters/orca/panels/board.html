@@ -581,13 +581,32 @@
        * value Electron's own `app.getLocale()` reads in the main process --
        * so it tracks the OS/app language even though Orca sets no attribute
        * for it. This board is read-only (it never pushes a locale request
-       * back to the worker, unlike config.html), so this guess is the whole
-       * story here. Anything this plugin has no catalog for falls back to
-       * English, same as `t()` below.
+       * back to the worker, unlike config.html), so this guess is only ever
+       * a FALLBACK now (JEVADV-10): resolveEffectiveLocale below prefers the
+       * worker's own published status when it already reflects Orca's
+       * explicit setting. Anything this plugin has no catalog for falls back
+       * to English, same as `t()` below.
        */
       function localeFromOrca () {
         var tag = ((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase()
         return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      /**
+       * The locale this board actually paints with, given the worker's own
+       * published status (main.mjs's publishLocaleStatus, JEVADV-10) and
+       * this board's own navigator-derived guess -- see config.html's own
+       * copy of this function for the full reasoning. This board never
+       * pushes a locale request back to the worker (read-only, see
+       * localeFromOrca's own doc comment above), but it still PAINTS with
+       * Orca's own explicit setting when the worker already knows one,
+       * instead of always re-guessing from `navigator.language`.
+       */
+      function resolveEffectiveLocale (status, navigatorGuess) {
+        if (status && status.source === 'orca-setting' && (status.value === 'es' || status.value === 'en')) {
+          return status.value
+        }
+        return navigatorGuess
       }
 
       var currentLocale = localeFromOrca()
@@ -1289,8 +1308,17 @@
         })
       })
 
-      // Orca's language decides; see the note in config.html.
+      // Orca's language decides; see the note in config.html. JEVADV-10
+      // (odd/tasks/release-0.5.1.md): read the worker's own published
+      // locale status BEFORE the first paint, and repaint with Orca's own
+      // explicit setting when the worker already knows one -- this board
+      // still never PUSHES a locale request back (read-only, see
+      // localeFromOrca's own doc comment above).
+      var LOCALE_STATUS_KEY = 'localeStatus'
       Promise.resolve().then(function () {
+        return read(LOCALE_STATUS_KEY, false).catch(function () { return null })
+      }).then(function (status) {
+        currentLocale = resolveEffectiveLocale(status, currentLocale)
         applyStaticI18n()
         return reload(true)
       }).then(startPolling)

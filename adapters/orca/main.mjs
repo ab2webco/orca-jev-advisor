@@ -1275,9 +1275,24 @@ const LOCALE_REQUEST_KEY = 'localeRequest'
 const LOCALE_RESULT_KEY = 'localeResult'
 const LOCALE_STATUS_KEY = 'localeStatus'
 
-async function publishLocaleStatus (orca, storageHost) {
-  const locale = await resolveWorkerLocale()
-  await storageHost.set(LOCALE_STATUS_KEY, { value: locale, checkedAt: new Date().toISOString() })
+/**
+ * JEVADV-10 (odd/tasks/release-0.5.1.md T-lane-a task 3): `source` tells a
+ * panel WHERE `value` came from, so it can tell "Orca's own explicit
+ * uiLanguage" apart from "just this mirror's last write" -- which, before
+ * any panel ever pushes a request, is only ever a navigator-derived guess.
+ * LOCALE_ORCA_SETTING_KEY is read once at activation (see
+ * applyOrcaUiLanguageAtActivation) and is only ever a concrete `es`/`en`
+ * when Orca's own setting is a concrete choice, never for `"system"`, a
+ * missing setting, or a read failure -- exactly the same concrete-or-defer
+ * test attendLocaleRequest already uses to decide whether Orca's setting
+ * overrides the panel's own request.
+ */
+async function publishLocaleStatus (orca, storageHost, options = {}) {
+  const resolveLocale = options.resolveLocale ?? resolveWorkerLocale
+  const locale = await resolveLocale()
+  const orcaSetting = await storageHost.get(LOCALE_ORCA_SETTING_KEY)
+  const source = orcaSetting === 'es' || orcaSetting === 'en' ? 'orca-setting' : 'navigator'
+  await storageHost.set(LOCALE_STATUS_KEY, { value: locale, source, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`locale status publish failed: ${error.message}`))
 }
 
@@ -2156,6 +2171,7 @@ export {
   GATE_DEFAULTS_KEY,
   LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
+  LOCALE_STATUS_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
   POLICY_SEED_DISMISS_RESULT_KEY,
@@ -2164,6 +2180,7 @@ export {
   POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
   publishGateDefaults,
+  publishLocaleStatus,
   publishModSkillsStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,

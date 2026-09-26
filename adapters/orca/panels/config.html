@@ -986,12 +986,39 @@
        * for it. This is only ever a GUESS, not the person's actual choice
        * inside Orca's own settings: main.mjs's attendLocaleRequest may
        * override it with Orca's own explicit `settings.uiLanguage` when one
-       * exists (see applyOrcaUiLanguageAtActivation there). Anything this
-       * plugin has no catalog for falls back to English, same as `t()` below.
+       * exists (see applyOrcaUiLanguageAtActivation there), and THIS panel's
+       * own paint is overridden the same way -- see resolveEffectiveLocale
+       * below, which initLocale() consults before the first paint. Anything
+       * this plugin has no catalog for falls back to English, same as `t()`
+       * below.
        */
       function localeFromOrca () {
         var tag = ((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase()
         return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      /**
+       * The locale this panel actually paints with, given the worker's own
+       * published status (main.mjs's publishLocaleStatus, JEVADV-10) and
+       * this panel's own navigator-derived guess.
+       *
+       * localeFromOrca is only ever a GUESS -- Orca's plugin shells never
+       * expose the person's real in-app language choice to this sandboxed
+       * document (see localeFromOrca's own doc comment). But main.mjs
+       * already knows better once Orca's own `settings.uiLanguage` is a
+       * concrete choice (applyOrcaUiLanguageAtActivation), and publishes
+       * that fact through `status.source === 'orca-setting'` -- this panel
+       * must paint with THAT, not re-guess from `navigator.language`, or a
+       * person who set Orca to Spanish while their OS locale is English
+       * would still see this panel's own text in English. Anything else --
+       * no status yet, a mere mirrored navigator guess, a malformed value --
+       * falls back to the guess, exactly as before this fix.
+       */
+      function resolveEffectiveLocale (status, navigatorGuess) {
+        if (status && status.source === 'orca-setting' && (status.value === 'es' || status.value === 'en')) {
+          return status.value
+        }
+        return navigatorGuess
       }
 
       var currentLocale = localeFromOrca()
@@ -1273,11 +1300,13 @@
       // ---------- language: request/result/status -----------------------------
       // Same pattern again: this panel cannot write the language's mirror
       // file itself (the worker's permission sandbox), so it requests and
-      // main.mjs attends it -- currentLocale (localeFromOrca's own guess) is
-      // what this panel actually paints with; LOCALE_STATUS_KEY is declared
-      // for parity with every other *_STATUS_KEY in this file but nothing
-      // here reads it back, since this panel already knows its own guess
-      // synchronously, before any round trip could resolve.
+      // main.mjs attends it. currentLocale starts as localeFromOrca's own
+      // navigator guess, synchronously, because painting cannot wait for a
+      // round trip -- but JEVADV-10 (odd/tasks/release-0.5.1.md) reads
+      // LOCALE_STATUS_KEY back before the first paint (initLocale, called
+      // from load() below) and overrides that guess with Orca's own
+      // explicit setting when the worker already published one
+      // (resolveEffectiveLocale) -- see that function's own doc comment.
       var LOCALE_REQUEST_KEY = 'localeRequest'
       var LOCALE_RESULT_KEY = 'localeResult'
       var LOCALE_STATUS_KEY = 'localeStatus'
@@ -1306,6 +1335,32 @@
         return write(LOCALE_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForLocaleResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      /**
+       * Reads the worker's own published locale status BEFORE this panel's
+       * first paint, and resolves `currentLocale` from it -- see
+       * resolveEffectiveLocale's own doc comment. Only pushes this panel's
+       * own navigator guess back to the worker when the published status is
+       * NOT already Orca's own explicit setting: re-sending the guess in
+       * that case would be a pointless round trip at best (attendLocaleRequest
+       * already overrides it with Orca's own setting either way), and this
+       * skips it rather than rely on that safety net alone.
+       *
+       * The push itself stays fire-and-forget in both branches (as it always
+       * was, pre-JEVADV-10): this panel's own paint never waits on it.
+       */
+      function initLocale () {
+        return read(LOCALE_STATUS_KEY, false).then(function (status) {
+          currentLocale = resolveEffectiveLocale(status, currentLocale)
+          if (status && status.source === 'orca-setting') return
+          sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
+        }).catch(function () {
+          // No published status to read at all (a bridge failure): fall back
+          // to the navigator guess exactly as before this fix, and still
+          // push it -- there is no status.source to check here.
+          sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
         })
       }
 
@@ -1532,7 +1587,11 @@
       // panel's `<html lang>`, so the locale Orca reports is mirrored out to
       // them. Best effort: a failed mirror leaves those two on their previous
       // language, which is a cosmetic difference, never a blocked command.
-      sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
+      // JEVADV-10: this used to fire immediately, right here, with whatever
+      // `currentLocale` was at load time (the navigator guess, always) --
+      // moved into initLocale(), called from load() below, so it runs AFTER
+      // reading the worker's own published status back, and paints with
+      // Orca's own explicit setting first when there is one.
 
       // ---------- catalogo ----------------------------------------------
       var DESTINATION_KINDS = ['service', 'client-site', 'project', 'support']
@@ -2578,8 +2637,12 @@
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
-        // Orca and cannot see this document.
-        return Promise.resolve().then(function () {
+        // Orca and cannot see this document. initLocale() resolves
+        // currentLocale against the worker's own published status FIRST
+        // (JEVADV-10), so the first paint below already honours Orca's
+        // explicit setting when there is one, instead of always the
+        // navigator guess.
+        return initLocale().then(function () {
           applyStaticI18n()
           renderSecretStatus(null)
           renderClaudeIntegrationStatus(null)
