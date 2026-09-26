@@ -29,7 +29,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeHomePaths } from "./hooks/runtime.ts";
+import { computeHomePaths, resolveUserSkillsDir } from "./hooks/runtime.ts";
 import { measurementDecisionsToday, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from "./hooks/index.ts";
 
 test("returns null when neither HOME nor USERPROFILE is set", () => {
@@ -141,6 +141,32 @@ test('agrees with src/core/paths.ts on every platform shape', async () => {
     assert.equal(mine?.configDir, theirs.configDir, `${c.name}: config dir diverged`);
     assert.equal(mine?.cacheDir, theirs.cacheDir, `${c.name}: cache dir diverged`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// resolveUserSkillsDir -- Claude Code's own user skills folder for a
+// session is `$CLAUDE_CONFIG_DIR/skills` when that variable is set (how
+// every Orca-managed account runs), not unconditionally `<home>/.claude/
+// skills`. Pure: env values in, path out, no `$`.
+// ---------------------------------------------------------------------------
+
+test("resolveUserSkillsDir prefers CLAUDE_CONFIG_DIR when it is a non-empty string", () => {
+  const result = resolveUserSkillsDir({ claudeConfigDir: "/data/claude-accounts/acct-1", home: "/Users/dev" });
+  assert.equal(result, "/data/claude-accounts/acct-1/skills");
+});
+
+test("resolveUserSkillsDir falls back to <home>/.claude/skills when CLAUDE_CONFIG_DIR is unset", () => {
+  const result = resolveUserSkillsDir({ home: "/Users/dev" });
+  assert.equal(result, "/Users/dev/.claude/skills");
+});
+
+test("resolveUserSkillsDir falls back to <home>/.claude/skills when CLAUDE_CONFIG_DIR is an empty string", () => {
+  const result = resolveUserSkillsDir({ claudeConfigDir: "", home: "/Users/dev" });
+  assert.equal(result, "/Users/dev/.claude/skills");
+});
+
+test("resolveUserSkillsDir is null when neither CLAUDE_CONFIG_DIR nor home is known", () => {
+  assert.equal(resolveUserSkillsDir({}), null);
 });
 
 // ---------------------------------------------------------------------------

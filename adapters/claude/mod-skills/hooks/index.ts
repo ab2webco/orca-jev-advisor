@@ -81,7 +81,7 @@ import { callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
 import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import { listSkillInventory, stripSkillFrontmatter } from '../../../../src/core/skill_inventory.ts'
-import type { SkillFs, SkillFsEntry, SkillSummary } from '../../../../src/core/skill_inventory.ts'
+import type { SkillFs, SkillFsEntry, SkillFsStat, SkillSummary } from '../../../../src/core/skill_inventory.ts'
 import {
   DEFAULT_FITS_THRESHOLD,
   DEFAULT_GATE_THRESHOLD,
@@ -128,7 +128,7 @@ import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sa
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
 import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
 import type { JevFetch, JevFetchResponse, JevSleep } from '../../../../src/core/jev.ts'
-import { computeHomePaths, parseEnvFile } from './runtime.ts'
+import { computeHomePaths, parseEnvFile, resolveUserSkillsDir } from './runtime.ts'
 import type { ModHomePaths } from './runtime.ts'
 
 const DEFAULT_BUDGET_MS = 800
@@ -366,6 +366,10 @@ export function makeSkillFs($: EngineInterface): SkillFs {
     exists: (path) => $.fs.exists(path),
     list: async (path): Promise<readonly SkillFsEntry[]> => await $.fs.list(path),
     read: (path) => $.fs.read(path),
+    stat: async (path): Promise<SkillFsStat> => {
+      const stat = await $.fs.stat(path)
+      return { kind: stat.kind }
+    },
   }
 }
 
@@ -667,9 +671,15 @@ export function register(on: On, options: PluginOptions): void {
         if (inventoryCache === null) {
           const cwd = await $.session.cwd()
           const home = await resolveHomeDir($)
+          // Claude Code's real user skills folder for THIS session is
+          // `$CLAUDE_CONFIG_DIR/skills` when that variable is set (how
+          // every Orca-managed account runs) -- see resolveUserSkillsDir's
+          // own doc in runtime.ts for why `<home>/.claude/skills` alone is
+          // wrong there.
+          const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
           inventoryCache = await listSkillInventory(makeSkillFs($), {
             projectSkillsDir: `${cwd}/.claude/skills`,
-            userSkillsDir: home ? `${home}/.claude/skills` : null,
+            userSkillsDir: resolveUserSkillsDir({ claudeConfigDir, home }),
           })
         }
         const inventory = inventoryCache

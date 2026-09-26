@@ -99,6 +99,30 @@ function stripMatchingQuotes(value: string): string {
   return isDoubleQuoted || isSingleQuoted ? value.slice(1, -1) : value
 }
 
+// ---------------------------------------------------------------------------
+// User skills directory -- Claude Code's own user skills folder for a
+// session is `$CLAUDE_CONFIG_DIR/skills` when that variable is set, not
+// unconditionally `<home>/.claude/skills`. Every Orca-managed account sets
+// CLAUDE_CONFIG_DIR (`<userData>/claude-accounts/<uuid>/auth`, see
+// src/core/orca_accounts.ts), so the two folders only happen to coincide on
+// a machine with a single, unmanaged Claude Code account -- reading
+// `<home>/.claude/skills` unconditionally would list the WRONG account's
+// skills for anyone else. Pure: env values in, path out, no `$`; index.ts's
+// own inventory-cache branch calls this with `$.env.get('CLAUDE_CONFIG_DIR')`
+// and resolveHomeDir($)'s result.
+// ---------------------------------------------------------------------------
+
+export interface UserSkillsDirEnv {
+  readonly claudeConfigDir?: string | undefined;
+  readonly home?: string | null;
+}
+
+export function resolveUserSkillsDir(env: UserSkillsDirEnv): string | null {
+  if (env.claudeConfigDir && env.claudeConfigDir.length > 0) return `${env.claudeConfigDir}/skills`
+  if (env.home && env.home.length > 0) return `${env.home}/.claude/skills`
+  return null
+}
+
 export function parseEnvFile(content: string): string | null {
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trim()
