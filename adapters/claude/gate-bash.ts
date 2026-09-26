@@ -1018,39 +1018,36 @@ async function main(): Promise<void> {
   const inspected = withoutHeredocBodies(command)
   const mentionOnly = mentionsRatherThanRuns(inspected)
   // Every rule is evaluated before anything is emitted: an 'ask' from one
-  // rule (a mention, or a rule whose switch is off) must never hide a
-  // command-position run that a LATER rule denies in the same command
-  // (review finding R3-ask-short-circuits-later-deny). A deny with its
-  // switch on wins outright; otherwise the first ask found speaks.
-  let firstAsk: { readonly why: GateKey; readonly mention: boolean } | null = null
+  // rule (a rule whose switch is off) must never hide a command-position run
+  // that a LATER rule denies in the same command (review finding
+  // R3-ask-short-circuits-later-deny). A deny with its switch on wins
+  // outright; otherwise the first downgraded-to-ask rule found speaks.
+  let firstAsk: { readonly why: GateKey } | null = null
   for (const { evaluate, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
     const outcome = evaluate(inspected)
     if (outcome === null) continue
-    if (outcome === 'deny' && readDenyTierConfig()[denyToggle]) {
+    // JEVADV-37 (odd/tasks/release-0.5.1.md): a MENTION -- a match found
+    // only in the "visible" view of an unknown program's quoted argument,
+    // someSegmentMatches' own 'ask' severity -- is NOT a local-rule match at
+    // all anymore. A local `ask` on a mere mention stalled an unattended
+    // agent until a human answered, where 0.5.0 gave a fast refusal;
+    // continuing here sends the command to the ordinary Jev path below (a
+    // real risk/policy judgment, never a silent allow), exactly the way
+    // mentionsRatherThanRuns already routes its own mention verbs (see the
+    // `mentionOnly` guard above). A COMMAND-position match is unaffected: it
+    // is still 'deny' here, never 'ask'.
+    if (outcome === 'ask') continue
+    if (readDenyTierConfig()[denyToggle]) {
       appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
       emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }))
       return
     }
-    if (firstAsk === null) firstAsk = { why, mention: outcome === 'ask' }
+    if (firstAsk === null) firstAsk = { why }
   }
   if (firstAsk !== null) {
     const { why } = firstAsk
-    if (firstAsk.mention) {
-      // The mention-only tier (odd/tasks/release-0.5.1.md JEVADV-36): the
-      // phrase sits inside a quoted argument of some OTHER, non-executing
-      // program, not command position -- this was never going to deny, so
-      // the rule's own denyToggle plays no part here (there is no 'deny' to
-      // downgrade FROM). Recorded the same way a deny-tier stop is: a local
-      // rule needs no model and no threshold, so there are no scores to
-      // calibrate, but whether the person accepted the interruption is
-      // still worth knowing.
-      appendGateRecord(cwd, command, 'local-rule', 'ask', null, 'local-rule', null)
-      appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
-      emit('ask', t('localRuleMention', { why: t(why) }))
-      return
-    }
     // A rule that would deny but whose switch was deliberately turned off
     // drops to 'ask' -- never to 'allow'. readDenyTierConfig() fails CLOSED,
     // so an unreadable config denies (above) exactly as a fresh install does.

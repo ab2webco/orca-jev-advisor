@@ -584,25 +584,29 @@ test('deny tier: an unreadable config file (a directory instead of a file) keeps
 })
 
 // ---------------------------------------------------------------------------
-// odd/tasks/release-0.5.1.md JEVADV-36: the two-level model for forcePush/
-// pushProtected/resetClean. A match in COMMAND POSITION still denies; a
-// match that exists ONLY because a quoted argument of some OTHER,
-// non-executing program stayed visible now ASKS instead of denying outright.
-// One ask-mention case and one wrapper-still-denies case, exercised at the
-// real subprocess level (not just git_discard.ts's unit tests).
+// odd/tasks/release-0.5.1.md JEVADV-37 (part 2): the mention tier must not
+// stall an unattended agent. A match in COMMAND POSITION still denies (toggle
+// on) / asks (toggle off), exactly as before; a match that exists ONLY
+// because a quoted argument of some OTHER, non-executing program stayed
+// visible -- someSegmentMatches' own 'ask' severity -- is NOT a local-rule
+// match at all anymore: it is not a local `ask` either, it falls through to
+// the ordinary Jev path, exactly like mentionsRatherThanRuns' own mention
+// verbs already do. These tests run with no API key, so "the ordinary path"
+// means the no-key pass-through (`allow` with a notice, or silent `none` on a
+// later call in the same home) -- see decisionFor() and the no-key tests
+// above for that same pattern.
 // ---------------------------------------------------------------------------
 
-test('real subprocess, ASKS (not denies): sed\'s own script argument merely mentions a hard reset', () => {
+test('real subprocess, not a local-rule stop: sed\'s own script argument merely mentions a hard reset', () => {
   const home = makeHome()
-  const payload = JSON.parse(run(home, "sed -i 's/git reset --hard//' f"))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
-  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /confirm it is not run/)
+  const decision = decisionFor(home, "sed -i 's/git reset --hard//' f")
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
 })
 
-test('real subprocess, ASKS (not denies): an unrecognised program\'s quoted argument merely mentions a force push', () => {
+test('real subprocess, not a local-rule stop: an unrecognised program\'s quoted argument merely mentions a force push', () => {
   const home = makeHome()
-  const payload = JSON.parse(run(home, 'some-unknown-tool "please never git push --force"'))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  const decision = decisionFor(home, 'some-unknown-tool "please never git push --force"')
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
 })
 
 test('real subprocess, still DENIES: a wrapper (su -c) really running a hard reset stays command position', () => {
@@ -611,13 +615,12 @@ test('real subprocess, still DENIES: a wrapper (su -c) really running a hard res
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
-test('a mention-ask stop is still recorded as stopReason "local-rule", same as a deny', () => {
+test('a mention is no longer a local-rule stop, so it writes no local-rule gate record', () => {
   const home = makeHome()
-  run(home, "sed -i 's/git reset --hard//' f", { apiKey: 'unused' })
-  const lines = readFileSync(gateLogPath(home), 'utf8').trim().split('\n')
-  const record = JSON.parse(lines[lines.length - 1])
-  assert.equal(record.stopReason, 'local-rule')
-  assert.equal(record.verdict, 'ask')
+  run(home, "sed -i 's/git reset --hard//' f")
+  // No API key and no local-rule match at all: main() returns from the
+  // no-key branch before ever calling appendGateRecord.
+  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
 })
 
 // ---------------------------------------------------------------------------
@@ -645,15 +648,15 @@ test('real subprocess, not stopped by a local rule at all: a generic --body flag
 // later token belonging to some other program's own argument.
 // ---------------------------------------------------------------------------
 
-test('real subprocess, ASKS (not denies): a wrapper NAME sitting inside another program\'s own argument is not treated as that wrapper', () => {
+test('real subprocess, not a local-rule stop: a wrapper NAME sitting inside another program\'s own argument is not treated as that wrapper', () => {
   const home = makeHome()
   // Not "grep": that leading verb is mentionsRatherThanRuns' own MENTION_ONLY
   // fast path (a separate, earlier guard), which would exit this command
   // silently before it ever reaches the NEVER_SILENTLY loop this test means
   // to exercise -- see git_discard.test.ts's own unit-level version of this
   // same case for that one instead.
-  const payload = JSON.parse(run(home, 'some-tool -n watch "…git reset --hard…" f'))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  const decision = decisionFor(home, 'some-tool -n watch "…git reset --hard…" f')
+  assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
 })
 
 // ---------------------------------------------------------------------------

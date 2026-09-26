@@ -256,8 +256,9 @@ set of text flags — `--body`/`--title`/`--message`/`--description`/
 overloaded a flag letter across unrelated tools to safely generalise, so it
 stays scoped to where it was already allowlisted above). Everywhere else —
 including an unrecognised program — a quoted argument stays visible and now
-resolves to a mention (`ask`), never silently allowed and never denied
-outright. A `$(...)`/backtick substitution stays visible regardless of
+resolves to a mention, never silently allowed, never denied outright, and
+(JEVADV-37) never a local ask either — it goes to Jev instead. A
+`$(...)`/backtick substitution stays visible regardless of
 quoting (its source text still becomes part of the enclosing command's own
 arguments at runtime, so it is always command position), and so does the
 script argument of a real shell/login/watch wrapper, read RECURSIVELY
@@ -270,7 +271,7 @@ another program (`ssh host "git push --force origin main"`, `su -c "git push
 -f origin main"`) was waved through as if it were merely descriptive text;
 and a mention sitting in a program's own argument (`git grep "git reset
 --hard"`, `sed -i 's/git reset --hard//' f`) was hard-denied instead of
-asked about.
+reaching the ordinary Jev judgment.
 
 ## Models
 

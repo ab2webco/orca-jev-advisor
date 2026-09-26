@@ -462,10 +462,15 @@ function isRedirection(command: string, index: number): boolean {
 // T10's binary opaque/visible split into three outcomes a caller can act on
 // differently: a match in COMMAND POSITION still denies; a match that
 // exists ONLY because a quoted argument of some OTHER, non-executing
-// program stayed visible (not a known data position, not code) now ASKS
-// instead -- a person decides, rather than the model being refused outright
-// for a phrase nobody was ever going to run; and a known data position stays
-// fully opaque (no match at all). `scanSegment` is scanned TWICE per
+// program stayed visible (not a known data position, not code) is a MENTION
+// -- not a run, but not known-safe either; and a known data position stays
+// fully opaque (no match at all). This function's own contract stops there:
+// what a caller DOES with a mention is the caller's decision, not this
+// module's. JEVADV-37 (same file) changed that decision at the gate layer
+// (adapters/claude/gate-bash.ts): a mention no longer stops locally to ask a
+// person -- an unattended agent has nobody to answer it -- it now falls
+// through to the ordinary Jev path instead, a real risk/policy judgment
+// rather than a silent allow. `scanSegment` is scanned TWICE per
 // segment, once per `ScanMode`:
 //   - "command": the strict view -- every quoted multi-word argument is
 //     opaque (T8's original blanket rule), EXCEPT an interpreter CODE
@@ -1023,10 +1028,17 @@ export function cannotScanWithConfidence(command: string): boolean {
  *  shell/interpreter would run it); `"ask"` is a match that exists ONLY
  *  because a quoted argument of some other, non-executing program stayed
  *  visible -- a mention, not a run, but not a KNOWN-safe data position
- *  either, so a person decides rather than the model being refused outright
- *  or the mention passing through in silence. `null` is no match at all
- *  (including every match sitting at a known data position, which is opaque
- *  in both scan modes and so never reaches either outcome). */
+ *  either. `null` is no match at all (including every match sitting at a
+ *  known data position, which is opaque in both scan modes and so never
+ *  reaches either outcome).
+ *
+ *  What a caller does with `"ask"` is the caller's own decision, not this
+ *  module's: gate-bash.ts (JEVADV-37, odd/tasks/release-0.5.1.md) does NOT
+ *  stop locally on it -- an unattended agent has nobody to answer a local
+ *  ask -- it routes the command to the ordinary Jev path instead. The name
+ *  stays `"ask"` here because at THIS module's level the fact being reported
+ *  is still "a mention, not a run"; only the gate's response to that fact
+ *  changed. */
 export type SegmentMatchSeverity = "deny" | "ask" | null;
 
 /**
