@@ -216,8 +216,9 @@ export function resolveGitDirForConfig(cwd: string): string | null {
  * (`<main>/.git/worktrees/<name>/HEAD`), never the main checkout's. Reading
  * `resolveGitDirForConfig`'s own result for this would resolve every linked
  * worktree's push to the MAIN checkout's branch instead of its own (see
- * push_own_branch.ts, odd/tasks/release-0.5.1-push-own-branch.md, which
- * needs the worktree cwd is actually IN, not the one its remotes live in).
+ * push_own_branch.ts, the own-branch-push/guarded-git-delete gate change,
+ * real evidence: the owner's gate log, 2026-09-26, which needs the worktree
+ * cwd is actually IN, not the one its remotes live in).
  *
  * For an ordinary checkout this is simply its own `.git` directory, exactly
  * like resolveGitDirForConfig. For a linked worktree it is the verified

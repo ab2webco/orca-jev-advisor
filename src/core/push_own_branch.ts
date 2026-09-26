@@ -1,5 +1,6 @@
 // Whether a Bash command's only effect is a plain (non-force) push of the
-// agent's own, non-shared branch -- odd/tasks/release-0.5.1-push-own-branch.md.
+// agent's own, non-shared branch, or one of git's own guarded delete/
+// worktree operations.
 //
 // Real evidence, 2026-09-26: the owner's gate log showed five identical
 // `git push -u origin fabolivark/release-0.5.1` runs, four allowed and one
@@ -147,9 +148,8 @@ function readCurrentBranch(cwd: string, readFile: (path: string) => string): str
  * `null` when the segment is not a qualifying push at all -- the shared
  * building block both `qualifiesForOwnBranchPush` (below, its own narrower,
  * single-segment contract, unchanged since it first shipped) and
- * `qualifiesForLocalGitAllow` (odd/tasks/release-0.5.1-push-own-branch.md,
- * the guarded-deletes extension) call, so the push-qualification rule is
- * never duplicated between the two.
+ * `qualifiesForLocalGitAllow` (the guarded-deletes extension, below) call,
+ * so the push-qualification rule is never duplicated between the two.
  */
 function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: boolean, readFile: (path: string) => string): string | null {
   const positionals = parsePushSegment(segmentText);
@@ -211,9 +211,13 @@ export function qualifiesForOwnBranchPush(input: OwnBranchPushInput): boolean {
 
   if (hasCommandSubstitution(command)) return false;
 
-  const { segments, joiners } = splitOnCommandSeparatorsDetailed(command);
+  const { segments, joiners, trailing } = splitOnCommandSeparatorsDetailed(command);
   if (segments.length === 0 || segments.length > 2) return false;
   if (joiners[0] !== null) return false;
+  // A trailing separator with nothing real after it -- most notably a bare
+  // `&`, which BACKGROUNDS the push instead of joining it to anything --
+  // disqualifies: see CommandSeparatorSplit.trailing's own doc comment.
+  if (trailing !== null) return false;
 
   let pushSegmentText: string;
   let cdPrefixPresent: boolean;
@@ -231,8 +235,8 @@ export function qualifiesForOwnBranchPush(input: OwnBranchPushInput): boolean {
 }
 
 // ===========================================================================
-// qualifiesForLocalGitAllow -- the guarded-deletes extension
-// (odd/tasks/release-0.5.1-push-own-branch.md, follow-up task). Generalizes
+// qualifiesForLocalGitAllow -- the guarded-deletes extension, a follow-up
+// to the own-branch-push allow above. Generalizes
 // the single-push shape above into a SEQUENCE of one or more segments,
 // optionally led by exactly one `cd <dir> &&`, where every remaining
 // segment is EITHER a qualifying own-branch push, one of git's own three
@@ -258,6 +262,22 @@ export function qualifiesForOwnBranchPush(input: OwnBranchPushInput): boolean {
 // they are the one thing that disqualifies each of these.
 // ===========================================================================
 
+/**
+ * A positional argument (a branch name, a path, a commit-ish) this module
+ * is willing to trust AS WRITTEN: never empty, never a flag, and carrying
+ * none of `$` (an unexpanded shell variable -- its REAL value is unknown at
+ * gate time; `BRANCH='-D main'` would make `git branch -d $BRANCH` actually
+ * run `git branch -d -D main`), `*`, `?` or `[` (a glob the shell may expand
+ * to anything, including zero, one or many real arguments). `git push`'s own
+ * remote/refspec positions are already covered by isBareRemoteName/
+ * isPlainBranchRefspec's own, stricter regexes; this is the same discipline
+ * for the three guarded-delete/worktree classifiers below, which otherwise
+ * only ever checked "does it start with `-`".
+ */
+function isPlainArgument(token: string): boolean {
+  return token.length > 0 && !token.startsWith("-") && !/[$*?[]/.test(token);
+}
+
 /** `git branch`'s own delete flags this module accepts -- `-d`/`--delete`
  *  only. `-D` (force-delete, skips the "already merged" check), `-f`,
  *  `--force`, or a short cluster combining `-d` with anything else all
@@ -277,6 +297,7 @@ function classifyBranchDeleteSegment(segmentText: string): boolean {
       sawDeleteFlag = true;
       continue;
     }
+    if (!isPlainArgument(token)) return false;
     nameCount += 1;
   }
   return sawDeleteFlag && nameCount >= 1;
@@ -289,8 +310,8 @@ function classifyWorktreeRemoveSegment(segmentText: string): boolean {
   const tokens = tokenize(segmentText);
   if (tokens[0] !== "git" || tokens[1] !== "worktree" || tokens[2] !== "remove") return false;
   const rest = tokens.slice(3);
-  if (rest.some((token) => token.startsWith("-"))) return false;
-  return rest.length === 1;
+  if (rest.length !== 1) return false;
+  return isPlainArgument(rest[0] ?? "");
 }
 
 /** `git worktree prune` -- no arguments at all. */
@@ -323,9 +344,18 @@ function classifyWorktreeAddSegment(segmentText: string): boolean {
     if (token.startsWith("-")) {
       if (token === "-f" || token === "--force" || token === "-B") return false;
       if (clusterHasForceOrBFlag(token)) return false;
-      i += token === "-b" ? 2 : 1;
+      if (token === "-b") {
+        // -b's own value (the new branch's name) is a positional too, and
+        // must be trusted the same way as every other one -- see
+        // isPlainArgument's own doc comment.
+        if (!isPlainArgument(rest[i + 1] ?? "")) return false;
+        i += 2;
+        continue;
+      }
+      i += 1;
       continue;
     }
+    if (!isPlainArgument(token)) return false;
     i += 1;
   }
   return true;
@@ -367,9 +397,12 @@ export function qualifiesForLocalGitAllow(input: OwnBranchPushInput): LocalGitAl
 
   if (hasCommandSubstitution(command)) return DOES_NOT_QUALIFY;
 
-  const { segments, joiners } = splitOnCommandSeparatorsDetailed(command);
+  const { segments, joiners, trailing } = splitOnCommandSeparatorsDetailed(command);
   if (segments.length === 0) return DOES_NOT_QUALIFY;
   if (joiners[0] !== null) return DOES_NOT_QUALIFY;
+  // See qualifiesForOwnBranchPush's own comment: a trailing separator (most
+  // notably a bare `&`, which backgrounds the last segment) disqualifies.
+  if (trailing !== null) return DOES_NOT_QUALIFY;
 
   const firstSegment = segments[0] ?? "";
   let cdPrefixPresent = false;

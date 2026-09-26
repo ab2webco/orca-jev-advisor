@@ -1020,7 +1020,7 @@ for (const command of ALREADY_NOT_DENIED_BEFORE_T8) {
 }
 
 // ---------------------------------------------------------------------------
-// Own-branch-push local allow -- odd/tasks/release-0.5.1-push-own-branch.md.
+// Own-branch-push local allow.
 // Real evidence: the owner's gate log showed five identical
 // `git push -u origin fabolivark/release-0.5.1` runs (four allowed, one
 // asked) all through Jev's risk stage, purely from repeat-call noise on the
@@ -1124,7 +1124,7 @@ test('own-branch push: a real force push is still denied, not allowed by the new
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
-// odd/tasks/release-0.5.1-push-own-branch.md: the brief's own example of a
+// The brief's own example of a
 // command "still denied by the local rules" (`git push origin +feature/x`)
 // does NOT actually deny today -- verified directly against
 // someSegmentMatches with the real forcePush pattern (`/(--force|-f)\b/`):

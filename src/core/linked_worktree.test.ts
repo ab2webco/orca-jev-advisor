@@ -290,7 +290,7 @@ test("resolveGitDirForConfig: nothing findable resolves to null, never throws", 
 });
 
 // ===========================================================================
-// resolveGitDirForHead -- odd/tasks/release-0.5.1-push-own-branch.md: unlike
+// resolveGitDirForHead -- the own-branch-push gate change: unlike
 // resolveGitDirForConfig (remotes are shared commondir state), HEAD is
 // PER-WORKTREE, so push_own_branch.ts must read a linked worktree's OWN
 // admin directory, never the main checkout's.

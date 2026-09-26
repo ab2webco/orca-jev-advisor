@@ -295,7 +295,7 @@ function commandRule(pattern: RegExp): (ctx: RuleContext) => RuleOutcome {
 
 // Built from push_remote.ts's own PROTECTED_BRANCH_NAMES -- the ONE
 // shared/protected-branch list, so this rule and push_own_branch.ts's
-// own-branch-push allow (odd/tasks/release-0.5.1-push-own-branch.md) can
+// own-branch-push allow (real evidence: the owner's gate log, 2026-09-26) can
 // never drift apart into two different notions of "shared".
 const PUSH_PROTECTED_PATTERN = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANCH_NAMES.join('|')})\\b`)
 
@@ -1127,7 +1127,7 @@ async function main(): Promise<void> {
   const commandScopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
 
   // Own-branch-push / guarded-git-delete local allow
-  // (odd/tasks/release-0.5.1-push-own-branch.md): a plain, non-force push of
+  // (real evidence: the owner's gate log, 2026-09-26): a plain, non-force push of
   // the agent's own non-shared branch, or one of git's own GUARDED
   // delete/worktree operations (a plain `git branch -d`, `git worktree
   // remove` with no `--force`, `git worktree prune`, or `git worktree add`

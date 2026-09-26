@@ -24,7 +24,7 @@ import { resolveGitDirForConfig } from "./linked_worktree.ts";
 /**
  * The exact branch names gate-bash.ts's pushProtectedRule treats as
  * shared/protected -- the ONE list, so push_own_branch.ts (the own-branch
- * push allow, odd/tasks/release-0.5.1-push-own-branch.md) checks a resolved
+ * push allow, real evidence: the owner's gate log, 2026-09-26) checks a resolved
  * or explicit branch name against the same notion of "shared" rather than a
  * second, independently maintained one. Lowercase and exact, matching
  * pushProtectedRule's own case-sensitive regex: "Main" or "MAIN" is not

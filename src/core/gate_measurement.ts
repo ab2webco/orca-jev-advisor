@@ -38,8 +38,7 @@ export type GateVerdict = "allow" | "ask" | "deny";
  *   "local-rule"  -- one of gate-bash.ts's own NEVER_SILENTLY patterns.
  *   "local-allow" -- a command that never needed judging at all: a plain
  *                    push of the agent's own non-shared branch, or a git
- *                    guarded delete (see push_own_branch.ts,
- *                    odd/tasks/release-0.5.1-push-own-branch.md) --
+ *                    guarded delete (see push_own_branch.ts) --
  *                    allowed without ever calling Jev, distinct from
  *                    "local-rule" (which only ever denies or asks; this is
  *                    the one local stage that ever produces "allow").

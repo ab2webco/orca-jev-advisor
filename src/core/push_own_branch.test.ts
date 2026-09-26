@@ -1,5 +1,5 @@
-// Unit tests for push_own_branch.ts --
-// odd/tasks/release-0.5.1-push-own-branch.md. Real evidence: the owner's
+// Unit tests for push_own_branch.ts -- the own-branch-push /
+// guarded-git-delete gate change. Real evidence: the owner's
 // gate log showed a plain, non-force push of the agent's own branch
 // (`git push -u origin fabolivark/release-0.5.1`) asked once out of five
 // identical runs, purely from Jev's own repeat-call noise on the
@@ -372,4 +372,54 @@ test("qualifiesForLocalGitAllow: a requires_human policy is not this module's co
   // adapters/claude/gate-bash.test.mjs). This module always answers the
   // same way regardless of what policies are configured.
   assertQualifies("git branch -d feature/old", undefined, "guardedGitDelete");
+});
+
+// ---------------------------------------------------------------------------
+// A trailing separator with nothing real after it -- most notably a bare
+// `&`, which BACKGROUNDS the last segment instead of joining it to anything.
+// Found during review: neither function checked CommandSeparatorSplit's own
+// `trailing` field, so `git push -u origin feature/x &` qualified as if the
+// `&` were not there at all.
+// ---------------------------------------------------------------------------
+
+test("does not qualify: a trailing '&' backgrounds the push instead of joining it to anything", () => {
+  assert.equal(qualifiesForOwnBranchPush({ command: "git push -u origin feature/x &", cwd: NO_REPO_CWD }), false);
+  assertDoesNotQualify("git push -u origin feature/x &");
+});
+
+test("does not qualify: a trailing ';' after the only segment", () => {
+  // Inert in a real shell (an empty statement), but still rejected: no
+  // "does this really run" analysis is worth building for zero benefit.
+  assert.equal(qualifiesForOwnBranchPush({ command: "git push -u origin feature/x ;", cwd: NO_REPO_CWD }), false);
+  assertDoesNotQualify("git branch -d feature/old ;");
+});
+
+// ---------------------------------------------------------------------------
+// An unexpanded shell variable or a glob in a guarded-delete/worktree
+// positional: its REAL value is unknown at gate time. `BRANCH='-D main'`
+// would make `git branch -d $BRANCH` actually run `git branch -d -D main`.
+// git push's own remote/refspec positions are already covered by
+// isBareRemoteName/isPlainBranchRefspec's stricter regexes (see the
+// existing "not a plain branch refspec" cases above) -- this is the same
+// discipline for the three guarded-delete/worktree classifiers.
+// ---------------------------------------------------------------------------
+
+test("does not qualify: git branch -d $BRANCH -- an unexpanded variable, not a plain name", () => {
+  assertDoesNotQualify("git branch -d $BRANCH");
+});
+
+test("does not qualify: git worktree remove $PATH_VAR -- an unexpanded variable", () => {
+  assertDoesNotQualify("git worktree remove $PATH_VAR");
+});
+
+test("does not qualify: git worktree remove * -- a glob, not one specific path", () => {
+  assertDoesNotQualify("git worktree remove *");
+});
+
+test("does not qualify: git worktree add -b $NAME ../w -- the -b value is a variable too", () => {
+  assertDoesNotQualify("git worktree add -b $NAME ../w");
+});
+
+test("does not qualify: git worktree add $DEST -- a variable path", () => {
+  assertDoesNotQualify("git worktree add $DEST");
 });

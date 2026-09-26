@@ -156,7 +156,7 @@ export function splitOutsideQuotes(command: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-/** Shell words of one segment, with quotes removed and a quoted argument kept whole. Exported for push_own_branch.ts (odd/tasks/release-0.5.1-push-own-branch.md), which needs the exact same shell-word reading this file already uses elsewhere -- never a second, drifting tokenizer. */
+/** Shell words of one segment, with quotes removed and a quoted argument kept whole. Exported for push_own_branch.ts (the own-branch-push/guarded-git-delete gate change), which needs the exact same shell-word reading this file already uses elsewhere -- never a second, drifting tokenizer. */
 export function tokenize(segment: string): string[] {
   const tokens: string[] = [];
   let current = "";
@@ -403,13 +403,25 @@ export interface CommandSeparatorSplit {
   readonly segments: readonly string[];
   /** `joiners[i]` is the joiner text before `segments[i]`; `joiners[0]` is always `null`. Consecutive separator characters (e.g. the two `&` of `&&`) are concatenated into one joiner string, so a real `&&` reads as `"&&"`, not two separate `"&"` entries. */
   readonly joiners: readonly (string | null)[];
+  /**
+   * Separator text trailing the LAST segment, with nothing real after it --
+   * `null` when the command does not end this way. `splitOnCommandSeparators`
+   * itself silently drops this (a bare trailing `;` is genuinely inert), but
+   * a caller reasoning about what JOINS two commands must not: a trailing
+   * `&` backgrounds the last segment instead of joining it to anything --
+   * `git push -u origin feature/x &` does not wait for the push to finish,
+   * which is not "one command" in the sense push_own_branch.ts's own
+   * qualification needs. Such a caller rejects the whole sequence whenever
+   * this is non-null.
+   */
+  readonly trailing: string | null;
 }
 
 /**
  * Same scan as `splitOnCommandSeparators` (quotes, backticks and paren depth
  * respected, a redirection never mistaken for a separator), but also reports
  * the joiner text between consecutive segments -- needed by
- * push_own_branch.ts (odd/tasks/release-0.5.1-push-own-branch.md) to tell a
+ * push_own_branch.ts (the own-branch-push/guarded-git-delete gate change) to tell a
  * real `&&`/`;` sequence apart from one joined by `|`, `||`, a bare `&` or a
  * newline, which `splitOnCommandSeparators` alone cannot distinguish (it
  * only ever returns the segments, never what joined them). `joiners[0]` is
@@ -460,7 +472,7 @@ export function splitOnCommandSeparatorsDetailed(command: string): CommandSepara
       pendingJoiner = (pendingJoiner ?? "") + (rawSeparators[i] ?? "");
     }
   }
-  return { segments, joiners };
+  return { segments, joiners, trailing: pendingJoiner };
 }
 
 /**
