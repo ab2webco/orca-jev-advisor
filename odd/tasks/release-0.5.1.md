@@ -71,11 +71,16 @@ reachability (E1) and per-direction confidence (E2).
 ## Constraints
 
 - Local rules stay the floor. Nothing in this release may make a deny-tier
-  rule, a `requires_human` policy or the risk stage more permissive. The
-  one deliberate refinement is JEVADV-36: a destructive command in COMMAND
-  POSITION still denies, and a mere MENTION inside a visible argument of an
-  unknown program asks instead of denying. The person still decides, and
-  it never becomes a silent allow.
+  rule, a `requires_human` policy or the risk stage more permissive. Two
+  deliberate refinements:
+  - JEVADV-36/37: a destructive command in COMMAND POSITION still denies. A
+    mere MENTION inside a visible argument of an unknown program is not a
+    local-rule match; it goes to the ordinary Jev path, never a silent
+    local allow.
+  - JEVADV-39: a push naming main/master whose remote resolves (pushurl
+    first) to a local path or `file://` is not a shared-branch push, so it
+    goes to the Jev path. Any other or unresolvable remote still denies, and
+    a force push denies everywhere.
 - A policy without the new field keeps today's behaviour (`command`). A user
   rule is never silently dropped.
 - Privacy rule of `gate_measurement.ts` holds: record ids and families,
@@ -190,9 +195,11 @@ touched.
 
 | Path | Branch | Purpose | Remove when |
 |---|---|---|---|
-| `../orca-supervisor-next` | `fabolivark/release-0.5.1-next` | Writer lane A | Its last batch is merged: remove the worktree, delete the branch |
-| `../orca-supervisor-lane-b` | `fabolivark/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Merged: remove the worktree, delete the branch |
-| `../orca-supervisor-lane-c` | `fabolivark/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Merged: remove the worktree, delete the branch |
+| `../orca-supervisor-next` | `fabolivark/release-0.5.1-next` | First writer lane | Removed 2026-09-25 after merge |
+| `../orca-supervisor-lane-a` | `fabolivark/release-0.5.1-lane-a` | Writer lane A (JEVADV-37/38/39) | Merged: remove the worktree, delete the branch |
+| `../orca-supervisor-lane-b` | `fabolivark/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-c` | `fabolivark/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-review` | detached | Temporary native-review checkouts | Removed after each review |
 | `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
 | `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | When the scenario report is recorded |
 
@@ -252,7 +259,31 @@ touched.
   running the realistic scenario on the live dev plugin, held at 42cc829
   until it finishes.
 
+- 2026-09-26. Native reviews 4a (`review-6e123ee64ddcd88f`) and 4b
+  (`review-367d0dd182240f55`) were approved and acknowledged. 4b needed one
+  bounded correction (cace3e2): a mention no longer hides a later deny, and
+  `find -exec` and `--` hand-offs recurse. The lane C review (mod-skills)
+  was approved. The user then declined the next candidate and switched
+  receipt-driven development OFF globally. From here, verification is the
+  suite, the replay bench, live probes, screenshots and an independent
+  read-only verifier agent.
+- Merged: lane C (455ffb2), lane B (eab4897, d6a3820, ed6b89b), lane A
+  JEVADV-37 (9565976, 899ffe9, 43b110d, 731192d), and a copy fix
+  (889725f). The final batch (JEVADV-38 non-live, JEVADV-39, discard behind
+  `sh -c`) is on lane A: d56ea46, e880f01, f3ee1b5, 97f2447. Its suite:
+  1360 pass, 6 skipped without playwright.
+- Visual check of the panel changes, looked at: team policies at 1440 light
+  (plain load and after import), 390 light and 320 dark; catalog proposals
+  at 1440 light, 768 dark and 320 light. No overflow, everything readable.
+  One copy fix (889725f).
+- JEVADV-8, the realistic context-free scenario on the dev plugin at
+  42cc829: no prompt on normal work, destructive git refused with the work
+  preserved, and model reclassification measured with the real resolved
+  models. One strictness finding became JEVADV-39.
+
 ## Next step
 
-Native review of `7cf2c47..HEAD`. Then merge lanes B and C, finish the lane D
-report, and do the release verification (JEVADV-7/9).
+Merge lane A after the independent verifier reports. Then run the live
+checks: dev plugin reload, the mod-skills attachment checklist and the
+locale mirror. Then run the release verification (JEVADV-7 replay, JEVADV-9:
+version bump, `npm run check`, the update path) and report.
