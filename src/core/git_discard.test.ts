@@ -469,3 +469,16 @@ test("someSegmentMatches: a wrapper NAME appearing only as another program's own
   // silently allowing.
   assert.equal(someSegmentMatches('grep -n watch "…git reset --hard…" f', resetClean), "ask");
 });
+
+test("someSegmentMatches: a shell reached through an exec-ing program still runs, so it still denies", () => {
+  // Review finding R3-wrapper-only-at-resolved-program: find -exec, xargs and
+  // a `--` hand-off run the program after them, exactly like a wrapper.
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('find . -exec sh -c "git push --force" \\;', forcePush), "deny");
+  assert.equal(someSegmentMatches('find . -name x -execdir bash -c "git push -f origin main" {} +', forcePush), "deny");
+  assert.equal(someSegmentMatches('xargs sh -c "git push -f origin main"', forcePush), "deny");
+  assert.equal(someSegmentMatches('docker exec web -- sh -c "git push --force"', forcePush), "deny");
+  assert.equal(someSegmentMatches("kubectl exec pod -- git push --force", forcePush), "deny");
+  // A `--` that hands over arguments, not a program, changes nothing.
+  assert.equal(someSegmentMatches('npm test -- --grep "git push --force"', forcePush), "ask");
+});

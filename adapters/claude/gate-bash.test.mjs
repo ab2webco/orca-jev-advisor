@@ -298,9 +298,18 @@ test('a force push denies by default, and drops to ask when its switch is off', 
   )
   writeDenyTierConfig(home, { denyForcePush: false })
   assert.equal(
-    JSON.parse(run(home, 'git push --force origin main')).hookSpecificOutput.permissionDecision,
+    JSON.parse(run(home, 'git push --force origin feature/x')).hookSpecificOutput.permissionDecision,
     'ask',
     'switched off must reach ask, never allow',
+  )
+  // Every rule is evaluated before anything is emitted (review finding
+  // R3-ask-short-circuits-later-deny): switching off the force-push rule
+  // does not switch off the protected-branch rule, which still denies a
+  // push that names main.
+  assert.equal(
+    JSON.parse(run(home, 'git push --force origin main')).hookSpecificOutput.permissionDecision,
+    'deny',
+    'another rule that still denies must win over a switched-off one',
   )
 })
 
@@ -822,6 +831,24 @@ test('real subprocess, refused: a python3 -c string that runs a hard reset is no
   const home = makeHome()
   const command = `python3 -c "import os; os.system('git reset --hard')"`
   const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// Review finding R3-ask-short-circuits-later-deny: a mention that asks under
+// one rule must never stop the loop before a later rule that DENIES a real
+// command-position run in the same command.
+// ---------------------------------------------------------------------------
+
+test('real subprocess, refused: a mention in one rule never hides a real run caught by a later rule', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'some-tool "git push --force" && git reset --hard'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('real subprocess, refused: a sed mention before a recursive delete of the home directory still denies', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, "sed -i 's/git push --force//' notes.txt && rm -rf ~"))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 

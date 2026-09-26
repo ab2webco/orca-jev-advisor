@@ -70,6 +70,9 @@ const SSH_OPTIONS_WITH_VALUE = new Set([
 /** `watch`'s own options that take a separate value. */
 const WATCH_OPTIONS_WITH_VALUE = new Set(["-n", "--interval"]);
 
+/** `find` options whose following tokens are a whole command it runs. */
+const FIND_EXEC_OPTIONS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+
 /** Every program name this module ever recurses into as a command line in
  *  its own right -- `git` itself, plus every wrapper that runs one whole
  *  line found further down the same token list. Used to jump PAST a
@@ -927,6 +930,27 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
   // that wrapper's own command.
   const plainTexts = tokens.map((token) => token.text);
   const { name, index } = resolveProgram(plainTexts, RECURSIVE_COMMAND_PROGRAMS);
+
+  // A program that runs ANOTHER program named in its own arguments hands off
+  // a whole command line, exactly like a wrapper: `find ... -exec sh -c '...'`
+  // and a `--` hand-off (`docker exec c -- sh -c '...'`, `kubectl exec p --
+  // git ...`). The rest of the segment from that point is scanned as its own
+  // command line, so a shell reached this way is recursed into instead of
+  // being read as one opaque quoted argument (review finding
+  // R3-wrapper-only-at-resolved-program). `xargs` needs nothing here: it is
+  // already one of WRAPPERS.
+  const handOff = RECURSIVE_COMMAND_PROGRAMS.has(name) ? -1 : execHandOffIndex(plainTexts, index, name);
+  if (handOff !== -1) {
+    const before = scanTokens(tokens.slice(0, handOff), nextScannedBody, mode);
+    const rest = tokens
+      .slice(handOff)
+      .map((candidate) => candidate.text.split(SCAN_SUBSTITUTION_MARKER).reduce((out, part, at) => (at === 0 ? part : `${out}$(${extracted.bodies[bodyIndex++] ?? ""})${part}`), ""))
+      .map((text, at) => (tokens[handOff + at]?.quoted && /\s/.test(text) ? `'${text.replace(/'/g, "'\\''")}'` : text))
+      .join(" ");
+    const scanned = scanSegment(rest, depth + 1, mode);
+    if (scanned === null) return null;
+    return [before, scanned].join(" ");
+  }
   const isEval = name === "eval";
   const takesDashC = SHELLS.has(name) || DASH_C_COMMAND_PROGRAMS.has(name);
   const flagIndex = takesDashC
@@ -958,6 +982,23 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
   }
 
   return scanTokens(tokens, nextScannedBody, mode);
+}
+
+/**
+ * Where the command a program hands off to begins, or -1. `find`'s -exec
+ * family starts one right after the option; a bare `--` starts one only when
+ * the token after it names a program this module recurses into, so `npm test
+ * -- --grep x` (arguments, not a program) is left alone.
+ */
+function execHandOffIndex(texts: readonly string[], index: number, name: string): number {
+  if (name === "find") {
+    const at = texts.findIndex((text, position) => position > index && FIND_EXEC_OPTIONS.has(text));
+    return at === -1 || at + 1 >= texts.length ? -1 : at + 1;
+  }
+  const dashDash = texts.findIndex((text, position) => position > index && text === "--");
+  if (dashDash === -1) return -1;
+  const next = texts[dashDash + 1];
+  return next !== undefined && RECURSIVE_COMMAND_PROGRAMS.has(programName(stripLeadingGroupers(next))) ? dashDash + 1 : -1;
 }
 
 /**
