@@ -14,12 +14,19 @@
 //      pushProtected, ...) run first, completely unchanged -- this module is
 //      only ever consulted for a command that already survived them.
 //   2. A destination policy that resolves to `requires_human` or
-//      `prohibits` (decisions.ts's PolicyKind) still wins -- gate-bash.ts
-//      checks that itself, before ever calling qualifiesForLocalGitAllow,
-//      because a policy's own coverage question can only be answered by
-//      Jev, which this module exists to avoid calling in the first place.
-//   3. Only then does this module decide whether the command qualifies for
-//      a purely local 'allow', with no Jev call and no cache read/write.
+//      `prohibits` (decisions.ts's PolicyKind) still wins. This module only
+//      decides the SHAPE question ("could this command even destroy
+//      anything on its own"); whether a real policy actually covers it is
+//      Jev's own coverage question (`same_kind`), which only Jev can
+//      honestly answer -- Option D: when gate-bash.ts finds at least one
+//      command-scoped policy for the matched destination, it still calls
+//      Jev for the policy question, with decisions.ts's decideGateAction told
+//      (`localAllowQualifies`) to let the risk axes never decide FOR this
+//      qualifying command -- only a policy that actually resolves to
+//      requires_human/prohibits can still stop it.
+//   3. Only when NO command-scoped policy exists at all does gate-bash.ts
+//      allow locally right here, with no Jev call and no cache read/write --
+//      there being nothing left for Jev to judge.
 //
 // Deliberately conservative throughout: any shape this module cannot
 // positively confirm is a plain push of a resolvable, non-shared branch

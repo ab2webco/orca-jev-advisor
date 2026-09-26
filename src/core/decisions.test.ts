@@ -506,6 +506,65 @@ test("decideGateAction: noDestinationMatched is NOT added when a policy resolved
 });
 
 // ===========================================================================
+// localAllowQualifies -- Option D (push_own_branch.ts's own-branch-push /
+// guarded-git-delete local allow). The policy stage stays fully authoritative
+// (a requires_human/prohibits match still asks, exactly as above); what
+// changes is the RISK stage: for a command gate-bash.ts has already
+// determined structurally qualifies for the local allow, the reversible/
+// external/consequence axes never decide FOR it -- not even a high
+// consequence score turns it into an ask -- once no policy stops it.
+// ===========================================================================
+
+test("decideGateAction: localAllowQualifies allows even a high-consequence risk score, once no policy covers it", () => {
+  // The owner's real policy set: global requires_human/prohibits policies
+  // whose RULES are not about this command at all (never_write_to_main,
+  // client_always_asks, infrastructure_changes, ...) -- Jev's own coverage
+  // question answers "no_policy" (none of them actually covers a plain
+  // push), and the same high-consequence risk answers that would normally
+  // ask (see decideAction's own "a permits policy can NEVER turn an ask
+  // into an allow" test above, same shape) must not turn this into an ask.
+  const ownerLikePolicies: Policy[] = [
+    { id: "never_write_to_main", rule: "Never write directly on main or develop.", kind: "prohibits" },
+    { id: "client_always_asks", rule: "Anything touching a client is confirmed with a human.", kind: "requires_human" },
+    { id: "infrastructure_changes", rule: "Changing real infrastructure is decided by a person.", kind: "requires_human" },
+  ];
+  const notCovered = combinedAnswers({ choice: "no_policy", confidence: 0.95, match: 0.1 }, { reversible: 0.1, external: 0.9, consequence: 2.5 });
+
+  const withoutLocalAllow = decideGateAction({ action: ACTION, policies: ownerLikePolicies, answers: notCovered });
+  assert.equal(withoutLocalAllow.verdict, "ask", "sanity check: this risk score alone would ask");
+
+  const result = decideGateAction({ action: ACTION, policies: ownerLikePolicies, answers: notCovered, localAllowQualifies: true });
+  assert.equal(result.verdict, "allow");
+  assert.equal(result.policyId, null);
+  assert.deepEqual(result.reasons, [], "the local reason text is gate-bash.ts's own concern, not this pure function's");
+});
+
+test("decideGateAction: localAllowQualifies still asks when a policy resolves to requires_human", () => {
+  const policies: Policy[] = [{ id: "client_always_asks", rule: "Anything touching a client is confirmed with a human.", kind: "requires_human" }];
+  const covered = combinedAnswers({ choice: "client_always_asks", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
+
+  const result = decideGateAction({ action: ACTION, policies, answers: covered, localAllowQualifies: true });
+  assert.equal(result.verdict, "ask");
+  assert.equal(result.policyId, "client_always_asks");
+});
+
+test("decideGateAction: localAllowQualifies still asks when a policy resolves to prohibits (the gate's own 2-way verdict, same as without localAllowQualifies)", () => {
+  const policies: Policy[] = [{ id: "never_write_to_main", rule: "Never write directly on main.", kind: "prohibits" }];
+  const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
+
+  const result = decideGateAction({ action: ACTION, policies, answers: covered, localAllowQualifies: true });
+  assert.equal(result.verdict, "ask");
+  assert.equal(result.policyId, "never_write_to_main");
+});
+
+test("decideGateAction: localAllowQualifies with no policies configured at all still allows regardless of risk", () => {
+  const highRisk = riskAnswers(0.1, 0.9, 3.9);
+  const result = decideGateAction({ action: ACTION, policies: [], answers: highRisk, localAllowQualifies: true });
+  assert.equal(result.verdict, "allow");
+  assert.equal(result.policyId, null);
+});
+
+// ===========================================================================
 // GATE_DECISION_RULES_VERSION -- native review follow-up on JEVADV-26
 // (review-3ca73b9da09b0927, R3/R4): gate-bash.ts's verdict cache is keyed
 // on the command's SHAPE alone, with no way to tell a verdict computed

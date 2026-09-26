@@ -805,6 +805,22 @@ export interface DecideGateActionInput {
   readonly consequenceCeiling?: number;
   /** True when the gate could not match the cwd to any catalog destination -- appends an explanatory reason if the risk rule ends up deciding. */
   readonly noDestinationMatched?: boolean;
+  /**
+   * True when gate-bash.ts's own structural check (push_own_branch.ts's
+   * qualifiesForLocalGitAllow -- a plain own-branch push or one of git's own
+   * guarded delete/worktree operations) already determined this command
+   * cannot destroy anything on its own -- Option D
+   * (odd/tasks/release-0.5.1-push-own-branch.md's follow-up): the POLICY
+   * stage stays fully authoritative (a requires_human/prohibits match still
+   * asks, exactly as without this flag), but the RISK stage's reversible/
+   * external/consequence axes never decide FOR this command once no policy
+   * stops it -- not even a high consequence score turns it into an ask. This
+   * is what lets a real destination policy (never_write_to_main,
+   * client_always_asks, ...) still gate the command through Jev's own
+   * coverage question, without Jev's noisy risk score deciding a command
+   * that structurally cannot be destructive.
+   */
+  readonly localAllowQualifies?: boolean;
 }
 
 /**
@@ -851,6 +867,25 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
   }
 
   const riskDecision = decideAction(input.answers, { consequenceCeiling: input.consequenceCeiling });
+  const axes = {
+    reversible: riskDecision.reversible,
+    external: riskDecision.external,
+    consequence: riskDecision.consequence,
+    ceiling: input.consequenceCeiling ?? GATE_CONSEQUENCE_CEILING,
+  };
+
+  // Option D (odd/tasks/release-0.5.1-push-own-branch.md's follow-up, see
+  // DecideGateActionInput.localAllowQualifies's own doc): no policy stopped
+  // it above, and this command already structurally cannot be destructive
+  // on its own -- the risk axes never decide FOR it. The scores are still
+  // carried in `axes` (Jev genuinely answered them, and they are worth
+  // keeping for calibration), but the verdict is unconditionally 'allow',
+  // and `reasons` stays empty: gate-bash.ts's own local reason text is
+  // shown instead of anything from this module's own catalog.
+  if (input.localAllowQualifies === true) {
+    return { verdict: "allow", reasons: [], axes, policyId: null };
+  }
+
   const reasons: GateActionReason[] = [...riskDecision.reasons];
   if (input.noDestinationMatched === true) {
     reasons.push({ key: "reason.noDestinationMatched" });
@@ -858,12 +893,7 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
   return {
     verdict: riskDecision.verdict,
     reasons,
-    axes: {
-      reversible: riskDecision.reversible,
-      external: riskDecision.external,
-      consequence: riskDecision.consequence,
-      ceiling: input.consequenceCeiling ?? GATE_CONSEQUENCE_CEILING,
-    },
+    axes,
     policyId: null,
   };
 }

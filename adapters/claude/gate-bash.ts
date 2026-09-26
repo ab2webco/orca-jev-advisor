@@ -65,7 +65,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
@@ -75,6 +75,7 @@ import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/co
 import { matchDestinationForCwd } from '../../src/core/linked_worktree.ts'
 import { PROTECTED_BRANCH_NAMES } from '../../src/core/push_remote.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
+import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -934,6 +935,17 @@ type JevOutcome =
       readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
       /** The policy that resolved this verdict, or null when the risk stage decided (or no policy matched). See decisions.ts's GateActionResult.policyId. */
       readonly policyId: string | null
+      /**
+       * True when this 'allow' happened because the command already
+       * structurally qualified for the local-only allow (own-branch push /
+       * guarded git delete -- push_own_branch.ts's qualifiesForLocalGitAllow)
+       * and no policy stopped it (Option D, see decisions.ts's
+       * DecideGateActionInput.localAllowQualifies). The risk axes never
+       * decided this verdict; `reason` is already this feature's own local
+       * text, never a risk-derived one. Always false when the command did
+       * not so qualify.
+       */
+      readonly viaLocalAllow: boolean
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
@@ -961,8 +973,18 @@ type JevOutcome =
  * composes "does a policy already resolve this" with the existing
  * consequence-ceiling risk rule, substituting the matched destination's own
  * ceiling override when its catalog entry carries one.
+ *
+ * `localGitAllow` is Option D's own contribution (odd/tasks/
+ * release-0.5.1-push-own-branch.md's follow-up): when the command already
+ * structurally qualifies for the local-only allow AND at least one
+ * command-scoped policy survives filtering (the ONLY reason this function
+ * gets called for a qualifying command at all -- see main()'s own
+ * short-circuit for the no-policies case), `localAllowQualifies` tells
+ * decideGateAction to let the policy stage's coverage question keep
+ * deciding while the risk axes never do. `qualifies: false` (the ordinary
+ * case) changes nothing here.
  */
-async function askJev(apiKey: string, command: string, context: string, cwd: string): Promise<JevOutcome> {
+async function askJev(apiKey: string, command: string, context: string, cwd: string, localGitAllow: LocalGitAllowResult): Promise<JevOutcome> {
   try {
     const catalog = readCatalogMirror()
     const policies = readPoliciesMirror()
@@ -985,8 +1007,17 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       answers: response.answers,
       consequenceCeiling: matched?.autonomy?.consequenceCeiling,
       noDestinationMatched: matched === null,
+      localAllowQualifies: localGitAllow.qualifies,
     })
-    const reason = gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
+    // Option D: no policy stopped it (policyId null) and the command
+    // already structurally qualified -- decideGateAction's own verdict is
+    // unconditionally 'allow' here, and gate-bash.ts's own local reason
+    // text is shown, never a risk-derived one (there may not even be one:
+    // decideGateAction returns empty reasons for this case).
+    const viaLocalAllow = localGitAllow.qualifies && gate.verdict === 'allow' && gate.policyId === null
+    const reason = viaLocalAllow
+      ? t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush')
+      : gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
     return {
       kind: 'verdict',
       decision: gate.verdict,
@@ -996,6 +1027,7 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       destinationKind: matched?.kind ?? null,
       usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
       policyId: gate.policyId,
+      viaLocalAllow,
     }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
@@ -1138,34 +1170,27 @@ async function main(): Promise<void> {
   const policiesMirror = readPoliciesMirror()
   const commandScopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
 
-  // Own-branch-push / guarded-git-delete local allow
-  // (real evidence: the owner's gate log, 2026-09-26): a plain, non-force push of
+  // Own-branch-push / guarded-git-delete local allow (Option D, real
+  // evidence: the owner's gate log, 2026-09-26): a plain, non-force push of
   // the agent's own non-shared branch, or one of git's own GUARDED
   // delete/worktree operations (a plain `git branch -d`, `git worktree
   // remove` with no `--force`, `git worktree prune`, or `git worktree add`
-  // with no `--force`/`-B`), cannot destroy anything on its own, so it never
-  // needs Jev's judgment -- but only once everything above (the deny tier)
-  // AND everything a destination policy could still say about it have both
-  // had their say.
+  // with no `--force`/`-B`), cannot destroy anything on its own -- but the
+  // POLICY stage stays fully authoritative: a destination policy
+  // (never_write_to_main, client_always_asks, ...) can still stop it, and
+  // only Jev's own coverage question can honestly say whether one of them
+  // actually covers THIS command. So:
   //
-  // A policy can only make the gate MORE careful (decisions.ts's own
-  // decideGateAction composes it this way too): a `permits` match can never
-  // turn Jev's own risk-based 'ask' into 'allow' on its own (it falls
-  // through to the risk rule instead of short-circuiting it), so its mere
-  // presence cannot change what THIS shortcut would otherwise decide either.
-  // Only `requires_human`/`prohibits` can, and this module has no local way
-  // to know whether such a policy's own coverage question would actually
-  // match THIS command -- that judgment is Jev's (`same_kind`), which this
-  // whole stage exists to avoid calling. So any surviving `requires_human`/
-  // `prohibits` policy, whatever its own rule text is about, blocks the
-  // shortcut and falls through to the ordinary path below -- conservative on
-  // purpose, never a guess at whether it would really have covered this one.
-  const hasBlockingCommandPolicy = commandScopedPolicies.some((policy) => {
-    const kind = migratePolicyKind(policy.kind)
-    return kind === 'requires_human' || kind === 'prohibits'
-  })
-  const localGitAllow = mentionOnly || hasBlockingCommandPolicy ? { qualifies: false as const } : qualifiesForLocalGitAllow({ command, cwd })
-  if (localGitAllow.qualifies) {
+  //   - When no command-scoped policy survives filtering at all, there is
+  //     truly nothing for Jev to judge -- allow locally, right here, with no
+  //     Jev call and no cache read/write, exactly as before Option D.
+  //   - When at least one does, this falls through to the ordinary
+  //     apiKey/cache/askJev path below, WITH `localGitAllow` threaded into
+  //     askJev: the risk axes never decide for a qualifying command, but the
+  //     policy coverage question still does (see decisions.ts's
+  //     decideGateAction and its own `localAllowQualifies` option).
+  const localGitAllow: LocalGitAllowResult = mentionOnly ? { qualifies: false } : qualifiesForLocalGitAllow({ command, cwd })
+  if (localGitAllow.qualifies && commandScopedPolicies.length === 0) {
     appendGateRecord(cwd, command, 'local-rule', 'allow', null, 'local-allow', null)
     emit('allow', t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush'))
     return
@@ -1215,7 +1240,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, context, cwd)
+  const outcome = await askJev(apiKey as string, command, context, cwd, localGitAllow)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
@@ -1257,9 +1282,11 @@ async function main(): Promise<void> {
   }
   // A jev-sourced verdict was decided by a policy when decideGateAction's
   // own policyId is non-null (see decisions.ts's GateActionResult.policyId);
+  // 'local-allow' when Option D's own structural check decided it instead
+  // (askJev's own viaLocalAllow -- the risk axes never ran this verdict);
   // otherwise the consequence-ceiling risk rule decided it, including a
   // clean 'allow'.
-  const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : 'risk'
+  const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : resolved.viaLocalAllow ? 'local-allow' : 'risk'
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId)
   // AB benchmark: 'deny' never reaches here -- decideGateAction's Jev-sourced
   // verdict is always allow/ask (GateVerdict, decisions.ts) -- but the guard
