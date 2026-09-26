@@ -90,6 +90,13 @@ const DISCARDS: readonly string[] = [
   // restore this real shell -c pair actually runs was invisible.
   'parallel sh -c "git checkout -- x"',
   'flock /tmp/l bash -c "git restore x"',
+  // JEVADV-38 T-lane-a task 1: shellDashCAnywhereIndex only ever recognised a
+  // `-c`-style flag sitting IMMEDIATELY after the shell name -- a real
+  // wrapper (`parallel`, `chroot`) commonly puts one of ITS OWN flags first
+  // (`bash -x -c`, `sh -e -c`), which made the fallback miss the shell
+  // entirely and read the whole thing as a plain, visible mention instead of
+  // the run it actually is.
+  'parallel bash -x -c "git checkout -- x"',
 ];
 
 // None of these touches uncommitted work in the working tree.
@@ -530,4 +537,68 @@ test("someSegmentMatches: ssh/watch/su/script stay limited to command position o
   // immediately followed by a `-c`-style flag, never ssh/watch/su/script.
   const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
   assert.equal(someSegmentMatches('grep -n watch "…git reset --hard…" f', resetClean), "ask");
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-38 (odd/tasks/release-0.5.1.md T-lane-a task 1): shellDashCAnywhereIndex
+// required the `-c`-style flag to sit IMMEDIATELY after the shell name, so a
+// wrapper this file does not model (`parallel`, `chroot`, `flock`) that puts
+// even ONE of its OWN flags before `-c` (`bash -x -c`, `sh -e -c`, bash's
+// `-o pipefail -c`) hid the real shell run behind it entirely -- with no key
+// configured (or Jev unreachable), that read as a silent pass-through, where
+// 0.5.0's own quote-blind regex denied outright. The fix walks the shell's
+// own option run (a plain `-`-flag, or `-o`/`+o` with its separate value)
+// until it finds the `-c`-style flag, instead of requiring it next door.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: a shell option BEFORE -c no longer hides a real force push", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('parallel bash -x -c "git push --force origin main"', forcePush), "deny");
+  assert.equal(someSegmentMatches('chroot / sh -e -c "git push --force origin main"', forcePush), "deny");
+});
+
+test("someSegmentMatches: a shell option BEFORE -c no longer hides a push to a protected branch", () => {
+  const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
+  assert.equal(someSegmentMatches('chroot / sh -e -c "git push origin main"', pushProtected), "deny");
+});
+
+test("someSegmentMatches: bash's own -o <opt> (a value-taking option, not a bare flag) before -c is still walked past", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  assert.equal(someSegmentMatches('flock /tmp/l bash -o pipefail -c "git reset --hard"', resetClean), "deny");
+});
+
+test("discardsUncommittedWork: a login shell's combined -lc flag behind an already-modelled wrapper (timeout) still denies a checkout discard -- unchanged, direct forward search", () => {
+  // Not a someSegmentMatches case: checkout/restore/reset/clean are read
+  // through discardsUncommittedWork's own segmentDiscards, never through one
+  // of gate-bash.ts's regex NEVER_SILENTLY rules. `timeout` is already a
+  // modelled WRAPPER and `-lc` is one combined token, so resolveProgram's own
+  // forward search already finds `zsh` directly -- this never needed
+  // shellDashCAnywhereIndex's fallback at all, kept here as a regression
+  // guard alongside the fallback fix, not a case it introduces.
+  assert.equal(discardsUncommittedWork('timeout 5 zsh -lc "git checkout -- x"'), true);
+});
+
+test("discardsUncommittedWork: a shell option BEFORE -c behind an unmodelled wrapper no longer hides a checkout discard", () => {
+  // segmentDiscards' own fallback (JEVADV-38) reuses the SAME
+  // shellDashCAnywhereIndex helper someSegmentMatches' scanSegment does, so
+  // this is the discard-detection side of the identical fix -- see this
+  // exact command in the DISCARDS table above.
+  assert.equal(discardsUncommittedWork('parallel bash -x -c "git checkout -- x"'), true);
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-38 T-lane-a task 2: gate-bash.ts's mention tests only asserted
+// 'allow'/'none' at the gate level, which cannot fail on the actual claim --
+// that no-key result is indistinguishable from a silent pass-through around a
+// bug like item 1's own gap. These unit-level pins are the direct check: the
+// gate-level mention cases must resolve to 'ask' (a mention), never 'deny',
+// at the someSegmentMatches layer gate-bash.ts's NEVER_SILENTLY loop reads.
+// ---------------------------------------------------------------------------
+
+test("someSegmentMatches: every gate-level mention case pins to 'ask', not 'deny' -- three-way severity, not just non-null", () => {
+  const resetClean = /git\s+(reset(\s+-\S+)*\s+--hard|clean\s+(-\S*f\S*|--force))/;
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches("sed -i 's/git reset --hard//' f", resetClean), "ask");
+  assert.equal(someSegmentMatches('some-unknown-tool "please never git push --force"', forcePush), "ask");
+  assert.equal(someSegmentMatches('some-tool -n watch "…git reset --hard…" f', resetClean), "ask");
 });

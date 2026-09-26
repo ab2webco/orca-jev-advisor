@@ -676,21 +676,46 @@ test('deny tier: an unreadable config file (a directory instead of a file) keeps
 // above for that same pattern.
 // ---------------------------------------------------------------------------
 
+// odd/tasks/release-0.5.1.md JEVADV-38 T-lane-a task 2: 'allow'/'none' alone
+// cannot fail on the actual claim -- both are exactly what the no-key
+// pass-through around a local-rule BUG (item 1's own gap) would also
+// produce. Every gate-level mention case below also asserts that no
+// local-rule gate record was written at all, the same direct check
+// test('a mention is no longer a local-rule stop...') already established.
+
 test('real subprocess, not a local-rule stop: sed\'s own script argument merely mentions a hard reset', () => {
   const home = makeHome()
   const decision = decisionFor(home, "sed -i 's/git reset --hard//' f")
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
 })
 
 test('real subprocess, not a local-rule stop: an unrecognised program\'s quoted argument merely mentions a force push', () => {
   const home = makeHome()
   const decision = decisionFor(home, 'some-unknown-tool "please never git push --force"')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
 })
 
 test('real subprocess, still DENIES: a wrapper (su -c) really running a hard reset stays command position', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'su -c "git reset --hard"'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// odd/tasks/release-0.5.1.md JEVADV-38 T-lane-a task 1: a shell option
+// BEFORE its own -c (an unmodelled wrapper's flag, `bash -x -c`/`sh -e -c`)
+// used to hide the real run entirely -- with no key configured, that read as
+// a silent pass-through where 0.5.0's own quote-blind regex denied outright.
+test('real subprocess, still DENIES: a shell option before -c behind an unmodelled wrapper still runs a force push', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'parallel bash -x -c "git push --force origin main"'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('real subprocess, still DENIES: bash\'s own -o <opt> before -c behind an unmodelled wrapper still runs a hard reset', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'flock /tmp/l bash -o pipefail -c "git reset --hard"'))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
@@ -713,12 +738,14 @@ test('real subprocess, not stopped by a local rule at all: git grep\'s pattern i
   const home = makeHome()
   const decision = decisionFor(home, 'git grep "git reset --hard"')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+  assert.equal(existsSync(gateLogPath(home)), false, 'a known data position must never reach the local-rule record path')
 })
 
 test('real subprocess, not stopped by a local rule at all: a generic --body flag on an unrecognised program is a known data position', () => {
   const home = makeHome()
   const decision = decisionFor(home, 'orca plane create --body "plan: run git reset --hard origin/main next"')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+  assert.equal(existsSync(gateLogPath(home)), false, 'a known data position must never reach the local-rule record path')
 })
 
 // ---------------------------------------------------------------------------
@@ -736,6 +763,7 @@ test('real subprocess, not a local-rule stop: a wrapper NAME sitting inside anot
   // same case for that one instead.
   const decision = decisionFor(home, 'some-tool -n watch "…git reset --hard…" f')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
+  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
 })
 
 // ---------------------------------------------------------------------------

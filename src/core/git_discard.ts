@@ -1025,6 +1025,20 @@ function execHandOffIndex(texts: readonly string[], index: number, name: string)
   return next !== undefined && RECURSIVE_COMMAND_PROGRAMS.has(programName(stripLeadingGroupers(next))) ? dashDash + 1 : -1;
 }
 
+/** A real shell's own OPTION token: a short cluster starting with `-`
+ *  (`-x`, `-e`, `-c`, `-lc`, ...) or bash's `+`-style toggle (`+x`, `+o`) --
+ *  as opposed to the shell's own POSITIONAL argument (its script, or a file
+ *  to run). Used by shellDashCAnywhereIndex to walk PAST every flag an
+ *  unmodelled wrapper (`parallel`, `flock`, `chroot`, ...) puts on the shell
+ *  BEFORE its `-c` (`bash -x -c '...'`, `sh -e -c '...'`). */
+function isShellOptionToken(token: string): boolean {
+  return /^[-+][a-zA-Z]+$/.test(token);
+}
+
+/** Shell options that consume a separate value rather than being a bare
+ *  toggle: bash's `-o <opt>` / `+o <opt>` (`bash -o pipefail -c '...'`). */
+const SHELL_OPTIONS_WITH_VALUE = new Set(["-o", "+o"]);
+
 /**
  * The index right after a real shell's `-c`-style flag, found ANYWHERE in
  * `texts` -- not only at the segment's own resolved command position -- or
@@ -1039,9 +1053,22 @@ function execHandOffIndex(texts: readonly string[], index: number, name: string)
  * all (a nice/ionice pair, or a `find -exec`/`--` hand-off, already resolves
  * the shell without this).
  *
+ * JEVADV-38 (odd/tasks/release-0.5.1.md T-lane-a task 1): the shell's own
+ * `-c` almost never sits bare next to its name in a realistic invocation --
+ * a wrapper this file does not model routinely puts ITS OWN flag first
+ * (`parallel bash -x -c '...'`, `chroot / sh -e -c '...'`, bash's own
+ * `-o pipefail -c '...'`). Requiring `-c` immediately after the shell name
+ * missed every one of those: with no key configured (or Jev unreachable)
+ * that read as a silent pass-through, where 0.5.0's own quote-blind regex
+ * denied outright. This now walks the shell's own OPTION RUN -- every
+ * consecutive token that is one of its own flags, `-o`/`+o` consuming its
+ * separate value -- accepting a `-c`-style flag found ANYWHERE in that run,
+ * not only right next to the shell name.
+ *
  * Deliberately narrower than resolveProgram's own forward search:
- *   - it requires the `-c`-style flag IMMEDIATELY after the shell token, not
- *     merely somewhere later in the segment;
+ *   - the `-c`-style flag must be found within the shell's OWN option run --
+ *     a non-option token (the shell's script, or some other program's own
+ *     argument) ends the run for that shell occurrence without a match;
  *   - it only ever recognises a REAL shell name (SHELLS) -- never
  *     ssh/watch/su/script, which stay limited to the segment's own command
  *     position or a known exec hand-off (see RECURSIVE_COMMAND_PROGRAMS/
@@ -1051,8 +1078,13 @@ function execHandOffIndex(texts: readonly string[], index: number, name: string)
  */
 function shellDashCAnywhereIndex(texts: readonly string[]): number {
   for (let i = 0; i < texts.length - 1; i += 1) {
-    if (SHELLS.has(programName(stripLeadingGroupers(texts[i] ?? ""))) && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(texts[i + 1] ?? "")) {
-      return i + 2;
+    if (!SHELLS.has(programName(stripLeadingGroupers(texts[i] ?? "")))) continue;
+    let j = i + 1;
+    while (j < texts.length) {
+      const token = texts[j] ?? "";
+      if (/^-[a-zA-Z]*c[a-zA-Z]*$/.test(token)) return j + 1;
+      if (!isShellOptionToken(token)) break;
+      j += SHELL_OPTIONS_WITH_VALUE.has(token) ? 2 : 1;
     }
   }
   return -1;
