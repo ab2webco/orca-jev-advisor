@@ -620,6 +620,13 @@ const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED
  *  needs none: the notice renders straight from policySeedNoticeStatus. */
 const SCENARIO_CLICKS = { seeds: { panel: 'config.html', selector: '#import-policy-seeds' } }
 
+// JEVADV-41 -- config.html now shows one section-group at a time behind
+// role="tab" buttons inside #config-tabbar (see that element's own comment
+// in the panel). Each tab is its own screen, so this harness photographs
+// every one of them rather than only whichever tab happens to be active by
+// default ('general').
+const CONFIG_TAB_KEYS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+
 /**
  * Impersonates the host bridge. Installed before the panel's own script runs,
  * because the panel starts calling immediately on load.
@@ -704,26 +711,56 @@ async function main() {
             await page.waitForTimeout(SETTLE_MS)
             const click = SCENARIO_CLICKS[scenario]
             if (click && click.panel === panel) {
+              // JEVADV-41: the target may live inside a tab-panel that is
+              // not the active one (import-policy-seeds is in Policies,
+              // not the default General tab) -- switch to it first, or
+              // Playwright's actionability check times out against a
+              // button hidden by its own tab-panel's [hidden].
+              const tabOfSelector = await page.evaluate((selector) => {
+                const target = document.querySelector(selector)
+                const panelEl = target && target.closest ? target.closest('.tab-panel') : null
+                return panelEl ? panelEl.id.replace(/^panel-/, '') : null
+              }, click.selector)
+              if (tabOfSelector) {
+                await page.click(`#tab-${tabOfSelector}`)
+                await page.waitForTimeout(300)
+              }
               await page.click(click.selector)
               await page.waitForTimeout(SETTLE_MS)
             }
 
-            const overflow = await page.evaluate(() => ({
-              scrollWidth: document.documentElement.scrollWidth,
-              clientWidth: document.documentElement.clientWidth
-            }))
-            if (overflow.scrollWidth > overflow.clientWidth) {
-              overflows.push(
-                `${scenario}/${panel}/${theme}/${width}: content is ${overflow.scrollWidth}px wide`
-              )
+            // JEVADV-41: config.html now shows one section-group at a time
+            // behind #config-tabbar; each tab is its own screen and gets its
+            // own screenshot and its own overflow check. board.html has no
+            // tabs, so tabKeys is a single `null` entry and behaves exactly
+            // as before.
+            const tabKeys = panel === 'config.html' ? CONFIG_TAB_KEYS : [null]
+            for (const tabKey of tabKeys) {
+              if (tabKey) {
+                await page.click(`#tab-${tabKey}`)
+                await page.waitForTimeout(300)
+              }
+
+              const overflow = await page.evaluate(() => ({
+                scrollWidth: document.documentElement.scrollWidth,
+                clientWidth: document.documentElement.clientWidth
+              }))
+              const label = tabKey
+                ? `${scenario}/${panel}/${theme}/${width}/${tabKey}`
+                : `${scenario}/${panel}/${theme}/${width}`
+              if (overflow.scrollWidth > overflow.clientWidth) {
+                overflows.push(`${label}: content is ${overflow.scrollWidth}px wide`)
+              }
+
+              const name = tabKey
+                ? `${scenario}-${panel.replace('.html', '')}-${theme}-${width}-${tabKey}.png`
+                : `${scenario}-${panel.replace('.html', '')}-${theme}-${width}.png`
+              await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
+              shots += 1
             }
             if (failures.length > 0) {
               overflows.push(`${scenario}/${panel}/${theme}/${width}: script error: ${failures[0]}`)
             }
-
-            const name = `${scenario}-${panel.replace('.html', '')}-${theme}-${width}.png`
-            await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
-            shots += 1
             await context.close()
           }
         }

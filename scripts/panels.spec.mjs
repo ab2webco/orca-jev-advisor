@@ -228,13 +228,42 @@ async function openBoardPanel (storage, locale = 'en', colorScheme = 'light') {
   return { browser, page, errors }
 }
 
-async function openPanel (storage, locale = 'en', colorScheme = 'light') {
+// `viewport` defaults to what every existing test in this file already
+// assumed before JEVADV-41 -- the tab-height test below is the first one
+// that needs a narrower one (320px, the layout every .row/.row.two/.row.four
+// rule collapses to a single column at, and so the tallest one).
+async function openPanel (storage, locale = 'en', colorScheme = 'light', viewport = { width: 1440, height: 1200 }) {
   const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
+  const context = await browser.newContext({ viewport, colorScheme, locale: playwrightLocaleFor(locale) })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
   await page.addInitScript(hostBridge, storage)
+  await page.goto(`file://${await renderPanel()}`)
+  await page.waitForTimeout(SETTLE_MS)
+  return { browser, page, errors }
+}
+
+/** Same host simulation as openPanel, but with `window.localStorage`
+ *  replaced by a getter that throws -- JEVADV-41's tab memory must not be
+ *  able to break the panel on a machine where storage access itself throws
+ *  (private browsing, a disabled/full quota, or -- in production -- Orca's
+ *  own sandboxed opaque-origin iframe, where it always does; see the
+ *  panel's own <head> comment). The override has to be an initScript, run
+ *  before config.html's own script executes, not something set after
+ *  goto -- by then the panel's first paint has already happened. */
+async function openPanelWithThrowingStorage (storage) {
+  const browser = await chromium.launch()
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, locale: 'en-US' })
+  const page = await context.newPage()
+  const errors = []
+  page.on('pageerror', (error) => errors.push(String(error.message)))
+  await page.addInitScript(hostBridge, storage)
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', {
+      get () { throw new Error('storage disabled for this test') }
+    })
+  })
   await page.goto(`file://${await renderPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
   return { browser, page, errors }
@@ -310,6 +339,9 @@ test('a refresh that could not reach the CLI says so, instead of reporting nothi
     __refreshResult: { at: new Date().toISOString(), ok: false, proposed: null, reason: 'derivation-failed', detail: 'spawn orca ENOENT' }
   })
   try {
+    // JEVADV-41: refresh-catalog now lives inside the Destinations tab,
+    // hidden by default (General is).
+    await page.click('#tab-destinations')
     await page.click('#refresh-catalog')
     await page.waitForFunction(() => {
       const said = document.getElementById('catalog-refresh-said')
@@ -331,6 +363,7 @@ test('a refresh that genuinely adds nothing keeps saying exactly that', { skip: 
     __refreshResult: { at: new Date().toISOString(), ok: true, proposed: 0, reason: null, detail: null }
   })
   try {
+    await page.click('#tab-destinations')
     await page.click('#refresh-catalog')
     await page.waitForFunction(() => {
       const said = document.getElementById('catalog-refresh-said')
@@ -384,6 +417,7 @@ test('clicking "Add ticked" with a ticked row but no kind chosen refuses, and se
     catalogProposalsStatus: CATALOG_PROPOSAL_FIXTURE
   })
   try {
+    await page.click('#tab-destinations')
     await page.click('#catalog-proposals input[data-catalog-proposal-id="cineco-backend"]')
     await page.click('#add-catalog-proposals')
     await page.waitForFunction(() => {
@@ -404,6 +438,7 @@ test('ticking a proposal, picking a kind, and clicking "Add ticked" sends exactl
     __proposalAcceptResult: { added: 1 }
   })
   try {
+    await page.click('#tab-destinations')
     await page.click('#catalog-proposals input[data-catalog-proposal-id="cineco-backend"]')
     await page.selectOption('#catalog-proposals select[data-catalog-proposal-kind="cineco-backend"]', 'client-site')
     await page.click('#add-catalog-proposals')
@@ -568,6 +603,8 @@ test('clicking the notice\'s review button sends a policy-seed-import request wi
     policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, at: new Date().toISOString() }
   })
   try {
+    // JEVADV-41: the policy-seed notice lives inside the Policies tab.
+    await page.click('#tab-policies')
     await page.click('#policy-seed-notice-review')
     await page.waitForFunction(() => !!window.__written.policySeedImportRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.policySeedImportRequest)
@@ -584,6 +621,7 @@ test('clicking the notice\'s dismiss button sends a policy-seed-dismiss request'
     policySeedNoticeStatus: { ...BASELINE_UPDATE_DECISION, at: new Date().toISOString() }
   })
   try {
+    await page.click('#tab-policies')
     await page.click('#policy-seed-notice-dismiss')
     await page.waitForFunction(() => !!window.__written.policySeedDismissRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.policySeedDismissRequest)
@@ -745,6 +783,8 @@ test('adding a model with a duplicate id is refused, and a valid one lands unran
   const models = [modelRow({ id: 'existing', label: 'Existing', rank: 1, available: true })]
   const { browser, page } = await openPanel({ models })
   try {
+    // JEVADV-41: the models editor lives inside the Models tab.
+    await page.click('#tab-models')
     await page.fill('#models-add-id', 'existing')
     await page.fill('#models-add-label', 'Existing again')
     await page.fill('#models-add-provider', 'anthropic')
@@ -786,6 +826,7 @@ test('the "Rank this" action grows the ladder without demoting anyone, and renum
   ]
   const { browser, page, errors } = await openPanel({ models })
   try {
+    await page.click('#tab-models')
     const entries = page.locator('#models-ladder-list .entry')
     await entries.nth(2).getByRole('button', { name: /rank this|clasificar/i }).click()
     const names = await page.evaluate(() =>
@@ -805,6 +846,7 @@ test('adding a model then ranking it grows the ladder from N to N+1 with ranks 1
   const models = [modelRow({ id: 'a', label: 'A', rank: 1, available: true })]
   const { browser, page } = await openPanel({ models })
   try {
+    await page.click('#tab-models')
     await page.fill('#models-add-id', 'new-model')
     await page.fill('#models-add-label', 'New Model')
     await page.fill('#models-add-provider', 'anthropic')
@@ -828,6 +870,7 @@ test('an unranked entry has no move up/down of its own -- only "Rank this" gets 
   ]
   const { browser, page } = await openPanel({ models })
   try {
+    await page.click('#tab-models')
     const unrankedEntry = page.locator('#models-ladder-list .entry').nth(1)
     const upDisabled = await unrankedEntry.getByRole('button', { name: /move up|subir/i }).isDisabled()
     const downDisabled = await unrankedEntry.getByRole('button', { name: /move down|bajar/i }).isDisabled()
@@ -846,6 +889,7 @@ test('move down swaps two ranked rows, and mark-unranked/remove renumber the res
   ]
   const { browser, page } = await openPanel({ models })
   try {
+    await page.click('#tab-models')
     const entries = () => page.locator('#models-ladder-list .entry')
     await entries().nth(0).getByRole('button', { name: /move down|bajar/i }).click()
     let names = await page.evaluate(() =>
@@ -914,6 +958,7 @@ test('clicking the model notice\'s apply button sends only the ticked ids, none 
   }
   const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
   try {
+    await page.click('#tab-models')
     const preTicked = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#models-seed-notice-items input[type=checkbox]')).map((b) => b.checked))
     assert.deepEqual(preTicked, [false], 'the notice preselected an item nobody ticked')
@@ -941,6 +986,7 @@ test('clicking the model notice\'s dismiss button sends a dismiss request with n
   }
   const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
   try {
+    await page.click('#tab-models')
     await page.click('#models-seed-notice-dismiss')
     await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelsSeedRequest)
@@ -987,6 +1033,7 @@ test('Apply and Dismiss are both disabled while an apply request is in flight, t
   }
   const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
   try {
+    await page.click('#tab-models')
     await holdSeedRequest(page)
     await page.check('#models-seed-notice-items input[type=checkbox]')
     await page.click('#models-seed-notice-apply')
@@ -1018,6 +1065,7 @@ test('Apply and Dismiss are both disabled while a dismiss request is in flight, 
   }
   const { browser, page } = await openPanel({ models: [], modelsSeedNotice: status })
   try {
+    await page.click('#tab-models')
     await holdSeedRequest(page)
     await page.click('#models-seed-notice-dismiss')
     await page.waitForFunction(() => window.__heldSeedRequest !== undefined, undefined, { timeout: 25000 })
@@ -1054,6 +1102,7 @@ test('a dirty ladder blocks Apply and shows the inline message, without sending 
   }
   const { browser, page } = await openPanel({ models, modelsSeedNotice: status })
   try {
+    await page.click('#tab-models')
     await page.locator('#models-ladder-list .entry').nth(0)
       .getByRole('button', { name: /rank this|clasificar/i }).click()
 
@@ -1090,6 +1139,7 @@ test('"Discard my edits" reloads the ladder from storage, clears the dirty flag,
   }
   const { browser, page } = await openPanel({ models, modelsSeedNotice: status })
   try {
+    await page.click('#tab-models')
     await page.locator('#models-ladder-list .entry').nth(0)
       .getByRole('button', { name: /rank this|clasificar/i }).click()
 
@@ -1215,6 +1265,228 @@ test('the Agent model hooks line renders only when the field exists, and never a
     assert.deepEqual(withoutField.errors, [])
   } finally {
     await withoutField.browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-41 (part A) -- config.html shows one section-group at a time behind
+// an in-panel role="tablist" (#config-tabbar), so a long settings document
+// with many open .entry rows never reports a height past Orca's own
+// PANEL_CONTENT_HEIGHT_MAX_PX clamp (8000, orca-oss plugin-panel-bridge.ts)
+// -- past it, the panel's iframe grows its own inner scrollbar on top of
+// Orca's Settings page scroll, which is two scrollbars.
+// ---------------------------------------------------------------------------
+
+/** One row from SCENARIOS.ready, repeated with a suffixed id -- the exact
+ *  field set that fixture already uses, never a new one invented for this
+ *  test. */
+function repeatRow (row, suffix) {
+  return { ...row, id: `${row.id}-${suffix}` }
+}
+
+/** 40 policies / 30 destinations, shaped exactly like SCENARIOS.ready's own
+ *  three policies / two destinations -- large enough that, on the old
+ *  one-long-page layout with every .entry open at once, this document
+ *  cleared Orca's height clamp by a wide margin (see the recorded RED
+ *  measurement in this task's own report). */
+function largeReadyStorage () {
+  const basePolicies = SCENARIOS.ready.policies
+  const baseDestinations = SCENARIOS.ready.catalog.destinations
+  const policies = []
+  for (let i = 0; i < 40; i++) policies.push(repeatRow(basePolicies[i % basePolicies.length], i))
+  const destinations = []
+  for (let i = 0; i < 30; i++) destinations.push(repeatRow(baseDestinations[i % baseDestinations.length], i))
+  return { ...SCENARIOS.ready, policies, catalog: { destinations } }
+}
+
+test(
+  "a large realistic config stays under Orca's own panel height clamp on every tab, at the tallest (320px) layout",
+  { skip: chromium && SCENARIOS ? false : 'playwright is not installed, or screenshot-panels.mjs could not be imported' },
+  async () => {
+    const HEIGHT_CLAMP = 8000
+    const { browser, page, errors } = await openPanel(largeReadyStorage(), 'en', 'light', { width: 320, height: 900 })
+    try {
+      const tabKeys = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('#config-tabbar [role="tab"]')).map((b) => b.id.replace(/^tab-/, '')))
+
+      // No tabs at all is the pre-fix shape this test must fail against:
+      // everything lives on the one visible page already, so "every tab"
+      // collapses to the whole document.
+      const groups = tabKeys.length > 0 ? tabKeys : [null]
+      const measured = []
+      for (const key of groups) {
+        if (key) {
+          await page.click(`#tab-${key}`)
+          await page.waitForTimeout(200)
+        }
+        // "trying to open every entry in each list" -- a real click on
+        // every visible <summary>, in order, the same way a person would.
+        // On the fixed panel this leaves at most one entry open per list
+        // (JEVADV-41's other invariant, closeSiblingEntries); on the base
+        // panel nothing closes anything, so all 70 stay open at once.
+        const summaryCount = await page.locator('details.entry > summary:visible').count()
+        for (let i = 0; i < summaryCount; i++) {
+          await page.locator('details.entry > summary:visible').nth(i).click()
+        }
+        const height = await page.evaluate(() => document.documentElement.scrollHeight)
+        measured.push({ tab: key, height })
+      }
+
+      for (const { tab, height } of measured) {
+        assert.ok(height < HEIGHT_CLAMP,
+          `tab ${tab === null ? '(none -- #config-tabbar is missing)' : tab} reports ${height}px, ` +
+          `at or past Orca's own ${HEIGHT_CLAMP}px clamp -- every measured tab: ${JSON.stringify(measured)}`)
+      }
+      assert.deepEqual(errors, [], 'the panel threw while rendering a large config')
+    } finally {
+      await browser.close()
+    }
+  }
+)
+
+test('clicking a tab shows only its own sections, and the save button stays visible on every tab', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    const keys = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+    for (const key of keys) {
+      await page.click(`#tab-${key}`)
+      await page.waitForTimeout(150)
+      const state = await page.evaluate((activeKey) => {
+        const keys = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+        return {
+          selected: keys.filter((k) => document.getElementById(`tab-${k}`).getAttribute('aria-selected') === 'true'),
+          visiblePanels: keys.filter((k) => !document.getElementById(`panel-${k}`).hidden),
+          saveVisible: document.getElementById('save-all').offsetParent !== null
+        }
+      }, key)
+      assert.deepEqual(state.selected, [key], `exactly tab-${key} should be aria-selected=true`)
+      assert.deepEqual(state.visiblePanels, [key], `exactly panel-${key} should be visible, saw ${JSON.stringify(state.visiblePanels)}`)
+      assert.equal(state.saveVisible, true, `the save button must stay visible while tab ${key} is active`)
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('arrow keys move focus and selection between tabs, wrapping at both ends', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-general')
+    await page.focus('#tab-general')
+
+    await page.keyboard.press('ArrowRight')
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-destinations')
+    assert.equal(await page.evaluate(() => document.getElementById('tab-destinations').getAttribute('aria-selected')), 'true')
+    assert.equal(await page.evaluate(() => document.getElementById('panel-destinations').hidden), false)
+
+    await page.keyboard.press('ArrowLeft')
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-general')
+
+    // Wrapping: ArrowLeft off the first tab lands on the last one, and
+    // ArrowRight off the last tab lands back on the first.
+    await page.keyboard.press('ArrowLeft')
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-rules')
+    await page.keyboard.press('ArrowRight')
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-general')
+
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a validation error on a field inside a hidden tab switches back to that tab and focuses the field', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ config: { logMaxEntries: 500 } })
+  try {
+    // logMaxEntries' own min="1" is the one real, already-declared HTML5
+    // constraint in this whole panel (see firstInvalidTabField's own
+    // comment) -- 0 fails it without any new business rule invented here.
+    await page.fill('#logMaxEntries', '0')
+    await page.click('#tab-destinations')
+    await page.waitForTimeout(150)
+    assert.equal(await page.evaluate(() => document.getElementById('panel-general').hidden), true,
+      'the field is not actually hidden yet, so this assertion proves nothing')
+
+    await page.click('#save-all')
+    await page.waitForTimeout(300)
+
+    assert.equal(await page.evaluate(() => document.getElementById('tab-general').getAttribute('aria-selected')), 'true',
+      'save-all must switch back to the tab holding the invalid field')
+    assert.equal(await page.evaluate(() => document.getElementById('panel-general').hidden), false)
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'logMaxEntries',
+      'the invalid field itself must end up focused, not just its tab')
+    assert.equal(await page.evaluate(() => window.__written.config), undefined,
+      'a blocked save must never reach the host writes')
+
+    const said = await page.evaluate(() => document.getElementById('save-said').innerText)
+    assert.match(said, /invalid value/i)
+
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('within one list, opening an entry closes every other open entry in that same list', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const policies = [
+    { id: 'p1', rule: 'Rule one', kind: 'permits' },
+    { id: 'p2', rule: 'Rule two', kind: 'permits' },
+    { id: 'p3', rule: 'Rule three', kind: 'permits' },
+  ]
+  const { browser, page, errors } = await openPanel({
+    policies,
+    catalog: { destinations: [{ id: 'app', label: 'app', kind: 'project', worktreePath: '/app' }] }
+  })
+  try {
+    await page.click('#tab-policies')
+    await page.waitForTimeout(150)
+
+    const openStates = () => page.evaluate(() =>
+      Array.from(document.querySelectorAll('#policies-list > details.entry')).map((d) => d.open))
+
+    await page.locator('#policies-list details.entry > summary').nth(0).click()
+    assert.deepEqual(await openStates(), [true, false, false])
+
+    await page.locator('#policies-list details.entry > summary').nth(1).click()
+    assert.deepEqual(await openStates(), [false, true, false])
+
+    // A newly added entry opens and becomes the one open entry.
+    await page.click('#tab-destinations')
+    await page.waitForTimeout(100)
+    await page.click('#tab-policies')
+    await page.waitForTimeout(100)
+    await page.click('#add-policy-row')
+    const statesAfterAdd = await openStates()
+    assert.deepEqual(statesAfterAdd.slice(0, 3), [false, false, false], 'adding a row must close every existing open row in the same list')
+    assert.equal(statesAfterAdd[3], true, 'the newly added row must itself be open')
+
+    // Opening a policy entry must never touch the catalog list -- a
+    // separate list, its own invariant.
+    await page.click('#tab-destinations')
+    await page.waitForTimeout(100)
+    const catalogOpenBefore = await page.evaluate(() => document.querySelector('#catalog-list details.entry').open)
+    assert.equal(catalogOpenBefore, false, 'the catalog entry must not have been opened by policy-list activity')
+
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a machine where localStorage itself throws (Orca\'s sandboxed opaque-origin iframe) still renders the default tab', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanelWithThrowingStorage({})
+  try {
+    assert.equal(await page.evaluate(() => document.getElementById('tab-general').getAttribute('aria-selected')), 'true')
+    assert.equal(await page.evaluate(() => document.getElementById('panel-general').hidden), false)
+    // Switching still has to work for this view even though nothing about
+    // it can be remembered.
+    await page.click('#tab-models')
+    await page.waitForTimeout(150)
+    assert.equal(await page.evaluate(() => document.getElementById('panel-models').hidden), false)
+    assert.deepEqual(errors, [], 'a throwing localStorage must never surface as an uncaught panel error')
+  } finally {
+    await browser.close()
   }
 })
 

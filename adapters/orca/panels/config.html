@@ -209,6 +209,31 @@
         letter-spacing: 0.04em; padding: 1px 6px; margin-left: 6px; border-radius: 999px;
         border: 1px solid var(--border, var(--fb-border)); color: var(--muted-foreground, var(--fb-muted-foreground)); }
       #models-section .models-row-fields { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      /* JEVADV-41 -- the in-panel tablist that keeps this document under
+         Orca's PANEL_CONTENT_HEIGHT_MAX_PX clamp (see the comment above
+         #config-tabbar in the body). flex-wrap is what keeps this from
+         ever needing horizontal scroll at 320px: a tab that does not fit
+         the row wraps to the next line instead of overflowing it. */
+      .tabbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      .tab {
+        border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0;
+        background: none; padding: 7px 12px; font: inherit; font-size: 12px; font-weight: 500;
+        color: var(--muted-foreground, var(--fb-muted-foreground));
+      }
+      .tab:hover { color: var(--foreground, var(--fb-foreground)); background: var(--accent, var(--fb-accent)); }
+      /* The selected tab needs to read clearly in both themes without a new
+         color token: a filled background (--secondary) plus heavier weight
+         plus a solid 2px underline in the current foreground color, which
+         still has real contrast against --secondary in dark mode where
+         --border alone (rgb(255 255 255 / 0.07)) would not. */
+      .tab[aria-selected="true"] {
+        color: var(--foreground, var(--fb-foreground)); font-weight: 600;
+        background: var(--secondary, var(--fb-secondary));
+        border-color: var(--border, var(--fb-border));
+        box-shadow: inset 0 -2px 0 var(--foreground, var(--fb-foreground));
+      }
+      .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      .tab-panel[hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -218,6 +243,28 @@
       </div>
       <p class="sub" data-i18n="app.subtitle"></p>
 
+      <!--
+        JEVADV-41. Orca clamps a panel's reported height at
+        PANEL_CONTENT_HEIGHT_MAX_PX = 8000 (orca-oss
+        plugin-panel-bridge.ts) with no manifest field to raise it, and a
+        long single-page settings document plus several open .entry rows
+        used to clear that easily -- past it, the iframe grows its own
+        inner scrollbar on top of Orca's Settings page scroll, which is
+        two scrollbars. One section-group is shown at a time behind a
+        real tablist instead; see activateTab below. The save button
+        (save-section, at the very end) stays outside every tab-panel so
+        it is never hidden.
+      -->
+      <div class="tabbar" id="config-tabbar" role="tablist" data-i18n-aria-label="tabs.groupLabel">
+        <button type="button" class="tab" id="tab-general" role="tab" aria-controls="panel-general" aria-selected="true" data-i18n="tabs.general"></button>
+        <button type="button" class="tab" id="tab-destinations" role="tab" aria-controls="panel-destinations" aria-selected="false" tabindex="-1" data-i18n="tabs.destinations"></button>
+        <button type="button" class="tab" id="tab-policies" role="tab" aria-controls="panel-policies" aria-selected="false" tabindex="-1" data-i18n="tabs.policies"></button>
+        <button type="button" class="tab" id="tab-models" role="tab" aria-controls="panel-models" aria-selected="false" tabindex="-1" data-i18n="tabs.models"></button>
+        <button type="button" class="tab" id="tab-modskills" role="tab" aria-controls="panel-modskills" aria-selected="false" tabindex="-1" data-i18n="tabs.modSkills"></button>
+        <button type="button" class="tab" id="tab-rules" role="tab" aria-controls="panel-rules" aria-selected="false" tabindex="-1" data-i18n="tabs.rules"></button>
+      </div>
+
+      <div class="tab-panel" id="panel-general" role="tabpanel" aria-labelledby="tab-general">
       <section id="secret-section">
         <h2 data-i18n="secret.heading"></h2>
         <div class="sub" id="secret-status" style="padding:0 0 6px"></div>
@@ -255,7 +302,9 @@
             <input id="logMaxEntries" type="number" step="1" min="1" /></div>
         </div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-destinations" role="tabpanel" aria-labelledby="tab-destinations" hidden>
       <section id="catalog-section">
         <h2 data-i18n="catalog.heading"></h2>
         <p class="hint" data-i18n="catalog.hint"></p>
@@ -269,7 +318,9 @@
         <p class="hint" data-i18n="catalog.refreshHint"></p>
         <p class="hint" data-i18n="catalog.proposalsLimitHint"></p>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-policies" role="tabpanel" aria-labelledby="tab-policies" hidden>
       <section id="policies-section">
         <h2 data-i18n="policies.heading"></h2>
         <p class="hint" data-i18n="policies.hint"></p>
@@ -289,7 +340,9 @@
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-modskills" role="tabpanel" aria-labelledby="tab-modskills" hidden>
       <section id="mod-skills-section">
         <h2 data-i18n="modSkills.heading"></h2>
         <p class="hint" id="mod-skills-hint"></p>
@@ -313,7 +366,9 @@
           <span class="said" id="mod-skills-said"></span>
         </div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
       <!--
         odd/tasks/model-reclassification.md T7. Self-contained on purpose:
         this is the only section a parallel change may not need to touch,
@@ -385,7 +440,9 @@
         <h2 style="margin-top:16px" data-i18n="models.measurementsHeading"></h2>
         <div id="models-measurements"></div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-rules" role="tabpanel" aria-labelledby="tab-rules" hidden>
       <section id="deny-tier-section">
         <h2 data-i18n="denyTier.heading"></h2>
         <p class="hint" data-i18n="denyTier.hint"></p>
@@ -395,6 +452,7 @@
           <span class="said" id="deny-tier-said"></span>
         </div>
       </section>
+      </div>
 
       <section id="save-section">
         <div class="actions">
@@ -417,6 +475,13 @@
       var CATALOG = {
         es: {
           'app.subtitle': 'Configuración del plugin. Todo se guarda a través del host de Orca — nada de esto llama a una URL externa desde este panel.',
+          'tabs.groupLabel': 'Secciones de configuración',
+          'tabs.general': 'General',
+          'tabs.destinations': 'Destinos',
+          'tabs.policies': 'Políticas',
+          'tabs.models': 'Modelos',
+          'tabs.modSkills': 'Mod de skills',
+          'tabs.rules': 'Reglas',
           'secret.heading': 'Clave de TypeSafe',
           'secret.checking': 'Comprobando…',
           'secret.label': 'Nueva clave (se guarda cifrada; nunca se vuelve a mostrar completa)',
@@ -458,7 +523,7 @@
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Mod de skills: no instalado. Usa «Configurar», abajo, para instalarlo.',
           'integration.modOnButMissing': 'Mod de skills: los interruptores de abajo están encendidos, pero el mod no está en el disco — ahora mismo no manda nada. Pulsa «Configurar», abajo, para reinstalarlo; si sigue igual, ejecuta «Advisor: Check configuration» desde la paleta de comandos de Orca una vez, que es lo que despierta al proceso del plugin.',
-          'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code -- una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
+          'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code — una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
           'integration.modRecording': 'Mod de skills: registrando. {{count}} prompts desde {{since}}, el más reciente {{last}}. Esto es modo medición: todavía nada de lo que ve el modelo cambia.',
           'integration.setup': 'Configurar',
           'integration.revert': 'Revertir todo',
@@ -476,7 +541,7 @@
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
           'catalog.refresh': 'Buscar en Orca',
-          'catalog.refreshHint': 'Busca repositorios que Orca ya conoce y que tu catálogo todavía no tiene -- nunca agrega nada por sí solo; lo que encuentre aparece en la lista de arriba.',
+          'catalog.refreshHint': 'Busca repositorios que Orca ya conoce y que tu catálogo todavía no tiene — nunca agrega nada por sí solo; lo que encuentre aparece en la lista de arriba.',
           'catalog.refreshing': 'Buscando…',
           'catalog.refreshFound': 'Se encontraron {{count}} repositorio(s) para proponer, abajo.',
           'catalog.refreshNone': 'No hay repositorios para proponer.',
@@ -578,6 +643,7 @@
           'save.whichCatalog': 'El catálogo de destinos',
           'save.whichPolicies': 'Las políticas',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
+          'save.invalidField': 'Hay un campo con un valor no válido; se cambió a su pestaña y quedó enfocado.',
           'common.timeout': 'Tiempo de espera agotado.',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
@@ -625,20 +691,20 @@
           'models.add': '+ Agregar modelo',
           'models.addMissingFields': 'Completa id, etiqueta, provider y agentModel.',
           'models.addDuplicateId': 'Ya existe un modelo con ese id.',
-          'models.added': 'Agregado, sin clasificar y no disponible -- ajústalo abajo y guarda la escalera.',
+          'models.added': 'Agregado, sin clasificar y no disponible — ajústalo abajo y guarda la escalera.',
           'models.activeLabel': 'Dejar que Jev reescriba el modelo (modo activo)',
           'models.activeHint': 'Apagado (hoy): solo mide. Encendido: reescribe el modelo únicamente cuando la medición ya alcanzó su umbral de listo, Jev está seguro y no está de acuerdo con lo pedido, y la sesión corre en modo bypassPermissions; en cualquier otro caso solo mide, sin cambiar nada.',
           'models.readiness.noData': 'Medición: todavía sin decisiones comparables.',
           'models.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} decisiones comparables. Faltan {{shortfall}}.',
           'models.readiness.rateLow': 'Medición: ya hay {{comparable}} decisiones comparables, pero el acierto es {{matchRate}}%, por debajo del umbral. Encender esto ahora aplicaría un criterio que los datos no respaldan.',
-          'models.readiness.ready': 'Medición: umbral alcanzado -- {{comparable}} decisiones comparables con {{matchRate}}% de acierto. Ya hay con qué calibrar.',
+          'models.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} decisiones comparables con {{matchRate}}% de acierto. Ya hay con qué calibrar.',
           'models.readiness.unknown': 'Medición: sin lectura todavía.',
           'models.saveConfig': 'Guardar modo activo',
           'models.savingConfig': 'Guardando…',
           'models.savedConfig': 'Guardado.',
           'models.seedNoticeText': 'La base de modelos que trae el plugin cambió a la versión {{version}}: {{added}} nuevo(s), {{differing}} distinto(s) de los tuyos.',
-          'models.seedNoticeItemAdded': '{{label}} ({{id}}) -- nuevo',
-          'models.seedNoticeItemChanged': '{{label}} ({{id}}) -- difiere en: {{fields}}',
+          'models.seedNoticeItemAdded': '{{label}} ({{id}}) — nuevo',
+          'models.seedNoticeItemChanged': '{{label}} ({{id}}) — difiere en: {{fields}}',
           'models.seedNoticeApply': 'Aplicar los marcados',
           'models.seedNoticeApplying': 'Aplicando…',
           'models.seedNoticeApplied': 'Listo: {{replaced}} reemplazado(s), {{added}} añadido(s).',
@@ -659,13 +725,20 @@
           'models.measurementsDown': 'Recomendó uno más chico: {{down}}',
           'models.measurementsAgree': 'De acuerdo con lo pedido: {{agree}}',
           'models.measurementsAgreementRate': 'Coincidencia con el modelo pedido: {{rate}}%',
-          'models.measurementsAgreementRateUnknown': 'Coincidencia con el modelo pedido: -- (todavía sin casos comparables)',
+          'models.measurementsAgreementRateUnknown': 'Coincidencia con el modelo pedido: — (todavía sin casos comparables)',
           'models.measurementsApplied': 'Reescrituras aplicadas: {{applied}}',
           'integration.agentModelHookInstalled': 'Hooks de modelo del Agent: puestos en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
           'integration.agentModelHookNotInstalled': 'Hooks de modelo del Agent: no puestos.',
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
+          'tabs.groupLabel': 'Configuration sections',
+          'tabs.general': 'General',
+          'tabs.destinations': 'Destinations',
+          'tabs.policies': 'Policies',
+          'tabs.models': 'Models',
+          'tabs.modSkills': 'Skills mod',
+          'tabs.rules': 'Rules',
           'secret.heading': 'TypeSafe key',
           'secret.checking': 'Checking…',
           'secret.label': 'New key (saved encrypted; never shown in full again)',
@@ -707,7 +780,7 @@
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Skills mod: not installed. Use "Set up", below, to install it.',
           'integration.modOnButMissing': 'Skills mod: the switches below are on, but the mod is not on disk — right now they command nothing. Press "Set up", below, to reinstall it; if it stays this way, run "Advisor: Check configuration" once from Orca\'s command palette, which is what wakes the plugin\'s process.',
-          'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS -- an already-open session will not pick it up. Start a new one to begin recording.',
+          'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS — an already-open session will not pick it up. Start a new one to begin recording.',
           'integration.modRecording': 'Skills mod: recording. {{count}} prompts since {{since}}, most recently {{last}}. This is measurement mode: nothing the model sees changes yet.',
           'integration.setup': 'Set up',
           'integration.revert': 'Revert everything',
@@ -768,8 +841,8 @@
           'policies.remove': 'Remove',
           'policies.importSeeds': 'Import baseline policies',
           'policies.diffHeading': "The version shipped with the plugin differs from yours in {{n}} of the policies you already have. Tick the ones you want to adopt; anything you leave unticked stays as it is.",
-          'policies.diffLabel': '{{id}} -- differs in: {{fields}}',
-          'policies.diffField': '{{field}} -- yours: "{{mine}}" · the plugin\'s: "{{baseline}}"',
+          'policies.diffLabel': '{{id}} — differs in: {{fields}}',
+          'policies.diffField': '{{field}} — yours: "{{mine}}" · the plugin\'s: "{{baseline}}"',
           'policies.diffAllDestinations': '(every destination)',
           'policies.diffApply': 'Adopt the ticked ones',
           'policies.diffNoneChosen': 'Nothing was ticked, so nothing changed.',
@@ -787,7 +860,7 @@
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
           'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
           'modSkills.readiness.rateLow': 'Measurement: {{comparable}} comparable prompts already, but the match rate is {{matchRate}}% against a threshold of {{minMatchRate}}%. Turning these on now would apply a criterion the data does not support.',
-          'modSkills.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
+          'modSkills.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
           'modSkills.readiness.unknown': 'Measurement: nothing read yet.',
           'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
@@ -827,6 +900,7 @@
           'save.whichCatalog': 'The destination catalog',
           'save.whichPolicies': 'The policies',
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
+          'save.invalidField': 'A field has an invalid value; switched to its tab and focused it.',
           'common.timeout': 'Timed out.',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
           'common.hostRejectedRequest': 'The host rejected the request.',
@@ -874,20 +948,20 @@
           'models.add': '+ Add model',
           'models.addMissingFields': 'Fill in id, label, provider and agentModel.',
           'models.addDuplicateId': 'A model with that id already exists.',
-          'models.added': 'Added, unranked and not available -- adjust it below and save the ladder.',
+          'models.added': 'Added, unranked and not available — adjust it below and save the ladder.',
           'models.activeLabel': 'Let Jev rewrite the model (active mode)',
           'models.activeHint': "Off (today): measures only. On: rewrites the model only when measurement has reached its readiness threshold, Jev is confident and disagrees with what was requested, and the session runs in bypassPermissions; any other case only measures, changing nothing.",
           'models.readiness.noData': 'Measurement: no comparable decisions yet.',
           'models.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable decisions. {{shortfall}} to go.',
           'models.readiness.rateLow': 'Measurement: {{comparable}} comparable decisions already, but the match rate is {{matchRate}}%, below the threshold. Turning this on now would apply a criterion the data does not support.',
-          'models.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable decisions at {{matchRate}}% match. There is now something to calibrate from.',
+          'models.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable decisions at {{matchRate}}% match. There is now something to calibrate from.',
           'models.readiness.unknown': 'Measurement: nothing read yet.',
           'models.saveConfig': 'Save active mode',
           'models.savingConfig': 'Saving…',
           'models.savedConfig': 'Saved.',
           'models.seedNoticeText': 'The shipped model baseline changed to version {{version}}: {{added}} new, {{differing}} different from yours.',
-          'models.seedNoticeItemAdded': '{{label}} ({{id}}) -- new',
-          'models.seedNoticeItemChanged': '{{label}} ({{id}}) -- differs in: {{fields}}',
+          'models.seedNoticeItemAdded': '{{label}} ({{id}}) — new',
+          'models.seedNoticeItemChanged': '{{label}} ({{id}}) — differs in: {{fields}}',
           'models.seedNoticeApply': 'Apply the ticked ones',
           'models.seedNoticeApplying': 'Applying…',
           'models.seedNoticeApplied': 'Done: {{replaced}} replaced, {{added}} added.',
@@ -908,7 +982,7 @@
           'models.measurementsDown': 'Recommended a smaller one: {{down}}',
           'models.measurementsAgree': 'Agreed with what was requested: {{agree}}',
           'models.measurementsAgreementRate': 'Agreement with the requested model: {{rate}}%',
-          'models.measurementsAgreementRateUnknown': 'Agreement with the requested model: -- (not enough comparable cases yet)',
+          'models.measurementsAgreementRateUnknown': 'Agreement with the requested model: — (not enough comparable cases yet)',
           'models.measurementsApplied': 'Rewrites applied: {{applied}}',
           'integration.agentModelHookInstalled': 'Agent model hooks: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
           'integration.agentModelHookNotInstalled': 'Agent model hooks: not installed.',
@@ -1574,9 +1648,126 @@
         document.querySelectorAll('[data-i18n-placeholder]').forEach(function (node) {
           node.placeholder = t(node.getAttribute('data-i18n-placeholder'))
         })
+        document.querySelectorAll('[data-i18n-aria-label]').forEach(function (node) {
+          node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria-label')))
+        })
         el('integration-hint').innerHTML = t('integration.hint')
       }
 
+      // ---------- tabs (JEVADV-41) -------------------------------------------
+      // One section-group visible at a time behind a real role="tablist", so
+      // this document's reported height (flowWithContentHeight) stays under
+      // Orca's own PANEL_CONTENT_HEIGHT_MAX_PX clamp (8000, orca-oss
+      // plugin-panel-bridge.ts) even with many open .entry rows -- see the
+      // comment above #config-tabbar in the body. Manual, not module-scoped:
+      // this file loads as a classic <script>, and the models-section script
+      // tag at the end of the body relies on that (it calls elMake, t, etc.
+      // declared up here).
+      var TABS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+      var TAB_STORAGE_KEY = 'jevAdvisor.configPanel.activeTab'
+
+      function tabButton (key) { return el('tab-' + key) }
+      function tabPanel (key) { return el('panel-' + key) }
+
+      /** Whatever this viewer chose last time, or null if storage has
+       *  nothing usable -- never lets a bad/foreign value pick a tab that
+       *  does not exist. */
+      function readStoredTab () {
+        try {
+          var value = window.localStorage.getItem(TAB_STORAGE_KEY)
+          return TABS.indexOf(value) !== -1 ? value : null
+        } catch (e) {
+          // Private browsing, disabled storage, a full quota -- the panel
+          // still has to render its default tab (see activateTab below).
+          return null
+        }
+      }
+
+      function writeStoredTab (key) {
+        try {
+          window.localStorage.setItem(TAB_STORAGE_KEY, key)
+        } catch (e) {
+          // Same as above: not remembered next time, never a broken panel
+          // this time.
+        }
+      }
+
+      /** Shows exactly one tab-panel, updates the tablist's own ARIA state
+       *  (aria-selected, roving tabindex) and remembers the choice.
+       *  `opts.focus` also moves real keyboard focus onto the newly active
+       *  tab button -- used by arrow-key movement, never by a programmatic
+       *  switch such as the validation guard in save-all's click handler,
+       *  which must not steal focus away from the field it is about to
+       *  focus itself. */
+      function activateTab (key, opts) {
+        opts = opts || {}
+        if (TABS.indexOf(key) === -1) key = TABS[0]
+        TABS.forEach(function (candidate) {
+          var isActive = candidate === key
+          var button = tabButton(candidate)
+          var panel = tabPanel(candidate)
+          button.setAttribute('aria-selected', isActive ? 'true' : 'false')
+          button.tabIndex = isActive ? 0 : -1
+          panel.hidden = !isActive
+        })
+        writeStoredTab(key)
+        if (opts.focus) tabButton(key).focus()
+      }
+
+      TABS.forEach(function (key) {
+        tabButton(key).addEventListener('click', function () { activateTab(key) })
+      })
+
+      /** Arrow-key movement between tabs, wrapping at both ends, plus
+       *  Home/End -- the roving-tabindex pattern the ARIA APG describes for
+       *  role="tablist". Moving focus also activates the tab it lands on
+       *  (automatic activation), which is what lets a single keystroke both
+       *  move and switch instead of requiring a second Enter/Space. */
+      el('config-tabbar').addEventListener('keydown', function (event) {
+        var currentKey = null
+        TABS.forEach(function (key) { if (tabButton(key) === document.activeElement) currentKey = key })
+        if (!currentKey) return
+        var index = TABS.indexOf(currentKey)
+        var nextIndex = null
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % TABS.length
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + TABS.length) % TABS.length
+        else if (event.key === 'Home') nextIndex = 0
+        else if (event.key === 'End') nextIndex = TABS.length - 1
+        if (nextIndex === null) return
+        event.preventDefault()
+        activateTab(TABS[nextIndex], { focus: true })
+      })
+
+      /** The first field, in tab order, that fails its own declared HTML5
+       *  constraint (today, only logMaxEntries' min="1") -- scoped to the
+       *  tab-panels so a field the panel never shows (there is none today,
+       *  but a future one) is never reported. There is no other field-level
+       *  validation anywhere in save-all today; this is the one real,
+       *  already-declared constraint this panel has, wired up rather than
+       *  a new business rule invented for the occasion. */
+      function firstInvalidTabField () {
+        var panels = document.querySelectorAll('.tab-panel')
+        for (var i = 0; i < panels.length; i++) {
+          var invalid = panels[i].querySelector(':invalid')
+          if (invalid) return invalid
+        }
+        return null
+      }
+
+      /** Switches to the tab that holds `fieldEl` and focuses it, so a save
+       *  blocked by a validation error on a field inside a HIDDEN tab is
+       *  never invisible. reportValidity() both shows the browser's own
+       *  native validation message and (per spec, in real browsers) moves
+       *  focus -- focus() below is the deterministic backstop a headless
+       *  test can always rely on. */
+      function focusInvalidTabField (fieldEl) {
+        var panel = fieldEl.closest('.tab-panel')
+        if (panel) activateTab(panel.id.replace(/^panel-/, ''))
+        if (typeof fieldEl.reportValidity === 'function') fieldEl.reportValidity()
+        fieldEl.focus()
+      }
+
+      activateTab(readStoredTab() || TABS[0])
 
       // There is no applyLocale here any more. It existed to repaint the panel
       // when the in-panel language switch was used, and the switch is gone:
@@ -1617,9 +1808,24 @@
 
       var catalogListEl = el('catalog-list')
 
+      /** Closes every OTHER open <details class="entry"> directly inside
+       *  `listEl` -- JEVADV-41: at most one entry open per list at a time,
+       *  so a list of 40 keeps its own height to one open row's worth
+       *  rather than every row's, which is the other half (with the tabs
+       *  above) of keeping this document under Orca's height clamp. */
+      function closeSiblingEntries (listEl, exceptEntry) {
+        if (!listEl) return
+        Array.prototype.forEach.call(listEl.children, function (sibling) {
+          if (sibling !== exceptEntry && sibling.tagName === 'DETAILS' && sibling.open) sibling.open = false
+        })
+      }
+
       /** Wraps one editable row in a disclosure whose summary stays in step
-       *  with the id field, so a collapsed list still says what is in it. */
-      function makeCollapsible (isNew, nameOf, metaOf) {
+       *  with the id field, so a collapsed list still says what is in it.
+       *  `listEl` is the row's own list container (catalogListEl/
+       *  policiesListEl) -- passed in, not read from a shared global, so
+       *  opening a row in one list never closes a row in the other. */
+      function makeCollapsible (isNew, nameOf, metaOf, listEl) {
         var entry = elMake('details', 'entry')
         var summary = elMake('summary')
         var name = elMake('span', 'entry-name')
@@ -1628,6 +1834,28 @@
         summary.appendChild(meta)
         entry.appendChild(summary)
         entry.open = isNew
+        // Covers the ordinary case: a person clicking (or activating via
+        // keyboard) a <summary> to expand an already-mounted row. This is a
+        // 'click' listener on the SUMMARY, not a 'toggle' listener on the
+        // <details> -- <details>'s own 'toggle' event fires in a task
+        // QUEUED after the open attribute already flipped (HTML Standard),
+        // which left a real window where two entries both read .open ===
+        // true until that queued task ran (caught by this file's own
+        // Playwright test). A summary's click listener runs during event
+        // dispatch, which for a native <details>/<summary> happens BEFORE
+        // the element's own post-click activation behaviour (the actual
+        // open/close flip) -- so `entry.open` here still holds the
+        // PRE-click value, and closing siblings here is synchronous with
+        // this exact click: by the time it returns, at most one entry in
+        // the list is open, never two, not even for a frame.
+        // The isNew case (a brand-new row, appended still closed relative
+        // to its future siblings) is handled by each caller explicitly
+        // right after it appends the entry, since this element is not
+        // inside listEl yet at construction time -- see
+        // addCatalogRow/addPolicyRow below.
+        summary.addEventListener('click', function () {
+          if (!entry.open) closeSiblingEntries(listEl, entry)
+        })
         entry._sync = function () {
           name.textContent = nameOf() || t('entry.untitled')
           meta.textContent = metaOf()
@@ -1653,7 +1881,8 @@
         var entry = makeCollapsible(
           !row.id,
           function () { return idField.input.value.trim() },
-          function () { return kindSelect.value + ' \u00b7 ' + (labelField.input.value.trim() || row.worktreePath) }
+          function () { return kindSelect.value + ' \u00b7 ' + (labelField.input.value.trim() || row.worktreePath) },
+          catalogListEl
         )
         idField.input.addEventListener('input', function () { entry._sync() })
         labelField.input.addEventListener('input', function () { entry._sync() })
@@ -1715,6 +1944,12 @@
         }
 
         catalogListEl.appendChild(entry)
+        // The entry was not inside catalogListEl yet when makeCollapsible
+        // set entry.open above (isNew case), so there was no click on its
+        // summary to trigger the close-siblings listener. A freshly added
+        // row still has to become the one open entry now that it is
+        // actually in the list.
+        if (entry.open) closeSiblingEntries(catalogListEl, entry)
       }
 
       el('add-catalog-row').addEventListener('click', function () { addCatalogRow() })
@@ -1892,7 +2127,8 @@
             // differently from a global one at a glance, which matters once
             // there are 20 of them.
             return destinations.length > 0 ? base + ' → ' + destinations.join(', ') : base
-          }
+          },
+          policiesListEl
         )
         idField.input.addEventListener('input', function () { entry._sync() })
         ruleField.input.addEventListener('input', function () { entry._sync() })
@@ -1998,6 +2234,11 @@
         }
 
         policiesListEl.appendChild(entry)
+        // Same reasoning as addCatalogRow's own comment above: a freshly
+        // added row is not inside policiesListEl yet when it is opened, so
+        // there was no click on its summary to trigger the close-siblings
+        // listener.
+        if (entry.open) closeSiblingEntries(policiesListEl, entry)
       }
 
       el('add-policy-row').addEventListener('click', function () { addPolicyRow() })
@@ -2610,6 +2851,16 @@
       var currentConfig = null
 
       el('save-all').addEventListener('click', function () {
+        // JEVADV-41: a field that fails its own declared HTML5 constraint
+        // (today, only logMaxEntries' min="1") must never fail silently
+        // behind a hidden tab -- switch to its tab and focus it instead of
+        // writing anything.
+        var invalidField = firstInvalidTabField()
+        if (invalidField) {
+          focusInvalidTabField(invalidField)
+          said(saveSaidEl, t('save.invalidField'), true)
+          return
+        }
         // consequenceCeiling used to be saved from here too, with a guard
         // against persisting a blank/guessed value (see T7 in
         // odd/tasks/panel-worker-wakeup.md). It is read-only now and never
