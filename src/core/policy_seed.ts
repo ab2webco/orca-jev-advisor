@@ -26,6 +26,7 @@
 // ---------------------------------------------------------------------------
 
 import { isRecord } from "../guards.ts";
+import { withNormalizedPolicyScope } from "./decisions.ts";
 import { isPolicyRow, type PolicyRow } from "./store.ts";
 
 /** Records that the shipped policies have been offered to this install once. */
@@ -52,9 +53,18 @@ function seedRowsOf(payload: unknown): readonly unknown[] {
  * Row by row, never all-or-nothing: the same choice getPolicies makes and for
  * the same reason. One malformed row in a hand-edited seed should cost that
  * row, not the other rows around it.
+ *
+ * isPolicyRow (store.ts) is deliberately silent on `scope`'s VALUE -- only
+ * its presence matters there -- so a row with a typo'd or unrecognised
+ * `scope` still survives that filter. withNormalizedPolicyScope
+ * (decisions.ts) is what turns that into ABSENT rather than letting it leak
+ * through as though it satisfied PolicyScope: store.ts's getPolicies and
+ * gate_catalog_mirror.ts's parseMirroredPolicies already normalize this way,
+ * and buildSeedScopeIndex's own map is only as honest as the rows it is
+ * built from (odd/tasks/release-0.5.1.md JEVADV-36).
  */
 export function parseSeedPolicies(payload: unknown): readonly PolicyRow[] {
-  return seedRowsOf(payload).filter(isPolicyRow);
+  return seedRowsOf(payload).filter(isPolicyRow).map(withNormalizedPolicyScope);
 }
 
 /**

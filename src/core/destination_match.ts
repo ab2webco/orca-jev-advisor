@@ -35,14 +35,22 @@ function normalizePath(path: string): string {
  * Finds the destination whose worktreePath is the longest normalized
  * path-segment prefix of cwd (or equals it exactly). Returns null when no
  * destination's worktreePath is a prefix of, or equal to, cwd.
+ *
+ * Generic over the destination element type, so a caller passing a richer
+ * type than the bare MatchableDestination shape (e.g. gate_catalog_mirror.ts's
+ * MirroredDestination, which adds an optional `autonomy` override) gets that
+ * SAME type back, not the narrower MatchableDestination erased -- see
+ * matchDestinationForCwd below, whose own MatchedDestinationForCwd is
+ * generic for exactly this reason (odd/tasks/release-0.5.1.md JEVADV-35,
+ * review-3ca73b9da09b0927 R2).
  */
-export function matchDestination(
+export function matchDestination<D extends MatchableDestination>(
   cwd: string,
-  destinations: readonly MatchableDestination[],
-): MatchableDestination | null {
+  destinations: readonly D[],
+): D | null {
   const normalizedCwd = normalizePath(cwd);
 
-  let best: MatchableDestination | null = null;
+  let best: D | null = null;
   let bestWorktreePathLength = -1;
 
   for (const destination of destinations) {

@@ -30,7 +30,7 @@
 // rather than rejected -- nothing here is asked to reject a SKILL.md, only
 // to get its name and description when it can.
 
-import { isRecord, isString } from "../guards.ts";
+import { isBoolean, isRecord, isString } from "../guards.ts";
 
 // ---------------------------------------------------------------------------
 // Frontmatter reading (pure)
@@ -156,16 +156,32 @@ export function parseSkillFrontmatter(markdown: string): SkillFrontmatter {
 // Inventory scanning (adapter-facing: takes an injected fs facade)
 // ---------------------------------------------------------------------------
 
-/** The subset of `$.fs` the inventory scan needs; a mod passes `$.fs` itself. */
+/**
+ * One entry of `$.fs.list`: the entry itself, a link not followed -- a
+ * symbolic link reports `kind: "other"` with `isLink: true` ($.fs.list
+ * never follows a link; `$.fs.stat` says what it leads to). `isLink` is
+ * optional here, not on the real `FsEntry`, purely so a hand-written test
+ * double that omits it (as this project's did before symlinks mattered)
+ * keeps typechecking; a missing value reads as `false`.
+ */
 export interface SkillFsEntry {
   readonly name: string;
   readonly kind: "file" | "dir" | "other";
+  readonly isLink?: boolean;
 }
 
+/** What `$.fs.stat` resolves with, narrowed to the one field this module needs: what the path leads to, a link followed. */
+export interface SkillFsStat {
+  readonly kind: "file" | "dir" | "other";
+}
+
+/** The subset of `$.fs` the inventory scan needs; a mod passes `$.fs` itself. */
 export interface SkillFs {
   exists(path: string): Promise<boolean>;
   list(path: string): Promise<readonly SkillFsEntry[]>;
   read(path: string): Promise<string>;
+  /** What `path` leads to, a link followed -- mirrors `$.fs.stat` (no `resolve` needed: `kind` alone already answers "is this a directory"). */
+  stat(path: string): Promise<SkillFsStat>;
 }
 
 export type SkillSource = "project" | "user" | "synced";
@@ -181,12 +197,12 @@ export interface SkillSummary {
 export interface SkillInventoryRoots {
   /** `<project>/.claude/skills`, or null when there is no project directory. */
   readonly projectSkillsDir: string | null;
-  /** `<home>/.claude/skills`, or null when HOME is unknown. */
+  /** Claude Code's own user skills folder for this session: `$CLAUDE_CONFIG_DIR/skills` when that variable is set, else `<home>/.claude/skills`; null when neither is known. See adapters/claude/mod-skills/hooks/runtime.ts's `resolveUserSkillsDir`, which computes this for the one real caller. */
   readonly userSkillsDir: string | null;
 }
 
 function isSkillFsEntry(value: unknown): value is SkillFsEntry {
-  return isRecord(value) && isString(value.name) && (value.kind === "file" || value.kind === "dir" || value.kind === "other");
+  return isRecord(value) && isString(value.name) && (value.kind === "file" || value.kind === "dir" || value.kind === "other") && (value.isLink === undefined || isBoolean(value.isLink));
 }
 
 /** Guards a `$.fs.list` result at the boundary: malformed entries are dropped, never thrown on. */
@@ -194,21 +210,50 @@ export function asSkillFsEntries(value: readonly unknown[]): SkillFsEntry[] {
   return value.filter(isSkillFsEntry);
 }
 
-async function skillDirNames(fs: SkillFs, skillsDir: string): Promise<readonly string[]> {
+/**
+ * Whether a listed entry is (or leads to) a directory. A plain directory
+ * entry (`kind: "dir"`) needs no extra work; a symbolic link -- reported by
+ * `$.fs.list` as `kind: "other"` with `isLink: true` -- is resolved with one
+ * `fs.stat` call and counted only when it leads to a directory. A dangling
+ * link, a link to a file, or a rejected stat all read as "not a directory"
+ * rather than throwing, so one bad entry never empties the roster.
+ */
+async function entryLeadsToDir(fs: SkillFs, entryPath: string, entry: SkillFsEntry): Promise<boolean> {
+  if (entry.kind === "dir") return true;
+  if (entry.kind !== "other" && entry.isLink !== true) return false;
+  try {
+    const stat = await fs.stat(entryPath);
+    return stat.kind === "dir";
+  } catch {
+    return false;
+  }
+}
+
+/** Directory names directly under `parentDir`, a link resolved to what it leads to (see `entryLeadsToDir`). `filter` narrows which entries are even considered (name-based only; cheap, so it runs before any `stat` call). */
+async function dirNamesUnder(fs: SkillFs, parentDir: string, filter: (entry: SkillFsEntry) => boolean): Promise<readonly string[]> {
   let exists: boolean;
   try {
-    exists = await fs.exists(skillsDir);
+    exists = await fs.exists(parentDir);
   } catch {
     return [];
   }
   if (!exists) return [];
   let entries: readonly SkillFsEntry[];
   try {
-    entries = await fs.list(skillsDir);
+    entries = await fs.list(parentDir);
   } catch {
     return [];
   }
-  return entries.filter((entry) => entry.kind === "dir" && !entry.name.startsWith(".") && !entry.name.startsWith("_") && entry.name !== "synced").map((entry) => entry.name);
+  const names: string[] = [];
+  for (const entry of entries) {
+    if (!filter(entry)) continue;
+    if (await entryLeadsToDir(fs, `${parentDir}/${entry.name}`, entry)) names.push(entry.name);
+  }
+  return names;
+}
+
+async function skillDirNames(fs: SkillFs, skillsDir: string): Promise<readonly string[]> {
+  return dirNamesUnder(fs, skillsDir, (entry) => !entry.name.startsWith(".") && !entry.name.startsWith("_") && entry.name !== "synced");
 }
 
 async function readSkillAt(fs: SkillFs, skillDir: string, dirName: string, source: SkillSource): Promise<SkillSummary | null> {
@@ -264,23 +309,11 @@ export async function listSkillInventory(fs: SkillFs, roots: SkillInventoryRoots
   if (roots.userSkillsDir) await addFrom(roots.userSkillsDir, "user");
 
   if (roots.userSkillsDir) {
+    // dirNamesUnder already yields [] when `synced/` is missing or
+    // unlistable, so no separate `fs.exists` guard is needed here.
     const syncedRoot = `${roots.userSkillsDir}/synced`;
-    let hasSynced: boolean;
-    try {
-      hasSynced = await fs.exists(syncedRoot);
-    } catch {
-      hasSynced = false;
-    }
-    if (hasSynced) {
-      let accounts: readonly string[];
-      try {
-        accounts = (await fs.list(syncedRoot)).filter((entry) => entry.kind === "dir").map((entry) => entry.name);
-      } catch {
-        accounts = [];
-      }
-      for (const account of accounts) {
-        await addFrom(`${syncedRoot}/${account}`, "synced");
-      }
+    for (const account of await dirNamesUnder(fs, syncedRoot, () => true)) {
+      await addFrom(`${syncedRoot}/${account}`, "synced");
     }
   }
 

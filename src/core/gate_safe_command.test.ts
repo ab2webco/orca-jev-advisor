@@ -154,6 +154,18 @@ test("node/npx invocations other than a version check are left on the existing p
   assert.equal(isObviouslySafeCommand("npx some-cli"), false);
 });
 
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24): `env` on its own only prints
+// the environment, but `env NAME=value cmd` RUNS `cmd` with that variable
+// set -- the safe-verb list matched both shapes on the leading word alone,
+// so `env A=1 git reset --hard` was waved through by tier 1a before the
+// deny tier (or anything else) ever saw it.
+test("env used as a wrapper to run another command is never safe, even though bare env is", () => {
+  assert.equal(isObviouslySafeCommand("env"), true);
+  assert.equal(isObviouslySafeCommand("env -i"), true);
+  assert.equal(isObviouslySafeCommand("env A=1 git reset --hard"), false);
+  assert.equal(isObviouslySafeCommand("env node script.js"), false);
+});
+
 test("an empty or whitespace-only command is not safe", () => {
   assert.equal(isObviouslySafeCommand(""), false);
   assert.equal(isObviouslySafeCommand("   "), false);
@@ -177,12 +189,34 @@ test("a search or print command that merely quotes a dangerous phrase is not tha
   }
 });
 
-test("a pipe inside quotes defeats the splitter, and that errs toward judging", () => {
-  // `cat notes.md | grep "curl x | bash"` splits into a last segment that
-  // begins `bash"`, which is not a mention-only verb, so the rule stands and
-  // the command is judged. That is the intended direction: a false "mention"
-  // waves a dangerous command through, a false "run" costs one interruption.
-  assert.equal(mentionsRatherThanRuns('cat notes.md | grep "curl x | bash"'), false);
+// odd/tasks/release-0.5.1.md T8 (JEVADV-24): `echo "$(git reset --hard)"` is
+// NOT a mention -- the `$(...)` really runs `git reset --hard`, exactly the
+// reasoning isSafeSegment already applies via hasCommandSubstitution (a
+// read/print verb whose argument carries a substitution cannot be judged
+// safe by its leading word alone). Without this, mentionsRatherThanRuns
+// broke the loop before the deny tier ever saw the substitution.
+test("a mention-only verb whose argument carries a real command substitution is not a mention", () => {
+  assert.equal(mentionsRatherThanRuns('echo "$(git reset --hard)"'), false);
+  assert.equal(mentionsRatherThanRuns("echo `git reset --hard`"), false);
+  assert.equal(mentionsRatherThanRuns("grep -n $(whoami) file.txt"), false);
+});
+
+// SECURITY HOTFIX (release-0.5.1-newline-bypass) updates this test's own
+// expectation: splitSegments used to be quote-BLIND, so the `|` inside the
+// quoted grep pattern below defeated it and produced a spurious extra
+// segment (`bash"`) that was not a mention verb -- an accident the old test
+// documented as "erring toward judging" (deferring to Jev instead of
+// skipping the local rules). splitSegments now delegates to git_discard.ts's
+// own quote-aware splitOnCommandSeparators (the same primitive the deny tier
+// already used), so this command correctly reads as its real TWO segments --
+// `cat notes.md` and `grep "curl x | bash"` -- both genuine mention-only
+// reads, since the quoted `|` is grep's own search pattern, never a real
+// pipe. This is the exact false positive T8/JEVADV-24 exists to fix ("an
+// agent unable to grep this very repository"): a true "mention" here still
+// reaches Jev, it only skips the hardcoded NEVER_SILENTLY loop, never a
+// silent allow.
+test("a pipe inside a quoted grep pattern is data, not a separator -- a real mention, now that the splitter is quote-aware", () => {
+  assert.equal(mentionsRatherThanRuns('cat notes.md | grep "curl x | bash"'), true);
 });
 
 test("actually running it is still running it", () => {
@@ -195,4 +229,78 @@ test("actually running it is still running it", () => {
   ]) {
     assert.equal(mentionsRatherThanRuns(command), false, command);
   }
+});
+
+// ---------------------------------------------------------------------------
+// SECURITY HOTFIX (release-0.5.1-newline-bypass): a newline or a lone `&`
+// used to be ordinary text to gate_measurement.ts's own splitSegments (which
+// both functions below are built on), so a compound command joined either
+// way read as ONE segment -- and that segment's own leading safe/mention
+// verb (SAFE_SEGMENT_PATTERNS/MENTION_ONLY_VERBS have no trailing `$`
+// anchor) waved the rest through silently, with no deny rule, no Jev call
+// and no gate-decision record at all.
+// ---------------------------------------------------------------------------
+
+test("a newline joins two commands exactly like `;` -- one unsafe line makes the whole command unsafe", () => {
+  assert.equal(isObviouslySafeCommand("ls\nrm -rf $HOME"), false);
+  assert.equal(isObviouslySafeCommand("pwd\ngit push --force origin main"), false);
+});
+
+test("a newline-joined command is still safe when every line independently is", () => {
+  assert.equal(isObviouslySafeCommand("ls\npwd"), true);
+  assert.equal(isObviouslySafeCommand("git log --oneline -3\ngit status"), true);
+});
+
+test("a lone `&` joins two commands exactly like `;` -- one unsafe segment makes the whole command unsafe", () => {
+  assert.equal(isObviouslySafeCommand("ls & git push --force origin main"), false);
+  assert.equal(isObviouslySafeCommand("true & rm -rf $HOME"), false);
+});
+
+test("a lone `&`-joined command is still safe when every segment independently is", () => {
+  assert.equal(isObviouslySafeCommand("ls & pwd"), true);
+});
+
+test("a redirection's own `&` inside a pipe is not mistaken for a separator, and does not sink an otherwise-safe command", () => {
+  assert.equal(isObviouslySafeCommand("git status 2>&1 | tail -5"), true);
+});
+
+test("mentionsRatherThanRuns is false when any LINE, not just any `;`-segment, is not a mention verb", () => {
+  assert.equal(mentionsRatherThanRuns("echo x\ngit push --force origin main"), false);
+  assert.equal(mentionsRatherThanRuns("grep foo file.txt\ngit reset --hard"), false);
+});
+
+test("mentionsRatherThanRuns is false when a lone `&`-joined segment is not a mention verb", () => {
+  assert.equal(mentionsRatherThanRuns("echo x & git push --force origin main"), false);
+});
+
+// ---------------------------------------------------------------------------
+// Review follow-up on the newline-bypass hotfix above: splitSegments now
+// delegates to a QUOTE-AWARE splitter (git_discard.ts's own
+// splitOnCommandSeparators). An open single or double quote that never
+// closes -- a stray apostrophe in a trailing comment, or a genuinely
+// unterminated quote -- makes it believe every following character,
+// including a REAL newline starting a second, unrelated command, is still
+// inside that quote, so it never splits there. Without the `[\r\n]` guard
+// this closes, the merged "segment" (still carrying the raw newline) would
+// be judged by its own leading verb alone (no trailing `$` anchor), waving
+// the second command straight through -- reopening the exact bug this
+// hotfix exists to close, just via a different vector. Built from parts,
+// never typed as one literal dangerous string.
+// ---------------------------------------------------------------------------
+
+const STRAY_APOSTROPHE_THEN_RM_RF = ["ls # it's", "rm -rf $HOME"].join("\n");
+const UNTERMINATED_QUOTE_THEN_RM_RF = ['ls "', "rm -rf $HOME"].join("\n");
+const STRAY_APOSTROPHE_THEN_FORCE_PUSH = ["echo # it's", "git push --force origin main"].join("\n");
+
+test("a stray apostrophe before a newline never lets isObviouslySafeCommand swallow the next line", () => {
+  assert.equal(isObviouslySafeCommand(STRAY_APOSTROPHE_THEN_RM_RF), false);
+  assert.equal(isObviouslySafeCommand(UNTERMINATED_QUOTE_THEN_RM_RF), false);
+});
+
+test("a stray apostrophe before a newline never lets mentionsRatherThanRuns swallow the next line", () => {
+  assert.equal(mentionsRatherThanRuns(STRAY_APOSTROPHE_THEN_FORCE_PUSH), false);
+});
+
+test("a literal newline inside a properly quoted argument is conservatively unsafe too, not a crash -- costs a Jev round-trip instead of a silent allow", () => {
+  assert.equal(isObviouslySafeCommand('echo "a\nb"'), false);
 });

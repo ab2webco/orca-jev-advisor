@@ -14,6 +14,7 @@ import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/den
 import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion } from '../../src/core/policy_seed.ts'
 import { decidePolicySeedNotice } from '../../src/core/policy_seed_notice.ts'
+import { getPolicies } from '../../src/core/store.ts'
 
 // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute a
 // real path at all under node's test runner unless an explicit override is
@@ -30,6 +31,8 @@ process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, 'cache')
 after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }))
 
 const {
+  applyOrcaUiLanguageAtActivation,
+  attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -39,6 +42,8 @@ const {
   attendPolicySeedImportRequest,
   attendPolicySeedNoticeRefresh,
   attendSecretRequest,
+  CATALOG_PROPOSAL_ACCEPT_RESULT_KEY,
+  CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
   claudeIntegrationResultPayload,
@@ -49,16 +54,22 @@ const {
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
+  LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
+  LOCALE_STATUS_KEY,
+  migrateLegacyPolicyKinds,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
+  POLICIES_WITHOUT_KIND_STATUS_KEY,
   POLICY_SEED_DISMISS_RESULT_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
   POLICY_SEED_NOTICE_STATUS_KEY,
   POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
   publishGateDefaults,
+  publishLocaleStatus,
   publishModSkillsStatus,
+  publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,
@@ -216,6 +227,104 @@ test('attendLocaleRequest: an expired request publishes reason "expired"', async
   assert.equal(result.id, 'loc-1')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+// JEVADV-10 -- odd/tasks/release-0.5.1.md. Orca's own explicit
+// settings.uiLanguage (read once at activation, see
+// applyOrcaUiLanguageAtActivation below) is authoritative over the panel's
+// own navigator-derived guess: a person who set Orca itself to Spanish
+// while their OS/browser locale is English must still get Spanish gate
+// prompts, even though the panel's own per-open push would otherwise send
+// 'en'. Every test here injects `saveLocale` -- the real one spawns a real
+// sidecar child, exactly the hazard T9 already hit (see the module note
+// above attendModSkillsConfigRequest's own tests).
+test('attendLocaleRequest: Orca\'s own concrete setting overrides the panel\'s requested locale', async () => {
+  const orca = fakeOrca()
+  const saved = []
+  const fakeSaveLocale = async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  const storageHost = fakeStorageHost({
+    [LOCALE_ORCA_SETTING_KEY]: 'es',
+    localeRequest: { id: 'loc-2', at: new Date().toISOString(), locale: 'en' }
+  })
+  await attendLocaleRequest(orca, storageHost, { saveLocale: fakeSaveLocale })
+  assert.deepEqual(saved, ['es'], 'Orca\'s own explicit setting must win over the panel\'s navigator guess')
+  const result = await storageHost.get(LOCALE_RESULT_KEY)
+  assert.equal(result.ok, true)
+})
+
+test('attendLocaleRequest: with no concrete Orca setting, the panel\'s requested locale is used as before', async () => {
+  const orca = fakeOrca()
+  const saved = []
+  const fakeSaveLocale = async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  const storageHost = fakeStorageHost({
+    localeRequest: { id: 'loc-3', at: new Date().toISOString(), locale: 'es' }
+  })
+  await attendLocaleRequest(orca, storageHost, { saveLocale: fakeSaveLocale })
+  assert.deepEqual(saved, ['es'])
+})
+
+test('applyOrcaUiLanguageAtActivation: a concrete reading is mirrored and remembered', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const saved = []
+  await applyOrcaUiLanguageAtActivation(orca, storageHost, {
+    readOrcaUiLanguage: async () => ({ ok: true, value: 'es' }),
+    saveLocale: async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  })
+  assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), 'es')
+  assert.deepEqual(saved, ['es'])
+})
+
+test('applyOrcaUiLanguageAtActivation: "system"/missing/malformed (a successful read with no concrete value) records null and never mirrors anything', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const saved = []
+  await applyOrcaUiLanguageAtActivation(orca, storageHost, {
+    readOrcaUiLanguage: async () => ({ ok: true, value: null }),
+    saveLocale: async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  })
+  assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), null)
+  assert.deepEqual(saved, [], 'a non-concrete reading must never mirror a language')
+})
+
+test('applyOrcaUiLanguageAtActivation: a read failure leaves the existing marker and mirror completely untouched', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [LOCALE_ORCA_SETTING_KEY]: 'es' })
+  const saved = []
+  await applyOrcaUiLanguageAtActivation(orca, storageHost, {
+    readOrcaUiLanguage: async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' }),
+    saveLocale: async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  })
+  assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), 'es', 'a transient read failure must not flip a prior marker to defer')
+  assert.deepEqual(saved, [])
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/release-0.5.1.md JEVADV-10 (T-lane-b task 3): the published
+// locale status must carry a SOURCE marker -- LOCALE_ORCA_SETTING_KEY's own
+// concrete es/en means the published value is Orca's own explicit setting,
+// not merely this panel's navigator guess -- so config.html/board.html can
+// tell the two apart and paint with the explicit one instead of always
+// re-guessing from `navigator.language`. See config_html_locale.test.mjs's
+// own resolveEffectiveLocale tests for the panel side of this.
+// ---------------------------------------------------------------------------
+
+test('publishLocaleStatus: source is "orca-setting" when Orca has a concrete uiLanguage', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [LOCALE_ORCA_SETTING_KEY]: 'es' })
+  await publishLocaleStatus(orca, storageHost, { resolveLocale: async () => 'es' })
+  const status = await storageHost.get(LOCALE_STATUS_KEY)
+  assert.equal(status.value, 'es')
+  assert.equal(status.source, 'orca-setting')
+})
+
+test('publishLocaleStatus: source is "navigator" when Orca\'s own setting is deferred ("system"), missing, or malformed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  await publishLocaleStatus(orca, storageHost, { resolveLocale: async () => 'en' })
+  const status = await storageHost.get(LOCALE_STATUS_KEY)
+  assert.equal(status.value, 'en')
+  assert.equal(status.source, 'navigator')
 })
 
 test('attendCatalogRefreshRequest: an expired request publishes reason "expired"', async () => {
@@ -492,6 +601,133 @@ test('cmdRefreshCatalog: surfaces derivation-failed instead of reporting success
   assert.equal(result.added, undefined)
 })
 
+// ---------------------------------------------------------------------------
+// JEVADV-11 (odd/tasks/release-0.5.1.md) -- cmdRefreshCatalog only ever
+// added a newly-seen worktree with `kind: "project"` hardcoded
+// (worktree_catalog.ts's deriveDestinations has nothing else to guess from),
+// which is exactly why a real client repository never got "client-site"
+// treatment: nothing ever asked. It no longer WRITES anything; it computes
+// and publishes a proposal list instead (src/core/catalog_proposals.ts's
+// deriveCatalogProposals), and a NEW request/result channel
+// (attendCatalogProposalAcceptRequest) is the only path that can add one,
+// always with a kind the person explicitly chose. Every test here injects
+// `fetchOrcaWorktrees` -- the real one shells out to `orca worktree ps`,
+// exactly the hazard T8's own tests above already guard against for
+// deriveCatalogFromOrca.
+// ---------------------------------------------------------------------------
+
+function fakeWorktreeFetch (worktrees) {
+  return async () => ({ worktrees, failure: null })
+}
+
+test('cmdRefreshCatalog: proposes an uncatalogued repository without writing it to the catalog', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
+  const result = await cmdRefreshCatalog(orca, storageHost, {
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'myparkplanner-be', path: '/Users/dev/Projects/myparkplanner-be' }])
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.proposed, 1)
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 0, 'a proposal must never be written to the catalog on its own')
+  const status = await storageHost.get(CATALOG_PROPOSALS_STATUS_KEY)
+  assert.equal(status.ok, true)
+  assert.equal(status.proposals.length, 1)
+  assert.equal(status.proposals[0].worktreePath, '/Users/dev/Projects/myparkplanner-be')
+  assert.equal('kind' in status.proposals[0], false, 'a proposal must never carry a guessed kind')
+})
+
+test('cmdRefreshCatalog: a repository the catalog already covers is never proposed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [{ id: 'cineco-frontend', label: 'cineco-frontend', kind: 'client-site', worktreePath: '/Users/dev/Projects/cineco-frontend', autonomy: {} }] }
+  })
+  const result = await cmdRefreshCatalog(orca, storageHost, {
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'cineco-frontend', path: '/Users/dev/Projects/cineco-frontend' }])
+  })
+  assert.equal(result.ok, true)
+  assert.equal(result.proposed, 0)
+})
+
+test('attendCatalogProposalAcceptRequest: an expired request publishes reason "expired"', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalogProposalAcceptRequest: { id: 'cpa-1', at: TEN_MINUTES_AGO, accepted: [] }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost)
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.id, 'cpa-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+})
+
+test('attendCatalogProposalAcceptRequest: adds only the accepted proposals, each with its chosen kind, and republishes the status', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [] },
+    catalogProposalAcceptRequest: {
+      id: 'cpa-2', at: new Date().toISOString(),
+      accepted: [{ id: 'cineco-backend', kind: 'client-site' }]
+    }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost, {
+    mirror: noopMirror,
+    fetchOrcaWorktrees: fakeWorktreeFetch([
+      { repo: 'cineco-backend', path: '/Users/dev/Projects/cineco-backend' },
+      { repo: 'myparkplanner-be', path: '/Users/dev/Projects/myparkplanner-be' }
+    ])
+  })
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.id, 'cpa-2')
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 1)
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 1)
+  assert.equal(catalog.destinations[0].kind, 'client-site')
+  assert.equal(catalog.destinations[0].worktreePath, '/Users/dev/Projects/cineco-backend')
+  // The accepted repo drops out of the republished proposal list; the other one stays.
+  const status = await storageHost.get(CATALOG_PROPOSALS_STATUS_KEY)
+  assert.deepEqual(status.proposals.map((p) => p.worktreePath), ['/Users/dev/Projects/myparkplanner-be'])
+})
+
+test('attendCatalogProposalAcceptRequest: an entry with an invalid or missing kind is skipped, never written with a guessed one', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [] },
+    catalogProposalAcceptRequest: {
+      id: 'cpa-3', at: new Date().toISOString(),
+      accepted: [{ id: 'myparkplanner-be', kind: 'not-a-real-kind' }]
+    }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost, {
+    mirror: noopMirror,
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'myparkplanner-be', path: '/Users/dev/Projects/myparkplanner-be' }])
+  })
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 0)
+  const catalog = await storageHost.get('catalog')
+  assert.equal(catalog.destinations.length, 0)
+})
+
+test('attendCatalogProposalAcceptRequest: a stale proposal id (no longer in the live derivation) is ignored, not thrown', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    catalog: { destinations: [] },
+    catalogProposalAcceptRequest: {
+      id: 'cpa-4', at: new Date().toISOString(),
+      accepted: [{ id: 'a-repo-that-no-longer-appears', kind: 'project' }]
+    }
+  })
+  await attendCatalogProposalAcceptRequest(orca, storageHost, {
+    mirror: noopMirror,
+    fetchOrcaWorktrees: fakeWorktreeFetch([])
+  })
+  const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
+  assert.equal(result.ok, true)
+  assert.equal(result.added, 0)
+})
+
 test('deriveInitialCatalogIfEmpty: the "only when empty" guard leaves an already-populated catalog untouched', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
@@ -698,6 +934,158 @@ test('a storage that throws is survived rather than propagated, because this mus
 })
 
 // ---------------------------------------------------------------------------
+// JEVADV-49 -- a config-panel save (run before a panel fix for legacy
+// Spanish kinds was loaded) left 20 of 23 stored policies with no `kind` at
+// all, and store.ts's own getPolicies silently excluded every one of them
+// from the policy stage. Two fixes: migrateLegacyPolicyKinds converts a row
+// still spelled permite/prohibe/pregunta to English, once, persisted;
+// publishPoliciesWithoutKindStatus counts and names whatever genuinely has
+// no kind left, so it is never silent again.
+// ---------------------------------------------------------------------------
+
+test('migrateLegacyPolicyKinds: a legacy-kind stored set is converted to English kinds, in place', async () => {
+  const orca = fakeOrca()
+  const legacy = [
+    { id: 'p1', rule: 'permite rule', kind: 'permite' },
+    { id: 'p2', rule: 'prohibe rule', kind: 'prohibe' },
+    { id: 'p3', rule: 'pregunta rule', kind: 'pregunta' },
+  ]
+  const host = fakeStorageHost({ policies: legacy })
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, [
+    { id: 'p1', rule: 'permite rule', kind: 'permits' },
+    { id: 'p2', rule: 'prohibe rule', kind: 'prohibits' },
+    { id: 'p3', rule: 'pregunta rule', kind: 'requires_human' },
+  ])
+  assert.ok(orca._logs.some((line) => line.includes('policy kind migration') && line.includes('3')), 'the conversion was not logged')
+})
+
+test('migrateLegacyPolicyKinds: a row already in English is left byte-for-byte untouched', async () => {
+  const orca = fakeOrca()
+  const english = [{ id: 'p1', rule: 'already english', kind: 'permits', destinations: ['d1'] }]
+  const host = fakeStorageHost({ policies: english })
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, english)
+  assert.equal(host._store.policies[0], english[0], 'an unchanged row must be the SAME object, never a copy')
+})
+
+test('migrateLegacyPolicyKinds: a row with no kind at all, or an unrecognised kind, is left exactly as stored -- never guessed', async () => {
+  const orca = fakeOrca()
+  const noKind = [
+    { id: 'p1', rule: 'no kind here' },
+    { id: 'p2', rule: 'bogus kind', kind: 'not-a-real-kind' },
+  ]
+  const host = fakeStorageHost({ policies: noKind })
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, noKind)
+})
+
+test('migrateLegacyPolicyKinds is idempotent: a second run over an already-migrated set converts nothing and writes nothing again', async () => {
+  const orca = fakeOrca()
+  const legacy = [{ id: 'p1', rule: 'permite rule', kind: 'permite' }]
+  const host = fakeStorageHost({ policies: legacy })
+
+  await migrateLegacyPolicyKinds(orca, host)
+  const afterFirst = host._store.policies
+  let setCalls = 0
+  const originalSet = host.set.bind(host)
+  host.set = async (key, value) => { setCalls += 1; return originalSet(key, value) }
+
+  await migrateLegacyPolicyKinds(orca, host)
+
+  assert.deepEqual(host._store.policies, afterFirst)
+  assert.equal(setCalls, 0, 'a second, no-op migration must never write to storage again')
+})
+
+test('migrateLegacyPolicyKinds: what mirrorCatalogAndPolicies would actually mirror is English, not the stored legacy spelling', async () => {
+  // mirrorCatalogAndPolicies (this file) serializes getPolicies(storageHost)
+  // verbatim into policies.json -- it never spawns for a fake host (see this
+  // file's own noopMirror note), so this is the cheap, honest proxy for "is
+  // mirrored with English kinds": read back through the SAME function the
+  // real mirror call reads through, and check what IT would have written.
+  const orca = fakeOrca()
+  const host = fakeStorageHost({ policies: [
+    { id: 'p1', rule: 'permite rule', kind: 'permite' },
+    { id: 'p2', rule: 'prohibe rule', kind: 'prohibe' },
+    { id: 'p3', rule: 'pregunta rule', kind: 'pregunta' },
+  ] })
+
+  await migrateLegacyPolicyKinds(orca, host)
+  const mirrored = await getPolicies(host)
+
+  assert.deepEqual(mirrored.map((row) => row.kind), ['permits', 'prohibits', 'requires_human'])
+})
+
+test('migrateLegacyPolicyKinds: a storage that throws is survived rather than propagated', async () => {
+  const orca = fakeOrca()
+  const host = {
+    async get () { throw new Error('storage is down') },
+    async set () { throw new Error('storage is down') }
+  }
+
+  await migrateLegacyPolicyKinds(orca, host)   // must not reject
+
+  assert.ok(orca._logs.some((line) => line.includes('policy kind migration failed')), 'the failure was not logged')
+})
+
+test('publishPoliciesWithoutKindStatus: a kind-less stored set reports the count and ids, and leaves those rows untouched', async () => {
+  const orca = fakeOrca()
+  const stored = [
+    { id: 'has-kind', rule: 'r0', kind: 'permits' },
+    { id: 'no-kind-1', rule: 'r1' },
+    { id: 'no-kind-2', rule: 'r2' },
+  ]
+  const host = fakeStorageHost({ policies: stored })
+
+  await publishPoliciesWithoutKindStatus(orca, host)
+
+  const status = host._store[POLICIES_WITHOUT_KIND_STATUS_KEY]
+  assert.equal(status.count, 2)
+  assert.deepEqual([...status.ids].sort(), ['no-kind-1', 'no-kind-2'])
+  assert.equal(typeof status.at, 'string')
+  // Never touched: this function only reports, it never migrates or drops.
+  assert.deepEqual(host._store.policies, stored)
+  assert.ok(orca._logs.some((line) => line.includes('policies without a kind') && line.includes('2')), 'the count was not logged')
+})
+
+test('publishPoliciesWithoutKindStatus: a fully-kinded set reports zero, not silence', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({ policies: [{ id: 'p1', rule: 'r', kind: 'permits' }] })
+
+  await publishPoliciesWithoutKindStatus(orca, host)
+
+  assert.deepEqual(host._store[POLICIES_WITHOUT_KIND_STATUS_KEY].count, 0)
+  assert.deepEqual(host._store[POLICIES_WITHOUT_KIND_STATUS_KEY].ids, [])
+})
+
+test('publishPoliciesWithoutKindStatus: a legacy-kind row (not yet migrated) is NOT reported -- migratePolicyKind still recognises it', async () => {
+  const orca = fakeOrca()
+  const host = fakeStorageHost({ policies: [{ id: 'p1', rule: 'r', kind: 'pregunta' }] })
+
+  await publishPoliciesWithoutKindStatus(orca, host)
+
+  assert.deepEqual(host._store[POLICIES_WITHOUT_KIND_STATUS_KEY], { count: 0, ids: [], at: host._store[POLICIES_WITHOUT_KIND_STATUS_KEY].at })
+})
+
+test('publishPoliciesWithoutKindStatus: a storage that throws is survived rather than propagated', async () => {
+  const orca = fakeOrca()
+  const host = {
+    async get () { throw new Error('storage is down') },
+    async set () { throw new Error('storage is down') }
+  }
+
+  await publishPoliciesWithoutKindStatus(orca, host)   // must not reject
+
+  assert.ok(orca._logs.some((line) => line.includes('policies-without-kind status publish failed')), 'the failure was not logged')
+})
+
+// ---------------------------------------------------------------------------
 // T2b -- telling an install the shipped baseline moved. See
 // odd/tasks/gate-destructive-restore-and-seed-refresh.md and
 // src/core/policy_seed_notice.ts for the design; every test below reads the
@@ -764,15 +1152,68 @@ test('cmdImportPolicySeeds: a failed import (unreadable seed) never marks this i
   assert.equal(await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY), null)
 })
 
-test('cmdImportPolicySeeds: republishes the notice status, which now reads not-due', async () => {
+// JEVADV-27 -- odd/tasks/release-0.5.1.md. Before this fix,
+// cmdImportPolicySeeds bumped POLICY_SEED_OFFERED_VERSION_KEY unconditionally
+// on every successful import, so a person who imported the additions but
+// left a differing row unticked (exactly what clicking the notice's "Review"
+// button does: runPolicySeedImport([]), i.e. this same call with
+// acceptedIds: []) silenced the notice for that row forever -- the offered
+// marker is never lowered, so it would never come back until the shipped
+// version bumped again. The three rows this observed live: "3 added" shown,
+// the 3 differing rows never seen again.
+test('cmdImportPolicySeeds: an unresolved differing row keeps the notice due, even though additions landed', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
     policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
   })
-  await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror })
+  assert.ok(result.added > 0, 'the fixture must add something for this to prove anything')
   const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
-  assert.equal(status.due, false, 'the notice is still due right after the person just ran the import')
+  assert.equal(status.due, true, 'an unresolved differing row silently marked this install offered')
+  assert.equal(status.added, 0, 'the additions are already merged in by the time the status is read again')
+  assert.equal(status.differing, 1)
   assert.equal(status.shippedVersion, REAL_SEED_VERSION)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered, null, 'the offered marker must not move while a differing row is still unticked')
+})
+
+test('cmdImportPolicySeeds: accepting every differing id settles the notice and marks the install offered', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror, acceptedIds: ['read_and_test'] })
+  assert.equal(result.replaced, 1)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, false, 'every differing row was resolved, so nothing is left to show')
+  assert.equal(status.differing, 0)
+  const offered = await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY)
+  assert.equal(offered.version, REAL_SEED_VERSION)
+})
+
+test('cmdImportPolicySeeds: result.differing reports only the rows still unresolved after this apply, not the original pre-apply list', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [
+      { id: 'read_and_test', rule: 'my own edited rule a', kind: 'prohibits' },
+      { id: 'own_branch', rule: 'my own edited rule b', kind: 'prohibits' }
+    ]
+  })
+  const result = await cmdImportPolicySeeds(orca, storageHost, { mirror: noopMirror, acceptedIds: ['read_and_test'] })
+  assert.equal(result.differing.some((d) => d.id === 'read_and_test'), false, 'an accepted, now-matching id must drop out of the reported list')
+  assert.ok(result.differing.some((d) => d.id === 'own_branch'), 'an unaccepted, still-differing id must stay reported')
+})
+
+test('attendPolicySeedImportRequest: reviewing with no accepted ids (the notice\'s Review button) leaves a real difference due', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }],
+    policySeedImportRequest: { id: 'psi-4', at: new Date().toISOString(), acceptedIds: [] }
+  })
+  await attendPolicySeedImportRequest(orca, storageHost, { mirror: noopMirror })
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.due, true, 'opening Review and accepting nothing must not silence the notice')
+  assert.equal(await storageHost.get(POLICY_SEED_OFFERED_VERSION_KEY), null)
 })
 
 test('publishPolicySeedNoticeStatus: an install offered nothing before, with real added counts, is due', async () => {
@@ -933,7 +1374,25 @@ test('policySeedNoticeStatus carries only what the panel renders', async () => {
   const storageHost = fakeStorageHost({})
   await publishPolicySeedNoticeStatus(orca, storageHost)
   const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
-  assert.deepEqual(Object.keys(status).sort(), ['added', 'at', 'differing', 'due', 'shippedVersion'])
+  assert.deepEqual(Object.keys(status).sort(), ['added', 'at', 'differing', 'differingItems', 'due', 'shippedVersion'])
+})
+
+// JEVADV-27 -- the differing rows themselves, not just their count, so the
+// panel can render the tick list straight from this status on every load
+// instead of only right after a live import request/result round trip (the
+// only place they used to be available at all -- see config.html's
+// renderPolicySeedDiffs and its caller before this fix).
+test('policySeedNoticeStatus carries the real differing rows, not just their count', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    policies: [{ id: 'read_and_test', rule: 'my own edited rule', kind: 'prohibits' }]
+  })
+  await publishPolicySeedNoticeStatus(orca, storageHost)
+  const status = await storageHost.get(POLICY_SEED_NOTICE_STATUS_KEY)
+  assert.equal(status.differing, 1)
+  assert.equal(status.differingItems.length, 1)
+  assert.equal(status.differingItems[0].id, 'read_and_test')
+  assert.ok(Array.isArray(status.differingItems[0].fields) && status.differingItems[0].fields.length > 0)
 })
 
 // ---------------------------------------------------------------------------

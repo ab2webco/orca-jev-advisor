@@ -1,0 +1,351 @@
+# Release 0.5.1: stop asking about harmless commands, judge client work as client work
+
+## Objective
+
+Ship 0.5.1 so that a plugin user in `bypassPermissions` is no longer
+interrupted for commands that harm nothing, while every command the gate
+exists to catch still stops. Everything below is evidence from one real
+machine running 0.5.0 on 2026-09-25, not a hypothesis.
+
+## Problem (observed on 0.5.0, real machine)
+
+- **Policy-stage false positives.** The policy stage asks Jev which policy
+  covers the action and whether the action is "a concrete instance of what
+  the policy covers, without judging whether it is allowed, forbidden or
+  needs someone" (`src/core/decisions.ts:141`). A `prohibits` match is then
+  treated as a violation (`interpretDestinationPolicy`). Commands that take
+  a screenshot or write a heredoc match `visual_evidence` ("Nothing with a
+  screen is called done without a screenshot…"), so the gate asks
+  "Forbidden by visual_evidence" about the exact action that policy
+  demands. Seen three times in one hour, once on the supervisor's own
+  session. Five seeded policies describe how an agent works or what it
+  claims, not anything a single shell command can violate:
+  `visual_evidence`, `model_by_difficulty`, `delegate_by_scope`,
+  `no_inventing_contracts`, `ticket_first`.
+- **The stop reason is not recorded.** `gate-decision` records carry
+  `type,id,at,project,commandFamily,source,verdict,latencyMs,pluginVersion`,
+  and `gate-pending` records carry no policy id. Of 170 historical asks, 82
+  have no risk scores. That set mixes policy stops, local-rule asks
+  (`git push`, `curl | shell`, `git reset/clean`, `terraform`, `rm -rf`)
+  and uncacheable commands, and today nothing can tell them apart. A fix to
+  the policy stage cannot be measured without this.
+- **Client work in sibling worktrees is not judged as client work.**
+  Destination matching is a longest-prefix match on `worktreePath`
+  (`src/core/destination_match.ts`). Orca worktrees live next to the main
+  checkout, not inside it (`~/Projects/cineco-frontend-cin-985` next to
+  `~/Projects/cineco-frontend`), so they never match their `client-site`
+  destination. `client_always_asks` and the destination's context do not
+  apply to real client work. This is the direction that matters: the gate
+  is loosest where it should be tightest.
+- **mod-skills can run active with zero calibration.** The hook reads the
+  raw `active`/`activeTools` booleans (`adapters/claude/mod-skills/hooks/index.ts:133-142`)
+  and never consults readiness. With `active:true` the real skill listing
+  is withheld on every main-loop prompt, and when Jev picks nothing the
+  model gets neither the listing nor a skill for that turn (`:183-192`,
+  `:332-341`). The panel warns against it and the code does not enforce
+  it. It was on, with 0 measurements, on this machine. Separately, the
+  tool-relevance path calls Jev on every prompt with no sampling (`:350-457`).
+- **Suite breaks without dev dependencies.** `scripts/fixture_shape.test.mjs:31`
+  imports `screenshot-panels.mjs`, which imports `playwright` at top
+  level, with no guard.
+- **Policy seed notice reports noise.** `mergePolicySeeds` compares raw
+  `kind` strings, so every install still carrying the legacy Spanish enum
+  (`permite/prohibe/pregunta`) sees "20 differing" when 17 are functionally
+  identical (`migratePolicyKind` already maps them at decision time).
+
+## Why
+
+The user asked for the next release to be tuned so that "this cannot
+happen to plugin users" (2026-09-25), after being asked about harmless
+commands several times in one session.
+
+## Scope
+
+In: tasks T1–T7 below. Out, documented for 0.6: the gate-approval-learning
+chain (#29, B1b..C2), per-account model availability, mapping gateway
+`resolvedModel` (`glm-*`) back to aliases for the match rate, widening
+`REWRITE_PERMISSION_MODES` to `default`/`acceptEdits` (docs confirm Agent
+never prompts and hook `allow` does not bypass deny/ask rules), readiness
+reachability (E1) and per-direction confidence (E2).
+
+## Constraints
+
+- Local rules stay the floor. Nothing in this release may make a deny-tier
+  rule, a `requires_human` policy or the risk stage more permissive. Two
+  deliberate refinements:
+  - JEVADV-36/37: a destructive command in COMMAND POSITION still denies. A
+    mere MENTION inside a visible argument of an unknown program is not a
+    local-rule match; it goes to the ordinary Jev path, never a silent
+    local allow.
+  - JEVADV-39: a push naming main/master whose remote resolves (pushurl
+    first) to a local path or `file://` is not a shared-branch push, so it
+    goes to the Jev path. Any other or unresolvable remote still denies, and
+    a force push denies everywhere.
+- A policy without the new field keeps today's behaviour (`command`). A user
+  rule is never silently dropped.
+- Privacy rule of `gate_measurement.ts` holds: record ids and families,
+  never the command.
+- Artifacts in English. No `any`, no `console.log`/`debugger`, no mocks in
+  production code. Tests and docs travel with each fix.
+- Branch `fabolivark/release-0.5.1` from `main` at `19e9873` (v0.5.0).
+
+## TDD
+
+- Mode: strict TDD **on**. Source: `~/.claude/CLAUDE.md` ("Strict TDD Mode: enabled").
+- Runner: `npm test` (`node --test --experimental-strip-types`), full
+  gate `npm run check` (suite + panels spec + screenshots).
+- Each task starts with an observed RED.
+
+## Tasks
+
+Tracked on Plane, private project `JEVADV` (workspace ab2web), module
+"0.5.1 — release hardening". Mapping: T1=JEVADV-2, T2=JEVADV-1,
+T3=JEVADV-3, T4=JEVADV-4, T5=JEVADV-5, T6=JEVADV-6, T7=JEVADV-9, with
+JEVADV-7 (replay bench), JEVADV-8 (naive-agent scenario), JEVADV-10
+(locale) and JEVADV-11 (catalog gaps) in the same module. Module "0.6 —
+evolution" holds JEVADV-12..23.
+
+- [x] **T1 — Record why the gate stopped.** Done in `49d249d` (delegated
+  writer). Vocabulary: `local-rule`, `cache`, `policy`, `risk`, `unreachable`.
+  Split on `GateActionResult.policyId`. Add a `stopReason`
+  (`policy` | `local-rule` | `risk` | `unreachable` | `cache`) and, for
+  policy stops, the `policyId` to `gate-decision` and `gate-pending`
+  records. Ids only. Route: delegated writer (2+ non-trivial files).
+- [x] **T2 — Process policies never gate a command.** Done in `60dab61`
+  (delegated writer). Seed version 2. `cmdDecide` in `main.mjs`, which
+  judges free-text task actions rather than shell commands, keeps every
+  policy on purpose. `Policy.scope?:
+  "command" | "process"`. Filter `process` before `buildPolicyQuestions` so
+  those rules never enter the coverage criteria. Mark the five process
+  policies in `seed/policies.json` and bump the seed version. For a stored
+  row without the field: use the seed's scope for that id, else `command`.
+  Route: delegated writer.
+- [x] **T3 — Sibling worktrees match their repository's destination.** Done in 67cdce7.
+  When the cwd's worktree is a linked worktree, resolve its main checkout
+  (`.git` file → `gitdir:` → `<main>/.git/worktrees/<name>`) and match the
+  catalog against the main checkout too. A nested path match still wins
+  over a sibling match. Route: delegated writer.
+- [x] **T4 — mod-skills never hides skills it did not replace.** Done in 455ffb2 and 181d2d8. Keep the
+  real listing whenever no skill is injected, and sample the tool path the
+  same way as the skill path. Route: delegated writer.
+- [x] **T5 — Suite runs without playwright.** Done in bda6bb8. `fixture_shape.test.mjs`
+  skips cleanly when `playwright` is absent. Route: inline (one file).
+- [x] **T6 — Seed notice compares normalized kinds.** Done in `648e508`
+  (delegated writer). Compares the migrated kind and the resolved scope.
+- [x] **T8a — Review correction R3 (inline, 45ad820).** A double-quoted
+  `$(…)`/backtick was opaque to the force-push rule, which is a deny-tier
+  bypass introduced by T8. Bodies are now spliced back in per token, after
+  tokenizing. RED/GREEN, 2063/2063.
+- [x] **T10 — Quoted text opaque only in known data positions (JEVADV-28).** Done in 7a64807, 43b110d, 2ee8d47 and fa9fec2.
+  Review follow-ups: ssh/su -c/python -c/watch/script -c commands must stay
+  visible; `git checkout main --` allowed; an unknown policy scope resolves
+  as command instead of dropping the row; fix the misleading comment and
+  the function name. Blocks the release.
+- [x] **T11 — Pending baseline policy updates stay visible (JEVADV-27).** Done in eab4897.
+  Worker/panel side, so it needs a plugin reload to verify.
+- [x] **T8 — Deny tier ignores quoted data (JEVADV-24).** Done in
+  eab080a, dd7975f and 44862a3; reopened by T10. Observed live:
+  a `printf` whose double-quoted text spelled out a hard reset was refused
+  as "discards uncommitted work". Quoted strings and heredoc bodies must be
+  opaque to the deny rules; `$(…)`, `bash -c` and `sh -c` stay scanned.
+  Route: delegated writer.
+- [x] **T9 — Leading env assignment leaks into commandFamily (JEVADV-25).**
+  Done in 37b972f.
+- [x] **T12 — mod-skills really loads (JEVADV-43).** It had never loaded on
+  any machine; the engine refused it for five static reasons. Fixed in
+  f69af8e and c683593 (layout-mirrored installed copy with a generated
+  manifest, top-level `$` helpers, named `register`, literal env names,
+  content-digest marker). A real `claude plugin validate` test is in
+  `npm test`. Live: installed copies valid in all 5 config dirs; active mode
+  pattern false/true/false. Route: delegated writer.
+- [x] **T13 — Gate reasons in plain Spanish (JEVADV-44).** 9ebb862. A catalog
+  test rejects unaccented words and " -- ". Route: inline.
+- [x] **T14 — Own-branch push and git-guarded deletes (JEVADV-45).** cd8a870,
+  9f1145f, aec809e, 7e95457, 82c1d27 (+refspec is a force push), 8b88ca4 and
+  c6599b0. The policy stage stays authoritative (option D). Live: `git worktree
+  remove` and `git branch -d` allowed at stage `local-allow`. Route: delegated
+  writer.
+- [x] **T15 — Real push shapes qualify (JEVADV-45 follow-up).** Done in 78c4b47. `cd <dir> &&`,
+  `2>&1` and pipes into safe readers. Lane Q, in progress. Route: delegated
+  writer.
+- [x] **T16 — mod-skills sees symlinked skills (JEVADV-46).** 3446994. Live:
+  candidates 62 → 76; the Plane prompt picks orca-plane (0.56). Route:
+  delegated writer.
+- [x] **T17 — The cache honours policy changes (JEVADV-48).** Done in e47f81b.
+- [x] **T18 — Policies never silently lose their kind (JEVADV-49).** Done in 495e485 and 7470d0f.
+  On 2026-09-26 at 11:48Z a panel save (seed accept, before the JEVADV-42
+  fix was loaded) stripped the kind of 20 of 23 stored policies. The kinds
+  were restored by hand from values read earlier that day; the mirror was
+  rewritten with the plugin's own writer (23 policies); 136 cache entries
+  from the window were dropped.
+- [x] **T19 — The gate advises the coding model.** Done in dbb5c61..067ff19
+  (advice, prohibits hard stop, local rules, deploy floor, board). Replay of
+  151 real commands: normal work asking a person 37 → 2, harmful without at
+  least an advice 0. Evidence so far: 66 real asks and denies classified
+  (41 normal, 17 harmful, 8 unsure; 5 of 12 denies were text false
+  positives); a miss check found no harmful command allowed by a judgment on
+  0.5.1, and one on 0.5.0 (a client PR merge on cineco-frontend); the
+  advice experiment (30 real sessions) shows the model acts on a gate
+  message, never routes around it, and an advice costs one turn.
+  JEVADV-47 (human-facing message copy) is on hold until this decides the
+  audience.
+- [x] **T20 — Security: newline and `&` never hide a command (JEVADV-50).**
+  Done in d8679c4. v0.5.0 is affected.
+- [x] **T21 — Settings panel tabs (JEVADV-41).** Done in 9438b7d and ce4cb99.
+  RED 29,834px at 320px; every tab under the 8000px clamp.
+- [ ] **T7 — Release.** Version bump done (bcf73c4), README done. Version 0.5.1, README and changelog, `npm run
+  check` with screenshots at 1440/768/390/320 in both themes, then the
+  real-machine verification below.
+
+## Acceptance criteria
+
+- A command that writes or takes a screenshot, run in any catalogued
+  destination, is no longer stopped by `visual_evidence` or any other
+  `process` policy.
+- Every stop recorded after 0.5.1 carries a `stopReason`. Policy stops
+  carry the `policyId`.
+- A command run in `~/Projects/cineco-frontend-cin-985` resolves to the
+  `cineco-frontend` destination.
+- With `active:true` and a Jev pick of none, the model still receives the
+  full skill listing.
+- `npm test` passes with `playwright` moved out of `node_modules`.
+- Deny-tier matrix unchanged: `git reset --hard`, `git checkout -- <file>`,
+  force push, `rm -rf` of `/` or `$HOME`, `DROP TABLE`, `curl | bash`,
+  `terraform apply/destroy`, `kubectl delete` are refused exactly as in 0.5.0.
+
+## Real-machine verification (before tagging)
+
+1. Load the branch through Orca's plugin **Desarrollo** section, then run
+   `node adapters/orca/install-claude-integration.mjs status <root>`: 5/5
+   targets with hook, outcomeHook, agentModelHook, env, modCopy.
+2. Replay bench: a local-only corpus of realistic developer commands, drawn
+   from this machine's own agent transcripts and never committed, run
+   through the real hook before (0.5.0) and after (branch). Compare the ask
+   rate per `stopReason`.
+3. A fresh supervised agent with no context runs a realistic developer
+   scenario in a sandbox project with a local bare remote (npm, TypeScript,
+   tests, git flow, subagents, plus the deny-tier commands confined to the
+   sandbox). Every prompt it hits gets recorded verbatim.
+4. Evidence in `~/Downloads/jev-advisor-verificacion-0.5.0/`.
+
+## Worktree and scratch hygiene
+
+Every worktree or scratch directory created for this feature is listed here
+and removed when its purpose ends. Pre-existing ones that belong to other
+work (`gate-approval-learning/`, `../orca-supervisor-release`) are not
+touched.
+
+| Path | Branch | Purpose | Remove when |
+|---|---|---|---|
+| `../orca-supervisor-next` | `fabolivark/release-0.5.1-next` | First writer lane | Removed 2026-09-25 after merge |
+| `../orca-supervisor-lane-a` | `fabolivark/release-0.5.1-lane-a` | Writer lane A (JEVADV-37/38/39) | Removed after merge |
+| `../orca-supervisor-lane-b` | `fabolivark/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-c` | `fabolivark/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-review` | detached | Temporary native-review checkouts | Removed after each review |
+| `../orca-supervisor-lane-m` | `fabolivark/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-g` | `fabolivark/release-0.5.1-push-own-branch` | Writer lane G (JEVADV-45) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-s` | `fabolivark/release-0.5.1-skill-links` | Writer lane S (JEVADV-46) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-q` | `fabolivark/release-0.5.1-push-shapes` | Writer lane Q (real push shapes) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-{h,r,v,d}` | hotfix, policy safety, advise model, docs | Writer lanes | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-p` | `fabolivark/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | Removed 2026-09-26 after merge |
+| `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
+| `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | Removed after the scenario report was recorded |
+
+## Delivery
+
+- Forecast: about 800 authored lines across T1–T7, over the 400 budget.
+  Strategy: `ask-on-risk`. Chain strategy: pending the user's choice.
+
+## Progress
+
+- 2026-09-25: branch created at `19e9873`. Config on the real machine
+  corrected: mod-skills switched off (`~/.config/orca-supervisor/mod-skills-config.json`,
+  the only writer is the panel request path, activation only reads it).
+  Models catalog verified correct for the four accounts: fable
+  `available:false` (one account without Fable quota, z.ai maps no fable
+  alias), opus/sonnet/haiku `true` (z.ai maps them to glm-*), `active:false`.
+
+- 2026-09-25: T1, T2 and T6 committed. Parent spot check with
+  `env -u ORCA_USER_DATA_PATH npm test`: 2012 tests, 2012 pass, 0 fail.
+  Dev plugin loaded in Orca from `~/Projects/orca-jev-advisor-dev`, a
+  detached worktree advanced only to verified commits. `status`: 5/5
+  targets pointing to it.
+- Replay baseline on 0.5.0 over a 300-command stratified sample of real
+  local traffic: allow 182, pass 11, ask 65, deny 42. About 49 asks come
+  from the risk stage and 16 from policies (client_always_asks 6,
+  others_pr 5, large_pr 3, visual_evidence 2).
+
+- 2026-09-25: native review (RDD on, consent granted by the user). Lineage
+  `review-035d390361bfd3ef` covers `19e9873..45ad820` with 4 lenses. One
+  CRITICAL finding (R3) was fixed in one bounded correction and passed the
+  targeted validator; the review was approved and acknowledged, authority
+  burned. The advisory findings became T10. The dev plugin runs at `45ad820`.
+- Replay after T8: 17 deny-tier verdict changes, each reviewed by hand. 12
+  quoted-data false positives are gone, and 5 real `git reset -q --hard`
+  cases that 0.5.0 missed are now refused.
+- JEVADV-26 measured: consequence noise σ = 0.039. A 3σ margin (0.12)
+  catches 22/22 flip-allows at a cost of 10/105 stable allows in a
+  risky-family sample. It is being implemented in the isolated worktree
+  `../orca-supervisor-next` together with T5 and T3.
+- Worker-side changes take effect only after the plugin reloads. Hook-side
+  changes take effect on the next command.
+
+- 2026-09-25, later in the day. Native reviews 2 (`review-3ca73b9da09b0927`)
+  and 3 (`review-4c988dc5b95e74e7`) were approved and acknowledged. Merged
+  since then:
+  - JEVADV-28 (7a64807) and JEVADV-34 (7cf2c47)
+  - JEVADV-35 (209c861): the cache key carries the decision-rules version;
+    the cache TTL is 30 days
+  - JEVADV-29 (42cc829): secrets masked before the Jev call
+  - JEVADV-36 (609e34b)
+  - JEVADV-29 precision (4d5ebe2)
+- Suite on the branch files: 1206/1206 with playwright. Wrapper probe: 10/10.
+  Compared with 0.5.0, `env A=1 <hard reset>` goes from pass to deny and
+  `echo "$(<force push>)"` from ask to deny.
+- Lanes B (panel, JEVADV-27/10/11) and C (mod-skills, JEVADV-4) run in
+  isolated worktrees. Lane D (JEVADV-8) is a context-free supervised agent
+  running the realistic scenario on the live dev plugin, held at 42cc829
+  until it finishes.
+
+- 2026-09-26. Native reviews 4a (`review-6e123ee64ddcd88f`) and 4b
+  (`review-367d0dd182240f55`) were approved and acknowledged. 4b needed one
+  bounded correction (cace3e2): a mention no longer hides a later deny, and
+  `find -exec` and `--` hand-offs recurse. The lane C review (mod-skills)
+  was approved. The user then declined the next candidate and switched
+  receipt-driven development OFF globally. From here, verification is the
+  suite, the replay bench, live probes, screenshots and an independent
+  read-only verifier agent.
+- Merged: lane C (455ffb2), lane B (eab4897, d6a3820, ed6b89b), lane A
+  JEVADV-37 (9565976, 899ffe9, 43b110d, 731192d), and a copy fix
+  (889725f). The final batch (JEVADV-38 non-live, JEVADV-39, discard behind
+  `sh -c`) is on lane A: d56ea46, e880f01, f3ee1b5, 97f2447. Its suite:
+  1360 pass, 6 skipped without playwright.
+- Visual check of the panel changes, looked at: team policies at 1440 light
+  (plain load and after import), 390 light and 320 dark; catalog proposals
+  at 1440 light, 768 dark and 320 light. No overflow, everything readable.
+  One copy fix (889725f).
+- JEVADV-8, the realistic context-free scenario on the dev plugin at
+  42cc829: no prompt on normal work, destructive git refused with the work
+  preserved, and model reclassification measured with the real resolved
+  models. One strictness finding became JEVADV-39.
+
+- 2026-09-26, afternoon. Draft PR #31 opened at the user's request. GitHub
+  push protection rejected fake provider-shaped tokens in
+  `secret_redaction.test.ts`; the unpushed history was rewritten to split
+  those literals (tests unchanged, 71/71). Merged and verified: T12, T13,
+  T14, T16. Suite on c6599b0: 2538/2538 unit, 55/55 panels. The dev plugin
+  runs at c6599b0.
+- The owner's direction, recorded as memory: protect real harm only, Jev
+  advises the coding model directly for speed and token savings, never ask a
+  person to approve a raw command, defaults must be right for every
+  developer running agents in bypass mode. Evidence reports:
+  `$CLAUDE_JOB_DIR/tmp/asks/report.md`, `misses/report.md`,
+  `advice-exp/report.md`; the scenario matrix replay is running.
+
+## Next step
+
+Everything is merged at 9438b7d and pushed to draft PR #31 (suite 2711/2711,
+panels 61/61). Remaining: the owner reloads the dev plugin in Orca (computer
+use is blocked by macOS accessibility), then a live check of the Settings
+tabs, the board advise tag and the policy-kind status, then mark PR #31
+ready for review. Merge and marketplace publish are the owner's decisions.

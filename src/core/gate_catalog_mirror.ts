@@ -22,7 +22,7 @@
 // Jev-answers boundary.
 import { isArrayOf, isNumber, isRecord, isString } from '../guards.ts'
 import type { MatchableDestination } from './destination_match.ts'
-import { migratePolicyKind } from './decisions.ts'
+import { migratePolicyKind, withNormalizedPolicyScope } from './decisions.ts'
 import type { Policy, PolicyKind } from './decisions.ts'
 
 /**
@@ -51,6 +51,12 @@ export interface MirroredCatalog {
 function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null
 }
+
+// PolicyScope's own runtime member check (isPolicyScope) is imported from
+// decisions.ts -- the one shared list every reader uses instead of its own
+// copy (odd/tasks/release-0.5.1.md JEVADV-36). Unlike isPolicyKind above,
+// there is no legacy Spanish spelling to map here: 'scope' is a field this
+// plugin has only ever shipped in English.
 
 function isAutonomyOverride(value: unknown): value is { readonly consequenceCeiling?: number } {
   if (!isRecord(value)) return false
@@ -81,6 +87,11 @@ export function parseMirroredCatalog(value: unknown): MirroredCatalog | null {
   return isMirroredCatalog(value) ? value : null
 }
 
+/** Shape check for everything except `scope`'s VALUE -- see
+ *  withNormalizedScope below (T10, JEVADV-28, R4): an unrecognised `scope`
+ *  used to drop the whole row, which is MORE permissive on what is probably
+ *  just a typo (including a stopping `prohibits` policy silently vanishing
+ *  instead of resolving to its seed's scope, or `"command"`). */
 function isMirroredPolicy(value: unknown): value is Policy {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false
   if ('destinations' in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false
@@ -94,8 +105,14 @@ function isMirroredPolicy(value: unknown): value is Policy {
  * documents exactly why: one row missing/holding an invalid `kind` must
  * never silently disable every OTHER policy the user configured. Returns
  * null only when the top-level value isn't an array at all.
+ *
+ * An unrecognised `scope` is stripped to ABSENT rather than costing the
+ * whole row -- decisions.ts's withNormalizedPolicyScope, shared with
+ * store.ts's getPolicies and policy_seed.ts's parseSeedPolicies, so every
+ * reader normalizes the same way instead of each rebuilding the row from
+ * its own fixed field list (odd/tasks/release-0.5.1.md JEVADV-36).
  */
 export function parseMirroredPolicies(value: unknown): readonly Policy[] | null {
   if (!Array.isArray(value)) return null
-  return value.filter(isMirroredPolicy)
+  return value.filter(isMirroredPolicy).map(withNormalizedPolicyScope)
 }

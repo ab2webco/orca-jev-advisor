@@ -117,7 +117,11 @@ function toGateDecisionRecord (row) {
     // file has hidden something that was actually working; check the other
     // guards in this file before trusting any of their omissions again.
     (row.source !== 'local-rule' && row.source !== 'cache' && row.source !== 'jev' && row.source !== 'none') ||
-    (row.verdict !== 'allow' && row.verdict !== 'ask' && row.verdict !== 'deny') ||
+    // 'advise' (the advise-model release, src/core/gate_measurement.ts): the
+    // risk stage (or a local rule whose switch is off) refuses the CODING
+    // MODEL and hands it a reason, rather than asking a person -- same
+    // silent-drop mistake as 'none' above if this guard forgets it.
+    (row.verdict !== 'allow' && row.verdict !== 'ask' && row.verdict !== 'deny' && row.verdict !== 'advise') ||
     (row.latencyMs !== null && typeof row.latencyMs !== 'number') ||
     // Optional ON READ, not on write (see gate_measurement.ts's own doc on
     // GateDecisionRecord.pluginVersion): absent entirely is a record from
@@ -434,7 +438,14 @@ async function aggregateModSkills () {
 
     if (isRecord(d.decision) && typeof d.decision.name === 'string') suggested += 1
 
-    if (typeof d.listingChars === 'number' && Number.isFinite(d.listingChars)) {
+    // board.html's own copy for this stat is "Listing characters not sent"
+    // -- only a decision that actually withheld the listing (JEVADV-4's own
+    // `listingWithheld: true`) counts. A record written before that field
+    // existed has no way to say either way; the documented choice is to
+    // keep counting it, exactly as every record was counted before this
+    // field existed at all, rather than silently dropping older history.
+    const countsAsNotSent = d.listingWithheld === undefined || d.listingWithheld === true
+    if (countsAsNotSent && typeof d.listingChars === 'number' && Number.isFinite(d.listingChars)) {
       listingCharsSum += d.listingChars
       listingCharsCount += 1
     }

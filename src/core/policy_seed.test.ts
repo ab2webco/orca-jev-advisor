@@ -63,6 +63,19 @@ test("the old bare-array shape this file has always shipped as still parses", ()
   assert.equal(parseSeedVersion(bareArray), 0, "a bare array carries no version, and 0 must not be guessed higher");
 });
 
+test("a row with an unrecognised scope value has it stripped, not passed through as if valid -- JEVADV-36", () => {
+  // isPolicyRow (store.ts) only validates id/rule/kind, deliberately silent
+  // on scope's VALUE (see its own doc comment) -- so a row with a typo'd
+  // scope still survives the filter, but used to come out of this function
+  // carrying that invalid string as if it satisfied PolicyScope. store.ts's
+  // getPolicies already normalizes this at read time (T10, JEVADV-28, R4);
+  // this is the seed reader doing the same, so every reader of a
+  // possibly-scopeless-or-mistyped row is consistent.
+  const parsed = parseSeedPolicies([{ id: "typo-scope", kind: "prohibits", rule: "invalid scope value", scope: "proceso" }]);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0]?.scope, undefined, "an invalid scope must be stripped, not passed through");
+});
+
 test("the versioned { version, policies } object parses both halves", () => {
   const versioned = {
     version: 3,
@@ -144,6 +157,40 @@ test("the seed prohibits discarding uncommitted work, in the same forms the gate
   assert.ok(row.rule.includes("--staged"), "the rule does not carve out git restore --staged");
 });
 
+test("the shipped seed marks exactly the two local-rule policies -- odd/tasks/release-0.5.1.md T10 (JEVADV-34)", () => {
+  // Both are already enforced by a local deny rule (gate-bash.ts's
+  // NEVER_SILENTLY) before Jev's policy stage ever runs, so a real instance
+  // never reaches it -- only a command that merely MENTIONS one in quoted
+  // data does, and that stage cannot honestly answer "forbidden by
+  // no_force_push" about text that never ran. A row silently losing this
+  // scope would let that false ask back in without any test noticing.
+  const localRuleScoped = parseSeedPolicies(seedFile)
+    .filter((row) => row.scope === "local-rule")
+    .map((row) => row.id)
+    .sort();
+  assert.deepEqual(localRuleScoped, ["discard_uncommitted_work", "no_force_push"]);
+});
+
+test("the shipped seed marks exactly the five process policies -- odd/tasks/release-0.5.1.md T2", () => {
+  // Pinned by name, same loud-failure discipline as the prohibits count
+  // below: these five describe how the agent works or what it claims, not
+  // anything a single shell command can violate (visual_evidence matched
+  // the exact command it demands -- a screenshot or a heredoc -- and asked
+  // "forbidden by visual_evidence" about it). A row silently losing its
+  // scope would let this exact bug back in without any test noticing.
+  const processScoped = parseSeedPolicies(seedFile)
+    .filter((row) => row.scope === "process")
+    .map((row) => row.id)
+    .sort();
+  assert.deepEqual(processScoped, [
+    "delegate_by_scope",
+    "model_by_difficulty",
+    "no_inventing_contracts",
+    "ticket_first",
+    "visual_evidence",
+  ]);
+});
+
 test("the shipped seed carries ten prohibits, which is what the marker protects", () => {
   // The comments justifying the marker name this number. A seed that changes
   // shape should force them to be re-read, not quietly outdate them.
@@ -177,7 +224,7 @@ function sortKeysDeep(value: unknown): unknown {
  *  loudly here instead of silently reaching an install that will never know
  *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
  *  which decides `due` from `version` alone and never looks at content. */
-const PINNED_DIGEST = "163d37c060a538a502032a99c3359d5b42ca4201200b8420e81234da6bd80e82";
+const PINNED_DIGEST = "4bf63a78101f82546fd55f82f3e1404a154e20ce21333b3c4084f1d10a88a6f1";
 
 test("editing a shipped policy row without bumping the seed version fails loudly", () => {
   // Pinned together on purpose: a row edit changes the digest, and the
@@ -196,7 +243,7 @@ test("editing a shipped policy row without bumping the seed version fails loudly
   );
   assert.equal(
     parseSeedVersion(seedFile),
-    1,
+    3,
     'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
       "PINNED_DIGEST once the rows for that release are final).",
   );

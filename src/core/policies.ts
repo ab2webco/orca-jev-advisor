@@ -9,6 +9,7 @@
 
 import { readFile } from "node:fs/promises";
 import type { Policy, PolicyKind } from "./decisions.ts";
+import { isPolicyScope, POLICY_SCOPE_VALUES } from "./decisions.ts";
 import { isRecord, isString } from "../guards.ts";
 
 /** Reserved: never usable as a real policy id, since Jev's coverage question uses it to mean "none of these apply". */
@@ -20,6 +21,10 @@ const POLICY_KINDS: readonly PolicyKind[] = ["permits", "requires_human", "prohi
 function isPolicyKind(value: unknown): value is PolicyKind {
   return isString(value) && (POLICY_KINDS as readonly string[]).includes(value);
 }
+
+// The only valid values for a policy row's optional `scope` -- see
+// isPolicyScope in decisions.ts, the one runtime member list every reader
+// shares (odd/tasks/release-0.5.1.md JEVADV-36) instead of its own copy.
 
 function isPolicyRow(value: unknown, index: number): Policy {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule)) {
@@ -36,7 +41,23 @@ function isPolicyRow(value: unknown, index: number): Policy {
   if (!isPolicyKind(value.kind)) {
     throw new Error(`La politica en la posicion ${index} ('${value.id}') necesita 'kind' igual a uno de: ${POLICY_KINDS.join(", ")}`);
   }
-  return { id: value.id, rule: value.rule, kind: value.kind };
+  // Unlike `kind`, `scope` is genuinely optional: absent means "resolve it
+  // later" (resolvePolicyScope in decisions.ts), not a misconfiguration --
+  // but a PRESENT, invalid value is still a typo the operator needs to see,
+  // same discipline as `kind` above.
+  if ("scope" in value && value.scope !== undefined && !isPolicyScope(value.scope)) {
+    // JEVADV-37 (R2-002, odd/tasks/release-0.5.1.md): the allowed values are
+    // named from POLICY_SCOPE_VALUES (decisions.ts), the single runtime list
+    // isPolicyScope itself already checks against, rather than a second,
+    // hardcoded copy of the same three strings drifting out of sync with it.
+    throw new Error(`La politica en la posicion ${index} ('${value.id}') tiene un 'scope' invalido; debe ser uno de: ${[...POLICY_SCOPE_VALUES].join(", ")}`);
+  }
+  return {
+    id: value.id,
+    rule: value.rule,
+    kind: value.kind,
+    ...(isPolicyScope(value.scope) ? { scope: value.scope } : {}),
+  };
 }
 
 /**

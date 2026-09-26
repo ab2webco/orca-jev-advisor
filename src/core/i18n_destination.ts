@@ -27,8 +27,8 @@ export const DESTINATION_CATALOG: Catalog<DestinationKey> = {
     "risk.hardToUndo": "revertirla no es trivial",
     "risk.noticedOutsideTeam": "se nota fuera del equipo",
     "risk.hurtsIfWrong": "si sale mal, duele",
-    "risk.clear": "Sin politica que la cubra, pero es reversible, interna y barata.",
-    "risk.noPolicyCoverage": "Sin politica que la cubra",
+    "risk.clear": "Sin política que la cubra, pero es reversible, interna y barata.",
+    "risk.noPolicyCoverage": "Sin política que la cubra",
   },
   en: {
     "policy.allowed": "Allowed by {{policyId}}: {{rule}}",

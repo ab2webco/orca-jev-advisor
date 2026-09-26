@@ -16,6 +16,7 @@ test("a well-shaped entry is valid", () => {
   assert.equal(isValidGateCacheEntry({ decision: "allow", reason: "reversible, local and cheap", at: Date.now() }), true);
   assert.equal(isValidGateCacheEntry({ decision: "deny", reason: "x", at: 0 }), true);
   assert.equal(isValidGateCacheEntry({ decision: "ask", reason: "x", at: 1 }), true);
+  assert.equal(isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", at: 1 }), true, "advise is cacheable, never as a silent allow");
 });
 
 test("malformed entries are never valid -- a corrupt cache is just a smaller cache, never a crash", () => {
@@ -27,6 +28,24 @@ test("malformed entries are never valid -- a corrupt cache is just a smaller cac
   assert.equal(isValidGateCacheEntry({ decision: "allow", reason: "x", at: "yesterday" }), false, "at must be a number");
   assert.equal(isValidGateCacheEntry({ decision: "allow", reason: "x" }), false, "missing at");
   assert.equal(isValidGateCacheEntry({ decision: "allow", reason: "x", at: Number.NaN }), false, "at must be finite");
+});
+
+test("reasonKey is optional, for localizing an advise entry's person-facing summary", () => {
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKey: "reason.cannotUndo", at: 1 }),
+    true,
+    "a well-shaped reasonKey is valid",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", at: 1 }),
+    true,
+    "an entry with no reasonKey at all -- written before this field existed -- stays valid",
+  );
+  assert.equal(
+    isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", reasonKey: 5, at: 1 }),
+    false,
+    "reasonKey, when present, must be a string",
+  );
 });
 
 test("an entry younger than the TTL is fresh", () => {

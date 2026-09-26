@@ -65,7 +65,7 @@
  * orca-jev-mod-skills (plus its own marker file), and our own bookkeeping
  * under ~/.config/orca-supervisor/.
  */
-import { lstat, readdir, readFile, readlink } from 'node:fs/promises'
+import { lstat, readdir, readFile, readlink, stat } from 'node:fs/promises'
 // Guarded stand-ins for the mutating fs/promises calls this file makes --
 // see guarded_fs.ts's module doc for why every write in this script goes
 // through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/cp.
@@ -79,6 +79,7 @@ import {
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
 import {
   ORCA_USER_DATA_ENV,
@@ -89,6 +90,7 @@ import {
   settingsPathFor,
   skillsDirFor
 } from '../../src/core/orca_accounts.ts'
+import { buildModSkillsHooksManifest, buildModSkillsPluginManifest, computeModSkillsDigest, walkModSkillsClosure } from '../../src/core/mod_skills_copy.ts'
 
 // `~/.claude/...` is Claude Code's own convention, not ours to redefine --
 // it stays home-relative on every platform (Claude Code's own docs give no
@@ -560,13 +562,36 @@ function uninstallEnvVar (settings, state) {
 // simple enough that "one mechanism, well tested" beats "two, one of them
 // dark."
 //
-// A copy cannot tell "still current" from "stale" by reading its own
-// target the way a symlink could, so a marker file next to it records
-// which plugin tree it came from. Orca installs each version of this
-// plugin under its own content-hashed directory, so the marker's `source`
-// path changing IS the update signal -- no content hash of the copy itself
-// is needed.
+// JEVADV-43 -- mod-skills had never actually loaded on any machine, in part
+// because a flat copy of `adapters/claude/mod-skills/` puts its hooks
+// module's own `../../../../src/core/*` imports OUTSIDE any plugin folder
+// rooted there; the engine refuses a module whose imports leave its own
+// plugin folder. The copy now mirrors the REPO's own relative layout
+// instead: `planModSkillsCopy` walks hooks/index.ts's transitive import
+// closure (src/core/mod_skills_copy.ts) and `writeModSkillsCopy` copies
+// each file to that SAME repo-relative path under the copy's own root, so
+// `../../../../src/core/jev.ts` resolves inside the copy exactly as it does
+// inside the repo. Two files are generated fresh at the copy's root instead
+// of copied: `.claude-plugin/plugin.json` (the manifest the engine
+// requires -- reason #1 of the diagnosis: `author` must be an object, never
+// a bare string) and `hooks/hooks.json` (pointing at
+// `../adapters/claude/mod-skills/hooks/index.ts`, the mirrored entry).
+//
+// A copy used to be judged "current" purely by the marker's `source` path
+// -- which never changes for a plugin loaded straight off a fixed dev path
+// (`--plugin-dir`, or a symlinked checkout), so a copy could sit there
+// stale forever even after every source file under it changed. The marker
+// now also records a content digest (computeModSkillsDigest) over every
+// closure file's bytes AND the two generated files' own content, and a
+// copy is current only when the source path, the digest, AND the presence
+// of `.claude-plugin/plugin.json` all agree -- see modCopyState below.
 // ---------------------------------------------------------------------------
+
+const MOD_SKILLS_ENTRY = 'adapters/claude/mod-skills/hooks/index.ts'
+const MOD_SKILLS_PLUGIN_NAME = 'orca-jev-mod-skills'
+const MOD_SKILLS_AUTHOR_NAME = 'Ab2Web'
+const MOD_SKILLS_MANIFEST_PATH = '.claude-plugin/plugin.json'
+const MOD_SKILLS_HOOKS_JSON_PATH = 'hooks/hooks.json'
 
 function modCopyMarkerPathFor (modCopyPath) {
   return join(dirname(modCopyPath), '.orca-jev-mod-skills.source.json')
@@ -581,138 +606,168 @@ async function readModCopyMarker (markerPath) {
   }
 }
 
-async function writeModCopyMarker (markerPath, source) {
+async function writeModCopyMarker (markerPath, source, digest) {
   await mkdir(dirname(markerPath), { recursive: true })
   const tempPath = `${markerPath}.${randomUUID()}.tmp`
-  await writeFile(tempPath, `${JSON.stringify({ source, copiedAt: new Date().toISOString() }, null, 2)}\n`, 'utf8')
+  await writeFile(tempPath, `${JSON.stringify({ source, digest, copiedAt: new Date().toISOString() }, null, 2)}\n`, 'utf8')
   await rename(tempPath, markerPath)
 }
 
-/**
- * Whether the copy at `modCopyPath` is ours and current for `source`.
- *
- * A marker naming `source` is the ordinary case. Absent a marker, a
- * symlink whose own target already names `source` is a pre-fix install
- * this code has not touched yet -- still ours, still current, just not
- * migrated to a copy on disk yet (that happens the next time `install`
- * runs). Anything else (a foreign directory, a symlink to somewhere else,
- * a marker for a different plugin root) is not current, whether or not it
- * exists.
- */
-async function modCopyState (modCopyPath, markerPath, source) {
-  const stat = await lstat(modCopyPath).catch((error) => {
-    if (error?.code === 'ENOENT') return null
-    throw error
-  })
-  if (!stat) return { exists: false, current: false }
-  const marker = await readModCopyMarker(markerPath)
-  if (marker !== null) return { exists: true, current: marker.source === source }
-  if (stat.isSymbolicLink()) {
-    const target = await readlink(modCopyPath).catch(() => null)
-    return { exists: true, current: target === source }
-  }
-  return { exists: true, current: false }
+async function pathExists (path) {
+  return lstat(path).then(
+    () => true,
+    (error) => {
+      if (error?.code === 'ENOENT') return false
+      throw error
+    }
+  )
+}
+
+/** A reader (src/core/mod_skills_copy.ts's own `ModSkillsCopyReader` shape) over `pluginRoot`'s real files, keyed by repo-relative posix path. */
+function repoFileReader (pluginRoot) {
+  return { read: (repoRelativePath) => readFile(join(pluginRoot, ...repoRelativePath.split('/')), 'utf8') }
 }
 
 /**
- * Manual recursive tree copy, standing in for `fs.cp`. Measured on the exact
- * flags the plugin worker spawns this script with: `fs.cp`'s recursive copy
- * is denied outright (ERR_ACCESS_DENIED), on every real machine measured,
- * even with `/*` wildcards added to both the read and write grants -- while
- * `readdir`, `mkdir`, `readFile` and `writeFile` are all separately
- * permitted under the same flags. This walks the tree with exactly those
- * four permitted primitives instead of the one denied one.
+ * Everything an installed copy of mod-skills needs to be judged "current"
+ * for `pluginRoot`, and everything `writeModSkillsCopy` needs to actually
+ * write it: the transitive closure starting at hooks/index.ts, the two
+ * generated files (the manifest and the root hooks.json), and their
+ * combined digest. Exported so the repo's own validate test builds exactly
+ * what `install` would build, through this one function, rather than a
+ * second hand-rolled copy of this logic.
  *
- * A symbolic link inside the source tree is skipped -- neither followed nor
- * recreated. mod-skills, the only tree this ever copies, ships none, and a
- * sandbox that denies `fs.symlink` outright (see the module note above on
- * why this file copies rather than links in the first place) could not
- * recreate one here even if the source had one.
+ * The plugin manifest's version comes from `pluginRoot`'s own package.json
+ * (never hardcoded); both generated files' `description` is read from the
+ * SOURCE's own `adapters/claude/mod-skills/hooks/hooks.json` (its author's
+ * hand-maintained description of what this mod does), so that file stays a
+ * live part of the product instead of dead weight after this layout change.
  */
-async function copyTree (source, destination, skipped) {
-  // Read the source before creating anything at the destination, so a
-  // missing or unreadable source (the P5 failure fixture, and any real
-  // permission problem) fails cleanly with nothing left behind.
-  const entries = await readdir(source, { withFileTypes: true })
-  await mkdir(destination, { recursive: true })
-  for (const entry of entries) {
-    const from = join(source, entry.name)
-    const to = join(destination, entry.name)
-    if (entry.isDirectory()) {
-      await copyTree(from, to, skipped)
-      continue
-    }
-    if (entry.isFile()) {
-      await writeFile(to, await readFile(from))
-      // writeFile creates 0644 regardless of the source, so the mode has to
-      // be carried over deliberately. Today every file in mod-skills is
-      // 0644 and this is a no-op -- but the day someone adds a file that
-      // has to be executable, losing the bit here would be silent, and a
-      // hook that cannot run looks exactly like a hook that was never
-      // installed. `chmod` is permitted under the worker's sandbox;
-      // measured, unlike `fs.cp`.
-      const mode = (await lstat(from)).mode & 0o777
-      if (mode !== 0o644) await chmod(to, mode)
-      continue
-    }
-    // A symlink, socket or FIFO is skipped -- see the doc comment above --
-    // but counted, because a tree that arrived incomplete must not report
-    // itself as a clean copy.
-    skipped.push(entry.name)
+export async function planModSkillsCopy (pluginRoot) {
+  const reader = repoFileReader(pluginRoot)
+  const closurePaths = await walkModSkillsClosure(MOD_SKILLS_ENTRY, reader)
+
+  const pkg = JSON.parse(await readFile(join(pluginRoot, 'package.json'), 'utf8'))
+  const version = isRecord(pkg) && typeof pkg.version === 'string' ? pkg.version : '0.0.0'
+
+  const sourceHooksJson = JSON.parse(await readFile(join(pluginRoot, 'adapters', 'claude', 'mod-skills', 'hooks', 'hooks.json'), 'utf8'))
+  const description = isRecord(sourceHooksJson) && typeof sourceHooksJson.description === 'string' ? sourceHooksJson.description : MOD_SKILLS_PLUGIN_NAME
+
+  const generatedFiles = [
+    { path: MOD_SKILLS_MANIFEST_PATH, content: buildModSkillsPluginManifest({ name: MOD_SKILLS_PLUGIN_NAME, version, description, authorName: MOD_SKILLS_AUTHOR_NAME }) },
+    { path: MOD_SKILLS_HOOKS_JSON_PATH, content: buildModSkillsHooksManifest({ description, modulePath: `../${MOD_SKILLS_ENTRY}` }) }
+  ]
+
+  const digest = await computeModSkillsDigest(closurePaths, reader, generatedFiles)
+  return { closurePaths, generatedFiles, digest }
+}
+
+/**
+ * Writes exactly `plan`'s closure files (each at its own repo-relative
+ * path under `destination`) and generated files. Assumes `destination`
+ * is either absent or was just wiped by the caller (installModCopy below
+ * always wipes wholesale rather than merging into whatever is already
+ * there -- never trusting a stale or foreign directory, or a symlink's
+ * target, as good enough to write into directly).
+ */
+export async function writeModSkillsCopy (pluginRoot, destination, plan) {
+  for (const repoRelativePath of plan.closurePaths) {
+    const from = join(pluginRoot, ...repoRelativePath.split('/'))
+    const to = join(destination, ...repoRelativePath.split('/'))
+    await mkdir(dirname(to), { recursive: true })
+    await writeFile(to, await readFile(from))
+    // writeFile creates 0644 regardless of the source, so the mode has to
+    // be carried over deliberately. Today every file in the closure is
+    // 0644 and this is a no-op -- but the day one has to be executable,
+    // losing the bit here would be silent, and a hook that cannot run
+    // looks exactly like a hook that was never installed.
+    const mode = (await stat(from)).mode & 0o777
+    if (mode !== 0o644) await chmod(to, mode)
   }
+  for (const file of plan.generatedFiles) {
+    const to = join(destination, ...file.path.split('/'))
+    await mkdir(dirname(to), { recursive: true })
+    await writeFile(to, file.content, 'utf8')
+  }
+}
+
+/**
+ * Whether the copy at `modCopyPath` is ours, and current, for `source`.
+ *
+ * `ours`: a marker naming `source` is the ordinary case. Absent a marker, a
+ * symlink whose own target already names `source` is a pre-fix install
+ * this code has not touched yet -- still ours, just not migrated to a copy
+ * on disk yet (that happens the next time `install` runs). Anything else
+ * (a foreign directory, a symlink to somewhere else, a marker for a
+ * different plugin root) is not ours.
+ *
+ * `current`: ours AND a real directory (never a symlink -- a pre-fix
+ * install always needs migrating) AND the marker's own digest matches
+ * `digest` AND `.claude-plugin/plugin.json` is actually present. `digest`
+ * may be `null` (uninstall does not need "current", only "ours"), which
+ * makes `current` always false.
+ */
+async function modCopyState (modCopyPath, markerPath, source, digest) {
+  const st = await lstat(modCopyPath).catch((error) => {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  })
+  if (!st) return { exists: false, ours: false, current: false, hasManifest: false }
+
+  const marker = await readModCopyMarker(markerPath)
+  let ours
+  if (marker !== null) {
+    ours = marker.source === source
+  } else if (st.isSymbolicLink()) {
+    const target = await readlink(modCopyPath).catch(() => null)
+    ours = target === source
+  } else {
+    ours = false
+  }
+
+  const hasManifest = await pathExists(join(modCopyPath, ...MOD_SKILLS_MANIFEST_PATH.split('/')))
+  const current = ours && !st.isSymbolicLink() && marker !== null && typeof marker.digest === 'string' && digest !== null && marker.digest === digest && hasManifest
+  return { exists: true, ours, current, hasManifest }
 }
 
 async function installModCopy (pluginRoot, modCopyPath, markerPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  const stat = await lstat(modCopyPath).catch((error) => {
-    if (error?.code === 'ENOENT') return null
-    throw error
-  })
-  const marker = stat ? await readModCopyMarker(markerPath) : null
-  // Deliberately stricter than modCopyState's "current" (which treats a
-  // matching symlink as ours, for uninstall/status backward compatibility):
-  // install must never treat a symlink as "nothing to do" here, or a
-  // pre-fix install would never get migrated to a real copy. Only an
-  // actual directory with a marker naming this exact source counts as
-  // already installed.
-  const alreadyCurrentCopy = stat !== null && !stat.isSymbolicLink() && marker !== null && marker.source === source
-  if (alreadyCurrentCopy) return { changed: false }
-  if (stat !== null) {
-    // Stale (different plugin root), an unrecognized leftover, or -- always
-    // -- a pre-fix symlink: replace wholesale rather than merging into it
-    // or trusting a symlink's target as good enough, the same way a stale
-    // settings.json container is never partially reused.
-    await rm(modCopyPath, { recursive: true, force: true })
-  }
-  const skipped = []
+  let plan
   try {
-    await copyTree(source, modCopyPath, skipped)
+    plan = await planModSkillsCopy(pluginRoot)
   } catch (error) {
     return { changed: false, reason: 'copy-failed', detail: `could not copy the skills mod (${String(error?.message ?? error)})` }
   }
-  await writeModCopyMarker(markerPath, source)
-  // The copy happened, so this is not 'copy-failed' -- but an entry this
-  // walk cannot reproduce means the tree on disk is not the tree that
-  // shipped, and saying nothing about it is how the previous two failures
-  // stayed invisible for a whole release each.
-  if (skipped.length > 0) {
-    return {
-      changed: true,
-      reason: 'copy-incomplete',
-      detail: `copied the skills mod, but skipped ${skipped.length} entry/entries it cannot reproduce (${skipped.slice(0, 5).join(', ')})`
-    }
+
+  const state = await modCopyState(modCopyPath, markerPath, source, plan.digest)
+  if (state.current) return { changed: false }
+
+  if (state.exists) {
+    // Stale (different plugin root or changed content), an unrecognized
+    // leftover, or -- always -- a pre-fix symlink: replace wholesale rather
+    // than merging into it or trusting a symlink's target as good enough,
+    // the same way a stale settings.json container is never partially
+    // reused. `rm` on a path that is itself a symlink removes the link,
+    // never the tree it points at.
+    await rm(modCopyPath, { recursive: true, force: true })
   }
+  try {
+    await writeModSkillsCopy(pluginRoot, modCopyPath, plan)
+  } catch (error) {
+    return { changed: false, reason: 'copy-failed', detail: `could not copy the skills mod (${String(error?.message ?? error)})` }
+  }
+  await writeModCopyMarker(markerPath, source, plan.digest)
   return { changed: true }
 }
 
 async function uninstallModCopy (pluginRoot, modCopyPath, markerPath) {
   const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  const state = await modCopyState(modCopyPath, markerPath, source)
+  const state = await modCopyState(modCopyPath, markerPath, source, null)
   if (!state.exists) {
     await rm(markerPath, { force: true })
     return { changed: false }
   }
-  if (!state.current) {
+  if (!state.ours) {
     // Not ours (or not pointing at this plugin root): leave it alone rather
     // than guessing whose it is -- the same care uninstallHookEntry takes
     // with a container it did not create.
@@ -937,6 +992,12 @@ async function status (pluginRoot) {
   const [gateSpec, postSpec, deniedSpec, postFailureSpec, agentPreSpec, agentPostSpec, agentPostFailureSpec] = specs
   const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
   const discovery = await discoverTargets()
+  // Best-effort: an unreadable pluginRoot (a missing package.json, a
+  // missing source hooks.json) must not fail status entirely -- every
+  // target's modCopy just reads as not current (digest stays null, so
+  // modCopyState's own current check can never pass), the same "absent
+  // digest never lies about freshness" rule installModCopy relies on.
+  const modPlan = await planModSkillsCopy(pluginRoot).catch(() => null)
 
   const perTarget = []
   for (const target of discovery.targets) {
@@ -956,7 +1017,7 @@ async function status (pluginRoot) {
     const ownAgentPostHook = findMarkedHook(findGroup(settings, agentPostSpec.event, agentPostSpec.matcher), agentPostSpec.marker)
     const ownAgentPostFailureHook = findMarkedHook(findGroup(settings, agentPostFailureSpec.event, agentPostFailureSpec.matcher), agentPostFailureSpec.marker)
     const modCopyPath = modCopyPathFor(target)
-    const modCopy = await modCopyState(modCopyPath, modCopyMarkerPathFor(modCopyPath), modSource).catch(() => ({ exists: false, current: false }))
+    const modCopy = await modCopyState(modCopyPath, modCopyMarkerPathFor(modCopyPath), modSource, modPlan?.digest ?? null).catch(() => ({ exists: false, ours: false, current: false, hasManifest: false }))
     perTarget.push({
       id: target.id,
       label: target.label,
@@ -982,13 +1043,20 @@ async function status (pluginRoot) {
       },
       env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
       // `installed` keeps its old meaning (this exact plugin root's copy is
-      // in place); `exists` is finer-grained -- a stale copy from an older
-      // plugin root still exists (and still loads for Claude Code) even
-      // though it is not "installed" in the sense above. The config panel's
-      // skills-mod line (see odd/tasks/production-honesty-pass.md P6) reads
-      // `exists`, not `installed`, because a stale-but-present copy can
-      // still have produced real measurements worth reporting.
-      modCopy: { installed: modCopy.current, exists: modCopy.exists }
+      // in place, AND current for it -- JEVADV-43: `current` now also
+      // requires the marker's digest to match today's source, and the
+      // manifest to actually be present, so a copy that merely sits at the
+      // same path forever no longer reads as installed once its content
+      // goes stale); `exists` is finer-grained -- a stale copy from an
+      // older plugin root still exists (and still loads for Claude Code)
+      // even though it is not "installed" in the sense above. `hasManifest`
+      // is `false` whenever the copy lacks `.claude-plugin/plugin.json` --
+      // the exact gap that kept this mod from ever loading -- independent
+      // of whether the rest of it happens to be current. The config
+      // panel's skills-mod line (see odd/tasks/production-honesty-pass.md
+      // P6) reads `exists`, not `installed`, because a stale-but-present
+      // copy can still have produced real measurements worth reporting.
+      modCopy: { installed: modCopy.current, exists: modCopy.exists, hasManifest: modCopy.hasManifest }
     })
   }
 
@@ -1023,7 +1091,8 @@ async function status (pluginRoot) {
     env: { installed: perTarget.every((t) => t.env.installed), name: ENV_VAR_NAME },
     modCopy: {
       installed: perTarget.every((t) => t.modCopy.installed),
-      exists: perTarget.some((t) => t.modCopy.exists)
+      exists: perTarget.some((t) => t.modCopy.exists),
+      hasManifest: perTarget.some((t) => t.modCopy.hasManifest)
     },
     orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
     statePath: STATE_PATH
@@ -1053,4 +1122,12 @@ async function main () {
   process.stdout.write(JSON.stringify(result))
 }
 
-await main()
+// Runs `main()` only when this file is the actual entrypoint (`node
+// install-claude-integration.mjs <mode> <pluginRoot>`, exactly how every
+// existing test already invokes it via execFileSync) -- never when another
+// module imports it for its own named exports (planModSkillsCopy,
+// writeModSkillsCopy), which the validate test does directly, with no
+// subprocess and no argv of its own.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  await main()
+}

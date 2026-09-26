@@ -140,7 +140,10 @@ const MODEL_MEASUREMENTS_SUMMARY = summarizeModelMeasurements(MODEL_MEASUREMENT_
 const READY_DAY = {
   key: 'day', available: true, pluginVersion: null, since: '2026-09-24T00:28:46.766Z',
   totalDecisions: 2409,
-  byVerdict: { allow: 2320, ask: 77, deny: 12 },
+  // The advise-model release: the risk stage's own borderline verdict no
+  // longer asks a person -- it advises the coding model instead. 40 of the
+  // 2320 that used to be a plain 'allow' are now this new bucket.
+  byVerdict: { allow: 2280, ask: 77, deny: 12, advise: 40 },
   bySource: { 'local-rule': 23, cache: 240, jev: 2101, none: 45 },
   jevLatency: { sampleCount: 2101, medianMs: 577, p95Ms: 1243, maxMs: 1809 },
   interventions: {
@@ -169,7 +172,7 @@ const READY_DAY = {
 const READY_ALL = {
   key: 'all', available: true, pluginVersion: null, since: null,
   totalDecisions: 3711,
-  byVerdict: { allow: 3383, ask: 316, deny: 12 },
+  byVerdict: { allow: 3323, ask: 316, deny: 12, advise: 60 },
   bySource: { 'local-rule': 126, cache: 278, jev: 3262, none: 45 },
   jevLatency: { sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809 },
   interventions: {
@@ -207,7 +210,7 @@ function emptyWindow (key) {
   return {
     key, available: key !== 'version', pluginVersion: null, since: null,
     totalDecisions: 0,
-    byVerdict: { allow: 0, ask: 0, deny: 0 },
+    byVerdict: { allow: 0, ask: 0, deny: 0, advise: 0 },
     bySource: { 'local-rule': 0, cache: 0, jev: 0, none: 0 },
     jevLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
     interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
@@ -321,7 +324,7 @@ const READY = {
     ok: true,
     gate: {
       totalDecisions: 3711,
-      byVerdict: {allow: 3383, ask: 316, deny: 12},
+      byVerdict: {allow: 3323, ask: 316, deny: 12, advise: 60},
       bySource: {'local-rule': 126, cache: 278, jev: 3262, none: 45},
       jevLatency: {sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809},
       windows: READY_WINDOWS,
@@ -342,6 +345,9 @@ const READY = {
       recent: [
         { at: '2026-09-24T15:02:03.837Z', project: 'orca-supervisor', commandFamily: 'cd', source: 'jev', verdict: 'allow', latencyMs: 784 },
         { at: '2026-09-24T15:01:44.102Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'local-rule', verdict: 'ask', latencyMs: null },
+        // The advise-model release's own new verdict: the model was refused
+        // this one attempt and handed a reason, nobody was interrupted.
+        { at: '2026-09-24T15:01:20.511Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'jev', verdict: 'advise', latencyMs: 640 },
         { at: '2026-09-24T15:00:58.640Z', project: 'orca-oss', commandFamily: 'git', source: 'cache', verdict: 'allow', latencyMs: null },
       ],
     },
@@ -539,6 +545,12 @@ const BASELINE_NOTICE_DECISION = decidePolicySeedNotice({
   existing: BASELINE_EXISTING_POLICIES,
   shipped: SHIPPED_POLICIES,
 })
+// JEVADV-27 (odd/tasks/release-0.5.1.md): the worker now publishes the real
+// differing rows alongside the counts (main.mjs's computePolicySeedNoticeDecision),
+// and the panel renders the tick list straight from them while the notice is
+// due -- so the fixture must carry `differingItems` too, or this scenario's
+// screenshot would show the notice banner over an empty list.
+const BASELINE_DIFFERING_ITEMS = mergePolicySeeds(BASELINE_EXISTING_POLICIES, SHIPPED_POLICIES).differing
 
 // odd/tasks/model-reclassification.md T7's own baseline-notice fixture:
 // one shipped model this install never has (haiku, dropped below) and one
@@ -566,7 +578,7 @@ const MODEL_BASELINE_ITEMS = [
 const BASELINE = {
   ...READY,
   policies: BASELINE_EXISTING_POLICIES,
-  policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, at: iso },
+  policySeedNoticeStatus: { ...BASELINE_NOTICE_DECISION, differingItems: BASELINE_DIFFERING_ITEMS, at: iso },
   models: MODEL_BASELINE_EXISTING,
   modelsSeedNotice: { ...MODEL_BASELINE_DECISION, items: MODEL_BASELINE_ITEMS, checkedAt: iso },
 }
@@ -582,11 +594,38 @@ const BASELINE = {
 const { modelMeasurements: _readyModelMeasurements, ...READY_WITHOUT_MODEL_MEASUREMENTS } = READY
 const MODELS_EMPTY = { ...READY_WITHOUT_MODEL_MEASUREMENTS, models: [] }
 
-const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY }
+/**
+ * JEVADV-11 (odd/tasks/release-0.5.1.md) -- two real client repositories
+ * "Search Orca" found that the catalog does not yet cover, each awaiting a
+ * kind choice: catalogProposalsStatus is the exact shape
+ * publishCatalogProposalsStatus (main.mjs) publishes, never a hand-typed
+ * count. Needs no click: the tick list renders straight from the status,
+ * same as `baseline` above.
+ */
+const CATALOG_PROPOSALS = {
+  ...READY,
+  catalogProposalsStatus: {
+    ok: true,
+    proposals: [
+      { id: 'cineco-backend', label: 'cineco-backend', worktreePath: '/Users/dev/Projects/cineco-backend' },
+      { id: 'myparkplanner-be', label: 'myparkplanner-be', worktreePath: '/Users/dev/Projects/myparkplanner-be' },
+    ],
+    checkedAt: iso,
+  },
+}
+
+const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'catalog-proposals': CATALOG_PROPOSALS }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */
 const SCENARIO_CLICKS = { seeds: { panel: 'config.html', selector: '#import-policy-seeds' } }
+
+// JEVADV-41 -- config.html now shows one section-group at a time behind
+// role="tab" buttons inside #config-tabbar (see that element's own comment
+// in the panel). Each tab is its own screen, so this harness photographs
+// every one of them rather than only whichever tab happens to be active by
+// default ('general').
+const CONFIG_TAB_KEYS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
 
 /**
  * Impersonates the host bridge. Installed before the panel's own script runs,
@@ -637,15 +676,16 @@ async function main() {
   await rm(OUT_DIR, { recursive: true, force: true })
   await mkdir(WORK_DIR, { recursive: true })
 
-  // The panel reads its language from `<html lang>`, which the Orca shell sets.
-  // Rewriting the tag is simpler and more faithful than patching the DOM after
-  // load, which races the panel's own first read.
+  // JEVADV-10 (odd/tasks/release-0.5.1.md): the panel used to read its
+  // language from `<html lang>`, which Orca's plugin shells hardcode to
+  // "en" (never set by this plugin, never varied) -- it now reads
+  // `navigator.languages`/`navigator.language` instead (config.html's
+  // localeFromOrca), so English screenshots come from the browser
+  // CONTEXT's own `locale` below, not from rewriting the markup.
   const rendered = {}
   for (const panel of PANELS) {
-    const html = await readFile(join(PANELS_DIR, panel), 'utf8')
-    if (!html.includes('<html>')) throw new Error(`${panel}: no bare <html> tag to localise`)
     const path = join(WORK_DIR, panel)
-    await writeFile(path, html.replace('<html>', '<html lang="en">'))
+    await writeFile(path, await readFile(join(PANELS_DIR, panel), 'utf8'))
     rendered[panel] = path
   }
 
@@ -660,7 +700,8 @@ async function main() {
             const context = await browser.newContext({
               viewport: { width, height: 900 },
               colorScheme: theme,
-              deviceScaleFactor: 2
+              deviceScaleFactor: 2,
+              locale: 'en-US'
             })
             const page = await context.newPage()
             await page.addInitScript(hostBridge, SCENARIOS[scenario])
@@ -670,26 +711,56 @@ async function main() {
             await page.waitForTimeout(SETTLE_MS)
             const click = SCENARIO_CLICKS[scenario]
             if (click && click.panel === panel) {
+              // JEVADV-41: the target may live inside a tab-panel that is
+              // not the active one (import-policy-seeds is in Policies,
+              // not the default General tab) -- switch to it first, or
+              // Playwright's actionability check times out against a
+              // button hidden by its own tab-panel's [hidden].
+              const tabOfSelector = await page.evaluate((selector) => {
+                const target = document.querySelector(selector)
+                const panelEl = target && target.closest ? target.closest('.tab-panel') : null
+                return panelEl ? panelEl.id.replace(/^panel-/, '') : null
+              }, click.selector)
+              if (tabOfSelector) {
+                await page.click(`#tab-${tabOfSelector}`)
+                await page.waitForTimeout(300)
+              }
               await page.click(click.selector)
               await page.waitForTimeout(SETTLE_MS)
             }
 
-            const overflow = await page.evaluate(() => ({
-              scrollWidth: document.documentElement.scrollWidth,
-              clientWidth: document.documentElement.clientWidth
-            }))
-            if (overflow.scrollWidth > overflow.clientWidth) {
-              overflows.push(
-                `${scenario}/${panel}/${theme}/${width}: content is ${overflow.scrollWidth}px wide`
-              )
+            // JEVADV-41: config.html now shows one section-group at a time
+            // behind #config-tabbar; each tab is its own screen and gets its
+            // own screenshot and its own overflow check. board.html has no
+            // tabs, so tabKeys is a single `null` entry and behaves exactly
+            // as before.
+            const tabKeys = panel === 'config.html' ? CONFIG_TAB_KEYS : [null]
+            for (const tabKey of tabKeys) {
+              if (tabKey) {
+                await page.click(`#tab-${tabKey}`)
+                await page.waitForTimeout(300)
+              }
+
+              const overflow = await page.evaluate(() => ({
+                scrollWidth: document.documentElement.scrollWidth,
+                clientWidth: document.documentElement.clientWidth
+              }))
+              const label = tabKey
+                ? `${scenario}/${panel}/${theme}/${width}/${tabKey}`
+                : `${scenario}/${panel}/${theme}/${width}`
+              if (overflow.scrollWidth > overflow.clientWidth) {
+                overflows.push(`${label}: content is ${overflow.scrollWidth}px wide`)
+              }
+
+              const name = tabKey
+                ? `${scenario}-${panel.replace('.html', '')}-${theme}-${width}-${tabKey}.png`
+                : `${scenario}-${panel.replace('.html', '')}-${theme}-${width}.png`
+              await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
+              shots += 1
             }
             if (failures.length > 0) {
               overflows.push(`${scenario}/${panel}/${theme}/${width}: script error: ${failures[0]}`)
             }
-
-            const name = `${scenario}-${panel.replace('.html', '')}-${theme}-${width}.png`
-            await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
-            shots += 1
             await context.close()
           }
         }

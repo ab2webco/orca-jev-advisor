@@ -75,3 +75,43 @@ test("still rejects a row missing id/rule before it ever looks at kind", async (
     });
   });
 });
+
+// ===========================================================================
+// scope -- odd/tasks/release-0.5.1.md T2. Optional command-vs-process scope;
+// see decisions.ts's PolicyScope for what the two values mean.
+// ===========================================================================
+
+test("loads a row with a valid 'command' or 'process' scope", async () => {
+  await withPoliciesFile(
+    [
+      { id: "a", rule: "rule a", kind: "permits", scope: "command" },
+      { id: "b", rule: "rule b", kind: "prohibits", scope: "process" },
+    ],
+    async (path) => {
+      const policies = await loadPolicies(path);
+      assert.deepEqual(policies, [
+        { id: "a", rule: "rule a", kind: "permits", scope: "command" },
+        { id: "b", rule: "rule b", kind: "prohibits", scope: "process" },
+      ]);
+    },
+  );
+});
+
+test("a row with no scope field at all still loads fine -- absent means 'resolve it later'", async () => {
+  await withPoliciesFile([{ id: "a", rule: "rule a", kind: "permits" }], async (path) => {
+    const policies = await loadPolicies(path);
+    assert.deepEqual(policies, [{ id: "a", rule: "rule a", kind: "permits" }]);
+  });
+});
+
+test("throws a descriptive error naming the row index when scope is an invalid value", async () => {
+  await withPoliciesFile([{ id: "a", rule: "rule a", kind: "permits", scope: "sometimes" }], async (path) => {
+    await assert.rejects(() => loadPolicies(path), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /posicion 0/);
+      assert.match(error.message, /'a'/);
+      assert.match(error.message, /command, process/);
+      return true;
+    });
+  });
+});
