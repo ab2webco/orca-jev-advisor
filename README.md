@@ -61,6 +61,10 @@ of a cent — not by a large model reasoning about your shell.
 - **The skills mod actually loads.** Its installed copy now mirrors this
   repository's own layout, with a generated manifest, so Claude Code's
   engine accepts it — before 0.5.1 it never actually loaded on any machine.
+  It also now lists skills installed as symbolic links (it used to skip
+  them, and many skill installers use links), and it reads the session's
+  own skills folder, `$CLAUDE_CONFIG_DIR/skills`, when Claude Code runs
+  under a separate config directory, as Orca-managed accounts do.
 
 One developer's own replay of 151 real commands through this machine's
 gate, before and after this redesign: normal-work interruptions of a person
