@@ -356,7 +356,21 @@ function segmentDiscards(segment: string): boolean {
     const commandStart = afterOwnOptions(tokens, index + 1, WATCH_OPTIONS_WITH_VALUE);
     return commandStart < tokens.length && discardsUncommittedWork(tokens.slice(commandStart).join(" "));
   }
-  return gitDiscardsFrom(tokens, index, viaXargs);
+  if (gitDiscardsFrom(tokens, index, viaXargs)) return true;
+  // JEVADV-38 (odd/tasks/release-0.5.1.md T-lane-a task 3), mirroring
+  // scanSegment's own shellDashCAnywhereIndex fallback (JEVADV-37 item 3,
+  // "a shell -c anywhere in a segment is a run"): resolveProgram resolved
+  // this segment to some OTHER, unmodelled command (`parallel`, `flock`,
+  // `chroot`, ...) -- neither a WRAPPER nor recognised above -- so a real
+  // shell hidden behind it (`parallel sh -c "git checkout -- x"`, `flock f
+  // bash -c "git restore x"`) was invisible to every check so far. Fall
+  // back to a real shell name immediately followed by a `-c` flag found
+  // ANYWHERE in the segment's own tokens; shellDashCAnywhereIndex only ever
+  // recognises a REAL shell name (SHELLS), never ssh/watch/su/script, so a
+  // bare mention of one of those as some OTHER program's own argument
+  // (`grep -n watch "…git checkout -- x…" f`) still resolves to no match.
+  const scriptStart = shellDashCAnywhereIndex(tokens);
+  return scriptStart !== -1 && tokens[scriptStart] !== undefined && discardsUncommittedWork(tokens.slice(scriptStart).join(" "));
 }
 
 /**

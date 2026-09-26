@@ -81,6 +81,15 @@ const DISCARDS: readonly string[] = [
   'su root -c "git clean -fd"',
   'script -c "git reset --hard"',
   'watch "git reset --hard"',
+  // JEVADV-38 T-lane-a task 3: shellDashCAnywhereIndex's own fallback
+  // (odd/tasks/release-0.5.1.md, "a shell -c anywhere in a segment is a
+  // run") caught these for someSegmentMatches (the force-push/protected-
+  // branch/resetClean-raw scan) but discardsUncommittedWork/segmentDiscards
+  // never got it: resolveProgram resolves `parallel`/`flock` themselves as
+  // the segment's program (neither is a modelled WRAPPER), so the checkout/
+  // restore this real shell -c pair actually runs was invisible.
+  'parallel sh -c "git checkout -- x"',
+  'flock /tmp/l bash -c "git restore x"',
 ];
 
 // None of these touches uncommitted work in the working tree.
@@ -131,6 +140,13 @@ const KEEPS: readonly string[] = [
   // discard when xargs is about to append the actual pathspecs after it
   // (see "find . | xargs git checkout --" above).
   "git checkout main --",
+  // JEVADV-38 T-lane-a task 3: the shellDashCAnywhere fallback must not
+  // start matching a bare mention sitting inside another program's own
+  // argument -- "watch" is not itself a SHELLS name, so this stays a
+  // mention, exactly as someSegmentMatches' own equivalent test already
+  // established (git_discard.test.ts's forcePush/resetClean coverage
+  // below).
+  'grep -n watch "…git checkout -- x…" f',
 ];
 
 for (const command of DISCARDS) {
