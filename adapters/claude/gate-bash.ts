@@ -389,6 +389,18 @@ function resetCleanRule(ctx: RuleContext): RuleOutcome {
  * Only the agent is refused. The person can always run the command in a
  * terminal, which is what the deny message tells them.
  */
+/**
+ * A leading `+` on a refspec IS a force push -- `git push origin +main`
+ * rewrites main exactly the way `--force`/`-f` would, just scoped to that
+ * one ref (git's own `+<src>:<dst>` / bare `+<ref>` forced-update syntax).
+ * `(?:^|\s)\+\S` requires the `+` to actually START a token (preceded by
+ * whitespace or the beginning of the segment, never mid-word) and to be
+ * followed by a non-whitespace character, so a bare `+` alone never matches
+ * and this can never fire on an unrelated `+` inside some other argument.
+ * Found while building the own-branch-push allow (push_own_branch.ts):
+ * this rule's own `(--force|-f)\b` pattern never matched `+feature/x` at
+ * all, which is a real gap this closes rather than works around.
+ */
 const NEVER_SILENTLY: readonly {
   readonly evaluate: (ctx: RuleContext) => RuleOutcome
   readonly why: GateKey
@@ -397,7 +409,7 @@ const NEVER_SILENTLY: readonly {
   // Two-level rules (odd/tasks/release-0.5.1.md JEVADV-36): read through
   // someSegmentMatches, which is what can return 'ask' as well as 'deny' --
   // see segmentRule's own doc comment above.
-  { evaluate: segmentRule(/git\s+push\b.*(--force|-f)\b/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
+  { evaluate: segmentRule(/git\s+push\b.*(?:(?:--force|-f)\b|(?:^|\s)\+\S)/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
   { evaluate: pushProtectedRule, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root.

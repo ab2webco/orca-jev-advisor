@@ -175,7 +175,7 @@ for (const command of DISALLOWED_OPTION_COMMANDS) {
 // ---------------------------------------------------------------------------
 
 const DISALLOWED_REFSPEC_COMMANDS = [
-  "git push origin +feature/x", // leading + -- not denied by forcePush today either (verified live: someSegmentMatches returns null), but still not a plain branch name
+  "git push origin +feature/x", // leading + -- also denied by forcePush now (a +refspec is a force push), but this module's own refspec rule rejects it independently too
   "git push origin feature/x:main", // src:dst
   "git push origin :feature/x", // :branch delete
   "git push origin refs/heads/feature/x", // a full ref path, not "a plain branch name"

@@ -547,6 +547,48 @@ for (const command of SEGMENT_SCOPED_DENIED) {
 }
 
 // ---------------------------------------------------------------------------
+// forcePush: a leading `+` on a refspec IS a force push -- `git push origin
+// +main` rewrites main exactly the way `--force`/`-f` would, just scoped to
+// that one ref. Found while building the own-branch-push allow: forcePush's
+// pattern (`/(--force|-f)\b/`) never matched a `+`-prefixed refspec at all.
+// ---------------------------------------------------------------------------
+
+test('forcePush: a leading + on a refspec denies -- git push origin +main', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push origin +main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('forcePush: a leading + on a src:dst refspec denies -- git push origin +HEAD:main', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push origin +HEAD:main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// A non-protected branch name on purpose: "+main"/"+HEAD:main" above are
+// ALSO caught by pushProtectedRule's own text match on the word "main",
+// which would make those two pass even without this fix. "feature/x"
+// isolates the "+" behavior this fix is actually about -- this is the case
+// that gave genuine RED before the fix and GREEN after.
+test('forcePush: a leading + on a refspec denies even for a non-protected branch -- git push origin +feature/x', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push origin +feature/x'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('forcePush: a leading + on a src:dst refspec denies even for a non-protected branch -- git push origin +HEAD:feature/x', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push origin +HEAD:feature/x'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('forcePush: an ordinary refspec with no + is not caught by this rule', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'git push origin feature/x'))
+  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
 // JEVADV-39 (odd/tasks/release-0.5.1.md T-lane-a): a push naming
 // main/master/production is only a shared-branch push once its remote
 // actually resolves to somewhere shared. Real temp git repos throughout --
@@ -1124,21 +1166,16 @@ test('own-branch push: a real force push is still denied, not allowed by the new
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
 })
 
-// The brief's own example of a
-// command "still denied by the local rules" (`git push origin +feature/x`)
-// does NOT actually deny today -- verified directly against
-// someSegmentMatches with the real forcePush pattern (`/(--force|-f)\b/`):
-// "+feature/x" contains no "-f"/"--force" token, so it never matches. This
-// is a genuine discrepancy in the brief, reported rather than silently
-// "fixed" by widening the deny tier (out of scope: the deny tier is
-// unchanged). This module's own refspec rule ("no leading +") still keeps
-// it from qualifying for the NEW allow path either, so the net behavior is
-// unchanged: it falls through to the ordinary Jev/no-key path exactly as
-// before this feature existed.
-test('own-branch push: git push origin +feature/x is NOT denied by forcePush today (a leading + has no -f/--force token) -- but also not allowed by the new path', () => {
+// The brief's own example of a command "still denied by the local rules"
+// (`git push origin +feature/x`) originally did NOT deny (forcePush's own
+// pattern had no `-f`/`--force` token to match a leading `+` refspec) --
+// fixed in the forcePush rule itself (see NEVER_SILENTLY's own +refspec
+// doc comment above), so this is now a straightforward "still denied by
+// the local rules" case, not a discrepancy.
+test('own-branch push: git push origin +feature/x is denied by forcePush (a leading + refspec is a force push) -- never reaches the new path', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'git push origin +feature/x'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assertNotAllowedByOwnBranchPush(home, 'git push origin +feature/x')
 })
 
