@@ -126,14 +126,29 @@ async function storageAfterRealSeeding () {
 const temps = []
 after(async () => { for (const dir of temps) await rm(dir, { recursive: true, force: true }) })
 
-/** Copies the panel out with a language tag, the way the Orca shell sets one. */
-async function renderPanel (locale) {
+/** Copies the panel out to a temp path -- Playwright needs a real file for
+ *  `file://`. The locale itself is no longer an `<html lang>` mutation:
+ *  JEVADV-10 (odd/tasks/release-0.5.1.md) found Orca's plugin shells
+ *  hardcode `<html lang="en">` on every panel, so the panel now detects its
+ *  locale from `navigator.languages`/`navigator.language` instead (see
+ *  config.html's localeFromOrca) -- openPanel/openBoardPanel below drive
+ *  that through the browser CONTEXT's own `locale` option instead. */
+async function renderPanel () {
   const dir = await mkdtemp(join(tmpdir(), 'advisor-panel-'))
   temps.push(dir)
   const html = await readFile(CONFIG_PANEL, 'utf8')
   const path = join(dir, 'config.html')
-  await writeFile(path, html.replace('<html>', `<html lang="${locale}">`))
+  await writeFile(path, html)
   return path
+}
+
+/** 'es'/'en' (the only two this suite ever asks for) to a real BCP47 tag
+ *  Playwright's context `locale` option accepts -- anything else (an
+ *  already-full tag like 'es-CO', for a test that wants a specific region)
+ *  passes through unchanged. */
+function playwrightLocaleFor (locale) {
+  if (locale.indexOf('-') !== -1) return locale
+  return locale === 'es' ? 'es-ES' : 'en-US'
 }
 
 /**
@@ -184,13 +199,14 @@ function hostBridge (storage) {
   })
 }
 
-/** Copies board.html out with a language tag -- same discipline as renderPanel above. */
-async function renderBoardPanel (locale) {
+/** Copies board.html out -- same discipline as renderPanel above; no more a
+ *  language tag than that one is. */
+async function renderBoardPanel () {
   const dir = await mkdtemp(join(tmpdir(), 'advisor-board-panel-'))
   temps.push(dir)
   const html = await readFile(BOARD_PANEL, 'utf8')
   const path = join(dir, 'board.html')
-  await writeFile(path, html.replace('<html>', `<html lang="${locale}">`))
+  await writeFile(path, html)
   return path
 }
 
@@ -200,24 +216,24 @@ async function renderBoardPanel (locale) {
  *  the plain `storage[key] ?? null` branch already there. */
 async function openBoardPanel (storage, locale = 'en', colorScheme = 'light') {
   const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme })
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
   await page.addInitScript(hostBridge, storage)
-  await page.goto(`file://${await renderBoardPanel(locale)}`)
+  await page.goto(`file://${await renderBoardPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
   return { browser, page, errors }
 }
 
 async function openPanel (storage, locale = 'en', colorScheme = 'light') {
   const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme })
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
   await page.addInitScript(hostBridge, storage)
-  await page.goto(`file://${await renderPanel(locale)}`)
+  await page.goto(`file://${await renderPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
   return { browser, page, errors }
 }
@@ -456,10 +472,12 @@ test('clicking the notice\'s dismiss button sends a policy-seed-dismiss request'
 })
 
 test('every policies.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  // t() falls back to the Spanish catalog on a missing key, which hides a
-  // one-sided addition from a Spanish-locale reader but leaves an English
-  // reader looking at the literal key string -- this catches either gap in
-  // either direction, for every `policies.*` key, not only the new ones.
+  // t() falls back to the English catalog on a missing key (JEVADV-10,
+  // aligned with src/core/i18n.ts's DEFAULT_LOCALE = "en"), which hides a
+  // one-sided addition from an English-locale reader but leaves a
+  // Spanish-locale reader looking at the literal key string -- this catches
+  // either gap in either direction, for every `policies.*` key, not only
+  // the new ones.
   const { browser, page } = await openPanel({})
   try {
     const catalog = await page.evaluate(() => window.CATALOG)

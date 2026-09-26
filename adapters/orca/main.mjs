@@ -1148,8 +1148,20 @@ async function publishLocaleStatus (orca, storageHost) {
     .catch((error) => orca.log(`locale status publish failed: ${error.message}`))
 }
 
-/** Attends one pending language-change request from the panel, if any. */
-async function attendLocaleRequest (orca, storageHost) {
+/** Attends one pending language-change request from the panel, if any.
+ *
+ *  JEVADV-10 (odd/tasks/release-0.5.1.md): the requested locale is the
+ *  panel's own `navigator`-derived guess (config.html's localeFromOrca), a
+ *  hint, never final -- LOCALE_ORCA_SETTING_KEY, set once at activation by
+ *  applyOrcaUiLanguageAtActivation, is Orca's own EXPLICIT setting when it
+ *  has one, and overrides the request rather than the other way around: a
+ *  person who set Orca itself to Spanish while their OS/browser locale is
+ *  English must still get Spanish gate prompts. When that marker is
+ *  anything other than a concrete `es`/`en` (no setting yet, `"system"`,
+ *  read failure), the panel's own request wins, exactly as before this
+ *  fix -- this never invents `en` on its own. */
+async function attendLocaleRequest (orca, storageHost, options = {}) {
+  const save = options.saveLocale ?? saveLocale
   const request = await storageHost.get(LOCALE_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
 
@@ -1164,16 +1176,87 @@ async function attendLocaleRequest (orca, storageHost) {
     return
   }
 
-  const locale = request.locale === 'en' ? 'en' : request.locale === 'es' ? 'es' : null
-  const result = locale === null
-    ? { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${String(request.locale).slice(0, 20)}` }
-    : await saveLocale(orca, locale)
+  const requestedLocale = request.locale === 'en' ? 'en' : request.locale === 'es' ? 'es' : null
+  let result
+  if (requestedLocale === null) {
+    result = { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${String(request.locale).slice(0, 20)}` }
+  } else {
+    const orcaSetting = await storageHost.get(LOCALE_ORCA_SETTING_KEY)
+    const effective = orcaSetting === 'es' || orcaSetting === 'en' ? orcaSetting : requestedLocale
+    result = await save(orca, effective)
+  }
 
   await storageHost.set(LOCALE_RESULT_KEY, {
     id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
   }).catch((err) => orca.log(`locale result publish failed: ${err.message}`))
 
   await publishLocaleStatus(orca, storageHost)
+}
+
+/** The path this worker grants a narrow, one-file `--allow-fs-read` for --
+ *  Orca's own `orca-data.json`, always inside ORCA_USER_DATA_DIR (the same
+ *  constant claudeAccountsDir already resolves against). */
+const ORCA_DATA_FILE_PATH = join(ORCA_USER_DATA_DIR, 'orca-data.json')
+
+/** Reads Orca's own `settings.uiLanguage` through write-secret-mirror.mjs's
+ *  orca-ui-language-read mode -- a real sidecar, same reason every other
+ *  mirror read in this file is one (this worker's own permission sandbox
+ *  cannot read outside its plugin root). Deliberately NOT
+ *  runSecretMirrorScript: that helper's permission grant is fixed to
+ *  PLUGIN_ROOT/CONFIG_DIR, and this read needs its own single extra file
+ *  granted, nothing wider. */
+function readOrcaUiLanguageMirror (orcaDataPath) {
+  return spawnSidecar(
+    ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${orcaDataPath}`, SECRET_MIRROR_SCRIPT, 'orca-ui-language-read', orcaDataPath],
+    {
+      timeout: SECRET_MIRROR_TIMEOUT_MS,
+      maxBuffer: 64 * 1024,
+      env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    }
+  )
+}
+
+/** Records what Orca's OWN settings.uiLanguage said, the last time this was
+ *  read -- `'es'`/`'en'` for a concrete setting, `null` for `"system"`,
+ *  missing, or malformed. attendLocaleRequest reads this to decide whether
+ *  Orca's own choice overrides the panel's navigator guess. */
+const LOCALE_ORCA_SETTING_KEY = 'localeOrcaSetting'
+
+/**
+ * Read ONCE, at activation (never per locale request -- a concrete answer
+ * here is meant to be a durable fact about this install, not re-fetched on
+ * every panel open). A concrete `es`/`en` is authoritative: mirrored
+ * immediately (so gate-bash.ts/mod-skills see it even before any panel ever
+ * opens) and remembered in LOCALE_ORCA_SETTING_KEY, so a later panel push
+ * cannot silently override it (see attendLocaleRequest). `"system"`,
+ * missing, or malformed records `null` -- explicitly "defer", not merely
+ * "unknown" -- so the panel's own navigator-derived guess decides instead,
+ * and this never forces `en`.
+ *
+ * Fail-safe: a read failure (sidecar launch failure, timeout, non-JSON
+ * stdout) touches NEITHER the marker NOR the locale mirror file -- a
+ * transient failure must not flip a prior concrete marker to "defer" and
+ * let the next panel push clobber Orca's own explicit choice.
+ */
+async function applyOrcaUiLanguageAtActivation (orca, storageHost, options = {}) {
+  const orcaDataPath = options.orcaDataPath ?? ORCA_DATA_FILE_PATH
+  const read = options.readOrcaUiLanguage ?? readOrcaUiLanguageMirror
+  const save = options.saveLocale ?? saveLocale
+
+  const result = await read(orcaDataPath)
+  if (!result.ok) {
+    orca.log(`orca ui language read failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+    return
+  }
+
+  const language = result.value === 'es' || result.value === 'en' ? result.value : null
+  await storageHost.set(LOCALE_ORCA_SETTING_KEY, language)
+    .catch((error) => orca.log(`locale orca-setting marker publish failed: ${error.message}`))
+
+  if (language !== null) {
+    const saved = await save(orca, language)
+    if (!saved.ok) orca.log(`orca ui language mirror failed: ${String(saved.reason ?? 'unknown')} -- ${String(saved.detail ?? '').slice(0, 160)}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1840,7 +1923,13 @@ export default function activate (orca) {
   installClaudeIntegration(orca)
     .then(() => publishClaudeIntegrationStatus(orca, storageHost))
     .catch((error) => orca.log(`initial claude integration install failed: ${error.message}`))
-  publishLocaleStatus(orca, storageHost)
+  // JEVADV-10 -- reads Orca's OWN language setting once, before the status
+  // this panel-open reads is even computed, so the very first thing the
+  // panel sees already reflects it (see applyOrcaUiLanguageAtActivation's
+  // own doc for why this is activation-only, never per-request).
+  applyOrcaUiLanguageAtActivation(orca, storageHost)
+    .catch((error) => orca.log(`initial orca ui language read failed: ${error.message}`))
+    .then(() => publishLocaleStatus(orca, storageHost))
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
   publishModSkillsStatus(orca, storageHost)
     .catch((error) => orca.log(`initial mod-skills status failed: ${error.message}`))
@@ -1897,6 +1986,7 @@ export default function activate (orca) {
 // ---------------------------------------------------------------------------
 
 export {
+  applyOrcaUiLanguageAtActivation,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -1916,6 +2006,7 @@ export {
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
+  LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,

@@ -643,15 +643,16 @@ async function main() {
   await rm(OUT_DIR, { recursive: true, force: true })
   await mkdir(WORK_DIR, { recursive: true })
 
-  // The panel reads its language from `<html lang>`, which the Orca shell sets.
-  // Rewriting the tag is simpler and more faithful than patching the DOM after
-  // load, which races the panel's own first read.
+  // JEVADV-10 (odd/tasks/release-0.5.1.md): the panel used to read its
+  // language from `<html lang>`, which Orca's plugin shells hardcode to
+  // "en" (never set by this plugin, never varied) -- it now reads
+  // `navigator.languages`/`navigator.language` instead (config.html's
+  // localeFromOrca), so English screenshots come from the browser
+  // CONTEXT's own `locale` below, not from rewriting the markup.
   const rendered = {}
   for (const panel of PANELS) {
-    const html = await readFile(join(PANELS_DIR, panel), 'utf8')
-    if (!html.includes('<html>')) throw new Error(`${panel}: no bare <html> tag to localise`)
     const path = join(WORK_DIR, panel)
-    await writeFile(path, html.replace('<html>', '<html lang="en">'))
+    await writeFile(path, await readFile(join(PANELS_DIR, panel), 'utf8'))
     rendered[panel] = path
   }
 
@@ -666,7 +667,8 @@ async function main() {
             const context = await browser.newContext({
               viewport: { width, height: 900 },
               colorScheme: theme,
-              deviceScaleFactor: 2
+              deviceScaleFactor: 2,
+              locale: 'en-US'
             })
             const page = await context.newPage()
             await page.addInitScript(hostBridge, SCENARIOS[scenario])

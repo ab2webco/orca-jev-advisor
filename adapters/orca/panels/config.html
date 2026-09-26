@@ -955,21 +955,30 @@
       }
 
       /**
-       * The language Orca is running in.
+       * The language Orca is running in, guessed from this panel's own
+       * side.
        *
-       * Orca substitutes the resolved UI locale into the panel shell's
-       * `<html lang>`, so the plugin no longer has to ask a question the
-       * user already answered in Orca's own settings. Anything this plugin
-       * has no catalog for falls back to English.
+       * Orca's plugin shells hardcode `<html lang="en">` on every panel
+       * (measured, not assumed -- see odd/tasks/release-0.5.1.md JEVADV-10);
+       * there is no `<html lang>` this plugin can read to learn the
+       * person's real choice. `navigator.languages[0] || navigator.language`
+       * is the Chromium application locale instead -- the same underlying
+       * value Electron's own `app.getLocale()` reads in the main process --
+       * so it tracks the OS/app language even though Orca sets no attribute
+       * for it. This is only ever a GUESS, not the person's actual choice
+       * inside Orca's own settings: main.mjs's attendLocaleRequest may
+       * override it with Orca's own explicit `settings.uiLanguage` when one
+       * exists (see applyOrcaUiLanguageAtActivation there). Anything this
+       * plugin has no catalog for falls back to English, same as `t()` below.
        */
       function localeFromOrca () {
-        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        var tag = ((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase()
         return tag.indexOf('es') === 0 ? 'es' : 'en'
       }
 
       var currentLocale = localeFromOrca()
       function t (key, params) {
-        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
+        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.en[key] || key
         if (!params) return template
         return template.replace(/\{\{(\w+)\}\}/g, function (_m, name) {
           return Object.prototype.hasOwnProperty.call(params, name) ? params[name] : ''
@@ -1246,8 +1255,11 @@
       // ---------- language: request/result/status -----------------------------
       // Same pattern again: this panel cannot write the language's mirror
       // file itself (the worker's permission sandbox), so it requests and
-      // main.mjs attends it. LOCALE_STATUS_KEY is what this panel reads on
-      // open to know which language to paint.
+      // main.mjs attends it -- currentLocale (localeFromOrca's own guess) is
+      // what this panel actually paints with; LOCALE_STATUS_KEY is declared
+      // for parity with every other *_STATUS_KEY in this file but nothing
+      // here reads it back, since this panel already knows its own guess
+      // synchronously, before any round trip could resolve.
       var LOCALE_REQUEST_KEY = 'localeRequest'
       var LOCALE_RESULT_KEY = 'localeResult'
       var LOCALE_STATUS_KEY = 'localeStatus'

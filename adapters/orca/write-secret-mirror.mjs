@@ -18,7 +18,7 @@
  * works the same way on Windows, unlike the wrapper this project used
  * before), where the sandbox does not apply.
  *
- * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|models-save>
+ * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|models-save|orca-ui-language-read>
  *   save   reads the new key from stdin (never argv, never logged), and
  *          atomically (temp file + rename) writes or replaces its
  *          TYPESAFE_API_KEY= line in the mirror file, mode 0600. Other
@@ -65,6 +65,16 @@
  *          file permissions, same as catalog-save/policies-save -- the Agent
  *          PreToolUse/PostToolUse hooks (adapters/claude/agent-model.ts)
  *          read this file directly.
+ *   orca-ui-language-read  reads Orca's OWN `settings.uiLanguage` from the
+ *          path given as the next argv (always the running Orca's
+ *          `<userData>/orca-data.json`) and reports the concrete `es`/`en`
+ *          it means, or `null` when it says `"system"`, is missing, or
+ *          fails to parse -- src/core/orca_ui_language.ts's
+ *          parseOrcaUiLanguage does the parsing; this mode is only the I/O
+ *          around it. Outside CONFIG_DIR/PLUGIN_ROOT, so main.mjs grants it
+ *          its own narrow `--allow-fs-read` for that one file (see
+ *          readOrcaUiLanguageMirror there), never the general permission
+ *          set every other mode above gets.
  *
  * Always prints exactly one JSON line to stdout and nothing else -- no
  * console.error, no stray output that would corrupt the parent's parse.
@@ -82,6 +92,7 @@ import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
 import { parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
 import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
+import { parseOrcaUiLanguage } from '../../src/core/orca_ui_language.ts'
 // Guarded stand-ins for the mutating fs/promises calls this file makes --
 // see guarded_fs.ts's module doc for why every write in this script goes
 // through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/chmod.
@@ -411,6 +422,33 @@ async function modelsSave (raw) {
   return { ok: true }
 }
 
+/**
+ * Reads Orca's OWN `settings.uiLanguage` (JEVADV-10,
+ * odd/tasks/release-0.5.1.md) from the path given as `path` -- always
+ * `<userData>/orca-data.json`, resolved by the caller (main.mjs, via
+ * src/core/orca_accounts.ts's resolveOrcaUserDataDir) and passed as argv,
+ * never guessed here. Outside CONFIG_DIR/PLUGIN_ROOT, so the caller must
+ * grant this one path its own narrow `--allow-fs-read` -- see main.mjs's
+ * readOrcaUiLanguageMirror.
+ *
+ * A missing file (ENOENT) reads as `value: null`, the same as a `"system"`
+ * setting or malformed JSON -- parseOrcaUiLanguage's own contract, and the
+ * whole point: this plugin must never treat "could not read this" as
+ * license to force a concrete language, only as a reason to defer.
+ */
+async function orcaUiLanguageRead (path) {
+  if (typeof path !== 'string' || path.length === 0) {
+    return { ok: false, reason: 'invalid-path', detail: 'no orca-data.json path was given.' }
+  }
+  let raw = null
+  try {
+    raw = await readFile(path, 'utf8')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  return { ok: true, value: parseOrcaUiLanguage(raw) }
+}
+
 async function main () {
   const mode = process.argv[2]
   let result
@@ -442,6 +480,8 @@ async function main () {
       result = await denyTierConfigRead()
     } else if (mode === 'models-save') {
       result = await modelsSave((await readStdin()).trim())
+    } else if (mode === 'orca-ui-language-read') {
+      result = await orcaUiLanguageRead(process.argv[3])
     } else {
       result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
     }

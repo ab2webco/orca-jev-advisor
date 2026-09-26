@@ -570,21 +570,29 @@
         }
       }
       /**
-       * The language Orca is running in.
+       * The language Orca is running in, guessed from this panel's own
+       * side.
        *
-       * Orca substitutes the resolved UI locale into the panel shell's
-       * `<html lang>`, so the plugin no longer has to ask a question the
-       * user already answered in Orca's own settings. Anything this plugin
-       * has no catalog for falls back to English.
+       * Orca's plugin shells hardcode `<html lang="en">` on every panel
+       * (measured, not assumed -- see odd/tasks/release-0.5.1.md JEVADV-10);
+       * there is no `<html lang>` this plugin can read to learn the
+       * person's real choice. `navigator.languages[0] || navigator.language`
+       * is the Chromium application locale instead -- the same underlying
+       * value Electron's own `app.getLocale()` reads in the main process --
+       * so it tracks the OS/app language even though Orca sets no attribute
+       * for it. This board is read-only (it never pushes a locale request
+       * back to the worker, unlike config.html), so this guess is the whole
+       * story here. Anything this plugin has no catalog for falls back to
+       * English, same as `t()` below.
        */
       function localeFromOrca () {
-        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        var tag = ((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase()
         return tag.indexOf('es') === 0 ? 'es' : 'en'
       }
 
       var currentLocale = localeFromOrca()
       function t (key, params) {
-        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
+        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.en[key] || key
         if (!params) return template
         return template.replace(/\{\{(\w+)\}\}/g, function (_m, name) {
           return Object.prototype.hasOwnProperty.call(params, name) ? params[name] : ''

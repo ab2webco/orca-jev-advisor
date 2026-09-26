@@ -30,6 +30,7 @@ process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, 'cache')
 after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }))
 
 const {
+  applyOrcaUiLanguageAtActivation,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -49,6 +50,7 @@ const {
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
+  LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
@@ -216,6 +218,76 @@ test('attendLocaleRequest: an expired request publishes reason "expired"', async
   assert.equal(result.id, 'loc-1')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'expired')
+})
+
+// JEVADV-10 -- odd/tasks/release-0.5.1.md. Orca's own explicit
+// settings.uiLanguage (read once at activation, see
+// applyOrcaUiLanguageAtActivation below) is authoritative over the panel's
+// own navigator-derived guess: a person who set Orca itself to Spanish
+// while their OS/browser locale is English must still get Spanish gate
+// prompts, even though the panel's own per-open push would otherwise send
+// 'en'. Every test here injects `saveLocale` -- the real one spawns a real
+// sidecar child, exactly the hazard T9 already hit (see the module note
+// above attendModSkillsConfigRequest's own tests).
+test('attendLocaleRequest: Orca\'s own concrete setting overrides the panel\'s requested locale', async () => {
+  const orca = fakeOrca()
+  const saved = []
+  const fakeSaveLocale = async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  const storageHost = fakeStorageHost({
+    [LOCALE_ORCA_SETTING_KEY]: 'es',
+    localeRequest: { id: 'loc-2', at: new Date().toISOString(), locale: 'en' }
+  })
+  await attendLocaleRequest(orca, storageHost, { saveLocale: fakeSaveLocale })
+  assert.deepEqual(saved, ['es'], 'Orca\'s own explicit setting must win over the panel\'s navigator guess')
+  const result = await storageHost.get(LOCALE_RESULT_KEY)
+  assert.equal(result.ok, true)
+})
+
+test('attendLocaleRequest: with no concrete Orca setting, the panel\'s requested locale is used as before', async () => {
+  const orca = fakeOrca()
+  const saved = []
+  const fakeSaveLocale = async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  const storageHost = fakeStorageHost({
+    localeRequest: { id: 'loc-3', at: new Date().toISOString(), locale: 'es' }
+  })
+  await attendLocaleRequest(orca, storageHost, { saveLocale: fakeSaveLocale })
+  assert.deepEqual(saved, ['es'])
+})
+
+test('applyOrcaUiLanguageAtActivation: a concrete reading is mirrored and remembered', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const saved = []
+  await applyOrcaUiLanguageAtActivation(orca, storageHost, {
+    readOrcaUiLanguage: async () => ({ ok: true, value: 'es' }),
+    saveLocale: async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  })
+  assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), 'es')
+  assert.deepEqual(saved, ['es'])
+})
+
+test('applyOrcaUiLanguageAtActivation: "system"/missing/malformed (a successful read with no concrete value) records null and never mirrors anything', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const saved = []
+  await applyOrcaUiLanguageAtActivation(orca, storageHost, {
+    readOrcaUiLanguage: async () => ({ ok: true, value: null }),
+    saveLocale: async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  })
+  assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), null)
+  assert.deepEqual(saved, [], 'a non-concrete reading must never mirror a language')
+})
+
+test('applyOrcaUiLanguageAtActivation: a read failure leaves the existing marker and mirror completely untouched', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [LOCALE_ORCA_SETTING_KEY]: 'es' })
+  const saved = []
+  await applyOrcaUiLanguageAtActivation(orca, storageHost, {
+    readOrcaUiLanguage: async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' }),
+    saveLocale: async (_orca, locale) => { saved.push(locale); return { ok: true } }
+  })
+  assert.equal(await storageHost.get(LOCALE_ORCA_SETTING_KEY), 'es', 'a transient read failure must not flip a prior marker to defer')
+  assert.deepEqual(saved, [])
 })
 
 test('attendCatalogRefreshRequest: an expired request publishes reason "expired"', async () => {
