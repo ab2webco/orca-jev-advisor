@@ -71,7 +71,11 @@ reachability (E1) and per-direction confidence (E2).
 ## Constraints
 
 - Local rules stay the floor. Nothing in this release may make a deny-tier
-  rule, a `requires_human` policy or the risk stage more permissive.
+  rule, a `requires_human` policy or the risk stage more permissive. The
+  one deliberate refinement is JEVADV-36: a destructive command in COMMAND
+  POSITION still denies, and a mere MENTION inside a visible argument of an
+  unknown program asks instead of denying. The person still decides, and
+  it never becomes a silent allow.
 - A policy without the new field keeps today's behaviour (`command`). A user
   rule is never silently dropped.
 - Privacy rule of `gate_measurement.ts` holds: record ids and families,
@@ -177,6 +181,21 @@ evolution" holds JEVADV-12..23.
    sandbox). Every prompt it hits gets recorded verbatim.
 4. Evidence in `~/Downloads/jev-advisor-verificacion-0.5.0/`.
 
+## Worktree and scratch hygiene
+
+Every worktree or scratch directory created for this feature is listed here
+and removed when its purpose ends. Pre-existing ones that belong to other
+work (`gate-approval-learning/`, `../orca-supervisor-release`) are not
+touched.
+
+| Path | Branch | Purpose | Remove when |
+|---|---|---|---|
+| `../orca-supervisor-next` | `fabolivark/release-0.5.1-next` | Writer lane A | Its last batch is merged: remove the worktree, delete the branch |
+| `../orca-supervisor-lane-b` | `fabolivark/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Merged: remove the worktree, delete the branch |
+| `../orca-supervisor-lane-c` | `fabolivark/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Merged: remove the worktree, delete the branch |
+| `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
+| `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | When the scenario report is recorded |
+
 ## Delivery
 
 - Forecast: about 800 authored lines across T1–T7, over the 400 budget.
@@ -216,7 +235,24 @@ evolution" holds JEVADV-12..23.
 - Worker-side changes take effect only after the plugin reloads. Hook-side
   changes take effect on the next command.
 
+- 2026-09-25, later in the day. Native reviews 2 (`review-3ca73b9da09b0927`)
+  and 3 (`review-4c988dc5b95e74e7`) were approved and acknowledged. Merged
+  since then:
+  - JEVADV-28 (7a64807) and JEVADV-34 (7cf2c47)
+  - JEVADV-35 (209c861): the cache key carries the decision-rules version;
+    the cache TTL is 30 days
+  - JEVADV-29 (42cc829): secrets masked before the Jev call
+  - JEVADV-36 (609e34b)
+  - JEVADV-29 precision (4d5ebe2)
+- Suite on the branch files: 1206/1206 with playwright. Wrapper probe: 10/10.
+  Compared with 0.5.0, `env A=1 <hard reset>` goes from pass to deny and
+  `echo "$(<force push>)"` from ask to deny.
+- Lanes B (panel, JEVADV-27/10/11) and C (mod-skills, JEVADV-4) run in
+  isolated worktrees. Lane D (JEVADV-8) is a context-free supervised agent
+  running the realistic scenario on the live dev plugin, held at 42cc829
+  until it finishes.
+
 ## Next step
 
-Merge the `-next` writer's commits (T5, JEVADV-26, T3) after verification,
-then T10.
+Native review of `7cf2c47..HEAD`. Then merge lanes B and C, finish the lane D
+report, and do the release verification (JEVADV-7/9).
