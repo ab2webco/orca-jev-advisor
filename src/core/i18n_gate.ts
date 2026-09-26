@@ -19,6 +19,7 @@ export type GateKey =
   | "localRuleDeny"
   | "cached"
   | "statusLine"
+  | "advisedLine"
   | "authRejected"
   | "noApiKey"
   | "jevUnreachable"
@@ -54,6 +55,10 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
+    // The advise-model release: nobody is interrupted here -- the model was
+    // handed a reason and decides. Deliberately its own line, distinct from
+    // statusLine's "bloquea"/"pregunta": this is neither.
+    advisedLine: "jev · avisó al modelo: {{effect}}",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
     noApiKey: "sin llave configurada: la mitad del gate que juzga con Jev no está corriendo — solo las reglas locales siguen activas. Configúrala en el panel de ajustes del plugin en Orca.",
     jevUnreachable: "no se pudo contactar a Jev: la mitad del gate que juzga con Jev no está corriendo ahora mismo — solo las reglas locales siguen activas. Se va a intentar de nuevo con el próximo comando.",
@@ -95,6 +100,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
+    advisedLine: "jev · advised the model: {{effect}}",
     authRejected: "not judging: the key was rejected ({{status}})",
     noApiKey: "no key configured: the Jev-backed half of the gate is not running — only the local rules are still active. Set one in the plugin's settings panel in Orca.",
     jevUnreachable: "couldn't reach Jev: the Jev-backed half of the gate is not running right now — only the local rules are still active. It'll try again on the next command.",

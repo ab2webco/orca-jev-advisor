@@ -16,6 +16,7 @@ test("a well-shaped entry is valid", () => {
   assert.equal(isValidGateCacheEntry({ decision: "allow", reason: "reversible, local and cheap", at: Date.now() }), true);
   assert.equal(isValidGateCacheEntry({ decision: "deny", reason: "x", at: 0 }), true);
   assert.equal(isValidGateCacheEntry({ decision: "ask", reason: "x", at: 1 }), true);
+  assert.equal(isValidGateCacheEntry({ decision: "advise", reason: "it can't be undone", at: 1 }), true, "advise is cacheable, never as a silent allow");
 });
 
 test("malformed entries are never valid -- a corrupt cache is just a smaller cache, never a crash", () => {

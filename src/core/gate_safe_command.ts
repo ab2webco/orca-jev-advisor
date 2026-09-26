@@ -153,7 +153,12 @@ function hasRedirection(segment: string): boolean {
  * own argument (e.g. `$(a; b)`) contains one of the same separator
  * characters splitSegments itself splits on.
  */
-function isSafeSegment(segment: string): boolean {
+/** Exported for gate_advice_text.ts (the advise-model release): the advice
+ *  message names the concrete segments a command would affect, and a
+ *  tier-1a-safe segment (a plain `git status`, a bare `cd`, ...) is never
+ *  one of them -- the same "obviously safe" test tier 1a already uses,
+ *  never a second, drifting copy of it. */
+export function isSafeSegment(segment: string): boolean {
   // SECURITY HOTFIX (release-0.5.1-newline-bypass), review follow-up:
   // splitSegments now delegates to git_discard.ts's own
   // splitOnCommandSeparators, which is quote-aware -- an OPEN single or

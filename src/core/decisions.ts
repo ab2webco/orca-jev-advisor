@@ -563,8 +563,17 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  * its only consumer is gate-bash.ts's own cacheKey() (which folds it into
  * the hashed material), plus that file's own tests mirroring the same
  * formula -- nothing reads it as a version to compare, display or migrate.
+ *
+ * Bumped to 2 for the advise-model release: gate-bash.ts's own deploy/publish
+ * floor (src/core/deploy_publish.ts) can now turn what used to be a silent
+ * risk-path 'allow' into an advise, for a command shape that previously
+ * cached 'allow' outright -- exactly this constant's own bump trigger. A
+ * stale v1 'allow' entry for a deploy/publish command must never keep
+ * replaying after this upgrade; the version prefix in gate-bash.ts's
+ * cacheKey() makes it miss instead, so the command is judged fresh under the
+ * new rules.
  */
-export const GATE_DECISION_RULES_VERSION = 1;
+export const GATE_DECISION_RULES_VERSION = 2;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {

@@ -20,7 +20,17 @@ import { splitOnCommandSeparators, startsWithGitDiscard } from "./git_discard.ts
  * stops being silent.
  */
 export type GateSource = "local-rule" | "cache" | "jev" | "none";
-export type GateVerdict = "allow" | "ask" | "deny";
+/**
+ * `"advise"` (the advise-model release): the risk stage (or a local rule
+ * whose deny-tier switch is off, or an interpreter-code-only match) no
+ * longer stops a PERSON -- it hands the coding MODEL a concrete reason and
+ * lets it decide, with an identical retry passing (see GateStopReason's own
+ * `"advice-retry"` below). Claude Code's own `permissionDecision` for this is
+ * still `'deny'` (the model is refused THIS attempt, not asked); `"advise"`
+ * is the honest record of WHY, distinct from a NEVER_SILENTLY hard stop --
+ * see gate-bash.ts's own `emitAdvice`.
+ */
+export type GateVerdict = "allow" | "ask" | "deny" | "advise";
 
 /**
  * WHY the gate produced this decision -- finer than `source` above, which
@@ -49,6 +59,12 @@ export type GateVerdict = "allow" | "ask" | "deny";
  *   "cache"       -- a prior verdict was replayed; the cache does not keep
  *                    which of the reasons above produced the original one,
  *                    so "cache" is the honest, complete answer on its own.
+ *   "advice-retry" -- an identical (session_id, command) retry within the
+ *                    advice retry window let a PAST advise through as a
+ *                    truthful "allow" -- see src/core/gate_advice_retry.ts.
+ *                    Distinct from every other bucket: it is the ONLY
+ *                    stopReason whose own verdict is "allow" but whose
+ *                    record still explains why nobody had to ask again.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -58,7 +74,7 @@ export type GateVerdict = "allow" | "ask" | "deny";
  * no cache and no network) but gets its own, more specific stopReason so an
  * "allow" it produces is never confused with a NEVER_SILENTLY deny/ask.
  */
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -293,11 +309,19 @@ function isGateSource(value: unknown): value is GateSource {
 }
 
 function isGateVerdict(value: unknown): value is GateVerdict {
-  return value === "allow" || value === "ask" || value === "deny";
+  return value === "allow" || value === "ask" || value === "deny" || value === "advise";
 }
 
 function isGateStopReason(value: unknown): value is GateStopReason {
-  return value === "policy" || value === "local-rule" || value === "local-allow" || value === "risk" || value === "unreachable" || value === "cache";
+  return (
+    value === "policy" ||
+    value === "local-rule" ||
+    value === "local-allow" ||
+    value === "risk" ||
+    value === "unreachable" ||
+    value === "cache" ||
+    value === "advice-retry"
+  );
 }
 
 function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {

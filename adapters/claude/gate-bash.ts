@@ -68,6 +68,10 @@ import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
+import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
+import { composeAdviceText } from '../../src/core/gate_advice_text.ts'
+import { resolveRecoverabilityTargets } from '../../src/core/git_recoverability.ts'
+import type { GitStatusSets } from '../../src/core/git_recoverability.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
@@ -131,6 +135,12 @@ const UNREACHABLE_WARN_THRESHOLD = 3
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
+// The advise-model release's own small state file: one entry per
+// sha256(session_id + NUL + command), so an identical retry within the
+// window (src/core/gate_advice_retry.ts) passes without a fresh Jev call.
+// Never the real ~/.config or ~/.cache paths in a test -- same
+// ORCA_SUPERVISOR_CACHE_DIR override every other path in this file honors.
+const ADVICE_RETRY_PATH = join(CACHE_DIR, 'gate-advice-retry.json')
 // This file runs IN PLACE from `<pluginRoot>/adapters/claude/gate-bash.ts`
 // (see adapters/orca/install-claude-integration.mjs's hookSpecs, which
 // points Claude Code's hook entry straight at the installed copy rather
@@ -210,6 +220,19 @@ function resolveGateActionReason(reason: GateActionReason): string {
     return translateReason(DESTINATION_CATALOG, LOCALE, { key: reason.key, params: reason.params })
   }
   return translateReason(GATE_CATALOG, LOCALE, { key: reason.key as GateKey, params: reason.params })
+}
+
+/**
+ * Same as resolveGateActionReason, but always English -- for the advice
+ * mechanism's own core reason, which is model-facing text and so must stay
+ * in English regardless of the developer's chosen locale (same rule as
+ * localRuleDeny/tEnglish above).
+ */
+function resolveGateActionReasonEnglish(reason: GateActionReason): string {
+  if (isDestinationReasonKey(reason.key)) {
+    return translateReason(DESTINATION_CATALOG, 'en', { key: reason.key, params: reason.params })
+  }
+  return translateReason(GATE_CATALOG, 'en', { key: reason.key as GateKey, params: reason.params })
 }
 
 type Decision = 'allow' | 'deny' | 'ask'
@@ -429,7 +452,7 @@ const NEVER_SILENTLY: readonly {
   { evaluate: commandRule(/curl[^|]*\|\s*(bash|sh|zsh)\b/), why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
 ]
 
-type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null }
+type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null; readonly sessionId: string | null }
 
 function readHookInput(): HookInput | null {
   let raw = ''
@@ -456,7 +479,12 @@ function readHookInput(): HookInput | null {
   // means that one decision goes unlabelled.
   const rawId = record['tool_use_id']
   const toolUseId = typeof rawId === 'string' && rawId.length > 0 ? rawId : null
-  return { command, cwd, toolUseId }
+  // The advise-model release's retry pass keys on this: a missing session_id
+  // means no retry pass at all (conservative) -- see gate_advice_retry.ts's
+  // own module note and this file's own checkAdviceRetryPass.
+  const rawSessionId = record['session_id']
+  const sessionId = typeof rawSessionId === 'string' && rawSessionId.length > 0 ? rawSessionId : null
+  return { command, cwd, toolUseId, sessionId }
 }
 
 /**
@@ -575,6 +603,160 @@ function writeCache(cache: Record<string, CacheEntry>): void {
   } catch {
     // A cache that can't be written is never a reason to block anything.
   }
+}
+
+// ---------------------------------------------------------------------------
+// The advise-model release: the advice retry-pass state, and the git-status
+// reads that power recoverability naming. Both fail open, same discipline
+// as every other read in this file: a missing/unreadable/malformed state
+// never blocks anything, it just means the next command is judged fresh.
+// ---------------------------------------------------------------------------
+
+function readAdviceRetryState(): Record<string, number> {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(ADVICE_RETRY_PATH, 'utf8'))
+  } catch {
+    return {}
+  }
+  const { fresh, changed } = pruneAdviceRetryState(parsed)
+  if (changed) writeAdviceRetryState(fresh)
+  return fresh
+}
+
+function writeAdviceRetryState(state: Readonly<Record<string, number>>): void {
+  try {
+    mkdirSync(dirname(ADVICE_RETRY_PATH), { recursive: true })
+    writeFileSync(ADVICE_RETRY_PATH, JSON.stringify(state), 'utf8')
+  } catch {
+    // A retry-pass state that can't be written only costs the next identical
+    // retry a fresh advice instead of a pass -- never a reason to block.
+  }
+}
+
+/**
+ * Whether (sessionId, command) already has a fresh advice on record -- an
+ * identical retry within the window. `sessionId === null` (missing on the
+ * hook's own stdin) always answers false: a missing session_id means no
+ * retry pass at all, conservative by design (see gate_advice_retry.ts).
+ */
+function checkAdviceRetryPass(sessionId: string | null, command: string): boolean {
+  if (sessionId === null) return false
+  const key = adviceRetryKey(sessionId, command)
+  const advisedAt = readAdviceRetryState()[key]
+  return advisedAt !== undefined && isAdviceRetryFresh(advisedAt, Date.now())
+}
+
+/** Marks that an advice was just issued for (sessionId, command), opening its retry window. A missing session_id writes nothing -- there is nothing to key it by. */
+function recordAdviceIssued(sessionId: string | null, command: string): void {
+  if (sessionId === null) return
+  const state = readAdviceRetryState()
+  writeAdviceRetryState({ ...state, [adviceRetryKey(sessionId, command)]: Date.now() })
+}
+
+/** The repository root for recoverability resolution, or null when `cwd` is not inside a git repository at all (no recoverability naming, the advice still says what it can). */
+function getRepoRootForAdvice(cwd: string): string | null {
+  try {
+    return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+  } catch {
+    return null
+  }
+}
+
+/** Already-fetched git status, read exactly once per advice -- `git status --porcelain --ignored -uall` plus `git ls-files`, the same two calls the validated advice-experiment prototype used (jobs/74914c09/tmp/advice-exp/proto-hook.mjs). Best-effort: any failure yields empty sets, which git_recoverability.ts reads as "nothing to protect" -- never a throw, never a block. */
+function getGitStatusSetsForAdvice(repoRoot: string): GitStatusSets {
+  const modified = new Set<string>()
+  const untracked = new Set<string>()
+  const ignored = new Set<string>()
+  try {
+    const out = execFileSync('git', ['status', '--porcelain', '--ignored', '-uall'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+    for (const line of out.split('\n')) {
+      if (line.length === 0) continue
+      const code = line.slice(0, 2)
+      const path = line.slice(3).trim().replace(/^"|"$/g, '')
+      if (code === '??') untracked.add(path)
+      else if (code === '!!') ignored.add(path)
+      else modified.add(path)
+    }
+  } catch {
+    // Leave sets empty; the caller reads that as "nothing resolved".
+  }
+  let tracked = new Set<string>()
+  try {
+    tracked = new Set(
+      execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+        .split('\n')
+        .filter((line) => line.length > 0),
+    )
+  } catch {
+    // Same as above.
+  }
+  return { modified, untracked, ignored, tracked }
+}
+
+/**
+ * Composes the full advice, resolving recoverability against the REAL,
+ * CURRENT git status -- never a stale, cached one (see gate_cache.ts's own
+ * module note on GateCacheDecision's "advise" entry: the shape cache stores
+ * only the core English reason, and this is recomputed fresh on every
+ * advice, cache hit or not, because the repository's own state can change
+ * between two occurrences of the identical command SHAPE).
+ */
+function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: readonly string[], sessionEligibleForRetry: boolean) {
+  const repoRoot = getRepoRootForAdvice(cwd)
+  const recoverability = repoRoot === null ? undefined : resolveRecoverabilityTargets(command, cwd, repoRoot, getGitStatusSetsForAdvice(repoRoot))
+  return composeAdviceText({ command, reasons: reasonsEnglish, recoverability, sessionEligibleForRetry })
+}
+
+/**
+ * Emits an advice: `permissionDecision: 'deny'` (the model is refused THIS
+ * attempt, not asked -- Claude Code has no third verb), with a model-facing
+ * reason that is never "REFUSED" and always carries the retry clause. The
+ * person sees one short, non-blocking line, always -- unlike an ordinary
+ * 'allow' this is never silent, because a person who never sees the model
+ * changing course cannot tell an advice from the model simply doing
+ * something else on its own.
+ */
+function emitAdvice(effect: string, modelText: string): void {
+  const payload = {
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: modelText },
+    systemMessage: t('advisedLine', { effect }),
+  }
+  process.stdout.write(JSON.stringify(payload))
+}
+
+/**
+ * The single choke point every advice path (the risk stage, fresh or
+ * replayed from the shape cache; a local rule whose deny-tier switch is
+ * off; an interpreter-code-only local-rule match) resolves through: the
+ * retry pass is checked FIRST, so an identical retry always passes
+ * regardless of which path produced the ORIGINAL advice, and only a fresh
+ * (non-retry) occurrence ever composes and shows the advice text.
+ */
+function resolveAdviceOutcome(input: {
+  readonly command: string
+  readonly cwd: string
+  readonly sessionId: string | null
+  readonly toolUseId: string | null
+  readonly reasonsEnglish: readonly string[]
+  readonly source: GateSource
+  readonly stopReason: GateStopReason
+  readonly latencyMs?: number | null
+}): void {
+  const { command, cwd, sessionId, reasonsEnglish, source, stopReason } = input
+  if (checkAdviceRetryPass(sessionId, command)) {
+    appendGateRecord(cwd, command, source, 'allow', input.latencyMs ?? null, 'advice-retry', null)
+    // No visible systemMessage: emit() only shows one for a non-'allow'
+    // decision, and a truthful, silent 'allow' is exactly right here -- the
+    // person already saw the advice line once, on the original occurrence.
+    emit('allow', 'Jev: identical retry within the advice window; proceeding.')
+    return
+  }
+  const sessionEligible = sessionId !== null
+  const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible)
+  appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null)
+  recordAdviceIssued(sessionId, command)
+  emitAdvice(advice.effectSummary, advice.modelText)
 }
 
 /**
@@ -963,6 +1145,17 @@ type JevOutcome =
        * not so qualify.
        */
       readonly viaLocalAllow: boolean
+      /**
+       * True when this Jev-sourced 'ask' is the RISK stage's own ask (no
+       * policy resolved it -- policyId is null, and it is not an Option D
+       * local allow) -- the advise-model release's own trigger: this
+       * becomes an ADVICE to the coding model, not a human ask. A policy's
+       * own requires_human/prohibits ask (policyId non-null) keeps
+       * isRiskAdvice false and stays a human ask, unchanged.
+       */
+      readonly isRiskAdvice: boolean
+      /** The risk stage's own reasons, resolved in ENGLISH -- only meaningful when isRiskAdvice is true; empty otherwise. */
+      readonly riskAdviceReasonsEnglish: readonly string[]
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
@@ -1032,6 +1225,10 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
     // text is shown, never a risk-derived one (there may not even be one:
     // decideGateAction returns empty reasons for this case).
     const viaLocalAllow = localGitAllow.qualifies && gate.verdict === 'allow' && gate.policyId === null
+    // The advise-model release: a 'ask' that no policy resolved (policyId
+    // null) IS the risk stage's own ask -- viaLocalAllow already implies
+    // 'allow', so the two conditions never overlap.
+    const isRiskAdvice = gate.verdict === 'ask' && gate.policyId === null
     const reason = viaLocalAllow
       ? t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush')
       : gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
@@ -1045,6 +1242,8 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
       policyId: gate.policyId,
       viaLocalAllow,
+      isRiskAdvice,
+      riskAdviceReasonsEnglish: isRiskAdvice ? gate.reasons.map(resolveGateActionReasonEnglish) : [],
     }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
@@ -1111,7 +1310,7 @@ function pluginDisabledInOrca(): boolean {
 async function main(): Promise<void> {
   const input = readHookInput()
   if (input === null) passThrough()
-  const { command, cwd, toolUseId } = input as HookInput
+  const { command, cwd, toolUseId, sessionId } = input as HookInput
 
   // Before anything else, and before any work: if Orca has the plugin
   // switched off, this hook has no business judging anything.
@@ -1246,6 +1445,17 @@ async function main(): Promise<void> {
   const cache = key === null ? {} : readCache()
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
+    // An 'advise' hit is never replayed as a canned line: recoverability
+    // depends on the CURRENT git status, which the shape-only cache key
+    // knows nothing about, and an identical retry must still be checked
+    // fresh -- see buildAdviceForCommand/checkAdviceRetryPass's own module
+    // notes. hit.reason for an 'advise' entry is the core ENGLISH reason
+    // only (gate_cache.ts's own doc on GateCacheDecision), never
+    // locale-resolved and never the full composed text.
+    if (hit.decision === 'advise') {
+      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], source: 'cache', stopReason: 'risk' })
+      return
+    }
     appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null)
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
@@ -1297,10 +1507,6 @@ async function main(): Promise<void> {
   if (previousUnreachableFailures !== 0) writeUnreachableFailures(decideUnreachableNotice(true, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD).nextConsecutiveFailures)
 
   const resolved = outcome as Extract<JevOutcome, { kind: 'verdict' }>
-  if (key !== null) {
-    cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
-    writeCache(cache)
-  }
   // A jev-sourced verdict was decided by a policy when decideGateAction's
   // own policyId is non-null (see decisions.ts's GateActionResult.policyId);
   // 'local-allow' when Option D's own structural check decided it instead
@@ -1308,15 +1514,42 @@ async function main(): Promise<void> {
   // otherwise the consequence-ceiling risk rule decided it, including a
   // clean 'allow'.
   const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : resolved.viaLocalAllow ? 'local-allow' : 'risk'
-  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId)
   // AB benchmark: 'deny' never reaches here -- decideGateAction's Jev-sourced
   // verdict is always allow/ask (GateVerdict, decisions.ts) -- but the guard
   // is kept explicit rather than trusting the cast, matching this file's own
   // fail-open discipline: an unexpected value is skipped, never forced into
-  // the sample's narrower type.
+  // the sample's narrower type. Sampled on the RAW Jev verdict, always --
+  // whether it then became a human ask or an advice is this file's own
+  // presentation choice, not Jev's own judgment, which the benchmark
+  // compares against the big model exactly as Jev gave it.
   if (resolved.decision === 'allow' || resolved.decision === 'ask') {
     appendAbBenchmarkSample(command, resolved.decision, jevLatencyMs, resolved.usage, resolved.destinationKind)
   }
+
+  // The advise-model release: the risk stage's own 'ask' (no policy
+  // resolved it) is no longer a human ask -- it is an advice to the coding
+  // model. Cached as 'advise' (never as a silent 'allow'), with the core
+  // ENGLISH reason only -- see gate_cache.ts's own doc on GateCacheDecision
+  // and buildAdviceForCommand's own note on why recoverability is always
+  // recomputed fresh rather than cached alongside it.
+  if (resolved.isRiskAdvice) {
+    if (key !== null) {
+      cache[key] = { decision: 'advise', reason: resolved.riskAdviceReasonsEnglish.join(' · '), at: Date.now() }
+      writeCache(cache)
+    }
+    resolveAdviceOutcome({
+      command, cwd, sessionId, toolUseId,
+      reasonsEnglish: resolved.riskAdviceReasonsEnglish,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
+    })
+    return
+  }
+
+  if (key !== null) {
+    cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
+    writeCache(cache)
+  }
+  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId)
   // Only a stop becomes a question worth an answer. A pass was never asked
   // about, so recording it would bury the handful of real decisions under
   // hundreds of non-events.

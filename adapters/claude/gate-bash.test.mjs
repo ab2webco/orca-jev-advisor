@@ -22,6 +22,7 @@ import { after, test } from 'node:test'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
+import { adviceRetryKey } from '../../src/core/gate_advice_retry.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCRIPT_PATH = join(__dirname, 'gate-bash.ts')
@@ -47,7 +48,7 @@ const MIDDLE_TIER_COMMAND = 'some-unmeasured-tool --flag'
  *  lets a test reach past the no-key path into the cache; GIT_CEILING_
  *  DIRECTORIES keeps `git` from walking up past the throwaway home even if
  *  the OS temp dir ever ends up nested under a real repository. */
-function run (home, command, { cwd, apiKey } = {}) {
+function run (home, command, { cwd, apiKey, sessionId } = {}) {
   const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home }
   delete env.XDG_CACHE_HOME
   delete env.XDG_CONFIG_HOME
@@ -68,6 +69,7 @@ function run (home, command, { cwd, apiKey } = {}) {
   // check = false) instead of touching the real developer's Orca install.
   env.ORCA_USER_DATA_PATH = join(home, 'orca-userdata-does-not-exist')
   const payload = { tool_input: { command }, cwd: cwd ?? home, tool_use_id: 'tool-key-notice' }
+  if (sessionId !== undefined) payload.session_id = sessionId
   return execFileSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], {
     env,
     input: JSON.stringify(payload),
@@ -1680,4 +1682,168 @@ test('stray-apostrophe bypass: a trailing comment with an apostrophe never swall
   const command = ["echo # it's", 'git push --force origin main'].join('\n')
   const payload = JSON.parse(run(home, command))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// The advise-model release (Part 1): the RISK stage's own "ask" is no
+// longer a human ask -- it is an ADVICE to the coding model.
+// ('permissionDecision: deny' with a reason written FOR THE MODEL). Because
+// this suite's harness has no fetch injection point for a subprocess-spawned
+// hook (see the module note above every apiKey-carrying test in this file),
+// the risk stage's own live decision is exercised by pre-populating the
+// verdict cache directly with a decision:'advise' entry -- exactly the
+// entry gate-bash.ts itself would have written after a real Jev call -- so
+// the cache-hit path (which recomposes the FULL advice text fresh: see
+// buildAdviceForCommand's own module note on why recoverability is never
+// itself cached) is exercised end to end, with a real git repository behind
+// it for the recoverability naming.
+// ---------------------------------------------------------------------------
+
+function adviceRetryStatePath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-advice-retry.json')
+}
+
+function writeVerdictCacheEntry (home, key, entry) {
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({ [key]: entry }))
+}
+
+const ADVICE_MIDDLE_TIER_COMMAND = 'some-unmeasured-advisable-tool --flag'
+
+test('a risk-stage advice: permissionDecision is deny, the reason is never REFUSED, names a concrete segment and carries the retry clause', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  const payload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-1' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.doesNotMatch(reason, /REFUSED/i, 'the model must be able to tell an advice apart from a hard stop')
+  assert.match(reason, /`some-unmeasured-advisable-tool --flag`/, 'the concrete segment must be named')
+  assert.match(reason, /run the same command again unchanged and it will go through/, 'the retry clause must be present')
+  assert.match(payload.systemMessage, /advis/i, 'the person sees a short, non-blocking advice line')
+
+  const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
+  assert.equal(record.verdict, 'advise')
+  assert.equal(record.stopReason, 'risk')
+})
+
+test('an identical retry in the SAME session passes as allow, and is never written to the shape cache', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-2' })
+  const retryPayload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-2' }))
+  assert.equal(retryPayload.hookSpecificOutput.permissionDecision, 'allow', 'an identical retry, same session, must pass')
+
+  const cacheAfter = JSON.parse(readFileSync(verdictCachePath(home), 'utf8'))
+  assert.equal(cacheAfter[key].decision, 'advise', 'the retry-pass allow must never overwrite the shape cache entry')
+
+  const records = readFileSync(gateLogPath(home), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  const last = records[records.length - 1]
+  assert.equal(last.verdict, 'allow')
+  assert.equal(last.stopReason, 'advice-retry')
+})
+
+test('a DIFFERENT session gets advised again, not the retry pass', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-a' })
+  const otherSession = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-advice-b' }))
+  assert.equal(otherSession.hookSpecificOutput.permissionDecision, 'deny', 'a different session must be advised again, never waved through')
+})
+
+test('after the retry window (10 minutes), the same session is advised again', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  const sessionId = 'session-advice-stale'
+  run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId })
+
+  // Backdate the retry-pass state past the 10-minute window, exactly as if
+  // the first advice had been issued 11 minutes ago.
+  const retryPath = adviceRetryStatePath(home)
+  const key2 = adviceRetryKey(sessionId, ADVICE_MIDDLE_TIER_COMMAND)
+  writeFileSync(retryPath, JSON.stringify({ [key2]: Date.now() - 11 * 60 * 1000 }))
+
+  const stalePayload = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId }))
+  assert.equal(stalePayload.hookSpecificOutput.permissionDecision, 'deny', 'past the window, the retry must not pass -- advised again')
+})
+
+test('a missing session_id never gets a retry pass, and the advice text does not promise one', () => {
+  const home = makeHome()
+  const key = expectedCacheKey(ADVICE_MIDDLE_TIER_COMMAND, home, home)
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  const first = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit' }))
+  const second = JSON.parse(run(home, ADVICE_MIDDLE_TIER_COMMAND, { apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(first.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(second.hookSpecificOutput.permissionDecision, 'deny', 'with no session_id, an identical repeat is advised again, conservatively')
+  assert.doesNotMatch(first.hookSpecificOutput.permissionDecisionReason, /run the same command again unchanged and it will go through/)
+  assert.match(first.hookSpecificOutput.permissionDecisionReason, /could not be identified/)
+})
+
+/** Mirrors gate-bash.ts's own private repoContext(cwd) exactly, so a test
+ *  against a REAL repository (branch name and dirty state both matter to
+ *  the cache key) computes the same key gate-bash.ts itself will. */
+function computeRepoContextForTest (cwd) {
+  const run = (args) => {
+    try {
+      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    } catch {
+      return ''
+    }
+  }
+  const branch = run(['rev-parse', '--abbrev-ref', 'HEAD'])
+  const remote = run(['remote', 'get-url', 'origin']).replace(/^.*[:/]/, '').replace(/\.git$/, '')
+  const dirty = run(['status', '--porcelain']).length > 0
+  return [
+    remote.length > 0 ? `repository ${remote}` : 'no remote',
+    branch.length > 0 ? `branch ${branch}` : 'unknown branch',
+    branch === 'main' || branch === 'master' ? 'this is the shared main branch' : 'this is a working branch',
+    dirty ? 'with uncommitted changes' : 'clean',
+  ].join(', ')
+}
+
+test('recoverability naming on a real temp git repo: an uncommitted file, an untracked file, .env and dist/ are told apart', () => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-advice-recoverability-test-')))
+  initRepo(base)
+  writeFileSync(join(base, 'src.ts'), 'export const a = 1;\n')
+  git(['add', 'src.ts'], base)
+  git(['commit', '-q', '-m', 'add src'], base)
+  writeFileSync(join(base, 'src.ts'), 'export const a = 2;\n') // uncommitted change
+  mkdirSync(join(base, 'dist'), { recursive: true })
+  writeFileSync(join(base, 'dist', 'main.js'), 'built output')
+  writeFileSync(join(base, '.env'), 'SECRET=1\n')
+  writeFileSync(join(base, 'notes-draft.ts'), '// untracked draft\n')
+
+  const command = 'rm -rf dist src.ts .env notes-draft.ts'
+  const home = makeHome()
+  const key = computeCacheKey(command, base, home, { repoContext: computeRepoContextForTest(base) })
+  writeVerdictCacheEntry(home, key, { decision: 'advise', reason: "it can't be undone", at: Date.now() })
+
+  const payload = JSON.parse(run(home, command, { cwd: base, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-recoverability' }))
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(reason, /src\.ts \(uncommitted changes\)/)
+  assert.match(reason, /notes-draft\.ts \(untracked/)
+  assert.match(reason, /\.env \(looks like a secret\)/)
+  assert.match(reason, /rm -rf dist`/, 'the safe, regenerable subset must be offered as an exact command')
+})
+
+test('requires_human policy stops stay a human ask, never an advice -- unaffected by the advise-model release', () => {
+  const home = makeHome()
+  const command = 'some-policy-scoped-command --flag'
+  const key = expectedCacheKey(command, home, home)
+  // Simulates what gate-bash.ts itself would have cached for a policy-driven
+  // stop: decision 'ask', never 'advise' -- see decideGateAction's own
+  // policyId-gated branch, untouched by this release.
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'a person needs to decide: client_always_asks', at: Date.now() })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-policy' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
 })

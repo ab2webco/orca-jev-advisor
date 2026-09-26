@@ -14,7 +14,18 @@
 // (or an individual malformed entry) is never a crash, just a smaller
 // cache -- see isValidGateCacheEntry.
 
-export type GateCacheDecision = "allow" | "deny" | "ask";
+/**
+ * `"advise"` (the advise-model release): a risk-path advise can be cached --
+ * never as a silent "allow" -- so the next identical command SHAPE advises
+ * again without a fresh Jev call. Its `reason` (GateCacheEntry.reason) is
+ * NOT the full model-facing advice text: it is the core, English, axis-level
+ * rationale only (never locale-resolved, never containing recoverability
+ * naming or the retry clause) -- see gate-bash.ts's own cache write/read for
+ * the advise decision, which rebuilds the full text fresh on every hit
+ * (recoverability depends on the CURRENT git status, which the shape-only
+ * cache key knows nothing about).
+ */
+export type GateCacheDecision = "allow" | "deny" | "ask" | "advise";
 
 export interface GateCacheEntry {
   readonly decision: GateCacheDecision;
@@ -40,7 +51,7 @@ export interface GateCacheEntry {
  */
 export const GATE_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
-const VALID_DECISIONS: ReadonlySet<string> = new Set(["allow", "deny", "ask"]);
+const VALID_DECISIONS: ReadonlySet<string> = new Set(["allow", "deny", "ask", "advise"]);
 
 /** True only for a well-shaped entry: this is what stands between a corrupt or hand-edited cache file and a crash. */
 export function isValidGateCacheEntry(value: unknown): value is GateCacheEntry {

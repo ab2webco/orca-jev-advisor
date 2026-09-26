@@ -117,7 +117,11 @@ function toGateDecisionRecord (row) {
     // file has hidden something that was actually working; check the other
     // guards in this file before trusting any of their omissions again.
     (row.source !== 'local-rule' && row.source !== 'cache' && row.source !== 'jev' && row.source !== 'none') ||
-    (row.verdict !== 'allow' && row.verdict !== 'ask' && row.verdict !== 'deny') ||
+    // 'advise' (the advise-model release, src/core/gate_measurement.ts): the
+    // risk stage (or a local rule whose switch is off) refuses the CODING
+    // MODEL and hands it a reason, rather than asking a person -- same
+    // silent-drop mistake as 'none' above if this guard forgets it.
+    (row.verdict !== 'allow' && row.verdict !== 'ask' && row.verdict !== 'deny' && row.verdict !== 'advise') ||
     (row.latencyMs !== null && typeof row.latencyMs !== 'number') ||
     // Optional ON READ, not on write (see gate_measurement.ts's own doc on
     // GateDecisionRecord.pluginVersion): absent entirely is a record from

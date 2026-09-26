@@ -301,6 +301,41 @@ test("a source:'none' record carries stopReason 'unreachable' -- Jev was asked b
   assert.equal(record.stopReason, "unreachable");
 });
 
+test("an advise verdict with stopReason 'advice-retry' round-trips -- an identical retry let a past advise through as a truthful allow", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-advice-retry",
+    at: "2026-09-26T00:00:00.000Z",
+    project: null,
+    command: "rm -rf dist src/a.ts",
+    source: "jev",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.5.1",
+    stopReason: "advice-retry",
+  });
+  assert.equal(record.verdict, "allow");
+  assert.equal(record.stopReason, "advice-retry");
+  const raw = serializeGateRecord(record);
+  assert.deepEqual(parseGateDecisionRecords(raw), [record]);
+});
+
+test("an 'advise' verdict round-trips and is never dropped as an unrecognised verdict", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-advise",
+    at: "2026-09-26T00:00:01.000Z",
+    project: null,
+    command: "rm -rf dist src/a.ts",
+    source: "jev",
+    verdict: "advise",
+    latencyMs: 250,
+    pluginVersion: "0.5.1",
+    stopReason: "risk",
+  });
+  assert.equal(record.verdict, "advise");
+  const raw = serializeGateRecord(record);
+  assert.deepEqual(parseGateDecisionRecords(raw), [record]);
+});
+
 test("parseGateDecisionRecords: a line with an invalid stopReason value is skipped, siblings survive", () => {
   const good = buildGateDecisionRecord({
     id: "sr-6",
