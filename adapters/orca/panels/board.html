@@ -115,6 +115,17 @@
                   border-color: transparent; font-weight: 600; }
       .tag.working { color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
       .tag.blocked { color: var(--destructive, var(--fb-destructive)); border-style: dashed; }
+      /* `advised`: the model was refused this one attempt and handed a
+         concrete reason, but nobody was interrupted -- neither `done`'s
+         quiet accent (that reads as a clean pass), nor `blocked`'s red
+         (nothing was permanently refused), nor `working`'s plain bold (that
+         is a human still waiting). --primary is already this panel's own
+         "distinct, high-contrast" token (the selected window-picker button
+         above), so this reuses it rather than inventing a colour the host's
+         own allowlist does not carry. */
+      .tag.advised { background: var(--primary, var(--fb-primary));
+                     color: var(--primary-foreground, var(--fb-primary-foreground));
+                     border-color: transparent; font-weight: 600; }
       .empty { color: var(--muted-foreground, var(--fb-muted-foreground)); padding: 8px 12px; }
       .stale { color: var(--destructive, var(--fb-destructive)); }
 
@@ -363,12 +374,13 @@
           'status.unjudged': '{{n}} pasaron sin juicio en esta ventana',
           'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'sin latencia de Jev medida en esta ventana',
+          'status.policiesWithoutKind': '{{n}} políticas del equipo no tienen tipo y no se aplican: {{ids}}. Abre Configuración → Políticas del equipo y elige un tipo.',
           'toll.heading': '¿Qué me cuesta?',
           'toll.unit': 'decisiones en esta ventana',
           'toll.avoided': 'Las reglas locales y la caché resolvieron {{n}} sin llamar a la red.',
           'gate.source.jevMedian': 'Jev (con red, mediana {{ms}} ms)',
           'interv.heading': '¿Dónde interviene?',
-          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas, de {{total}} decisiones',
+          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas · {{advise}} avisadas al modelo, de {{total}} decisiones',
           'interv.family': 'Familia',
           'interv.ask': 'Pregunta',
           'interv.deny': 'Bloqueó',
@@ -394,13 +406,14 @@
           'stats.recentLocalRule': 'regla local',
           'stats.recentJev': 'jev',
           'stats.recentNone': 'sin respuesta',
+          'stats.recentAdvise': 'aviso al modelo',
           'stats.na': 'sin datos suficientes',
           'stats.unknownProject': '(proyecto desconocido)',
           'gate.source.localRule': 'Regla local (~1ms, sin red)',
           'gate.source.cache': 'Caché (sin red)',
           'gate.source.jev': 'Jev (con red)',
           'gate.source.none': 'Nadie: Jev no contestó',
-          'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso -- fallar abierto es lo correcto -- pero nadie lo revisó, así que no cuentan arriba.',
+          'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso — fallar abierto es lo correcto — pero nadie lo revisó, así que no cuentan arriba.',
           'approvals.heading': '¿Cómo va la calibración?',
           'approvals.empty': 'El gate todavía no ha detenido ningún comando. Esta sección se llena la próxima vez que se pregunte y la persona responda.',
           'approvals.approved': 'Aprobadas',
@@ -413,7 +426,7 @@
           // clasificación, no un hecho -- una sesión que se cerró después
           // de correr el comando deja el mismo rastro.
           'approvals.notRun': 'No corrió',
-          'approvals.notRunHint': 'No corrió: sin respuesta cuando venció la espera. La mayoría son comandos que el gate rechazó directo y que nunca llegaron a ejecutarse -- el freno funcionó -- pero una sesión que se cerró justo después de correr el comando deja el mismo rastro. Es una clasificación, no un hecho confirmado.',
+          'approvals.notRunHint': 'No corrió: sin respuesta cuando venció la espera. La mayoría son comandos que el gate rechazó directo y que nunca llegaron a ejecutarse — el freno funcionó — pero una sesión que se cerró justo después de correr el comando deja el mismo rastro. Es una clasificación, no un hecho confirmado.',
           // Preguntado, todavía sin respuesta, pero dentro de la ventana de
           // espera (UNRESOLVED_AFTER_MS) -- un aviso que sigue en pantalla en
           // este momento. Sin este cuarto grupo, approved+rejected+notRun no
@@ -424,7 +437,7 @@
           'approvals.suggestedCeiling': 'Techo sugerido',
           'approvals.evidenceCount': 'Basado en {{approved}} aprobación(es) y {{rejected}} rechazo(s) con puntaje.',
           'approvals.noSuggestionInsufficient': 'Todavía no hay evidencia suficiente para sugerir un techo: hacen falta aprobaciones y rechazos con puntaje de ambos lados ({{approved}} aprobación(es), {{rejected}} rechazo(s) hasta ahora).',
-          'approvals.noSuggestionOverlap': 'Las aprobaciones y los rechazos se superponen -- lo más alto aprobado ({{highest}}) es mayor o igual que lo más bajo rechazado ({{lowest}}), con {{approved}} aprobación(es) y {{rejected}} rechazo(s) -- así que ningún techo único los separa todavía.',
+          'approvals.noSuggestionOverlap': 'Las aprobaciones y los rechazos se superponen — lo más alto aprobado ({{highest}}) es mayor o igual que lo más bajo rechazado ({{lowest}}), con {{approved}} aprobación(es) y {{rejected}} rechazo(s) — así que ningún techo único los separa todavía.',
           'live.heading': 'Estados en vivo',
           'live.loading': 'Cargando…',
           'live.empty': 'Sin datos todavía. El tablero se llena a medida que llegan eventos.',
@@ -475,12 +488,13 @@
           'status.unjudged': '{{n}} passed unjudged in this window',
           'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'no Jev latency measured in this window',
+          'status.policiesWithoutKind': '{{n}} team policies have no kind and are not applied: {{ids}}. Open Settings → Team policies and pick a kind.',
           'toll.heading': 'What does it cost?',
           'toll.unit': 'decisions in this window',
           'toll.avoided': 'Local rules and the cache settled {{n}} of them without a network call.',
           'gate.source.jevMedian': 'Jev (network, median {{ms}} ms)',
           'interv.heading': 'Where does it step in?',
-          'interv.sub': '{{ask}} asked · {{deny}} blocked, out of {{total}} decisions',
+          'interv.sub': '{{ask}} asked · {{deny}} blocked · {{advise}} advised the model, out of {{total}} decisions',
           'interv.family': 'Family',
           'interv.ask': 'Asked',
           'interv.deny': 'Blocked',
@@ -506,13 +520,14 @@
           'stats.recentLocalRule': 'local rule',
           'stats.recentJev': 'jev',
           'stats.recentNone': 'no answer',
+          'stats.recentAdvise': 'advised the model',
           'stats.na': 'not enough data',
           'stats.unknownProject': '(unknown project)',
           'gate.source.localRule': 'Local rule (~1ms, no network)',
           'gate.source.cache': 'Cache (no network)',
           'gate.source.jev': 'Jev (network)',
           'gate.source.none': 'Nobody: Jev did not answer',
-          'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead -- failing open is correct -- but nobody reviewed it, so they are not counted above.',
+          'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead — failing open is correct — but nobody reviewed it, so they are not counted above.',
           'approvals.heading': 'How is calibration going?',
           'approvals.empty': 'The gate has not stopped any command yet. This section fills in the next time it asks and the person answers.',
           'approvals.approved': 'Approved',
@@ -536,7 +551,7 @@
           'approvals.suggestedCeiling': 'Suggested ceiling',
           'approvals.evidenceCount': 'Based on {{approved}} approval(s) and {{rejected}} rejection(s) with a score.',
           'approvals.noSuggestionInsufficient': 'Not enough evidence yet to suggest a ceiling: scored approvals and rejections are needed on both sides ({{approved}} approval(s), {{rejected}} rejection(s) so far).',
-          'approvals.noSuggestionOverlap': 'Approvals and rejections overlap -- the highest approved ({{highest}}) is at or above the lowest rejected ({{lowest}}), with {{approved}} approval(s) and {{rejected}} rejection(s) -- so no single ceiling separates them yet.',
+          'approvals.noSuggestionOverlap': 'Approvals and rejections overlap — the highest approved ({{highest}}) is at or above the lowest rejected ({{lowest}}), with {{approved}} approval(s) and {{rejected}} rejection(s) — so no single ceiling separates them yet.',
           'live.heading': 'Live status',
           'live.loading': 'Loading…',
           'live.empty': 'No data yet. The board fills in as events arrive.',
@@ -570,21 +585,48 @@
         }
       }
       /**
-       * The language Orca is running in.
+       * The language Orca is running in, guessed from this panel's own
+       * side.
        *
-       * Orca substitutes the resolved UI locale into the panel shell's
-       * `<html lang>`, so the plugin no longer has to ask a question the
-       * user already answered in Orca's own settings. Anything this plugin
-       * has no catalog for falls back to English.
+       * Orca's plugin shells hardcode `<html lang="en">` on every panel
+       * (measured, not assumed -- see odd/tasks/release-0.5.1.md JEVADV-10);
+       * there is no `<html lang>` this plugin can read to learn the
+       * person's real choice. `navigator.languages[0] || navigator.language`
+       * is the Chromium application locale instead -- the same underlying
+       * value Electron's own `app.getLocale()` reads in the main process --
+       * so it tracks the OS/app language even though Orca sets no attribute
+       * for it. This board is read-only (it never pushes a locale request
+       * back to the worker, unlike config.html), so this guess is only ever
+       * a FALLBACK now (JEVADV-10): resolveEffectiveLocale below prefers the
+       * worker's own published status when it already reflects Orca's
+       * explicit setting. Anything this plugin has no catalog for falls back
+       * to English, same as `t()` below.
        */
       function localeFromOrca () {
-        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        var tag = ((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase()
         return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      /**
+       * The locale this board actually paints with, given the worker's own
+       * published status (main.mjs's publishLocaleStatus, JEVADV-10) and
+       * this board's own navigator-derived guess -- see config.html's own
+       * copy of this function for the full reasoning. This board never
+       * pushes a locale request back to the worker (read-only, see
+       * localeFromOrca's own doc comment above), but it still PAINTS with
+       * Orca's own explicit setting when the worker already knows one,
+       * instead of always re-guessing from `navigator.language`.
+       */
+      function resolveEffectiveLocale (status, navigatorGuess) {
+        if (status && status.source === 'orca-setting' && (status.value === 'es' || status.value === 'en')) {
+          return status.value
+        }
+        return navigatorGuess
       }
 
       var currentLocale = localeFromOrca()
       function t (key, params) {
-        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
+        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.en[key] || key
         if (!params) return template
         return template.replace(/\{\{(\w+)\}\}/g, function (_m, name) {
           return Object.prototype.hasOwnProperty.call(params, name) ? params[name] : ''
@@ -694,6 +736,9 @@
       // for why this is a hand-copy rather than an import.
       var WORKER_HEARTBEAT_KEY = 'workerHeartbeat'
       var WORKER_HEARTBEAT_STALE_MS = 40 * 1000
+      // JEVADV-49: mirrors main.mjs's POLICIES_WITHOUT_KIND_STATUS_KEY --
+      // same hand-copy rule as WORKER_HEARTBEAT_KEY above.
+      var POLICIES_WITHOUT_KIND_STATUS_KEY = 'policiesWithoutKindStatus'
       function isHeartbeatFresh (heartbeat, nowMs, staleAfterMs) {
         if (!heartbeat || typeof heartbeat !== 'object' || typeof heartbeat.at !== 'string') return false
         var at = Date.parse(heartbeat.at)
@@ -796,6 +841,10 @@
       }
 
       var lastStats = null
+      // JEVADV-49: the last published policiesWithoutKindStatus read, `{count,
+      // ids, at}` or null before the first successful read -- see reload()
+      // and renderStats() below.
+      var lastPoliciesWithoutKind = null
 
       /** Shows `body`, or hides it and shows `emptyText` in its place.
        *  Every card on this board goes through here so that "nothing yet"
@@ -894,7 +943,7 @@
       })
 
       // ---------- the four questions -------------------------------------
-      function renderStatus (health, w) {
+      function renderStatus (health, w, policiesWithoutKind) {
         var chips = []
         if (health.lastJevAt) chips.push(chip(t('status.jevAnswered', { age: ago(health.lastJevAt) }), ''))
         else chips.push(chip(t('status.jevNever'), ''))
@@ -908,6 +957,12 @@
         chips.push(latency.sampleCount > 0
           ? chip(t('status.latency', { p50: ms(latency.medianMs), p95: ms(latency.p95Ms) }), '')
           : chip(t('status.latencyNone'), ''))
+        // JEVADV-49: a stored team policy with no kind is invisible to the
+        // gate (store.ts's getPolicies excludes it) and, until now, invisible
+        // to the owner too -- see main.mjs's publishPoliciesWithoutKindStatus.
+        if (policiesWithoutKind && policiesWithoutKind.count > 0) {
+          chips.push(chip(t('status.policiesWithoutKind', { n: num(policiesWithoutKind.count), ids: policiesWithoutKind.ids.join(', ') }), 'alarm'))
+        }
         el('status-body').innerHTML = chips.join('')
       }
       function chip (text, cls, title) {
@@ -951,7 +1006,7 @@
         var table = w.interventions || {}
         var rows = table.rows || []
         var sub = line(t('interv.sub', {
-          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), total: num(w.totalDecisions || 0)
+          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), advise: num(verdict.advise || 0), total: num(w.totalDecisions || 0)
         }), 'kpi-sub')
         if (rows.length === 0) {
           el('interventions-body').innerHTML = sub + line(t('interv.none'), 'empty-line')
@@ -1114,6 +1169,13 @@
           'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'),
           jev: t('stats.recentJev'), none: t('stats.recentNone')
         }
+        // 'advise' (the advise-model release): the model was refused this
+        // one attempt and handed a reason, but nobody was interrupted --
+        // its own state, own label, never `done`'s green (a clean pass) and
+        // never `blocked`'s red (nothing was permanently refused). Every
+        // OTHER verdict keeps printing its own raw word, unchanged.
+        var verdictState = { deny: 'blocked', ask: 'working', advise: 'advised' }
+        var verdictLabel = { advise: t('stats.recentAdvise') }
         // Family, source, verdict, age: the project moves to the tooltip and
         // the full timestamp is gone -- "4 min ago" is what a person scans.
         el('stats-recent').innerHTML = '<ul class="recent-list">' + recent.map(function (r) {
@@ -1121,8 +1183,8 @@
           return '<li title="' + esc(projectLabel(r.project)) + '">' +
             '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
             '<span class="tag">' + esc((sourceLabel[r.source] || r.source || '') + latency) + '</span>' +
-            '<span class="' + tagClass(r.verdict === 'deny' ? 'blocked' : (r.verdict === 'ask' ? 'working' : 'done')) + '">' +
-            esc(r.verdict || '') + '</span>' +
+            '<span class="' + tagClass(verdictState[r.verdict] || 'done') + '">' +
+            esc(verdictLabel[r.verdict] || r.verdict || '') + '</span>' +
             '<span class="when">' + esc(ago(r.at)) + '</span></li>'
         }).join('') + '</ul>'
       }
@@ -1138,8 +1200,9 @@
         show('card-live', hasMeasurements || entries.length > 0)
       }
 
-      function renderStats (summary) {
+      function renderStats (summary, policiesWithoutKind) {
         lastStats = summary
+        lastPoliciesWithoutKind = policiesWithoutKind || null
         var ok = !!(summary && summary.ok)
         var gate = (ok && summary.gate) || {}
         var mod = (ok && summary.modSkills) || {}
@@ -1149,13 +1212,19 @@
         var hasSpeed = (ab.sampleCount || 0) > 0
         var hasSkills = (mod.totalDecisions || 0) > 0
         hasMeasurements = hasGate || hasSpeed || hasSkills
+        // JEVADV-49: at least one stored team policy has no kind (a config-
+        // panel save can silently strip it -- see main.mjs's own
+        // publishPoliciesWithoutKindStatus). This must be visible even on a
+        // machine with no gate decisions measured yet, so it gets its own
+        // reason to show the status card, independent of hasGate.
+        var kindIssue = !!(lastPoliciesWithoutKind && lastPoliciesWithoutKind.count > 0)
 
         // An empty log gets one card that says why, never a column of empty
         // sections and never a zero standing in for "nothing yet".
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
         show('windows', hasGate)
-        show('card-status', hasGate)
+        show('card-status', hasGate || kindIssue)
         show('card-recent', hasGate)
         show('card-projects', hasGate || hasSkills)
         show('card-speed', hasMeasurements)
@@ -1168,13 +1237,20 @@
         show('top', hasGate && w.totalDecisions > 0)
         if (hasGate) {
           renderWindowPicker(windows, key)
-          renderStatus(gate.health || {}, w)
+          renderStatus(gate.health || {}, w, lastPoliciesWithoutKind)
           if (w.totalDecisions > 0) {
             renderToll(w)
             renderInterventions(w)
             renderApprovals(w.approvals || {})
           }
           renderRecent(gate)
+        } else if (kindIssue) {
+          // No gate decisions measured at all, but the kind-less-policy
+          // warning still has to render somewhere -- the same chips
+          // function, with no gate health to report (its own no-data chips
+          // are truthful either way: "Jev has not answered a call yet" is
+          // exactly what "no gate data" means here).
+          renderStatus({}, {}, lastPoliciesWithoutKind)
         }
         if (hasMeasurements) {
           renderUnmeasured()
@@ -1189,6 +1265,7 @@
         if (state === 'done') return 'tag done'
         if (state === 'working') return 'tag working'
         if (state === 'blocked') return 'tag blocked'
+        if (state === 'advised') return 'tag advised'
         return 'tag'
       }
       var lastBoard = null
@@ -1245,10 +1322,11 @@
         return Promise.all([
           read('board', usuario),
           read('measurementsSummary', usuario),
-          read(WORKER_HEARTBEAT_KEY, false)
+          read(WORKER_HEARTBEAT_KEY, false),
+          read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null })
         ]).then(function (results) {
           render(results[0] || { entries: [] })
-          renderStats(results[1])
+          renderStats(results[1], results[3])
           renderWorkerNote(results[2])
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
@@ -1281,8 +1359,17 @@
         })
       })
 
-      // Orca's language decides; see the note in config.html.
+      // Orca's language decides; see the note in config.html. JEVADV-10
+      // (odd/tasks/release-0.5.1.md): read the worker's own published
+      // locale status BEFORE the first paint, and repaint with Orca's own
+      // explicit setting when the worker already knows one -- this board
+      // still never PUSHES a locale request back (read-only, see
+      // localeFromOrca's own doc comment above).
+      var LOCALE_STATUS_KEY = 'localeStatus'
       Promise.resolve().then(function () {
+        return read(LOCALE_STATUS_KEY, false).catch(function () { return null })
+      }).then(function (status) {
+        currentLocale = resolveEffectiveLocale(status, currentLocale)
         applyStaticI18n()
         return reload(true)
       }).then(startPolling)

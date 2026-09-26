@@ -26,6 +26,14 @@ export interface GateVerdictCounts {
   readonly allow: number;
   readonly ask: number;
   readonly deny: number;
+  /**
+   * The advise-model release's third verdict: the model was refused this ONE
+   * attempt and handed a concrete reason, but nobody was interrupted -- see
+   * gate_measurement.ts's own GateVerdict doc. Kept OUT of
+   * GateCommandFamilyStat.interventions below on purpose: an intervention
+   * counts a human being asked, and advise never asks one.
+   */
+  readonly advise: number;
 }
 
 export interface GateSourceCounts {
@@ -59,7 +67,7 @@ export interface GateCommandFamilyStat {
   readonly commandFamily: string;
   readonly total: number;
   readonly byVerdict: GateVerdictCounts;
-  /** `byVerdict.ask + byVerdict.deny` -- how often this family actually needed a human, independent of how often it merely ran. */
+  /** `byVerdict.ask + byVerdict.deny` -- how often this family actually needed a HUMAN, independent of how often it merely ran. An `advise` verdict is deliberately excluded: it interrupts the coding model, never a person. */
   readonly interventions: number;
 }
 
@@ -99,7 +107,7 @@ export interface GateStatsSummary {
 }
 
 function emptyVerdictCounts(): GateVerdictCounts {
-  return { allow: 0, ask: 0, deny: 0 };
+  return { allow: 0, ask: 0, deny: 0, advise: 0 };
 }
 
 function incrementVerdict(counts: GateVerdictCounts, verdict: GateVerdict): GateVerdictCounts {

@@ -17,8 +17,10 @@ export type GateKey =
   | "verb.asks"
   | "localRule"
   | "localRuleDeny"
+  | "policyDeny"
   | "cached"
   | "statusLine"
+  | "advisedLine"
   | "authRejected"
   | "noApiKey"
   | "jevUnreachable"
@@ -30,7 +32,12 @@ export type GateKey =
   | "reason.someoneElseWillNotice"
   | "reason.breaksSomethingImportant"
   | "reason.needsCleanupAfter"
-  | "reason.noDestinationMatched";
+  | "reason.tooCloseToTheLine"
+  | "reason.noDestinationMatched"
+  | "reason.ownBranchPush"
+  | "reason.guardedGitDelete"
+  | "reason.deployPublish"
+  | "reason.inlineInterpreterCode";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -49,20 +56,44 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // Deliberately identical to the English entry: this string is read by the
     // model, not by a person. See the note on the English one.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    // A `prohibits` team policy match: the same REFUSED wording pattern as
+    // localRuleDeny above, naming the policy instead of a local rule -- also
+    // deliberately identical in both catalogs (model-facing, never a person).
+    // No retry clause: this is a hard stop, not an advice.
+    policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
+    // The advise-model release: nobody is interrupted here -- the model was
+    // handed a reason and decides. Deliberately its own line, distinct from
+    // statusLine's "bloquea"/"pregunta": this is neither.
+    advisedLine: "jev · avisó al modelo: {{effect}}",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
     noApiKey: "sin llave configurada: la mitad del gate que juzga con Jev no está corriendo — solo las reglas locales siguen activas. Configúrala en el panel de ajustes del plugin en Orca.",
     jevUnreachable: "no se pudo contactar a Jev: la mitad del gate que juzga con Jev no está corriendo ahora mismo — solo las reglas locales siguen activas. Se va a intentar de nuevo con el próximo comando.",
     notice: "jev · {{message}}",
     "reason.allowClear": "reversible, local y barato",
     "reason.incompleteAnswers": "Jev no devolvió respuestas completas para 'reversible', 'externa' o 'consecuencia'.",
-    "reason.cannotUndoAndLeavesMachine": "no se puede deshacer y el efecto sale de tu maquina",
-    "reason.cannotUndo": "no hay forma automatica de deshacerlo",
-    "reason.someoneElseWillNotice": "el efecto lo va a notar alguien mas",
-    "reason.breaksSomethingImportant": "si esta mal, rompe algo que le importa a alguien",
-    "reason.needsCleanupAfter": "si esta mal, hay que limpiar despues",
-    "reason.noDestinationMatched": "no se pudo relacionar el directorio actual con ningun destino del catalogo -- se usaron los umbrales globales por defecto",
+    "reason.cannotUndoAndLeavesMachine": "no se puede deshacer y afecta algo fuera de tu máquina",
+    "reason.cannotUndo": "no hay forma automática de deshacerlo",
+    "reason.someoneElseWillNotice": "otra persona va a notar el efecto",
+    "reason.breaksSomethingImportant": "si sale mal, rompe algo que le importa a alguien",
+    "reason.needsCleanupAfter": "si sale mal, habrá que limpiar después",
+    "reason.tooCloseToTheLine": "quedó justo en el límite, así que prefiere confirmarlo contigo antes que dejarlo pasar solo",
+    "reason.noDestinationMatched": "este directorio no corresponde a ningún destino del catálogo, así que se usaron los umbrales globales",
+    "reason.ownBranchPush": "sube tu propia rama, sin force y sin tocar ramas compartidas",
+    "reason.guardedGitDelete": "solo usa borrados que git mismo protege: se niega si hay trabajo sin guardar o sin integrar",
+    // The advise-model release: the deploy/publish floor's own person-facing
+    // summary -- one generic phrase for every pattern detect_deploy_publish.ts
+    // recognises, never the specific English description (that stays
+    // model-facing only, in reasonsEnglish). See gate-bash.ts's own
+    // resolveAdviceOutcome call for the local floor.
+    "reason.deployPublish": "dispara un deploy o publica un paquete",
+    // The advise-model release: the person-facing summary for a match found
+    // ONLY inside inline interpreter code (`{{what}}` is the matched rule's
+    // own already-localized text) -- never the model's own conditional
+    // sentence ("if it ran, it would..."), which stays English and
+    // model-facing only.
+    "reason.inlineInterpreterCode": "incluye código en línea que menciona {{what}}",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -87,8 +118,10 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // model that only learns "this was blocked" tends to try the same effect
     // by another route, which is the outcome the rule exists to prevent.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
+    advisedLine: "jev · advised the model: {{effect}}",
     authRejected: "not judging: the key was rejected ({{status}})",
     noApiKey: "no key configured: the Jev-backed half of the gate is not running — only the local rules are still active. Set one in the plugin's settings panel in Orca.",
     jevUnreachable: "couldn't reach Jev: the Jev-backed half of the gate is not running right now — only the local rules are still active. It'll try again on the next command.",
@@ -100,6 +133,11 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.someoneElseWillNotice": "someone else is going to notice the effect",
     "reason.breaksSomethingImportant": "if it's wrong, it breaks something that matters to someone",
     "reason.needsCleanupAfter": "if it's wrong, there's cleanup to do afterward",
-    "reason.noDestinationMatched": "couldn't match the current directory to any catalog destination -- fell back to the default global thresholds",
+    "reason.tooCloseToTheLine": "right at the limit, so it checks with you instead of letting it through on its own",
+    "reason.noDestinationMatched": "this directory doesn't match any catalog destination, so the global thresholds were used",
+    "reason.ownBranchPush": "pushes your own branch, with no force and no shared branch",
+    "reason.guardedGitDelete": "only uses deletes git itself guards: it refuses when there is unsaved or unmerged work",
+    "reason.deployPublish": "triggers a deployment or publishes a package",
+    "reason.inlineInterpreterCode": "includes inline code that mentions {{what}}",
   },
 };

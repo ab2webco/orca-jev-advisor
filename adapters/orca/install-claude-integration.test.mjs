@@ -327,7 +327,7 @@ test('an existing install made before PostToolUseFailure existed gains it on the
 // copy reaches the caller instead of being silently dropped.
 // ---------------------------------------------------------------------------
 
-test('install copies the skills mod into place -- a real directory, never a symlink', () => {
+test('install copies the skills mod into place -- a real directory, mirroring the repo layout so its imports resolve', () => {
   const home = makeHome()
   const result = run('install', home)
   assert.equal(result.ok, true)
@@ -337,17 +337,88 @@ test('install copies the skills mod into place -- a real directory, never a syml
   const st = lstatSync(copyPath)
   assert.equal(st.isSymbolicLink(), false, 'the mod must be a real copy, not a symlink -- symlink() is refused under a scoped grant')
   assert.equal(st.isDirectory(), true)
-  // A real file from the source tree made it into the copy, byte for byte.
-  const copiedContent = readFileSync(join(copyPath, 'hooks', 'hooks.json'), 'utf8')
-  const sourceContent = readFileSync(join(MOD_SOURCE, 'hooks', 'hooks.json'), 'utf8')
-  assert.equal(copiedContent, sourceContent)
+
+  // The real hooks/index.ts, mirrored at its own repo-relative path -- not
+  // flattened to <copy>/hooks/index.ts, which is where the GENERATED root
+  // hooks.json lives instead (asserted below). Byte for byte against the
+  // real source file.
+  const copiedEntry = readFileSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'hooks', 'index.ts'), 'utf8')
+  const sourceEntry = readFileSync(join(MOD_SOURCE, 'hooks', 'index.ts'), 'utf8')
+  assert.equal(copiedEntry, sourceEntry)
+  // A src/core dependency several directories deep also landed at its own
+  // repo-relative path, proving the mirror goes beyond the mod-skills
+  // folder itself.
+  assert.equal(readFileSync(join(copyPath, 'src', 'core', 'jev.ts'), 'utf8'), readFileSync(join(PLUGIN_ROOT, 'src', 'core', 'jev.ts'), 'utf8'))
+
+  // The generated manifest -- what used to be entirely missing, and the
+  // reason this mod never actually loaded.
+  const manifest = JSON.parse(readFileSync(join(copyPath, '.claude-plugin', 'plugin.json'), 'utf8'))
+  assert.equal(manifest.name, 'orca-jev-mod-skills')
+  assert.deepEqual(manifest.author, { name: 'Ab2Web' }, 'author must be an object -- the engine rejects a bare string')
+  assert.equal(manifest.version, JSON.parse(readFileSync(join(PLUGIN_ROOT, 'package.json'), 'utf8')).version)
+
+  // The generated root hooks.json, pointing at the mirrored entry.
+  const rootHooksJson = JSON.parse(readFileSync(join(copyPath, 'hooks', 'hooks.json'), 'utf8'))
+  assert.deepEqual(rootHooksJson.modules, ['../adapters/claude/mod-skills/hooks/index.ts'])
 })
 
-test('install writes a marker recording which plugin tree the copy came from', () => {
+test('install writes a marker recording which plugin tree the copy came from, and a content digest', () => {
   const home = makeHome()
   run('install', home)
   const marker = JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8'))
   assert.equal(marker.source, MOD_SOURCE)
+  assert.equal(typeof marker.digest, 'string')
+  assert.ok(marker.digest.length > 0)
+})
+
+test('install refreshes a copy whose recorded digest no longer matches the current source -- a changed byte at the same path is not ignored', () => {
+  const home = makeHome()
+  run('install', home)
+  const copyPath = modCopyPathFor(home)
+  const before = readFileSync(join(copyPath, '.claude-plugin', 'plugin.json'), 'utf8')
+
+  // Simulate a stale marker the way a dev-loaded plugin (same path forever)
+  // would produce: everything else about the copy is left alone, only the
+  // marker's own digest is now wrong for it.
+  const marker = JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8'))
+  writeFileSync(modCopyMarkerPathFor(home), JSON.stringify({ ...marker, digest: 'stale-digest-from-an-older-source-tree' }), 'utf8')
+
+  const result = run('install', home)
+  assert.equal(result.changes.modCopy, true, "today's bug: only the source PATH was ever recorded, so a copy at the same path never refreshed")
+  const after = readFileSync(join(copyPath, '.claude-plugin', 'plugin.json'), 'utf8')
+  assert.equal(after, before, 'the manifest content itself is unchanged -- only the stale marker triggered the rewrite')
+  const refreshedMarker = JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8'))
+  assert.notEqual(refreshedMarker.digest, 'stale-digest-from-an-older-source-tree')
+})
+
+test('install removes a file that no longer belongs to the copy -- a leftover from an older, differently-shaped source tree', () => {
+  const home = makeHome()
+  run('install', home)
+  const copyPath = modCopyPathFor(home)
+  const leftover = join(copyPath, 'adapters', 'claude', 'mod-skills', 'hooks', 'a-file-the-current-source-no-longer-has.ts')
+  writeFileSync(leftover, '// stale', 'utf8')
+  // Force a refresh the same way the digest-staleness test above does, so
+  // install actually re-walks and re-writes the copy instead of taking the
+  // already-current no-op path.
+  const marker = JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8'))
+  writeFileSync(modCopyMarkerPathFor(home), JSON.stringify({ ...marker, digest: 'force-a-refresh' }), 'utf8')
+
+  run('install', home)
+  assert.throws(() => readFileSync(leftover, 'utf8'), 'a file the current closure no longer names must not survive a refresh')
+})
+
+test('status reports hasManifest -- and installed:false -- when the copy exists but the manifest is missing', () => {
+  const home = makeHome()
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'hooks'), { recursive: true })
+  writeFileSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'hooks', 'index.ts'), 'not a real copy', 'utf8')
+  mkdirSync(dirname(modCopyMarkerPathFor(home)), { recursive: true })
+  writeFileSync(modCopyMarkerPathFor(home), JSON.stringify({ source: MOD_SOURCE, digest: 'whatever' }), 'utf8')
+
+  const status = run('status', home)
+  const target = status.targets.find((t) => t.id === 'home')
+  assert.equal(target.modCopy.hasManifest, false)
+  assert.equal(target.modCopy.installed, false)
 })
 
 test('re-running install with the same source is a no-op on the copy -- idempotent, no rewrite', () => {
@@ -440,49 +511,21 @@ test('a copy failure is reported through modCopyWarning, not swallowed -- the re
 })
 
 // ---------------------------------------------------------------------------
-// The manual recursive copy that replaces fs.cp -- fs.cp's own recursive
-// copy is denied outright by the plugin worker's permission sandbox
-// (ERR_ACCESS_DENIED, on every real machine measured), while readdir/mkdir/
-// readFile/writeFile are all separately permitted. These fixtures are built
-// with mkdirSync/writeFileSync/symlinkSync -- never fs.cp -- so a test here
-// can never accidentally pass through an API production cannot use.
+// JEVADV-43: the manual recursive tree-walk this section used to test
+// (fs.cp's own recursive copy is denied outright by the plugin worker's
+// permission sandbox) is gone. The copy no longer walks a directory at all
+// -- it copies exactly the files hooks/index.ts's own import closure names,
+// each to its own repo-relative path (src/core/mod_skills_copy.ts, unit
+// tested in its own test file: the closure walker, the digest, and the two
+// generated-file builders). A symlink or an unrelated file sitting in
+// adapters/claude/mod-skills/ that nothing imports is simply never visited
+// -- there is no directory listing step left to skip it FROM -- and the
+// executable-bit preservation this section used to test against an
+// artificial fixture is exercised for real above, against the real
+// hooks/index.ts (every file in the actual closure is 0644, so there is
+// nothing more specific to assert here without inventing a fixture the
+// production code path would never actually see).
 // ---------------------------------------------------------------------------
-
-test('the manual copy reaches files nested two directories deep, with contents matching the source exactly', () => {
-  const home = makeHome()
-  const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
-  tempDirs.push(pluginRoot)
-  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  mkdirSync(join(source, 'a', 'b'), { recursive: true })
-  writeFileSync(join(source, 'top.txt'), 'top level', 'utf8')
-  writeFileSync(join(source, 'a', 'mid.txt'), 'mid level', 'utf8')
-  writeFileSync(join(source, 'a', 'b', 'deep.txt'), 'deep level', 'utf8')
-
-  const result = run('install', home, pluginRoot)
-  assert.equal(result.changes.modCopy, true)
-
-  const copyPath = modCopyPathFor(home)
-  assert.equal(readFileSync(join(copyPath, 'top.txt'), 'utf8'), 'top level')
-  assert.equal(readFileSync(join(copyPath, 'a', 'mid.txt'), 'utf8'), 'mid level')
-  assert.equal(readFileSync(join(copyPath, 'a', 'b', 'deep.txt'), 'utf8'), 'deep level')
-})
-
-test('the manual copy skips a symbolic link inside the source tree instead of following or recreating it', () => {
-  const home = makeHome()
-  const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
-  tempDirs.push(pluginRoot)
-  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  mkdirSync(source, { recursive: true })
-  writeFileSync(join(source, 'kept.txt'), 'a real file', 'utf8')
-  symlinkSync(join(source, 'kept.txt'), join(source, 'linked.txt'))
-
-  const result = run('install', home, pluginRoot)
-  assert.equal(result.changes.modCopy, true)
-
-  const copyPath = modCopyPathFor(home)
-  assert.equal(readFileSync(join(copyPath, 'kept.txt'), 'utf8'), 'a real file', 'a regular file must still be copied')
-  assert.throws(() => lstatSync(join(copyPath, 'linked.txt')), 'a symlink in the source tree must not be followed or recreated in the copy')
-})
 
 test('a copy failure\'s underlying error text reaches the per-target record as modCopyDetail, separate from the stable modCopyWarning reason code', () => {
   const home = makeHome()
@@ -508,44 +551,54 @@ test('install\'s top-level result counts how many targets actually got the mod c
   assert.deepEqual(failResult.modCopyTargets, { landed: 0, failed: 1 }, 'ok:true must not read as "the mod landed everywhere" when it silently did not land anywhere')
 })
 
-// Portability, not luck: every file in mod-skills is 0644 today, so a copy
-// that ignores modes looks correct. The day somebody adds a file that has to
-// be executable, writeFile's own 0644 would drop the bit silently, and a hook
-// that cannot run is indistinguishable from a hook that was never installed.
-// `chmod` is permitted under the worker's sandbox -- measured, unlike fs.cp.
-test('the manual copy carries the executable bit across instead of leaving writeFile\'s default', () => {
+// Portability, not luck: every file in the real closure is 0644 today, so a
+// copy that ignores modes looks correct. The day one has to be executable,
+// writeFile's own 0644 would drop the bit silently, and a hook that cannot
+// run is indistinguishable from a hook that was never installed. Exercised
+// with a minimal fixture whose own hooks/index.ts is the walk's entry (the
+// closure-based copy only ever touches files something actually imports),
+// so this stays a faithful test of the real code path rather than an
+// artificial directory-walk fixture.
+test('the copy carries the executable bit across instead of leaving writeFile\'s default', () => {
   const home = makeHome()
   const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
   tempDirs.push(pluginRoot)
-  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  mkdirSync(join(source, 'bin'), { recursive: true })
-  writeFileSync(join(source, 'plain.txt'), 'not executable', 'utf8')
-  writeFileSync(join(source, 'bin', 'run.sh'), '#!/bin/sh\necho hi\n', 'utf8')
-  chmodSync(join(source, 'bin', 'run.sh'), 0o755)
+  writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version: '9.9.9' }), 'utf8')
+  const hooksDir = join(pluginRoot, 'adapters', 'claude', 'mod-skills', 'hooks')
+  mkdirSync(hooksDir, { recursive: true })
+  writeFileSync(join(hooksDir, 'hooks.json'), JSON.stringify({ description: 'fixture', modules: ['./index.ts'] }), 'utf8')
+  writeFileSync(join(hooksDir, 'index.ts'), "import { run } from '../bin/run.ts'\nexport function register() { run() }\n", 'utf8')
+  const binDir = join(pluginRoot, 'adapters', 'claude', 'mod-skills', 'bin')
+  mkdirSync(binDir, { recursive: true })
+  writeFileSync(join(binDir, 'run.ts'), 'export function run() {}\n', 'utf8')
+  chmodSync(join(binDir, 'run.ts'), 0o755)
 
   const result = run('install', home, pluginRoot)
   assert.equal(result.changes.modCopy, true)
 
   const copyPath = modCopyPathFor(home)
-  assert.equal(statSync(join(copyPath, 'bin', 'run.sh')).mode & 0o777, 0o755, 'the executable bit must survive the copy')
-  assert.equal(statSync(join(copyPath, 'plain.txt')).mode & 0o777, 0o644, 'an ordinary file keeps an ordinary mode')
+  assert.equal(statSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'bin', 'run.ts')).mode & 0o777, 0o755, 'the executable bit must survive the copy')
+  assert.equal(statSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'hooks', 'index.ts')).mode & 0o777, 0o644, 'an ordinary file keeps an ordinary mode')
 })
 
-test('a skipped entry is reported as copy-incomplete, never as a clean copy', () => {
+test('the copy contains exactly the closure -- an unrelated file in the source tree that nothing imports is never copied', () => {
   const home = makeHome()
   const pluginRoot = mkdtempSync(join(tmpdir(), 'orca-jev-fixture-root-'))
   tempDirs.push(pluginRoot)
-  const source = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
-  mkdirSync(source, { recursive: true })
-  writeFileSync(join(source, 'kept.txt'), 'a real file', 'utf8')
-  symlinkSync(join(source, 'kept.txt'), join(source, 'linked.txt'))
+  writeFileSync(join(pluginRoot, 'package.json'), JSON.stringify({ version: '1.2.3' }), 'utf8')
+  const modDir = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
+  mkdirSync(join(modDir, 'hooks'), { recursive: true })
+  writeFileSync(join(modDir, 'hooks', 'hooks.json'), JSON.stringify({ description: 'fixture', modules: ['./index.ts'] }), 'utf8')
+  writeFileSync(join(modDir, 'hooks', 'index.ts'), "export function register() {}\n", 'utf8')
+  // Nothing imports this -- a stray file, a stale draft, a symlink to
+  // somewhere unrelated; the point is that the closure walker never visits
+  // it, so it must never land in the copy.
+  writeFileSync(join(modDir, 'unrelated.txt'), 'nobody imports me', 'utf8')
 
-  const result = run('install', home, pluginRoot)
-  // The copy DID happen -- this is not 'copy-failed' -- but the tree on disk
-  // is not the tree that shipped, and the panel has to be able to say so.
-  assert.equal(result.changes.modCopy, true)
-  assert.equal(result.targets[0].modCopyWarning, 'copy-incomplete')
-  assert.match(result.targets[0].modCopyDetail, /linked\.txt/)
+  run('install', home, pluginRoot)
+  const copyPath = modCopyPathFor(home)
+  assert.equal(readFileSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'hooks', 'index.ts'), 'utf8'), "export function register() {}\n")
+  assert.throws(() => readFileSync(join(copyPath, 'adapters', 'claude', 'mod-skills', 'unrelated.txt'), 'utf8'), 'a file nothing imports must never be copied -- "do not hardcode the file list" cuts both ways')
 })
 
 // ---------------------------------------------------------------------------

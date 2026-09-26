@@ -25,6 +25,8 @@
 // cache already computes, a coarse family, and the numbers. None of it can be
 // read back into a command.
 
+import type { GateStopReason } from "./gate_measurement.ts";
+
 export type ApprovalOutcome = "approved" | "rejected";
 
 /** Written when the gate stops a command, and resolved later by the outcome hook. */
@@ -42,6 +44,20 @@ export interface PendingApprovalRecord {
   readonly consequence: number | null;
   /** The ceiling in force for this decision, so a later re-reading knows what it was judged against. */
   readonly ceiling: number;
+  /**
+   * Why the gate stopped -- see GateStopReason (gate_measurement.ts) for the
+   * vocabulary shared with gate-decisions.jsonl. Required, not optional
+   * on-read like GateDecisionRecord's own copy of this field: a
+   * `gate-pending` record only ever exists because the gate stopped
+   * something, so this is never genuinely unknown at the moment it is
+   * written, and nothing in this file parses a stopReason-less record back
+   * into this exact type (see gate_measurement.ts's own module note for the
+   * contrasting case, where a strict parser genuinely does need to accept
+   * an absent field).
+   */
+  readonly stopReason: GateStopReason;
+  /** The policy that resolved this stop -- non-null only when `stopReason` is `"policy"`. The id only, never the command or the policy's rule text. */
+  readonly policyId: string | null;
 }
 
 export interface ApprovalOutcomeRecord {

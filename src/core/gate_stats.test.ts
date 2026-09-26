@@ -27,7 +27,7 @@ function record(overrides: Partial<GateDecisionRecord> & Pick<GateDecisionRecord
 test("empty input yields an honest zeroed summary, not nulls masquerading as data", () => {
   const summary = foldGateDecisions([]);
   assert.equal(summary.totalDecisions, 0);
-  assert.deepEqual(summary.byVerdict, { allow: 0, ask: 0, deny: 0 });
+  assert.deepEqual(summary.byVerdict, { allow: 0, ask: 0, deny: 0, advise: 0 });
   assert.deepEqual(summary.bySource, { "local-rule": 0, cache: 0, jev: 0, none: 0 });
   assert.deepEqual(summary.byCommandFamily, []);
   assert.equal(summary.familiesWithNoInterventions, 0);
@@ -49,8 +49,20 @@ test("counts verdicts and sources independently", () => {
     record({ source: "jev", verdict: "deny", latencyMs: 900 }),
   ]);
   assert.equal(summary.totalDecisions, 5);
-  assert.deepEqual(summary.byVerdict, { allow: 2, ask: 2, deny: 1 });
+  assert.deepEqual(summary.byVerdict, { allow: 2, ask: 2, deny: 1, advise: 0 });
   assert.deepEqual(summary.bySource, { "local-rule": 2, cache: 1, jev: 2, none: 0 });
+});
+
+test("an 'advise' verdict counts in its own bucket and never as a human intervention", () => {
+  const summary = foldGateDecisions([
+    record({ commandFamily: "rm -rf", verdict: "advise", source: "jev", latencyMs: 120 }),
+    record({ commandFamily: "rm -rf", verdict: "advise", source: "jev", latencyMs: 80 }),
+    record({ commandFamily: "rm -rf", verdict: "allow", source: "jev", latencyMs: 60 }),
+  ]);
+  assert.deepEqual(summary.byVerdict, { allow: 1, ask: 0, deny: 0, advise: 2 });
+  const family = summary.byCommandFamily.find((f) => f.commandFamily === "rm -rf");
+  assert.deepEqual(family?.byVerdict, { allow: 1, ask: 0, deny: 0, advise: 2 });
+  assert.equal(family?.interventions, 0, "advise refuses the MODEL, not a person -- it is never counted as an intervention");
 });
 
 test("a 'none' record -- Jev was asked but never answered, so the command passed unjudged -- counts in its own bucket, never folded into 'jev'", () => {
@@ -111,13 +123,13 @@ test("command families aggregate total and per-family verdict breakdown, sorted 
   assert.deepEqual(summary.byCommandFamily[0], {
     commandFamily: "git push",
     total: 3,
-    byVerdict: { allow: 1, ask: 2, deny: 0 },
+    byVerdict: { allow: 1, ask: 2, deny: 0, advise: 0 },
     interventions: 2,
   });
   assert.deepEqual(summary.byCommandFamily[1], {
     commandFamily: "rm -rf",
     total: 1,
-    byVerdict: { allow: 0, ask: 0, deny: 1 },
+    byVerdict: { allow: 0, ask: 0, deny: 1, advise: 0 },
     interventions: 1,
   });
 });

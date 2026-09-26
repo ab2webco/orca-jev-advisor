@@ -41,7 +41,7 @@ const DANGEROUS_PIPE_FAMILY = 'curl | shell'
  * rest of a compound command through unseen.
  */
 const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
-  /^(ls|pwd|cat|head|tail|wc|which|echo|date|whoami|env)\b/,
+  /^(ls|pwd|cat|head|tail|wc|which|echo|date|whoami)\b/,
   // Bare `cd`: changing directory alone can't be dangerous, whatever the target.
   /^cd(\s|$)/,
   /^(jq|rg|grep|sed -n|awk)\b/,
@@ -65,6 +65,20 @@ const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprin
 
 function isSafeFindSegment(segment: string): boolean {
   return /^find\b/.test(segment) && !FIND_DANGEROUS_FLAGS.test(segment)
+}
+
+/**
+ * `env` with nothing but flags after it only prints the environment; `env
+ * NAME=value cmd` or `env cmd` RUNS `cmd` with a modified environment --
+ * the leading word alone cannot tell these apart, so a generic safe-verb
+ * pattern (odd/tasks/release-0.5.1.md T8, JEVADV-24) waved `env A=1 git
+ * reset --hard` through as obviously safe before anything -- the deny tier
+ * included -- ever saw it. Safe only when NOTHING follows `env` except
+ * short-flag clusters (`-i`, `-u NAME`'s flag itself, etc.); an assignment
+ * or a bare command word means something is about to run.
+ */
+function isSafeEnvSegment(segment: string): boolean {
+  return /^env(\s+-[A-Za-z-]+)*\s*$/.test(segment)
 }
 
 /**
@@ -133,17 +147,41 @@ function hasRedirection(segment: string): boolean {
  * unless a clean token follows, and `<(`/`>(` never leaves one), but this
  * ordering means that question never even has to be asked at call time.
  *
- * Safe against splitSegments' own naive split, too: `String.split` only
- * ever removes the separator text it matches (`&&`, `||`, `;`, `|`), never
- * any other character, so a substitution's opening token can never be torn
- * apart by a split -- it always survives intact inside whichever resulting
- * segment it started in, even when the substitution's own argument (e.g.
- * `$(a; b)`) contains one of those same separator characters.
+ * Safe against splitSegments' own split, too: a substitution's opening
+ * token can never be torn apart by it -- it always survives intact inside
+ * whichever resulting segment it started in, even when the substitution's
+ * own argument (e.g. `$(a; b)`) contains one of the same separator
+ * characters splitSegments itself splits on.
  */
-function isSafeSegment(segment: string): boolean {
+/** Exported for gate_advice_text.ts (the advise-model release): the advice
+ *  message names the concrete segments a command would affect, and a
+ *  tier-1a-safe segment (a plain `git status`, a bare `cd`, ...) is never
+ *  one of them -- the same "obviously safe" test tier 1a already uses,
+ *  never a second, drifting copy of it. */
+export function isSafeSegment(segment: string): boolean {
+  // SECURITY HOTFIX (release-0.5.1-newline-bypass), review follow-up:
+  // splitSegments now delegates to git_discard.ts's own
+  // splitOnCommandSeparators, which is quote-aware -- an OPEN single or
+  // double quote that never closes (a stray apostrophe in a comment
+  // `ls # it's`, or a genuinely unterminated `"`) makes it believe every
+  // following character, including a REAL newline that starts a second,
+  // unrelated command, is still inside that quote, and so never splits
+  // there. The result is one merged "segment" whose own leading verb
+  // (SAFE_SEGMENT_PATTERNS has no trailing `$` anchor) would otherwise wave
+  // the rest -- including a real `rm -rf $HOME` on the next line -- straight
+  // through, reopening the exact class of bug this hotfix exists to close,
+  // just via a different vector than a missing newline split. A segment
+  // that still carries a raw `\r`/`\n` after splitting is proof the split
+  // could not be trusted here (a real tier-1a verb never legitimately spans
+  // a line; a literal embedded newline INSIDE a quoted argument, e.g.
+  // `echo "a\nb"`, simply falls through to the ordinary path instead of
+  // tier 1a, which the module note above already accepts as the safe
+  // direction), so it is refused before anything else is even checked.
+  if (/[\r\n]/.test(segment)) return false
   if (hasCommandSubstitution(segment)) return false
   if (hasRedirection(segment)) return false
   if (isSafeFindSegment(segment)) return true
+  if (isSafeEnvSegment(segment)) return true
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
 }
 
@@ -183,8 +221,21 @@ const MENTION_ONLY_VERBS =
   /^(grep|rg|ag|ack|echo|printf|cat|bat|head|tail|less|more|wc|nl|comm|diff|sort|uniq|column|jq|yq|fgrep|egrep|sed\s+-n|awk)\b/;
 
 export function mentionsRatherThanRuns(command: string): boolean {
+  // odd/tasks/release-0.5.1.md T8 (JEVADV-24): `echo "$(git reset --hard)"`
+  // leads with a read/print verb, but its argument carries a REAL command
+  // substitution -- the exact reasoning isSafeSegment already applies via
+  // hasCommandSubstitution. Without this, this function broke the
+  // NEVER_SILENTLY loop before the deny tier ever got a chance to look at
+  // the substitution's body, waving a genuine `git reset --hard` through.
+  if (hasCommandSubstitution(command)) return false;
   // Reuses the gate's own splitter rather than a second, drifting copy.
   const segments = splitSegments(command).map((segment) => segment.trim()).filter((s) => s.length > 0);
   if (segments.length === 0) return false;
-  return segments.every((segment) => MENTION_ONLY_VERBS.test(segment));
+  // SECURITY HOTFIX (release-0.5.1-newline-bypass), review follow-up: same
+  // reasoning as isSafeSegment's own `[\r\n]` guard above -- an unbalanced
+  // quote can make splitSegments merge a real, later command into the same
+  // "segment" as an earlier mention verb, with the newline that should have
+  // separated them still literally embedded in the text. A segment must
+  // never be called a mention while it still carries one.
+  return segments.every((segment) => !/[\r\n]/.test(segment) && MENTION_ONLY_VERBS.test(segment));
 }

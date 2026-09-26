@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 3,
   "policies": [
     {
       "id": "read_and_test",
@@ -24,11 +24,13 @@
     {
       "id": "discard_uncommitted_work",
       "kind": "prohibits",
+      "scope": "local-rule",
       "rule": "The agent never discards uncommitted work: no git checkout -- <path>, git checkout ., git checkout <ref> <path>, git checkout -f, git restore <path> or git restore . (without --staged), git reset --hard, or git clean -f. Changes that were never committed have no reflog behind them; once they are gone nothing brings them back. If files need to go back to their committed state, the agent commits or stashes the work first, or says so and lets the person decide. Unstaging with git restore --staged only touches the index and is fine, and so is switching branches with git checkout <branch> or git switch."
     },
     {
       "id": "no_force_push",
       "kind": "prohibits",
+      "scope": "local-rule",
       "rule": "The agent never rewrites history on a remote: no git push --force, --force-with-lease or -f, on any branch. Rewriting what other people may already have pulled is decided by a person. A normal push of the feature branch is fine (see unit_commits)."
     },
     {
@@ -94,26 +96,31 @@
     {
       "id": "ticket_first",
       "kind": "permits",
+      "scope": "process",
       "rule": "Work that starts from a Linear or Plane ticket gets linked to the ticket before opening the PR, and the PR link gets pasted into the ticket when done. That happens without asking."
     },
     {
       "id": "model_by_difficulty",
       "kind": "permits",
+      "scope": "process",
       "rule": "A mechanical, localized task gets handled with the cheapest available model. Only a design decision with consequences, compatibility concerns, or several systems in play justifies the more expensive model."
     },
     {
       "id": "delegate_by_scope",
       "kind": "permits",
+      "scope": "process",
       "rule": "Understanding something that touches four or more files gets delegated to an exploration agent. Writing two or more non-trivial files gets delegated to a single writer agent. A mechanical one-file change happens inline."
     },
     {
       "id": "no_inventing_contracts",
       "kind": "permits",
+      "scope": "process",
       "rule": "Before writing against an API, a plugin or a format that already exists on the machine, its real implementation gets read. Assuming the shape of the contract isn't an option -- it's the cause of most bugs."
     },
     {
       "id": "visual_evidence",
       "kind": "prohibits",
+      "scope": "process",
       "rule": "Nothing with a screen is called done without a screenshot that was actually looked at. Building without looking doesn't count as verifying."
     }
   ]

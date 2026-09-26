@@ -8,7 +8,7 @@
 // which specific file or branch, only a coarse command *family* (`git
 // push`, `rm -rf`, `terraform`, ...) and which project it happened in.
 
-import { startsWithGitDiscard } from "./git_discard.ts";
+import { splitOnCommandSeparators, startsWithGitDiscard } from "./git_discard.ts";
 
 /**
  * `"none"` means the gate reached the point of asking Jev and got no answer
@@ -20,7 +20,67 @@ import { startsWithGitDiscard } from "./git_discard.ts";
  * stops being silent.
  */
 export type GateSource = "local-rule" | "cache" | "jev" | "none";
-export type GateVerdict = "allow" | "ask" | "deny";
+/**
+ * `"advise"` (the advise-model release): the risk stage (or a local rule
+ * whose deny-tier switch is off, or an interpreter-code-only match) no
+ * longer stops a PERSON -- it hands the coding MODEL a concrete reason and
+ * lets it decide, with an identical retry passing (see GateStopReason's own
+ * `"advice-retry"` below). Claude Code's own `permissionDecision` for this is
+ * still `'deny'` (the model is refused THIS attempt, not asked); `"advise"`
+ * is the honest record of WHY, distinct from a NEVER_SILENTLY hard stop --
+ * see gate-bash.ts's own `emitAdvice`.
+ */
+export type GateVerdict = "allow" | "ask" | "deny" | "advise";
+
+/**
+ * WHY the gate produced this decision -- finer than `source` above, which
+ * only says which STAGE decided (a local pattern, the cache, Jev, or nobody)
+ * and, for `source: "jev"`, conflates two very different reasons: a team
+ * policy resolved it (`interpretDestinationPolicy` in decisions.ts) or the
+ * consequence-ceiling risk rule did (`decideAction`). Of 170 historical asks
+ * on one real machine, 82 carried no risk scores at all -- policy stops,
+ * local-rule asks and cache hits all look identical in that respect, and
+ * nothing could tell them apart. This field is that distinction, made
+ * explicit instead of inferred:
+ *
+ *   "policy"     -- a team policy's `prohibits`/`requires_human` matched
+ *                    (see GateDecisionRecord.policyId below for which one).
+ *   "local-rule"  -- one of gate-bash.ts's own NEVER_SILENTLY patterns.
+ *   "local-allow" -- a command that never needed judging at all: a plain
+ *                    push of the agent's own non-shared branch, or a git
+ *                    guarded delete (see push_own_branch.ts) --
+ *                    allowed without ever calling Jev, distinct from
+ *                    "local-rule" (a NEVER_SILENTLY match): the
+ *                    advise-model release means a stopReason of
+ *                    "local-rule" now records a verdict of "deny" (its
+ *                    default) or "advise" (its own switch is off, or its
+ *                    only match was an ambiguous interpreter-code
+ *                    position) -- never "allow" on its own; an identical
+ *                    retry of a local-rule-driven advice records "allow"
+ *                    under "advice-retry" below instead.
+ *   "risk"        -- decideAction's reversible/external/consequence axes.
+ *   "unreachable" -- Jev was asked but never answered (source: "none");
+ *                    the verdict is still a truthful "allow" (failing open
+ *                    is correct), this only names why nobody actually judged.
+ *   "cache"       -- a prior verdict was replayed; the cache does not keep
+ *                    which of the reasons above produced the original one,
+ *                    so "cache" is the honest, complete answer on its own.
+ *   "advice-retry" -- an identical (session_id, command) retry within the
+ *                    advice retry window let a PAST advise through as a
+ *                    truthful "allow" -- see src/core/gate_advice_retry.ts.
+ *                    Distinct from every other bucket: it is the ONLY
+ *                    stopReason whose own verdict is "allow" but whose
+ *                    record still explains why nobody had to ask again.
+ *
+ * Reuses GateSource's own vocabulary wherever the two line up exactly
+ * (local-rule, cache) rather than inventing parallel names for the same
+ * thing -- only the "jev" bucket needed splitting, into "policy" and "risk",
+ * and "none" is renamed to the reader-facing "unreachable". "local-allow"
+ * shares GateSource's own "local-rule" bucket (both are decided locally, with
+ * no cache and no network) but gets its own, more specific stopReason so an
+ * "allow" it produces is never confused with a NEVER_SILENTLY deny/ask.
+ */
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -46,6 +106,23 @@ export interface GateDecisionRecord {
    * corrupt -- see parseGateDecisionRecords below.
    */
   readonly pluginVersion?: string;
+  /**
+   * Optional ON READ, not on write: same discipline as `pluginVersion`
+   * above. Every record `buildGateDecisionRecord` writes from 0.5.1 on
+   * carries one -- a `gate-decision` record is always written at the exact
+   * moment the gate has just decided why, so this is never genuinely
+   * unknown at write time -- but a record already on disk from before this
+   * field existed simply lacks the key, and must parse back that way, never
+   * dropped and never treated as corrupt.
+   */
+  readonly stopReason?: GateStopReason;
+  /**
+   * The policy that resolved this decision -- present only when
+   * `stopReason` is `"policy"`. The id only, never the command or the
+   * policy's rule text: same privacy rule as every other field in this
+   * file.
+   */
+  readonly policyId?: string;
 }
 
 /** The family for discarding uncommitted work. Records written before checkout and restore joined it carry `LEGACY_DISCARD_FAMILY`. */
@@ -110,24 +187,61 @@ export function commandFamily(command: string): string {
   return programName(segments[0] ?? "");
 }
 
-/** Splits on the shell operators that chain commands, so each part can be classified on its own. */
+/**
+ * Splits on the shell operators that chain commands, so each part can be
+ * classified on its own.
+ *
+ * SECURITY HOTFIX (release-0.5.1-newline-bypass): this used to be a naive,
+ * quote-blind `command.split(/\|\||&&|[;|]/)` -- it never split on a
+ * newline or on a single background `&`, so a command like `ls\nrm -rf
+ * $HOME` or `ls & git push --force origin main` read as ONE segment whose
+ * own leading verb (SAFE_SEGMENT_PATTERNS/MENTION_ONLY_VERBS in
+ * gate_safe_command.ts have no trailing `$` anchor) silently waved the
+ * REST of the string through tier 1a (isObviouslySafeCommand) or the
+ * mention check (mentionsRatherThanRuns) -- before the NEVER_SILENTLY deny
+ * rules or Jev ever saw it, and with no gate-decision record at all.
+ *
+ * Now delegates to git_discard.ts's own `splitOnCommandSeparators` -- the
+ * SAME primitive someSegmentMatches (the deny tier's forcePush/
+ * pushProtected/resetClean two-level rules) already uses, and a sibling of
+ * the one discardsUncommittedWork uses (splitOutsideQuotes), so this side
+ * finally agrees with that one about what separates two commands, instead
+ * of two drifting implementations. It is quote/backtick/paren-aware (a
+ * separator INSIDE a quoted string is not a boundary) and already treats a
+ * newline and a lone `&` as separators exactly like `;`, while `&&` still
+ * joins as one unit and a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`,
+ * `<&0`) is left alone -- see its own module note (the isRedirection
+ * helper) for exactly which `&`/`|` positions are exempt.
+ */
 export function splitSegments(command: string): string[] {
-  return command
-    .split(/\|\||&&|[;|]/)
+  return splitOnCommandSeparators(command)
     .map((part) => stripAssignments(part.trim()))
     .filter((part) => part.length > 0);
 }
 
 /**
- * Drops the `VAR=value` prefixes a command may carry before the program name.
+ * Drops the `VAR=value` prefixes a command may carry before the program name
+ * -- including an `export NAME=value` form, and one with nothing trailing it
+ * at all.
  *
  * This is the security-critical half of this module. Without it the fallback
  * below read `TOKEN=ghp_... gh pr merge` as its first word and, after
  * stripping punctuation, wrote `TOKENghp_...` into the log -- the literal
  * secret, in the one file this module promises never to put one in.
+ *
+ * The terminator used to be `\s+` alone, which required something to follow
+ * the assignment. `splitSegments` splits BEFORE this runs, so a command like
+ * `DEV=/path/to/project; node run.mjs` handed this function the assignment
+ * ALONE as its own segment -- nothing trailing it anymore -- and the regex
+ * stopped matching. The fallback then read that unstripped segment as the
+ * family's raw material: `programName` found a `/` in the assignment's own
+ * VALUE and returned its basename, so a project path (`orca-jev-advisor-dev`)
+ * was logged as the family, standing in for a program name it never was.
+ * `(?:\s+|$)` accepts the end of the segment as a terminator too, and
+ * `splitSegments` already filters the empty string this then produces.
  */
 export function stripAssignments(segment: string): string {
-  return segment.replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)\s+)+/, "");
+  return segment.replace(/^(?:(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/, "");
 }
 
 /**
@@ -154,6 +268,10 @@ export interface BuildGateDecisionRecordInput {
   readonly latencyMs: number | null;
   /** Required at construction time: whoever builds a record today always knows the build producing it. */
   readonly pluginVersion: string;
+  /** Required at construction time: whoever builds a record today always knows why (see GateStopReason above). */
+  readonly stopReason: GateStopReason;
+  /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */
+  readonly policyId?: string;
 }
 
 export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): GateDecisionRecord {
@@ -173,6 +291,18 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     // this record must be indistinguishable from one parsed back off disk
     // where the key never existed at all.
     ...(input.pluginVersion !== undefined ? { pluginVersion: input.pluginVersion } : {}),
+    // Same conditional-spread reasoning as pluginVersion above, even though
+    // stopReason is declared required on the input: a caller (or an older
+    // test, or a future one) that leaves it out at runtime must not produce
+    // a `stopReason: undefined` key, which JSON.stringify drops but which
+    // an in-memory `assert.deepEqual` against a round-tripped record would
+    // still see as a shape mismatch.
+    ...(input.stopReason !== undefined ? { stopReason: input.stopReason } : {}),
+    // Same conditional-spread reasoning as pluginVersion above: a policyId
+    // key that is present-but-undefined is a different shape than a truly
+    // absent one, and every non-"policy" stop must produce a record
+    // byte-for-byte indistinguishable from one that never had this field.
+    ...(input.policyId !== undefined ? { policyId: input.policyId } : {}),
   };
 }
 
@@ -185,7 +315,19 @@ function isGateSource(value: unknown): value is GateSource {
 }
 
 function isGateVerdict(value: unknown): value is GateVerdict {
-  return value === "allow" || value === "ask" || value === "deny";
+  return value === "allow" || value === "ask" || value === "deny" || value === "advise";
+}
+
+function isGateStopReason(value: unknown): value is GateStopReason {
+  return (
+    value === "policy" ||
+    value === "local-rule" ||
+    value === "local-allow" ||
+    value === "risk" ||
+    value === "unreachable" ||
+    value === "cache" ||
+    value === "advice-retry"
+  );
 }
 
 function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
@@ -202,7 +344,9 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     (record.latencyMs === null || typeof record.latencyMs === "number") &&
     // Absent entirely (a record written before this field existed) is valid;
     // present-but-wrong-type is not, same discipline as every other field.
-    (record.pluginVersion === undefined || typeof record.pluginVersion === "string")
+    (record.pluginVersion === undefined || typeof record.pluginVersion === "string") &&
+    (record.stopReason === undefined || isGateStopReason(record.stopReason)) &&
+    (record.policyId === undefined || typeof record.policyId === "string")
   );
 }
 

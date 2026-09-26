@@ -44,15 +44,19 @@ import {
   buildPolicyQuestions,
   decideDestination,
   GATE_CONSEQUENCE_CEILING,
-  interpretDestinationPolicy
+  interpretDestinationPolicy,
+  migratePolicyKind
 } from '../../src/core/decisions.ts'
+import { auditPoliciesWithoutKind } from '../../src/core/policy_kind_audit.ts'
 import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
+import { deriveCatalogProposals } from '../../src/core/catalog_proposals.ts'
+import { resolveLinkedWorktreeMainCheckout } from '../../src/core/linked_worktree.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeedPolicies } from '../../src/core/policy_seed.ts'
-import { applyPolicySeedChoices, mergePolicySeeds } from '../../src/core/policy_seed_import.ts'
+import { mergePolicySeeds, resolvePolicySeedImport } from '../../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice, parseOfferedVersion } from '../../src/core/policy_seed_notice.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
 import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
-import { deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
+import { DEFAULT_DERIVED_AUTONOMY, deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
@@ -255,6 +259,26 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
 // reusing that cache.
 // ---------------------------------------------------------------------------
 
+/** Runs `orca worktree ps --json` and returns the parsed OrcaWorktree[] list
+ *  -- the one fetch both deriveCatalogFromOrca (below) and JEVADV-11's
+ *  computeCatalogProposals (odd/tasks/release-0.5.1.md) read, so both ever
+ *  see the exact same live data through one code path. Never throws: a
+ *  fetch that cannot run reports its detail rather than swallowing it (see
+ *  cmdRefreshCatalog below for why that distinction matters to the caller). */
+async function fetchOrcaWorktrees (orca) {
+  try {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
+    return { worktrees: parseWorktreeList(JSON.parse(stdout)), failure: null }
+  } catch (error) {
+    const detail = String(error?.message ?? error).slice(0, 200)
+    orca.log(`orca worktree ps fetch failed: ${detail.slice(0, 160)}`)
+    return { worktrees: [], failure: detail }
+  }
+}
+
 /** Runs `orca worktree ps --json` and turns the result into destinations.
  *  Never throws: a derivation that cannot run leaves the catalog exactly as
  *  it was, which is always a safe, working state -- same fail-open shape as
@@ -262,18 +286,9 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
  *  failure detail rather than swallowing it (see cmdRefreshCatalog below for
  *  why that distinction matters to the caller). */
 async function deriveCatalogFromOrca (orca) {
-  try {
-    const { execFile } = await import('node:child_process')
-    const { promisify } = await import('node:util')
-    const execFileAsync = promisify(execFile)
-    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.worktreePs, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
-    const worktrees = parseWorktreeList(JSON.parse(stdout))
-    return { destinations: deriveDestinations(worktrees), failure: null }
-  } catch (error) {
-    const detail = String(error?.message ?? error).slice(0, 200)
-    orca.log(`catalog derivation (orca worktree ps) failed: ${detail.slice(0, 160)}`)
-    return { destinations: [], failure: detail }
-  }
+  const { worktrees, failure } = await fetchOrcaWorktrees(orca)
+  if (failure !== null) return { destinations: [], failure }
+  return { destinations: deriveDestinations(worktrees), failure: null }
 }
 
 /** Bootstraps the catalog from Orca's own worktree list, but ONLY when it
@@ -351,33 +366,242 @@ async function seedPoliciesIfEmpty (orca, storageHost) {
   }
 }
 
-/** advisor.refreshCatalog -- adds destinations for worktrees Orca has seen
- *  that are not yet in the catalog. Every id already present (and every
- *  field on it: thresholds, consequenceCeiling, everything) is left
- *  completely untouched, and nothing already in the catalog is ever
- *  removed -- a worktree disappearing from Orca's list is not this
- *  plugin's call to prune. Re-mirrors to catalog.json when it changes
- *  anything, so the gate sees the addition without waiting for the panel's
- *  own save button. */
-async function cmdRefreshCatalog (orca, storageHost) {
+// ---------------------------------------------------------------------------
+// JEVADV-49 -- a config-panel save, run before a panel fix for legacy
+// Spanish kinds (permite/prohibe/pregunta) was loaded, left 20 of 23 stored
+// policies with no `kind` at all. src/core/store.ts's own getPolicies
+// silently excludes any row with a missing or unrecognised `kind` from the
+// policy stage -- correct for THAT function (never guessing a kind for a
+// row that has none), but nothing told the owner it had happened.
+//
+// Two separate fixes, both worked over the RAW stored array (never
+// getPolicies' own filtered view -- that filtering is exactly what makes a
+// kind-less row invisible):
+//   a. migrateLegacyPolicyKinds converts a row still carrying a pre-rename
+//      Spanish kind to its English equivalent, ONCE, persisted -- so the
+//      gate's policy stage (and every panel) reads English going forward
+//      without depending on migratePolicyKind re-running at every read.
+//   b. publishPoliciesWithoutKindStatus counts and names the rows that
+//      genuinely have no recognisable kind at all (never guessed, never
+//      touched) so a panel -- or, absent one, this log line -- can finally
+//      say so instead of silently judging nothing for them.
+// ---------------------------------------------------------------------------
+
+/** Migrates every stored policy row still carrying a pre-rename Spanish
+ *  `kind` (permite/prohibe/pregunta) to its English equivalent, using
+ *  decisions.ts's own migratePolicyKind -- the same mapping the gate already
+ *  applies at judgment time (interpretDestinationPolicy), just persisted so
+ *  it stops depending on that migration re-running on every read. Never
+ *  touches a row already in English, and never guesses a kind for a row
+ *  that has none at all -- publishPoliciesWithoutKindStatus (below) is what
+ *  surfaces THOSE, without ever inventing a value for them. Idempotent: a
+ *  second activation finds nothing left to convert and writes nothing. Never
+ *  throws -- this must not block activation any more than seedPoliciesIfEmpty
+ *  does. */
+async function migrateLegacyPolicyKinds (orca, storageHost) {
   try {
-    const current = await getCatalog(storageHost)
-    const { destinations: derived, failure } = await deriveCatalogFromOrca(orca)
-    // A refresh that could not ask Orca anything is NOT a refresh that found
-    // nothing new. Reporting both as `ok: true, added: 0` is what made a
-    // broken CLI call look to the developer like a dead button, with the real
-    // cause reachable only by opening Orca's log.
+    const raw = await storageHost.get('policies')
+    if (!Array.isArray(raw)) return
+    let convertedCount = 0
+    const migrated = raw.map((row) => {
+      if (!isRecord(row) || typeof row.kind !== 'string') return row
+      // Already English (the overwhelmingly common case): left byte-for-byte
+      // alone, not just value-equal, so an untouched row never causes a
+      // spurious re-write.
+      if (row.kind === 'permits' || row.kind === 'requires_human' || row.kind === 'prohibits') return row
+      const mappedKind = migratePolicyKind(row.kind)
+      // migratePolicyKind returns null for both "no kind at all" (never true
+      // here, typeof row.kind === 'string' already) and "a kind string this
+      // build doesn't recognise" -- either way, not this migration's job to
+      // guess. Left exactly as stored.
+      if (mappedKind === null) return row
+      convertedCount += 1
+      return { ...row, kind: mappedKind }
+    })
+    if (convertedCount === 0) return
+    await storageHost.set('policies', migrated)
+    orca.log(`policy kind migration: ${convertedCount} row(s) converted from a legacy Spanish kind to English`)
+  } catch (error) {
+    orca.log(`policy kind migration failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+/** What the panels read for JEVADV-49's own audit -- `{count, ids, at}`,
+ *  same shape discipline as POLICY_SEED_NOTICE_STATUS_KEY just below: only
+ *  computed data, never raw storage access from a panel. See
+ *  publishPoliciesWithoutKindStatus. */
+const POLICIES_WITHOUT_KIND_STATUS_KEY = 'policiesWithoutKindStatus'
+
+/** Publishes JEVADV-49's own audit -- how many stored policy rows (after
+ *  migrateLegacyPolicyKinds above has already run, so a merely-legacy kind
+ *  is never counted here) still have no kind at all, and which ids -- for
+ *  the panels to render and, until (or unless) one does, at least one place
+ *  the owner can find it: this log line, once per call, every activation and
+ *  every config-panel save (see attendCatalogPolicyMirrorRequest, which
+ *  calls this too). Reads the RAW stored array, deliberately never
+ *  getPolicies' own filtered view -- that filtering is the exact silence
+ *  this closes. Never throws -- must not block activation. */
+async function publishPoliciesWithoutKindStatus (orca, storageHost) {
+  try {
+    const raw = await storageHost.get('policies')
+    const rows = Array.isArray(raw) ? raw : []
+    const audit = auditPoliciesWithoutKind(rows)
+    await storageHost.set(POLICIES_WITHOUT_KIND_STATUS_KEY, { count: audit.count, ids: audit.ids, at: new Date().toISOString() })
+    orca.log(audit.count > 0
+      ? `policies without a kind: ${audit.count} row(s) -- ${audit.ids.join(', ')}`
+      : 'policies without a kind: 0 row(s)')
+  } catch (error) {
+    orca.log(`policies-without-kind status publish failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// JEVADV-11 (odd/tasks/release-0.5.1.md) -- cmdRefreshCatalog used to add a
+// newly-seen worktree straight to the catalog with `kind: "project"`
+// hardcoded (deriveDestinations has nothing else to guess from). That
+// silent default is exactly why a real client repository never got
+// "client-site" treatment: nothing ever asked. This is now a PROPOSAL,
+// never a write -- src/core/catalog_proposals.ts's deriveCatalogProposals
+// is the pure decision; computeCatalogProposals below is only the I/O shell
+// around it (the live worktree list, and each candidate's linked-worktree
+// main checkout, both real reads). Only attendCatalogProposalAcceptRequest
+// can turn a proposal into a catalog row, and only with a kind the person
+// explicitly chose.
+//
+// Documented limit (see catalog_proposals.ts's own module doc): this can
+// only propose a repository `orca worktree ps` already reports. A
+// repository Orca has never opened as a worktree is invisible here --
+// there is no broader "every repository on this machine" API on this
+// plugin's host surface to reach for instead.
+// ---------------------------------------------------------------------------
+
+/** Which repositories `orca worktree ps` already knows about that the
+ *  catalog does not yet cover. The one piece of real I/O
+ *  deriveCatalogProposals itself cannot do: fetching the live worktree list
+ *  (fetchOrcaWorktrees) and resolving a candidate's linked-worktree main
+ *  checkout (resolveLinkedWorktreeMainCheckout, a `.git` file read -- see
+ *  src/core/linked_worktree.ts). `options.fetchOrcaWorktrees`/
+ *  `options.mainCheckoutOf` let tests substitute both, so no test needs a
+ *  real CLI call or a real `.git` file (same discipline as every other
+ *  `options.mirror` in this file -- see the module note above
+ *  attendModSkillsConfigRequest's own tests). Fails open, same shape as
+ *  deriveCatalogFromOrca: a fetch failure reports `{ proposals: [],
+ *  failure }` rather than throwing. */
+async function computeCatalogProposals (orca, storageHost, options = {}) {
+  const fetchWorktrees = options.fetchOrcaWorktrees ?? fetchOrcaWorktrees
+  const mainCheckoutOf = options.mainCheckoutOf ?? resolveLinkedWorktreeMainCheckout
+  const { worktrees, failure } = await fetchWorktrees(orca)
+  if (failure !== null) return { proposals: [], failure }
+  const catalog = await getCatalog(storageHost)
+  return { proposals: deriveCatalogProposals(worktrees, catalog.destinations, mainCheckoutOf), failure: null }
+}
+
+/** What the panel's proposal list reads on load -- `{ok, proposals,
+ *  reason?, detail?, checkedAt}`, the same "never conflate a broken read
+ *  with a genuinely empty one" discipline cmdRefreshCatalog's own module
+ *  note already established for `derivation-failed`. Computed and
+ *  published together so a caller that also needs the fresh proposals
+ *  (cmdRefreshCatalog, attendCatalogProposalAcceptRequest) does not have to
+ *  recompute them a second time. */
+const CATALOG_PROPOSALS_STATUS_KEY = 'catalogProposalsStatus'
+
+async function publishCatalogProposalsStatus (orca, storageHost, options = {}) {
+  const { proposals, failure } = await computeCatalogProposals(orca, storageHost, options)
+  const status = failure === null
+    ? { ok: true, proposals, reason: null, detail: null, checkedAt: new Date().toISOString() }
+    : { ok: false, proposals: [], reason: 'derivation-failed', detail: failure, checkedAt: new Date().toISOString() }
+  await storageHost.set(CATALOG_PROPOSALS_STATUS_KEY, status)
+    .catch((error) => orca.log(`catalog proposals status publish failed: ${error.message}`))
+  return { proposals, failure }
+}
+
+/** advisor.refreshCatalog -- computes and publishes the proposal list
+ *  (CATALOG_PROPOSALS_STATUS_KEY); never writes the catalog itself. A
+ *  refresh that could not ask Orca anything is NOT a refresh that found
+ *  nothing new -- reporting both as `ok: true, proposed: 0` is what made a
+ *  broken CLI call look to the developer like a dead button, with the real
+ *  cause reachable only by opening Orca's log. */
+async function cmdRefreshCatalog (orca, storageHost, options = {}) {
+  try {
+    const { proposals, failure } = await publishCatalogProposalsStatus(orca, storageHost, options)
     if (failure !== null) return { ok: false, reason: 'derivation-failed', detail: failure }
-    const existingIds = new Set(current.destinations.map((d) => d.id))
-    const additions = derived.filter((d) => !existingIds.has(d.id))
-    if (additions.length > 0) {
-      await setCatalog(storageHost, { destinations: [...current.destinations, ...additions] })
-      await mirrorCatalogAndPolicies(orca, storageHost)
-    }
-    return { ok: true, added: additions.length }
+    return { ok: true, proposed: proposals.length }
   } catch (error) {
     return { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
+}
+
+/** True for one of the four real DestinationKind values (src/core/store.ts)
+ *  -- store.ts's own isDestinationKind is not exported (store.ts is not a
+ *  file this fix touches), so this is a small, deliberate duplicate rather
+ *  than a cross-module reach for one line -- same call write-secret-
+ *  mirror.mjs's own isPlainObject already made. Never widened beyond the
+ *  four literals store.ts itself accepts: an invalid or missing kind here
+ *  must be refused, not coerced into a guess. */
+function isDestinationKind (value) {
+  return value === 'service' || value === 'client-site' || value === 'project' || value === 'support'
+}
+
+const CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY = 'catalogProposalAcceptRequest'
+const CATALOG_PROPOSAL_ACCEPT_RESULT_KEY = 'catalogProposalAcceptResult'
+
+/** Attends one pending "add these ticked proposals, with these kinds"
+ *  request from the panel -- the ONLY path that can turn a catalog proposal
+ *  into a real destination (JEVADV-11). Re-derives the live proposal list
+ *  rather than trusting the request's own ids blindly: a stale panel
+ *  selection (the underlying worktree list moved on since the person
+ *  opened the panel) is silently dropped, never written with whatever kind
+ *  happened to be typed next to it. Same for an entry whose kind is not one
+ *  of the four real values -- isDestinationKind above, never trusted from
+ *  the panel alone. Republishes the proposal status afterward so the
+ *  accepted rows disappear from the panel's very next read. */
+async function attendCatalogProposalAcceptRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY).catch((error) =>
+    orca.log(`catalog proposal accept request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, added: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`catalog proposal accept result publish failed: ${err.message}`))
+    return
+  }
+
+  const mirror = options.mirror ?? mirrorCatalogAndPolicies
+  const requestedAccepted = Array.isArray(request.accepted) ? request.accepted : []
+  let result
+  try {
+    const { proposals, failure } = await computeCatalogProposals(orca, storageHost, options)
+    if (failure !== null) {
+      result = { ok: false, reason: 'derivation-failed', detail: failure }
+    } else {
+      const proposalsById = new Map(proposals.map((p) => [p.id, p]))
+      const toAdd = []
+      for (const entry of requestedAccepted) {
+        if (!isRecord(entry) || typeof entry.id !== 'string' || !isDestinationKind(entry.kind)) continue
+        const proposal = proposalsById.get(entry.id)
+        if (proposal === undefined) continue
+        toAdd.push({ id: proposal.id, label: proposal.label, kind: entry.kind, worktreePath: proposal.worktreePath, autonomy: DEFAULT_DERIVED_AUTONOMY })
+      }
+      if (toAdd.length > 0) {
+        const current = await getCatalog(storageHost)
+        await setCatalog(storageHost, { destinations: [...current.destinations, ...toAdd] })
+        await mirror(orca, storageHost)
+      }
+      result = { ok: true, added: toAdd.length }
+    }
+  } catch (error) {
+    result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
+  }
+
+  await storageHost.set(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`catalog proposal accept result publish failed: ${err.message}`))
+
+  await publishCatalogProposalsStatus(orca, storageHost, options)
 }
 
 // ---------------------------------------------------------------------------
@@ -549,10 +773,11 @@ const POLICY_SEED_PATH = join(PLUGIN_ROOT, 'seed', 'policies.json')
  *
  *  `options.acceptedIds` is the only way a shared id already on this machine
  *  can be replaced by the seed's version -- see policy_seed_import.ts's
- *  applyPolicySeedChoices. Omitting it (the default, and the only behaviour
+ *  resolvePolicySeedImport. Omitting it (the default, and the only behaviour
  *  when this runs with no arguments) never replaces anything; the `differing`
- *  list in the result is how a panel finds out there is something to offer
- *  the developer in the first place. */
+ *  list in the result -- the rows STILL unresolved after this apply, never
+ *  the original pre-apply list -- is how a panel finds out there is
+ *  something left to offer the developer. */
 async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
   const seedPath = options.seedPath ?? POLICY_SEED_PATH
   const mirror = options.mirror ?? mirrorCatalogAndPolicies
@@ -565,18 +790,24 @@ async function cmdImportPolicySeeds (orca, storageHost, options = {}) {
     const shippedVersion = parseSeedVersion(parsed)
     const existingRaw = await storageHost.get('policies')
     const existing = Array.isArray(existingRaw) ? existingRaw : []
-    const { merged, added, skipped, differing } = mergePolicySeeds(existing, seeds)
-    const { result: finalPolicies, replaced } = applyPolicySeedChoices(merged, seeds, acceptedIds)
+    const { policies: finalPolicies, added, skipped, replaced, remaining, settled } = resolvePolicySeedImport(existing, seeds, acceptedIds)
     if (added > 0 || replaced > 0) {
       await storageHost.set('policies', finalPolicies)
       await mirror(orca, storageHost)
     }
-    // A successful import -- whether it added rows, replaced some, or did
-    // neither -- means this install has now seen the shipped baseline at
-    // this version, so the notice must not keep offering it again even if a
-    // reported `differing` id was left unticked. See policy_seed_notice.ts.
-    await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: shippedVersion, at: new Date().toISOString() })
-      .catch((error) => orca.log(`policy seed offered-version marker publish failed: ${error.message}`))
+    // JEVADV-27 (odd/tasks/release-0.5.1.md) -- this used to mark the
+    // install offered unconditionally on every successful import, which
+    // silenced the notice the instant additions landed even if a reported
+    // `differing` row was left unticked (the offered marker is never
+    // lowered, so it stayed silent forever, or until the NEXT shipped
+    // version bump). Only `settled` -- nothing genuinely differing left,
+    // per resolvePolicySeedImport -- may advance the marker; an unresolved
+    // row must keep the notice due. See policy_seed_notice.ts.
+    if (settled) {
+      await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: shippedVersion, at: new Date().toISOString() })
+        .catch((error) => orca.log(`policy seed offered-version marker publish failed: ${error.message}`))
+    }
+    const differing = remaining
     await publishPolicySeedNoticeStatus(orca, storageHost, options)
     return { ok: true, added, skipped, differing, replaced }
   } catch (error) {
@@ -617,11 +848,17 @@ const POLICY_SEED_DISMISS_REQUEST_KEY = 'policySeedDismissRequest'
 const POLICY_SEED_DISMISS_RESULT_KEY = 'policySeedDismissResult'
 
 /** Computes the same decision decidePolicySeedNotice would report, from a
- *  fresh read of the shipped seed file and storage. Returns `null` (and
- *  logs) rather than throwing on any failure to read either -- the caller
- *  decides what "could not compute this tick" should mean: leaving a
- *  previous status in place (publishPolicySeedNoticeStatus) or skipping a
- *  poll tick outright (attendPolicySeedNoticeRefresh). */
+ *  fresh read of the shipped seed file and storage, PLUS the full
+ *  `mergePolicySeeds` differing rows (id/existing/seed/fields) that
+ *  `decision` itself only ever reduces to a count -- JEVADV-27
+ *  (odd/tasks/release-0.5.1.md): the panel needs the actual rows to render
+ *  the tick list from a stored status on every load, not only right after a
+ *  live import request/result round trip. Same split as models-worker.mjs's
+ *  computeModelsSeedNotice/decideModelSeedNotice. Returns `null` (and logs)
+ *  rather than throwing on any failure to read either -- the caller decides
+ *  what "could not compute this tick" should mean: leaving a previous status
+ *  in place (publishPolicySeedNoticeStatus) or skipping a poll tick outright
+ *  (attendPolicySeedNoticeRefresh). */
 async function computePolicySeedNoticeDecision (orca, storageHost, options = {}) {
   const seedPath = options.seedPath ?? POLICY_SEED_PATH
   try {
@@ -636,23 +873,29 @@ async function computePolicySeedNoticeDecision (orca, storageHost, options = {})
     ])
     const offeredVersion = parseOfferedVersion(offeredMarker)
     const existing = Array.isArray(existingRaw) ? existingRaw : []
-    return decidePolicySeedNotice({ shippedVersion, offeredVersion, existing, shipped })
+    const decision = decidePolicySeedNotice({ shippedVersion, offeredVersion, existing, shipped })
+    const items = mergePolicySeeds(existing, shipped).differing
+    return { decision, items }
   } catch (error) {
     orca.log(`policy seed notice computation failed: ${String(error?.message ?? error).slice(0, 160)}`)
     return null
   }
 }
 
-/** Writes a computed decision to storage: the status the panel reads (only
- *  the fields it renders), and -- when `decision.markOffered`, i.e. a newer
- *  baseline with nothing to say to THIS install -- the offered-version
+/** Writes a computed `{decision, items}` to storage: the status the panel
+ *  reads (only the fields it renders, now including the real differing
+ *  rows as `differingItems`), and -- when `decision.markOffered`, i.e. a
+ *  newer baseline with nothing to say to THIS install -- the offered-version
  *  marker, so the same no-op merge is not recomputed on every later tick.
  *  `markOffered` is false when the marker is already equal or ahead (a
  *  downgrade), so this never lowers it. Resolves true only when the status
  *  write itself landed, so a caller that dedupes can retry a failed one. */
-async function writePolicySeedNoticeDecision (orca, storageHost, decision) {
+async function writePolicySeedNoticeDecision (orca, storageHost, computed) {
+  const { decision, items } = computed
   const { due, added, differing, shippedVersion } = decision
-  const written = await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, { due, added, differing, shippedVersion, at: new Date().toISOString() })
+  const written = await storageHost.set(POLICY_SEED_NOTICE_STATUS_KEY, {
+    due, added, differing, shippedVersion, differingItems: items, at: new Date().toISOString()
+  })
     .then(() => true, (error) => {
       orca.log(`policy seed notice status publish failed: ${error.message}`)
       return false
@@ -672,9 +915,9 @@ async function writePolicySeedNoticeDecision (orca, storageHost, decision) {
  *  whatever status was already published in place, rather than overwriting
  *  it with a guess. */
 async function publishPolicySeedNoticeStatus (orca, storageHost, options = {}) {
-  const decision = await computePolicySeedNoticeDecision(orca, storageHost, options)
-  if (decision === null) return
-  await writePolicySeedNoticeDecision(orca, storageHost, decision)
+  const computed = await computePolicySeedNoticeDecision(orca, storageHost, options)
+  if (computed === null) return
+  await writePolicySeedNoticeDecision(orca, storageHost, computed)
 }
 
 /** Poll-loop wrapper: recomputes the decision every tick -- a plain "Save
@@ -687,13 +930,18 @@ async function publishPolicySeedNoticeStatus (orca, storageHost, options = {}) {
  *  with the same due/added/differing/shippedVersion must count as
  *  unchanged even though `at` would differ. */
 async function attendPolicySeedNoticeRefresh (orca, storageHost, lastPublished, options = {}) {
-  const decision = await computePolicySeedNoticeDecision(orca, storageHost, options)
-  if (decision === null) return
-  const fingerprint = JSON.stringify([decision.due, decision.added, decision.differing, decision.shippedVersion])
+  const computed = await computePolicySeedNoticeDecision(orca, storageHost, options)
+  if (computed === null) return
+  const { decision, items } = computed
+  // The sorted id list, not just the count: two ticks can report the same
+  // `differing` COUNT with genuinely different ids (one row got fixed, a
+  // different one broke), and that must still republish.
+  const itemIds = items.map((item) => item.id).sort()
+  const fingerprint = JSON.stringify([decision.due, decision.added, decision.differing, decision.shippedVersion, itemIds])
   if (fingerprint === lastPublished.value) return
   // Remembered only once it is really on disk: a failed write must be
   // retried next tick, not deduped away while the panel reads a stale status.
-  if (await writePolicySeedNoticeDecision(orca, storageHost, decision)) lastPublished.value = fingerprint
+  if (await writePolicySeedNoticeDecision(orca, storageHost, computed)) lastPublished.value = fingerprint
 }
 
 /** Attends one pending "dismiss the baseline notice" request from the panel.
@@ -720,12 +968,12 @@ async function attendPolicySeedDismissRequest (orca, storageHost, options = {}) 
     return
   }
 
-  const decision = await computePolicySeedNoticeDecision(orca, storageHost, options)
+  const computed = await computePolicySeedNoticeDecision(orca, storageHost, options)
   let result
-  if (decision === null) {
+  if (computed === null) {
     result = { ok: false, reason: 'seed-unavailable', detail: 'the shipped seed could not be read to record the dismissed version.' }
   } else {
-    const marked = await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: decision.shippedVersion, at: new Date().toISOString() })
+    const marked = await storageHost.set(POLICY_SEED_OFFERED_VERSION_KEY, { version: computed.decision.shippedVersion, at: new Date().toISOString() })
       .then(() => true, (error) => {
         orca.log(`policy seed offered-version marker publish failed: ${error.message}`)
         return false
@@ -1118,14 +1366,41 @@ const LOCALE_REQUEST_KEY = 'localeRequest'
 const LOCALE_RESULT_KEY = 'localeResult'
 const LOCALE_STATUS_KEY = 'localeStatus'
 
-async function publishLocaleStatus (orca, storageHost) {
-  const locale = await resolveWorkerLocale()
-  await storageHost.set(LOCALE_STATUS_KEY, { value: locale, checkedAt: new Date().toISOString() })
+/**
+ * JEVADV-10 (odd/tasks/release-0.5.1.md T-lane-a task 3): `source` tells a
+ * panel WHERE `value` came from, so it can tell "Orca's own explicit
+ * uiLanguage" apart from "just this mirror's last write" -- which, before
+ * any panel ever pushes a request, is only ever a navigator-derived guess.
+ * LOCALE_ORCA_SETTING_KEY is read once at activation (see
+ * applyOrcaUiLanguageAtActivation) and is only ever a concrete `es`/`en`
+ * when Orca's own setting is a concrete choice, never for `"system"`, a
+ * missing setting, or a read failure -- exactly the same concrete-or-defer
+ * test attendLocaleRequest already uses to decide whether Orca's setting
+ * overrides the panel's own request.
+ */
+async function publishLocaleStatus (orca, storageHost, options = {}) {
+  const resolveLocale = options.resolveLocale ?? resolveWorkerLocale
+  const locale = await resolveLocale()
+  const orcaSetting = await storageHost.get(LOCALE_ORCA_SETTING_KEY)
+  const source = orcaSetting === 'es' || orcaSetting === 'en' ? 'orca-setting' : 'navigator'
+  await storageHost.set(LOCALE_STATUS_KEY, { value: locale, source, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`locale status publish failed: ${error.message}`))
 }
 
-/** Attends one pending language-change request from the panel, if any. */
-async function attendLocaleRequest (orca, storageHost) {
+/** Attends one pending language-change request from the panel, if any.
+ *
+ *  JEVADV-10 (odd/tasks/release-0.5.1.md): the requested locale is the
+ *  panel's own `navigator`-derived guess (config.html's localeFromOrca), a
+ *  hint, never final -- LOCALE_ORCA_SETTING_KEY, set once at activation by
+ *  applyOrcaUiLanguageAtActivation, is Orca's own EXPLICIT setting when it
+ *  has one, and overrides the request rather than the other way around: a
+ *  person who set Orca itself to Spanish while their OS/browser locale is
+ *  English must still get Spanish gate prompts. When that marker is
+ *  anything other than a concrete `es`/`en` (no setting yet, `"system"`,
+ *  read failure), the panel's own request wins, exactly as before this
+ *  fix -- this never invents `en` on its own. */
+async function attendLocaleRequest (orca, storageHost, options = {}) {
+  const save = options.saveLocale ?? saveLocale
   const request = await storageHost.get(LOCALE_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
 
@@ -1140,16 +1415,87 @@ async function attendLocaleRequest (orca, storageHost) {
     return
   }
 
-  const locale = request.locale === 'en' ? 'en' : request.locale === 'es' ? 'es' : null
-  const result = locale === null
-    ? { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${String(request.locale).slice(0, 20)}` }
-    : await saveLocale(orca, locale)
+  const requestedLocale = request.locale === 'en' ? 'en' : request.locale === 'es' ? 'es' : null
+  let result
+  if (requestedLocale === null) {
+    result = { ok: false, reason: 'invalid-locale', detail: `unrecognized locale: ${String(request.locale).slice(0, 20)}` }
+  } else {
+    const orcaSetting = await storageHost.get(LOCALE_ORCA_SETTING_KEY)
+    const effective = orcaSetting === 'es' || orcaSetting === 'en' ? orcaSetting : requestedLocale
+    result = await save(orca, effective)
+  }
 
   await storageHost.set(LOCALE_RESULT_KEY, {
     id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
   }).catch((err) => orca.log(`locale result publish failed: ${err.message}`))
 
   await publishLocaleStatus(orca, storageHost)
+}
+
+/** The path this worker grants a narrow, one-file `--allow-fs-read` for --
+ *  Orca's own `orca-data.json`, always inside ORCA_USER_DATA_DIR (the same
+ *  constant claudeAccountsDir already resolves against). */
+const ORCA_DATA_FILE_PATH = join(ORCA_USER_DATA_DIR, 'orca-data.json')
+
+/** Reads Orca's own `settings.uiLanguage` through write-secret-mirror.mjs's
+ *  orca-ui-language-read mode -- a real sidecar, same reason every other
+ *  mirror read in this file is one (this worker's own permission sandbox
+ *  cannot read outside its plugin root). Deliberately NOT
+ *  runSecretMirrorScript: that helper's permission grant is fixed to
+ *  PLUGIN_ROOT/CONFIG_DIR, and this read needs its own single extra file
+ *  granted, nothing wider. */
+function readOrcaUiLanguageMirror (orcaDataPath) {
+  return spawnSidecar(
+    ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${orcaDataPath}`, SECRET_MIRROR_SCRIPT, 'orca-ui-language-read', orcaDataPath],
+    {
+      timeout: SECRET_MIRROR_TIMEOUT_MS,
+      maxBuffer: 64 * 1024,
+      env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    }
+  )
+}
+
+/** Records what Orca's OWN settings.uiLanguage said, the last time this was
+ *  read -- `'es'`/`'en'` for a concrete setting, `null` for `"system"`,
+ *  missing, or malformed. attendLocaleRequest reads this to decide whether
+ *  Orca's own choice overrides the panel's navigator guess. */
+const LOCALE_ORCA_SETTING_KEY = 'localeOrcaSetting'
+
+/**
+ * Read ONCE, at activation (never per locale request -- a concrete answer
+ * here is meant to be a durable fact about this install, not re-fetched on
+ * every panel open). A concrete `es`/`en` is authoritative: mirrored
+ * immediately (so gate-bash.ts/mod-skills see it even before any panel ever
+ * opens) and remembered in LOCALE_ORCA_SETTING_KEY, so a later panel push
+ * cannot silently override it (see attendLocaleRequest). `"system"`,
+ * missing, or malformed records `null` -- explicitly "defer", not merely
+ * "unknown" -- so the panel's own navigator-derived guess decides instead,
+ * and this never forces `en`.
+ *
+ * Fail-safe: a read failure (sidecar launch failure, timeout, non-JSON
+ * stdout) touches NEITHER the marker NOR the locale mirror file -- a
+ * transient failure must not flip a prior concrete marker to "defer" and
+ * let the next panel push clobber Orca's own explicit choice.
+ */
+async function applyOrcaUiLanguageAtActivation (orca, storageHost, options = {}) {
+  const orcaDataPath = options.orcaDataPath ?? ORCA_DATA_FILE_PATH
+  const read = options.readOrcaUiLanguage ?? readOrcaUiLanguageMirror
+  const save = options.saveLocale ?? saveLocale
+
+  const result = await read(orcaDataPath)
+  if (!result.ok) {
+    orca.log(`orca ui language read failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+    return
+  }
+
+  const language = result.value === 'es' || result.value === 'en' ? result.value : null
+  await storageHost.set(LOCALE_ORCA_SETTING_KEY, language)
+    .catch((error) => orca.log(`locale orca-setting marker publish failed: ${error.message}`))
+
+  if (language !== null) {
+    const saved = await save(orca, language)
+    if (!saved.ok) orca.log(`orca ui language mirror failed: ${String(saved.reason ?? 'unknown')} -- ${String(saved.detail ?? '').slice(0, 160)}`)
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,12 +1661,17 @@ async function attendDenyTierConfigRequest (orca, storageHost, options = {}) {
 const CATALOG_POLICY_MIRROR_REQUEST_KEY = 'catalog-policy-mirror-request'
 
 /** Re-mirrors the catalog and policies only when the panel's trigger value
- *  has changed since the last tick that looked at it. */
+ *  has changed since the last tick that looked at it. Also refreshes
+ *  JEVADV-49's own kind-less-policy status right after: a config-panel save
+ *  is exactly the real incident this closes (20 of 23 rows losing their
+ *  kind on a save made before a panel fix was loaded), so the count must
+ *  not wait for the next worker activation to catch up. */
 async function attendCatalogPolicyMirrorRequest (orca, storageHost, lastSeen) {
   const request = await storageHost.get(CATALOG_POLICY_MIRROR_REQUEST_KEY)
   if (typeof request !== 'string' || request.length === 0 || request === lastSeen.value) return
   lastSeen.value = request
   await mirrorCatalogAndPolicies(orca, storageHost)
+  await publishPoliciesWithoutKindStatus(orca, storageHost)
 }
 
 // ---------------------------------------------------------------------------
@@ -1335,7 +1686,7 @@ const CATALOG_REFRESH_REQUEST_KEY = 'catalogRefreshRequest'
 const CATALOG_REFRESH_RESULT_KEY = 'catalogRefreshResult'
 
 /** Attends one pending catalog-refresh request from the panel, if any. */
-async function attendCatalogRefreshRequest (orca, storageHost) {
+async function attendCatalogRefreshRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(CATALOG_REFRESH_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
 
@@ -1345,14 +1696,18 @@ async function attendCatalogRefreshRequest (orca, storageHost) {
   const age = Date.now() - Date.parse(request.at)
   if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
     await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
-      id: request.id, at: new Date().toISOString(), ok: false, added: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+      id: request.id, at: new Date().toISOString(), ok: false, proposed: null, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
     }).catch((err) => orca.log(`catalog refresh result publish failed: ${err.message}`))
     return
   }
 
-  const result = await cmdRefreshCatalog(orca, storageHost)
+  // JEVADV-11: cmdRefreshCatalog no longer adds anything itself -- `proposed`
+  // is how many uncatalogued repositories it found (published in full to
+  // CATALOG_PROPOSALS_STATUS_KEY for the panel's tick list), replacing the
+  // old `added` count from when this silently wrote them with a guessed kind.
+  const result = await cmdRefreshCatalog(orca, storageHost, options)
   await storageHost.set(CATALOG_REFRESH_RESULT_KEY, {
-    id: request.id, at: new Date().toISOString(), ok: result.ok, added: result.added ?? null, reason: result.reason ?? null, detail: result.detail ?? null
+    id: request.id, at: new Date().toISOString(), ok: result.ok, proposed: result.proposed ?? null, reason: result.reason ?? null, detail: result.detail ?? null
   }).catch((err) => orca.log(`catalog refresh result publish failed: ${err.message}`))
 }
 
@@ -1742,6 +2097,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => attendCatalogRefreshRequest(orca, storageHost))
       .catch((error) => orca.log(`catalog refresh request handling failed: ${error.message}`))
+      .then(() => attendCatalogProposalAcceptRequest(orca, storageHost))
+      .catch((error) => orca.log(`catalog proposal accept request handling failed: ${error.message}`))
       .then(() => attendPolicySeedImportRequest(orca, storageHost))
       .catch((error) => orca.log(`policy seed import request handling failed: ${error.message}`))
       .then(() => attendPolicySeedDismissRequest(orca, storageHost))
@@ -1792,10 +2149,25 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial catalog derivation failed: ${error.message}`))
     .then(() => seedPoliciesIfEmpty(orca, storageHost))
     .catch((error) => orca.log(`initial policy seeding failed: ${error.message}`))
+    // JEVADV-49: migrated BEFORE the mirror below, so a freshly-converted
+    // English kind reaches policies.json on this same activation, same
+    // convergence guarantee as seeding/deriving above.
+    .then(() => migrateLegacyPolicyKinds(orca, storageHost))
+    .catch((error) => orca.log(`initial policy kind migration failed: ${error.message}`))
     .then(() => mirrorCatalogAndPolicies(orca, storageHost))
     .catch((error) => orca.log(`initial catalog/policies mirror failed: ${error.message}`))
+    // JEVADV-49: computed AFTER the migration above, so a row merely
+    // carrying a legacy Spanish kind is never reported as kind-less.
+    .then(() => publishPoliciesWithoutKindStatus(orca, storageHost))
+    .catch((error) => orca.log(`initial policies-without-kind status failed: ${error.message}`))
     .then(() => publishPolicySeedNoticeStatus(orca, storageHost))
     .catch((error) => orca.log(`initial policy seed notice status failed: ${error.message}`))
+    // JEVADV-11: computed after the catalog bootstrap above, so a
+    // freshly-seeded destination is never proposed a second time on this
+    // same activation. Fails open, same shape as every other publish in
+    // this chain -- a stuck CLI must not block activation.
+    .then(() => publishCatalogProposalsStatus(orca, storageHost))
+    .catch((error) => orca.log(`initial catalog proposals status failed: ${error.message}`))
     // Model catalog: seed once, mirror it out for the Agent hooks, then
     // check whether a newer shipped baseline has anything to offer -- same
     // three-step order as the policy chain just above, for the same reason
@@ -1816,7 +2188,13 @@ export default function activate (orca) {
   installClaudeIntegration(orca)
     .then(() => publishClaudeIntegrationStatus(orca, storageHost))
     .catch((error) => orca.log(`initial claude integration install failed: ${error.message}`))
-  publishLocaleStatus(orca, storageHost)
+  // JEVADV-10 -- reads Orca's OWN language setting once, before the status
+  // this panel-open reads is even computed, so the very first thing the
+  // panel sees already reflects it (see applyOrcaUiLanguageAtActivation's
+  // own doc for why this is activation-only, never per-request).
+  applyOrcaUiLanguageAtActivation(orca, storageHost)
+    .catch((error) => orca.log(`initial orca ui language read failed: ${error.message}`))
+    .then(() => publishLocaleStatus(orca, storageHost))
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
   publishModSkillsStatus(orca, storageHost)
     .catch((error) => orca.log(`initial mod-skills status failed: ${error.message}`))
@@ -1873,6 +2251,8 @@ export default function activate (orca) {
 // ---------------------------------------------------------------------------
 
 export {
+  applyOrcaUiLanguageAtActivation,
+  attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
@@ -1882,6 +2262,8 @@ export {
   attendPolicySeedImportRequest,
   attendPolicySeedNoticeRefresh,
   attendSecretRequest,
+  CATALOG_PROPOSAL_ACCEPT_RESULT_KEY,
+  CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
   claudeIntegrationResultPayload,
@@ -1892,16 +2274,22 @@ export {
   deriveCatalogFromOrca,
   deriveInitialCatalogIfEmpty,
   GATE_DEFAULTS_KEY,
+  LOCALE_ORCA_SETTING_KEY,
   LOCALE_RESULT_KEY,
+  LOCALE_STATUS_KEY,
+  migrateLegacyPolicyKinds,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
+  POLICIES_WITHOUT_KIND_STATUS_KEY,
   POLICY_SEED_DISMISS_RESULT_KEY,
   POLICY_SEED_IMPORT_RESULT_KEY,
   POLICY_SEED_NOTICE_STATUS_KEY,
   POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
   publishGateDefaults,
+  publishLocaleStatus,
   publishModSkillsStatus,
+  publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
   SECRET_RESULT_KEY,

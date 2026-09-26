@@ -15,7 +15,12 @@ import type { LabelledDecision, PendingApprovalRecord } from "./approval_record.
 const AT = "2026-09-23T12:00:00.000Z";
 const NOW = Date.parse("2026-09-23T12:30:00.000Z");
 
-function pending(toolUseId: string, consequence: number | null, at = AT): PendingApprovalRecord {
+// A gate-pending record only ever exists because the gate stopped
+// something, so `stopReason` is never genuinely unknown at write time --
+// every helper call below defaults to the risk stage, the most common
+// shape, and the stopReason/policyId-specific tests further down override
+// it explicitly.
+function pending(toolUseId: string, consequence: number | null, at = AT, stopReason: PendingApprovalRecord["stopReason"] = "risk", policyId: string | null = null): PendingApprovalRecord {
   return buildPendingApprovalRecord({
     toolUseId,
     at,
@@ -27,6 +32,8 @@ function pending(toolUseId: string, consequence: number | null, at = AT): Pendin
     external: 0.1,
     consequence,
     ceiling: 1.78,
+    stopReason,
+    policyId,
   });
 }
 
@@ -205,4 +212,29 @@ test("parsePendingToolUseIds skips malformed lines instead of throwing -- must b
 
 test("parsePendingToolUseIds on empty input returns an empty set", () => {
   assert.equal(parsePendingToolUseIds("").size, 0);
+});
+
+// ---------------------------------------------------------------------------
+// stopReason / policyId -- odd/tasks/release-0.5.1.md T1. A gate-pending
+// record is always written BECAUSE the gate stopped something, so it always
+// knows why. policyId is set only for a "policy" stop.
+// ---------------------------------------------------------------------------
+
+test("a pending record carries the stopReason it was built with", () => {
+  const record = pending("a", 1.9, AT, "local-rule");
+  assert.equal(record.stopReason, "local-rule");
+  assert.equal(record.policyId, null);
+});
+
+test("a policy stop's pending record carries the policy's id", () => {
+  const record = pending("a", null, AT, "policy", "client_always_asks");
+  assert.equal(record.stopReason, "policy");
+  assert.equal(record.policyId, "client_always_asks");
+});
+
+test("a pending record carries no command, only stopReason/policyId as ids -- never the command", () => {
+  const line = serializeApprovalRecord(pending("a", 1.9, AT, "policy", "client_always_asks"));
+  assert.ok(!line.includes("/Users/"), "a path leaked");
+  const parsed: unknown = JSON.parse(line);
+  assert.deepEqual(Object.keys(parsed as object).includes("command"), false);
 });

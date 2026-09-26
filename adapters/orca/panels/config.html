@@ -209,6 +209,31 @@
         letter-spacing: 0.04em; padding: 1px 6px; margin-left: 6px; border-radius: 999px;
         border: 1px solid var(--border, var(--fb-border)); color: var(--muted-foreground, var(--fb-muted-foreground)); }
       #models-section .models-row-fields { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      /* JEVADV-41 -- the in-panel tablist that keeps this document under
+         Orca's PANEL_CONTENT_HEIGHT_MAX_PX clamp (see the comment above
+         #config-tabbar in the body). flex-wrap is what keeps this from
+         ever needing horizontal scroll at 320px: a tab that does not fit
+         the row wraps to the next line instead of overflowing it. */
+      .tabbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; border-top: 1px solid var(--border, var(--fb-border)); }
+      .tab {
+        border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0;
+        background: none; padding: 7px 12px; font: inherit; font-size: 12px; font-weight: 500;
+        color: var(--muted-foreground, var(--fb-muted-foreground));
+      }
+      .tab:hover { color: var(--foreground, var(--fb-foreground)); background: var(--accent, var(--fb-accent)); }
+      /* The selected tab needs to read clearly in both themes without a new
+         color token: a filled background (--secondary) plus heavier weight
+         plus a solid 2px underline in the current foreground color, which
+         still has real contrast against --secondary in dark mode where
+         --border alone (rgb(255 255 255 / 0.07)) would not. */
+      .tab[aria-selected="true"] {
+        color: var(--foreground, var(--fb-foreground)); font-weight: 600;
+        background: var(--secondary, var(--fb-secondary));
+        border-color: var(--border, var(--fb-border));
+        box-shadow: inset 0 -2px 0 var(--foreground, var(--fb-foreground));
+      }
+      .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      .tab-panel[hidden] { display: none; }
     </style>
   </head>
   <body>
@@ -218,6 +243,28 @@
       </div>
       <p class="sub" data-i18n="app.subtitle"></p>
 
+      <!--
+        JEVADV-41. Orca clamps a panel's reported height at
+        PANEL_CONTENT_HEIGHT_MAX_PX = 8000 (orca-oss
+        plugin-panel-bridge.ts) with no manifest field to raise it, and a
+        long single-page settings document plus several open .entry rows
+        used to clear that easily -- past it, the iframe grows its own
+        inner scrollbar on top of Orca's Settings page scroll, which is
+        two scrollbars. One section-group is shown at a time behind a
+        real tablist instead; see activateTab below. The save button
+        (save-section, at the very end) stays outside every tab-panel so
+        it is never hidden.
+      -->
+      <div class="tabbar" id="config-tabbar" role="tablist" data-i18n-aria-label="tabs.groupLabel">
+        <button type="button" class="tab" id="tab-general" role="tab" aria-controls="panel-general" aria-selected="true" data-i18n="tabs.general"></button>
+        <button type="button" class="tab" id="tab-destinations" role="tab" aria-controls="panel-destinations" aria-selected="false" tabindex="-1" data-i18n="tabs.destinations"></button>
+        <button type="button" class="tab" id="tab-policies" role="tab" aria-controls="panel-policies" aria-selected="false" tabindex="-1" data-i18n="tabs.policies"></button>
+        <button type="button" class="tab" id="tab-models" role="tab" aria-controls="panel-models" aria-selected="false" tabindex="-1" data-i18n="tabs.models"></button>
+        <button type="button" class="tab" id="tab-modskills" role="tab" aria-controls="panel-modskills" aria-selected="false" tabindex="-1" data-i18n="tabs.modSkills"></button>
+        <button type="button" class="tab" id="tab-rules" role="tab" aria-controls="panel-rules" aria-selected="false" tabindex="-1" data-i18n="tabs.rules"></button>
+      </div>
+
+      <div class="tab-panel" id="panel-general" role="tabpanel" aria-labelledby="tab-general">
       <section id="secret-section">
         <h2 data-i18n="secret.heading"></h2>
         <div class="sub" id="secret-status" style="padding:0 0 6px"></div>
@@ -255,19 +302,25 @@
             <input id="logMaxEntries" type="number" step="1" min="1" /></div>
         </div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-destinations" role="tabpanel" aria-labelledby="tab-destinations" hidden>
       <section id="catalog-section">
         <h2 data-i18n="catalog.heading"></h2>
         <p class="hint" data-i18n="catalog.hint"></p>
         <div id="catalog-list"></div>
+        <div id="catalog-proposals"></div>
         <div class="actions">
           <button id="add-catalog-row" type="button" data-i18n="catalog.add"></button>
           <button id="refresh-catalog" type="button" data-i18n="catalog.refresh"></button>
           <span class="said" id="catalog-refresh-said"></span>
         </div>
         <p class="hint" data-i18n="catalog.refreshHint"></p>
+        <p class="hint" data-i18n="catalog.proposalsLimitHint"></p>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-policies" role="tabpanel" aria-labelledby="tab-policies" hidden>
       <section id="policies-section">
         <h2 data-i18n="policies.heading"></h2>
         <p class="hint" data-i18n="policies.hint"></p>
@@ -278,6 +331,7 @@
             <button id="policy-seed-notice-dismiss" class="link" type="button" data-i18n="policies.seedNoticeDismiss"></button>
           </div>
         </div>
+        <div id="policy-diffs"></div>
         <div id="policies-list"></div>
         <div class="actions">
           <button id="add-policy-row" type="button" data-i18n="policies.add"></button>
@@ -285,9 +339,10 @@
           <span class="said" id="policy-import-said"></span>
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
-        <div id="policy-diffs"></div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-modskills" role="tabpanel" aria-labelledby="tab-modskills" hidden>
       <section id="mod-skills-section">
         <h2 data-i18n="modSkills.heading"></h2>
         <p class="hint" id="mod-skills-hint"></p>
@@ -311,7 +366,9 @@
           <span class="said" id="mod-skills-said"></span>
         </div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-models" role="tabpanel" aria-labelledby="tab-models" hidden>
       <!--
         odd/tasks/model-reclassification.md T7. Self-contained on purpose:
         this is the only section a parallel change may not need to touch,
@@ -383,7 +440,9 @@
         <h2 style="margin-top:16px" data-i18n="models.measurementsHeading"></h2>
         <div id="models-measurements"></div>
       </section>
+      </div>
 
+      <div class="tab-panel" id="panel-rules" role="tabpanel" aria-labelledby="tab-rules" hidden>
       <section id="deny-tier-section">
         <h2 data-i18n="denyTier.heading"></h2>
         <p class="hint" data-i18n="denyTier.hint"></p>
@@ -393,6 +452,7 @@
           <span class="said" id="deny-tier-said"></span>
         </div>
       </section>
+      </div>
 
       <section id="save-section">
         <div class="actions">
@@ -415,6 +475,13 @@
       var CATALOG = {
         es: {
           'app.subtitle': 'Configuración del plugin. Todo se guarda a través del host de Orca — nada de esto llama a una URL externa desde este panel.',
+          'tabs.groupLabel': 'Secciones de configuración',
+          'tabs.general': 'General',
+          'tabs.destinations': 'Destinos',
+          'tabs.policies': 'Políticas',
+          'tabs.models': 'Modelos',
+          'tabs.modSkills': 'Mod de skills',
+          'tabs.rules': 'Reglas',
           'secret.heading': 'Clave de TypeSafe',
           'secret.checking': 'Comprobando…',
           'secret.label': 'Nueva clave (se guarda cifrada; nunca se vuelve a mostrar completa)',
@@ -456,7 +523,7 @@
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Mod de skills: no instalado. Usa «Configurar», abajo, para instalarlo.',
           'integration.modOnButMissing': 'Mod de skills: los interruptores de abajo están encendidos, pero el mod no está en el disco — ahora mismo no manda nada. Pulsa «Configurar», abajo, para reinstalarlo; si sigue igual, ejecuta «Advisor: Check configuration» desde la paleta de comandos de Orca una vez, que es lo que despierta al proceso del plugin.',
-          'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code -- una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
+          'integration.modNeverRun': 'Mod de skills: instalado, pero nunca corrió. Solo se carga cuando ARRANCA una sesión de Claude Code — una sesión ya abierta no lo va a recoger. Abre una sesión nueva para empezar a registrar.',
           'integration.modRecording': 'Mod de skills: registrando. {{count}} prompts desde {{since}}, el más reciente {{last}}. Esto es modo medición: todavía nada de lo que ve el modelo cambia.',
           'integration.setup': 'Configurar',
           'integration.revert': 'Revertir todo',
@@ -473,11 +540,11 @@
           'thresholds.logMaxEntries': 'Tamaño máximo del log',
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
-          'catalog.refresh': 'Actualizar desde Orca',
-          'catalog.refreshHint': 'Agrega los worktrees nuevos que Orca ya conoce, sin tocar los destinos que ya editaste.',
-          'catalog.refreshing': 'Actualizando…',
-          'catalog.refreshDone': 'Se agregaron {{count}} destino(s) nuevo(s).',
-          'catalog.refreshNone': 'No había destinos nuevos.',
+          'catalog.refresh': 'Buscar en Orca',
+          'catalog.refreshHint': 'Busca repositorios que Orca ya conoce y que tu catálogo todavía no tiene — nunca agrega nada por sí solo; lo que encuentre aparece en la lista de arriba.',
+          'catalog.refreshing': 'Buscando…',
+          'catalog.refreshFound': 'Se encontraron {{count}} repositorio(s) para proponer, abajo.',
+          'catalog.refreshNone': 'No hay repositorios para proponer.',
           'catalog.add': '+ Agregar destino',
           'catalog.fieldId': 'id',
           'catalog.fieldIdPlaceholder': 'id-corto',
@@ -489,6 +556,14 @@
           'catalog.fieldTitleMatch': 'terminalTitleMatch (opcional)',
           'catalog.fieldTitleMatchPlaceholder': 'fragmento del título',
           'catalog.remove': 'Quitar',
+          'catalog.proposalsHeading': 'Orca conoce {{n}} repositorio(s) que tu catálogo no tiene. Elige el kind de cada uno para agregarlo; lo que no marques se queda sin agregar.',
+          'catalog.proposalsKindPlaceholder': '(elige un kind)',
+          'catalog.proposalsAdd': 'Agregar los marcados',
+          'catalog.proposalsNoneChosen': 'No marcaste ninguno, así que no se agregó nada.',
+          'catalog.proposalsMissingKind': 'Elige un kind para cada repositorio marcado antes de agregar.',
+          'catalog.proposalsAdding': 'Agregando…',
+          'catalog.proposalsAdded': 'Se agregaron {{count}} destino(s).',
+          'catalog.proposalsLimitHint': 'Esta lista solo puede proponer un repositorio que Orca ya haya abierto como worktree; uno que Orca nunca ha tocado no es visible para este plugin.',
           'policies.heading': 'Políticas del equipo',
           'policies.hint': 'Cada fila es una decisión ya tomada: un id corto y la regla en una frase.',
           'policies.add': '+ Agregar política',
@@ -568,6 +643,7 @@
           'save.whichCatalog': 'El catálogo de destinos',
           'save.whichPolicies': 'Las políticas',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
+          'save.invalidField': 'Hay un campo con un valor no válido; se cambió a su pestaña y quedó enfocado.',
           'common.timeout': 'Tiempo de espera agotado.',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
           'common.hostRejectedRequest': 'El host rechazó el pedido.',
@@ -615,20 +691,20 @@
           'models.add': '+ Agregar modelo',
           'models.addMissingFields': 'Completa id, etiqueta, provider y agentModel.',
           'models.addDuplicateId': 'Ya existe un modelo con ese id.',
-          'models.added': 'Agregado, sin clasificar y no disponible -- ajústalo abajo y guarda la escalera.',
+          'models.added': 'Agregado, sin clasificar y no disponible — ajústalo abajo y guarda la escalera.',
           'models.activeLabel': 'Dejar que Jev reescriba el modelo (modo activo)',
           'models.activeHint': 'Apagado (hoy): solo mide. Encendido: reescribe el modelo únicamente cuando la medición ya alcanzó su umbral de listo, Jev está seguro y no está de acuerdo con lo pedido, y la sesión corre en modo bypassPermissions; en cualquier otro caso solo mide, sin cambiar nada.',
           'models.readiness.noData': 'Medición: todavía sin decisiones comparables.',
           'models.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} decisiones comparables. Faltan {{shortfall}}.',
           'models.readiness.rateLow': 'Medición: ya hay {{comparable}} decisiones comparables, pero el acierto es {{matchRate}}%, por debajo del umbral. Encender esto ahora aplicaría un criterio que los datos no respaldan.',
-          'models.readiness.ready': 'Medición: umbral alcanzado -- {{comparable}} decisiones comparables con {{matchRate}}% de acierto. Ya hay con qué calibrar.',
+          'models.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} decisiones comparables con {{matchRate}}% de acierto. Ya hay con qué calibrar.',
           'models.readiness.unknown': 'Medición: sin lectura todavía.',
           'models.saveConfig': 'Guardar modo activo',
           'models.savingConfig': 'Guardando…',
           'models.savedConfig': 'Guardado.',
           'models.seedNoticeText': 'La base de modelos que trae el plugin cambió a la versión {{version}}: {{added}} nuevo(s), {{differing}} distinto(s) de los tuyos.',
-          'models.seedNoticeItemAdded': '{{label}} ({{id}}) -- nuevo',
-          'models.seedNoticeItemChanged': '{{label}} ({{id}}) -- difiere en: {{fields}}',
+          'models.seedNoticeItemAdded': '{{label}} ({{id}}) — nuevo',
+          'models.seedNoticeItemChanged': '{{label}} ({{id}}) — difiere en: {{fields}}',
           'models.seedNoticeApply': 'Aplicar los marcados',
           'models.seedNoticeApplying': 'Aplicando…',
           'models.seedNoticeApplied': 'Listo: {{replaced}} reemplazado(s), {{added}} añadido(s).',
@@ -649,13 +725,20 @@
           'models.measurementsDown': 'Recomendó uno más chico: {{down}}',
           'models.measurementsAgree': 'De acuerdo con lo pedido: {{agree}}',
           'models.measurementsAgreementRate': 'Coincidencia con el modelo pedido: {{rate}}%',
-          'models.measurementsAgreementRateUnknown': 'Coincidencia con el modelo pedido: -- (todavía sin casos comparables)',
+          'models.measurementsAgreementRateUnknown': 'Coincidencia con el modelo pedido: — (todavía sin casos comparables)',
           'models.measurementsApplied': 'Reescrituras aplicadas: {{applied}}',
           'integration.agentModelHookInstalled': 'Hooks de modelo del Agent: puestos en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
           'integration.agentModelHookNotInstalled': 'Hooks de modelo del Agent: no puestos.',
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
+          'tabs.groupLabel': 'Configuration sections',
+          'tabs.general': 'General',
+          'tabs.destinations': 'Destinations',
+          'tabs.policies': 'Policies',
+          'tabs.models': 'Models',
+          'tabs.modSkills': 'Skills mod',
+          'tabs.rules': 'Rules',
           'secret.heading': 'TypeSafe key',
           'secret.checking': 'Checking…',
           'secret.label': 'New key (saved encrypted; never shown in full again)',
@@ -697,7 +780,7 @@
           // odd/tasks/production-honesty-pass.md).
           'integration.modNotInstalled': 'Skills mod: not installed. Use "Set up", below, to install it.',
           'integration.modOnButMissing': 'Skills mod: the switches below are on, but the mod is not on disk — right now they command nothing. Press "Set up", below, to reinstall it; if it stays this way, run "Advisor: Check configuration" once from Orca\'s command palette, which is what wakes the plugin\'s process.',
-          'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS -- an already-open session will not pick it up. Start a new one to begin recording.',
+          'integration.modNeverRun': 'Skills mod: installed, but it has never run. It only loads when a Claude Code session STARTS — an already-open session will not pick it up. Start a new one to begin recording.',
           'integration.modRecording': 'Skills mod: recording. {{count}} prompts since {{since}}, most recently {{last}}. This is measurement mode: nothing the model sees changes yet.',
           'integration.setup': 'Set up',
           'integration.revert': 'Revert everything',
@@ -714,11 +797,11 @@
           'thresholds.logMaxEntries': 'Maximum log size',
           'catalog.heading': 'Destination catalog',
           'catalog.hint': 'One destination per worktree this plugin may judge or route.',
-          'catalog.refresh': 'Refresh from Orca',
-          'catalog.refreshHint': 'Adds newly-seen worktrees without touching the destinations you already edited.',
-          'catalog.refreshing': 'Refreshing…',
-          'catalog.refreshDone': '{{count}} new destination(s) added.',
-          'catalog.refreshNone': 'No new destinations.',
+          'catalog.refresh': 'Search Orca',
+          'catalog.refreshHint': "Looks for repositories Orca already knows that your catalog doesn't -- never adds anything by itself; what it finds appears in the list above.",
+          'catalog.refreshing': 'Searching…',
+          'catalog.refreshFound': '{{count}} new destination(s) to propose, below.',
+          'catalog.refreshNone': 'No repositories to propose.',
           'catalog.add': '+ Add destination',
           'catalog.fieldId': 'id',
           'catalog.fieldIdPlaceholder': 'short-id',
@@ -730,6 +813,14 @@
           'catalog.fieldTitleMatch': 'terminalTitleMatch (optional)',
           'catalog.fieldTitleMatchPlaceholder': 'title fragment',
           'catalog.remove': 'Remove',
+          'catalog.proposalsHeading': "Orca knows about {{n}} destination(s) your catalog doesn't have. Pick a kind for each one to add it; anything you leave unticked stays unadded.",
+          'catalog.proposalsKindPlaceholder': '(pick a kind)',
+          'catalog.proposalsAdd': 'Add ticked',
+          'catalog.proposalsNoneChosen': 'Nothing was ticked, so nothing was added.',
+          'catalog.proposalsMissingKind': 'Pick a kind for every ticked repository before adding.',
+          'catalog.proposalsAdding': 'Adding…',
+          'catalog.proposalsAdded': '{{count}} destination(s) added.',
+          'catalog.proposalsLimitHint': 'This list can only propose a repository Orca has already opened as a worktree; one Orca has never touched is invisible to this plugin.',
           'policies.heading': 'Team policies',
           'policies.hint': 'Each row is a decision already made: a short id and the rule in one sentence.',
           'policies.add': '+ Add policy',
@@ -750,8 +841,8 @@
           'policies.remove': 'Remove',
           'policies.importSeeds': 'Import baseline policies',
           'policies.diffHeading': "The version shipped with the plugin differs from yours in {{n}} of the policies you already have. Tick the ones you want to adopt; anything you leave unticked stays as it is.",
-          'policies.diffLabel': '{{id}} -- differs in: {{fields}}',
-          'policies.diffField': '{{field}} -- yours: "{{mine}}" · the plugin\'s: "{{baseline}}"',
+          'policies.diffLabel': '{{id}} — differs in: {{fields}}',
+          'policies.diffField': '{{field}} — yours: "{{mine}}" · the plugin\'s: "{{baseline}}"',
           'policies.diffAllDestinations': '(every destination)',
           'policies.diffApply': 'Adopt the ticked ones',
           'policies.diffNoneChosen': 'Nothing was ticked, so nothing changed.',
@@ -769,7 +860,7 @@
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
           'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
           'modSkills.readiness.rateLow': 'Measurement: {{comparable}} comparable prompts already, but the match rate is {{matchRate}}% against a threshold of {{minMatchRate}}%. Turning these on now would apply a criterion the data does not support.',
-          'modSkills.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
+          'modSkills.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
           'modSkills.readiness.unknown': 'Measurement: nothing read yet.',
           'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
@@ -809,6 +900,7 @@
           'save.whichCatalog': 'The destination catalog',
           'save.whichPolicies': 'The policies',
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
+          'save.invalidField': 'A field has an invalid value; switched to its tab and focused it.',
           'common.timeout': 'Timed out.',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
           'common.hostRejectedRequest': 'The host rejected the request.',
@@ -856,20 +948,20 @@
           'models.add': '+ Add model',
           'models.addMissingFields': 'Fill in id, label, provider and agentModel.',
           'models.addDuplicateId': 'A model with that id already exists.',
-          'models.added': 'Added, unranked and not available -- adjust it below and save the ladder.',
+          'models.added': 'Added, unranked and not available — adjust it below and save the ladder.',
           'models.activeLabel': 'Let Jev rewrite the model (active mode)',
           'models.activeHint': "Off (today): measures only. On: rewrites the model only when measurement has reached its readiness threshold, Jev is confident and disagrees with what was requested, and the session runs in bypassPermissions; any other case only measures, changing nothing.",
           'models.readiness.noData': 'Measurement: no comparable decisions yet.',
           'models.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable decisions. {{shortfall}} to go.',
           'models.readiness.rateLow': 'Measurement: {{comparable}} comparable decisions already, but the match rate is {{matchRate}}%, below the threshold. Turning this on now would apply a criterion the data does not support.',
-          'models.readiness.ready': 'Measurement: threshold reached -- {{comparable}} comparable decisions at {{matchRate}}% match. There is now something to calibrate from.',
+          'models.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable decisions at {{matchRate}}% match. There is now something to calibrate from.',
           'models.readiness.unknown': 'Measurement: nothing read yet.',
           'models.saveConfig': 'Save active mode',
           'models.savingConfig': 'Saving…',
           'models.savedConfig': 'Saved.',
           'models.seedNoticeText': 'The shipped model baseline changed to version {{version}}: {{added}} new, {{differing}} different from yours.',
-          'models.seedNoticeItemAdded': '{{label}} ({{id}}) -- new',
-          'models.seedNoticeItemChanged': '{{label}} ({{id}}) -- differs in: {{fields}}',
+          'models.seedNoticeItemAdded': '{{label}} ({{id}}) — new',
+          'models.seedNoticeItemChanged': '{{label}} ({{id}}) — differs in: {{fields}}',
           'models.seedNoticeApply': 'Apply the ticked ones',
           'models.seedNoticeApplying': 'Applying…',
           'models.seedNoticeApplied': 'Done: {{replaced}} replaced, {{added}} added.',
@@ -890,7 +982,7 @@
           'models.measurementsDown': 'Recommended a smaller one: {{down}}',
           'models.measurementsAgree': 'Agreed with what was requested: {{agree}}',
           'models.measurementsAgreementRate': 'Agreement with the requested model: {{rate}}%',
-          'models.measurementsAgreementRateUnknown': 'Agreement with the requested model: -- (not enough comparable cases yet)',
+          'models.measurementsAgreementRateUnknown': 'Agreement with the requested model: — (not enough comparable cases yet)',
           'models.measurementsApplied': 'Rewrites applied: {{applied}}',
           'integration.agentModelHookInstalled': 'Agent model hooks: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
           'integration.agentModelHookNotInstalled': 'Agent model hooks: not installed.',
@@ -955,21 +1047,57 @@
       }
 
       /**
-       * The language Orca is running in.
+       * The language Orca is running in, guessed from this panel's own
+       * side.
        *
-       * Orca substitutes the resolved UI locale into the panel shell's
-       * `<html lang>`, so the plugin no longer has to ask a question the
-       * user already answered in Orca's own settings. Anything this plugin
-       * has no catalog for falls back to English.
+       * Orca's plugin shells hardcode `<html lang="en">` on every panel
+       * (measured, not assumed -- see odd/tasks/release-0.5.1.md JEVADV-10);
+       * there is no `<html lang>` this plugin can read to learn the
+       * person's real choice. `navigator.languages[0] || navigator.language`
+       * is the Chromium application locale instead -- the same underlying
+       * value Electron's own `app.getLocale()` reads in the main process --
+       * so it tracks the OS/app language even though Orca sets no attribute
+       * for it. This is only ever a GUESS, not the person's actual choice
+       * inside Orca's own settings: main.mjs's attendLocaleRequest may
+       * override it with Orca's own explicit `settings.uiLanguage` when one
+       * exists (see applyOrcaUiLanguageAtActivation there), and THIS panel's
+       * own paint is overridden the same way -- see resolveEffectiveLocale
+       * below, which initLocale() consults before the first paint. Anything
+       * this plugin has no catalog for falls back to English, same as `t()`
+       * below.
        */
       function localeFromOrca () {
-        var tag = (document.documentElement.getAttribute('lang') || '').toLowerCase()
+        var tag = ((navigator.languages && navigator.languages[0]) || navigator.language || '').toLowerCase()
         return tag.indexOf('es') === 0 ? 'es' : 'en'
+      }
+
+      /**
+       * The locale this panel actually paints with, given the worker's own
+       * published status (main.mjs's publishLocaleStatus, JEVADV-10) and
+       * this panel's own navigator-derived guess.
+       *
+       * localeFromOrca is only ever a GUESS -- Orca's plugin shells never
+       * expose the person's real in-app language choice to this sandboxed
+       * document (see localeFromOrca's own doc comment). But main.mjs
+       * already knows better once Orca's own `settings.uiLanguage` is a
+       * concrete choice (applyOrcaUiLanguageAtActivation), and publishes
+       * that fact through `status.source === 'orca-setting'` -- this panel
+       * must paint with THAT, not re-guess from `navigator.language`, or a
+       * person who set Orca to Spanish while their OS locale is English
+       * would still see this panel's own text in English. Anything else --
+       * no status yet, a mere mirrored navigator guess, a malformed value --
+       * falls back to the guess, exactly as before this fix.
+       */
+      function resolveEffectiveLocale (status, navigatorGuess) {
+        if (status && status.source === 'orca-setting' && (status.value === 'es' || status.value === 'en')) {
+          return status.value
+        }
+        return navigatorGuess
       }
 
       var currentLocale = localeFromOrca()
       function t (key, params) {
-        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.es[key] || key
+        var template = (CATALOG[currentLocale] && CATALOG[currentLocale][key]) || CATALOG.en[key] || key
         if (!params) return template
         return template.replace(/\{\{(\w+)\}\}/g, function (_m, name) {
           return Object.prototype.hasOwnProperty.call(params, name) ? params[name] : ''
@@ -1246,8 +1374,13 @@
       // ---------- language: request/result/status -----------------------------
       // Same pattern again: this panel cannot write the language's mirror
       // file itself (the worker's permission sandbox), so it requests and
-      // main.mjs attends it. LOCALE_STATUS_KEY is what this panel reads on
-      // open to know which language to paint.
+      // main.mjs attends it. currentLocale starts as localeFromOrca's own
+      // navigator guess, synchronously, because painting cannot wait for a
+      // round trip -- but JEVADV-10 (odd/tasks/release-0.5.1.md) reads
+      // LOCALE_STATUS_KEY back before the first paint (initLocale, called
+      // from load() below) and overrides that guess with Orca's own
+      // explicit setting when the worker already published one
+      // (resolveEffectiveLocale) -- see that function's own doc comment.
       var LOCALE_REQUEST_KEY = 'localeRequest'
       var LOCALE_RESULT_KEY = 'localeResult'
       var LOCALE_STATUS_KEY = 'localeStatus'
@@ -1279,6 +1412,32 @@
         })
       }
 
+      /**
+       * Reads the worker's own published locale status BEFORE this panel's
+       * first paint, and resolves `currentLocale` from it -- see
+       * resolveEffectiveLocale's own doc comment. Only pushes this panel's
+       * own navigator guess back to the worker when the published status is
+       * NOT already Orca's own explicit setting: re-sending the guess in
+       * that case would be a pointless round trip at best (attendLocaleRequest
+       * already overrides it with Orca's own setting either way), and this
+       * skips it rather than rely on that safety net alone.
+       *
+       * The push itself stays fire-and-forget in both branches (as it always
+       * was, pre-JEVADV-10): this panel's own paint never waits on it.
+       */
+      function initLocale () {
+        return read(LOCALE_STATUS_KEY, false).then(function (status) {
+          currentLocale = resolveEffectiveLocale(status, currentLocale)
+          if (status && status.source === 'orca-setting') return
+          sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
+        }).catch(function () {
+          // No published status to read at all (a bridge failure): fall back
+          // to the navigator guess exactly as before this fix, and still
+          // push it -- there is no status.source to check here.
+          sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
+        })
+      }
+
       // ---------- catalog refresh: request/result -----------------------------
       // Same request/result pattern as the secret/Claude-integration/locale
       // channels above: this panel cannot call orca.commands.register'd
@@ -1307,6 +1466,39 @@
         return write(CATALOG_REFRESH_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
           return waitForCatalogRefreshResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      // ---------- catalog proposals: status + accept request/result -----------
+      // JEVADV-11 (odd/tasks/release-0.5.1.md): "Search Orca" above only ever
+      // computes and publishes CATALOG_PROPOSALS_STATUS_KEY now -- it never
+      // writes the catalog itself. This channel is the only path that can:
+      // the person ticks which proposed repositories to adopt and picks a
+      // kind for each, exactly like the policy baseline's diff-and-adopt flow
+      // (renderPolicySeedDiffs above), never a guessed kind.
+      var CATALOG_PROPOSALS_STATUS_KEY = 'catalogProposalsStatus'
+      var CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY = 'catalogProposalAcceptRequest'
+      var CATALOG_PROPOSAL_ACCEPT_RESULT_KEY = 'catalogProposalAcceptResult'
+
+      function waitForCatalogProposalAcceptResult (requestId, deadline) {
+        return read(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForCatalogProposalAcceptResult(requestId, deadline) })
+        })
+      }
+
+      function sendCatalogProposalAcceptRequest (accepted) {
+        var requestId = 'catalog-proposal-accept-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        var request = { id: requestId, at: new Date().toISOString(), accepted: accepted }
+        signalPanelOpen()
+        return write(CATALOG_PROPOSAL_ACCEPT_REQUEST_KEY, request).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForCatalogProposalAcceptResult(requestId, Date.now() + 20000)
         })
       }
 
@@ -1456,9 +1648,126 @@
         document.querySelectorAll('[data-i18n-placeholder]').forEach(function (node) {
           node.placeholder = t(node.getAttribute('data-i18n-placeholder'))
         })
+        document.querySelectorAll('[data-i18n-aria-label]').forEach(function (node) {
+          node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria-label')))
+        })
         el('integration-hint').innerHTML = t('integration.hint')
       }
 
+      // ---------- tabs (JEVADV-41) -------------------------------------------
+      // One section-group visible at a time behind a real role="tablist", so
+      // this document's reported height (flowWithContentHeight) stays under
+      // Orca's own PANEL_CONTENT_HEIGHT_MAX_PX clamp (8000, orca-oss
+      // plugin-panel-bridge.ts) even with many open .entry rows -- see the
+      // comment above #config-tabbar in the body. Manual, not module-scoped:
+      // this file loads as a classic <script>, and the models-section script
+      // tag at the end of the body relies on that (it calls elMake, t, etc.
+      // declared up here).
+      var TABS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+      var TAB_STORAGE_KEY = 'jevAdvisor.configPanel.activeTab'
+
+      function tabButton (key) { return el('tab-' + key) }
+      function tabPanel (key) { return el('panel-' + key) }
+
+      /** Whatever this viewer chose last time, or null if storage has
+       *  nothing usable -- never lets a bad/foreign value pick a tab that
+       *  does not exist. */
+      function readStoredTab () {
+        try {
+          var value = window.localStorage.getItem(TAB_STORAGE_KEY)
+          return TABS.indexOf(value) !== -1 ? value : null
+        } catch (e) {
+          // Private browsing, disabled storage, a full quota -- the panel
+          // still has to render its default tab (see activateTab below).
+          return null
+        }
+      }
+
+      function writeStoredTab (key) {
+        try {
+          window.localStorage.setItem(TAB_STORAGE_KEY, key)
+        } catch (e) {
+          // Same as above: not remembered next time, never a broken panel
+          // this time.
+        }
+      }
+
+      /** Shows exactly one tab-panel, updates the tablist's own ARIA state
+       *  (aria-selected, roving tabindex) and remembers the choice.
+       *  `opts.focus` also moves real keyboard focus onto the newly active
+       *  tab button -- used by arrow-key movement, never by a programmatic
+       *  switch such as the validation guard in save-all's click handler,
+       *  which must not steal focus away from the field it is about to
+       *  focus itself. */
+      function activateTab (key, opts) {
+        opts = opts || {}
+        if (TABS.indexOf(key) === -1) key = TABS[0]
+        TABS.forEach(function (candidate) {
+          var isActive = candidate === key
+          var button = tabButton(candidate)
+          var panel = tabPanel(candidate)
+          button.setAttribute('aria-selected', isActive ? 'true' : 'false')
+          button.tabIndex = isActive ? 0 : -1
+          panel.hidden = !isActive
+        })
+        writeStoredTab(key)
+        if (opts.focus) tabButton(key).focus()
+      }
+
+      TABS.forEach(function (key) {
+        tabButton(key).addEventListener('click', function () { activateTab(key) })
+      })
+
+      /** Arrow-key movement between tabs, wrapping at both ends, plus
+       *  Home/End -- the roving-tabindex pattern the ARIA APG describes for
+       *  role="tablist". Moving focus also activates the tab it lands on
+       *  (automatic activation), which is what lets a single keystroke both
+       *  move and switch instead of requiring a second Enter/Space. */
+      el('config-tabbar').addEventListener('keydown', function (event) {
+        var currentKey = null
+        TABS.forEach(function (key) { if (tabButton(key) === document.activeElement) currentKey = key })
+        if (!currentKey) return
+        var index = TABS.indexOf(currentKey)
+        var nextIndex = null
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % TABS.length
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + TABS.length) % TABS.length
+        else if (event.key === 'Home') nextIndex = 0
+        else if (event.key === 'End') nextIndex = TABS.length - 1
+        if (nextIndex === null) return
+        event.preventDefault()
+        activateTab(TABS[nextIndex], { focus: true })
+      })
+
+      /** The first field, in tab order, that fails its own declared HTML5
+       *  constraint (today, only logMaxEntries' min="1") -- scoped to the
+       *  tab-panels so a field the panel never shows (there is none today,
+       *  but a future one) is never reported. There is no other field-level
+       *  validation anywhere in save-all today; this is the one real,
+       *  already-declared constraint this panel has, wired up rather than
+       *  a new business rule invented for the occasion. */
+      function firstInvalidTabField () {
+        var panels = document.querySelectorAll('.tab-panel')
+        for (var i = 0; i < panels.length; i++) {
+          var invalid = panels[i].querySelector(':invalid')
+          if (invalid) return invalid
+        }
+        return null
+      }
+
+      /** Switches to the tab that holds `fieldEl` and focuses it, so a save
+       *  blocked by a validation error on a field inside a HIDDEN tab is
+       *  never invisible. reportValidity() both shows the browser's own
+       *  native validation message and (per spec, in real browsers) moves
+       *  focus -- focus() below is the deterministic backstop a headless
+       *  test can always rely on. */
+      function focusInvalidTabField (fieldEl) {
+        var panel = fieldEl.closest('.tab-panel')
+        if (panel) activateTab(panel.id.replace(/^panel-/, ''))
+        if (typeof fieldEl.reportValidity === 'function') fieldEl.reportValidity()
+        fieldEl.focus()
+      }
+
+      activateTab(readStoredTab() || TABS[0])
 
       // There is no applyLocale here any more. It existed to repaint the panel
       // when the in-panel language switch was used, and the switch is gone:
@@ -1469,7 +1778,11 @@
       // panel's `<html lang>`, so the locale Orca reports is mirrored out to
       // them. Best effort: a failed mirror leaves those two on their previous
       // language, which is a cosmetic difference, never a blocked command.
-      sendLocaleRequest(currentLocale).catch(function () { /* cosmetic only */ })
+      // JEVADV-10: this used to fire immediately, right here, with whatever
+      // `currentLocale` was at load time (the navigator guess, always) --
+      // moved into initLocale(), called from load() below, so it runs AFTER
+      // reading the worker's own published status back, and paints with
+      // Orca's own explicit setting first when there is one.
 
       // ---------- catalogo ----------------------------------------------
       var DESTINATION_KINDS = ['service', 'client-site', 'project', 'support']
@@ -1495,9 +1808,24 @@
 
       var catalogListEl = el('catalog-list')
 
+      /** Closes every OTHER open <details class="entry"> directly inside
+       *  `listEl` -- JEVADV-41: at most one entry open per list at a time,
+       *  so a list of 40 keeps its own height to one open row's worth
+       *  rather than every row's, which is the other half (with the tabs
+       *  above) of keeping this document under Orca's height clamp. */
+      function closeSiblingEntries (listEl, exceptEntry) {
+        if (!listEl) return
+        Array.prototype.forEach.call(listEl.children, function (sibling) {
+          if (sibling !== exceptEntry && sibling.tagName === 'DETAILS' && sibling.open) sibling.open = false
+        })
+      }
+
       /** Wraps one editable row in a disclosure whose summary stays in step
-       *  with the id field, so a collapsed list still says what is in it. */
-      function makeCollapsible (isNew, nameOf, metaOf) {
+       *  with the id field, so a collapsed list still says what is in it.
+       *  `listEl` is the row's own list container (catalogListEl/
+       *  policiesListEl) -- passed in, not read from a shared global, so
+       *  opening a row in one list never closes a row in the other. */
+      function makeCollapsible (isNew, nameOf, metaOf, listEl) {
         var entry = elMake('details', 'entry')
         var summary = elMake('summary')
         var name = elMake('span', 'entry-name')
@@ -1506,6 +1834,28 @@
         summary.appendChild(meta)
         entry.appendChild(summary)
         entry.open = isNew
+        // Covers the ordinary case: a person clicking (or activating via
+        // keyboard) a <summary> to expand an already-mounted row. This is a
+        // 'click' listener on the SUMMARY, not a 'toggle' listener on the
+        // <details> -- <details>'s own 'toggle' event fires in a task
+        // QUEUED after the open attribute already flipped (HTML Standard),
+        // which left a real window where two entries both read .open ===
+        // true until that queued task ran (caught by this file's own
+        // Playwright test). A summary's click listener runs during event
+        // dispatch, which for a native <details>/<summary> happens BEFORE
+        // the element's own post-click activation behaviour (the actual
+        // open/close flip) -- so `entry.open` here still holds the
+        // PRE-click value, and closing siblings here is synchronous with
+        // this exact click: by the time it returns, at most one entry in
+        // the list is open, never two, not even for a frame.
+        // The isNew case (a brand-new row, appended still closed relative
+        // to its future siblings) is handled by each caller explicitly
+        // right after it appends the entry, since this element is not
+        // inside listEl yet at construction time -- see
+        // addCatalogRow/addPolicyRow below.
+        summary.addEventListener('click', function () {
+          if (!entry.open) closeSiblingEntries(listEl, entry)
+        })
         entry._sync = function () {
           name.textContent = nameOf() || t('entry.untitled')
           meta.textContent = metaOf()
@@ -1531,7 +1881,8 @@
         var entry = makeCollapsible(
           !row.id,
           function () { return idField.input.value.trim() },
-          function () { return kindSelect.value + ' \u00b7 ' + (labelField.input.value.trim() || row.worktreePath) }
+          function () { return kindSelect.value + ' \u00b7 ' + (labelField.input.value.trim() || row.worktreePath) },
+          catalogListEl
         )
         idField.input.addEventListener('input', function () { entry._sync() })
         labelField.input.addEventListener('input', function () { entry._sync() })
@@ -1593,21 +1944,113 @@
         }
 
         catalogListEl.appendChild(entry)
+        // The entry was not inside catalogListEl yet when makeCollapsible
+        // set entry.open above (isNew case), so there was no click on its
+        // summary to trigger the close-siblings listener. A freshly added
+        // row still has to become the one open entry now that it is
+        // actually in the list.
+        if (entry.open) closeSiblingEntries(catalogListEl, entry)
       }
 
       el('add-catalog-row').addEventListener('click', function () { addCatalogRow() })
+
+      // ---------- catalog proposals: render, tick, add -------------------------
+      // JEVADV-11 -- odd/tasks/release-0.5.1.md. Reuses DESTINATION_KINDS
+      // (declared above for the ordinary catalog rows) for the per-row
+      // `<select>`, but with an EMPTY first option pre-selected: unlike an
+      // ordinary row (which always has a real kind already), a proposal must
+      // start with none chosen, so "Add ticked" can refuse a row nobody
+      // actually decided on instead of silently defaulting to the first
+      // option in the list.
+      var catalogProposalsEl = el('catalog-proposals')
+
+      function renderCatalogProposals (status) {
+        catalogProposalsEl.innerHTML = ''
+        var proposals = (status && Array.isArray(status.proposals)) ? status.proposals : []
+        if (proposals.length === 0) return
+
+        var heading = elMake('p', 'hint')
+        heading.textContent = t('catalog.proposalsHeading', { n: String(proposals.length) })
+        catalogProposalsEl.appendChild(heading)
+
+        proposals.forEach(function (proposal) {
+          var row = elMake('div', 'checkbox-row')
+          var box = elMake('input')
+          box.type = 'checkbox'
+          box.setAttribute('data-catalog-proposal-id', proposal.id)
+          var text = elMake('div', 'checkbox-text')
+          var label = elMake('span', 'checkbox-label')
+          label.textContent = proposal.label
+          var path = elMake('span', 'hint')
+          path.textContent = proposal.worktreePath
+          text.appendChild(label)
+          text.appendChild(path)
+          var kindSelect = elMake('select')
+          kindSelect.setAttribute('data-catalog-proposal-kind', proposal.id)
+          var emptyOpt = elMake('option')
+          emptyOpt.value = ''
+          emptyOpt.textContent = t('catalog.proposalsKindPlaceholder')
+          kindSelect.appendChild(emptyOpt)
+          DESTINATION_KINDS.forEach(function (k) {
+            var opt = elMake('option')
+            opt.value = k
+            opt.textContent = k
+            kindSelect.appendChild(opt)
+          })
+          text.appendChild(kindSelect)
+          row.appendChild(box)
+          row.appendChild(text)
+          catalogProposalsEl.appendChild(row)
+        })
+
+        var actions = elMake('div', 'actions')
+        var addBtn = elMake('button')
+        addBtn.type = 'button'
+        addBtn.id = 'add-catalog-proposals'
+        addBtn.textContent = t('catalog.proposalsAdd')
+        var proposalsSaidEl = elMake('span', 'said')
+        addBtn.addEventListener('click', function () {
+          var accepted = []
+          var missingKind = false
+          catalogProposalsEl.querySelectorAll('input[data-catalog-proposal-id]').forEach(function (box) {
+            if (!box.checked) return
+            var id = box.getAttribute('data-catalog-proposal-id')
+            var kindSelect = catalogProposalsEl.querySelector('select[data-catalog-proposal-kind="' + id + '"]')
+            var kind = kindSelect ? kindSelect.value : ''
+            if (kind === '') { missingKind = true; return }
+            accepted.push({ id: id, kind: kind })
+          })
+          if (missingKind) { said(proposalsSaidEl, t('catalog.proposalsMissingKind'), true); return }
+          if (accepted.length === 0) { said(proposalsSaidEl, t('catalog.proposalsNoneChosen')); return }
+          said(proposalsSaidEl, t('catalog.proposalsAdding'))
+          sendCatalogProposalAcceptRequest(accepted).then(function (result) {
+            var added = (result && typeof result.added === 'number') ? result.added : 0
+            said(proposalsSaidEl, t('catalog.proposalsAdded', { count: String(added) }))
+            return Promise.all([read('catalog', false), read(CATALOG_PROPOSALS_STATUS_KEY, false)])
+          }).then(function (results) {
+            if (results[0]) {
+              catalogListEl.innerHTML = ''
+              ;(results[0].destinations || []).forEach(addCatalogRow)
+            }
+            renderCatalogProposals(results[1])
+          }).catch(function (error) {
+            said(proposalsSaidEl, errorText(error), true)
+          })
+        })
+        actions.appendChild(addBtn)
+        actions.appendChild(proposalsSaidEl)
+        catalogProposalsEl.appendChild(actions)
+      }
 
       var catalogRefreshSaidEl = el('catalog-refresh-said')
       el('refresh-catalog').addEventListener('click', function () {
         said(catalogRefreshSaidEl, t('catalog.refreshing'))
         sendCatalogRefreshRequest().then(function (result) {
-          var added = (result && typeof result.added === 'number') ? result.added : 0
-          said(catalogRefreshSaidEl, added > 0 ? t('catalog.refreshDone', { count: String(added) }) : t('catalog.refreshNone'))
-          return read('catalog', false)
-        }).then(function (catalog) {
-          if (!catalog) return
-          catalogListEl.innerHTML = ''
-          ;(catalog.destinations || []).forEach(addCatalogRow)
+          var proposed = (result && typeof result.proposed === 'number') ? result.proposed : 0
+          said(catalogRefreshSaidEl, proposed > 0 ? t('catalog.refreshFound', { count: String(proposed) }) : t('catalog.refreshNone'))
+          return read(CATALOG_PROPOSALS_STATUS_KEY, false)
+        }).then(function (status) {
+          renderCatalogProposals(status)
         }).catch(function (error) {
           said(catalogRefreshSaidEl, errorText(error), true)
         })
@@ -1654,6 +2097,17 @@
         { value: 'prohibits', labelKey: 'policies.kindProhibits' }
       ]
 
+      // Rows stored before the kind rename still carry the Spanish enum.
+      // src/core/decisions.ts's migratePolicyKind maps these same three
+      // values at decision time, so the gate honours them. The panel must
+      // read them the same way: shown as "-- Choose --", a plain Save wrote
+      // them back WITHOUT a kind and silently took them out of judgment.
+      var LEGACY_POLICY_KINDS = { permite: 'permits', prohibe: 'prohibits', pregunta: 'requires_human' }
+
+      function currentPolicyKind (value) {
+        return Object.prototype.hasOwnProperty.call(LEGACY_POLICY_KINDS, value) ? LEGACY_POLICY_KINDS[value] : value
+      }
+
       function policyKindLabel (value) {
         var match = POLICY_KIND_OPTIONS.filter(function (o) { return o.value === value })[0]
         return match ? t(match.labelKey) : t('policies.kindUnset')
@@ -1673,7 +2127,8 @@
             // differently from a global one at a glance, which matters once
             // there are 20 of them.
             return destinations.length > 0 ? base + ' → ' + destinations.join(', ') : base
-          }
+          },
+          policiesListEl
         )
         idField.input.addEventListener('input', function () { entry._sync() })
         ruleField.input.addEventListener('input', function () { entry._sync() })
@@ -1690,7 +2145,8 @@
         // `kind` existed, or with a typo'd value) never gets guessed into one
         // of the three real options -- it lands on the '' sentinel instead,
         // and stays there, visibly, until a human picks one.
-        var storedKind = POLICY_KIND_OPTIONS.some(function (o) { return o.value === row.kind && o.value !== '' }) ? row.kind : ''
+        var rowKind = currentPolicyKind(row.kind)
+        var storedKind = POLICY_KIND_OPTIONS.some(function (o) { return o.value === rowKind && o.value !== '' }) ? rowKind : ''
         POLICY_KIND_OPTIONS.forEach(function (option) {
           var opt = elMake('option')
           opt.value = option.value
@@ -1778,6 +2234,11 @@
         }
 
         policiesListEl.appendChild(entry)
+        // Same reasoning as addCatalogRow's own comment above: a freshly
+        // added row is not inside policiesListEl yet when it is opened, so
+        // there was no click on its summary to trigger the close-siblings
+        // listener.
+        if (entry.open) closeSiblingEntries(policiesListEl, entry)
       }
 
       el('add-policy-row').addEventListener('click', function () { addPolicyRow() })
@@ -1901,8 +2362,26 @@
         policySeedNoticeTextEl.textContent = t('policies.seedNoticeText', { added: String(added), differing: String(differing) })
       }
 
+      /** Renders both halves of the worker's POLICY_SEED_NOTICE_STATUS_KEY
+       *  mirror together: the banner, and -- while it is actually due --
+       *  the tick list straight from `status.differingItems`, the same
+       *  `{id, existing, seed, fields}` shape a live import's own
+       *  `result.differing` already carries. This is what keeps the list
+       *  visible on a plain panel reload, not only right after clicking
+       *  "Review"/"Adopt ticked": see main.mjs's computePolicySeedNoticeDecision
+       *  and the JEVADV-27 note there. Gated on `due`, not merely on the list
+       *  being non-empty: an install already marked offered (a resolved
+       *  notice, or one from before this fix existed) must not show a stale
+       *  list nobody asked to see again -- `runPolicySeedImport` below still
+       *  renders `result.differing` unconditionally right after a live
+       *  import, which is how that install can still review on request. */
+      function renderPolicySeedNoticeAndDiffs (status) {
+        renderPolicySeedNotice(status)
+        renderPolicySeedDiffs(status && status.due === true ? status.differingItems : [])
+      }
+
       function loadPolicySeedNoticeStatus () {
-        return read(POLICY_SEED_NOTICE_STATUS_KEY, false).then(renderPolicySeedNotice)
+        return read(POLICY_SEED_NOTICE_STATUS_KEY, false).then(renderPolicySeedNoticeAndDiffs)
       }
 
       el('policy-seed-notice-review').addEventListener('click', function () {
@@ -2372,6 +2851,16 @@
       var currentConfig = null
 
       el('save-all').addEventListener('click', function () {
+        // JEVADV-41: a field that fails its own declared HTML5 constraint
+        // (today, only logMaxEntries' min="1") must never fail silently
+        // behind a hidden tab -- switch to its tab and focus it instead of
+        // writing anything.
+        var invalidField = firstInvalidTabField()
+        if (invalidField) {
+          focusInvalidTabField(invalidField)
+          said(saveSaidEl, t('save.invalidField'), true)
+          return
+        }
         // consequenceCeiling used to be saved from here too, with a guard
         // against persisting a blank/guessed value (see T7 in
         // odd/tasks/panel-worker-wakeup.md). It is read-only now and never
@@ -2406,12 +2895,17 @@
         fillThresholds({})
         fillModSkillsStatus(null)
         fillDenyTierStatus(null)
-        renderPolicySeedNotice(null)
+        renderPolicySeedNoticeAndDiffs(null)
+        renderCatalogProposals(null)
         // Orca's own language decides, not a preference stored here: the
         // developer already chose it once, in Orca's settings. What is stored
         // exists only to reach the gate and the skills mod, which run outside
-        // Orca and cannot see this document.
-        return Promise.resolve().then(function () {
+        // Orca and cannot see this document. initLocale() resolves
+        // currentLocale against the worker's own published status FIRST
+        // (JEVADV-10), so the first paint below already honours Orca's
+        // explicit setting when there is one, instead of always the
+        // navigator guess.
+        return initLocale().then(function () {
           applyStaticI18n()
           renderSecretStatus(null)
           renderClaudeIntegrationStatus(null)
@@ -2423,6 +2917,7 @@
             read(MOD_SKILLS_STATUS_KEY, false),
             read(DENY_TIER_STATUS_KEY, false),
             read(POLICY_SEED_NOTICE_STATUS_KEY, false),
+            read(CATALOG_PROPOSALS_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus()
           ])
@@ -2435,7 +2930,8 @@
           ;(results[2] || []).forEach(addPolicyRow)
           fillModSkillsStatus(results[4])
           fillDenyTierStatus(results[5])
-          renderPolicySeedNotice(results[6])
+          renderPolicySeedNoticeAndDiffs(results[6])
+          renderCatalogProposals(results[7])
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
         })

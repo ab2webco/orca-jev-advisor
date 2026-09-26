@@ -14,8 +14,8 @@
 // `host.storage`) and from a CLI/test harness with a fake in-memory host.
 
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
-import { migratePolicyKind } from "./decisions.ts";
-import type { PolicyKind } from "./decisions.ts";
+import { migratePolicyKind, withNormalizedPolicyScope } from "./decisions.ts";
+import type { PolicyKind, PolicyScope } from "./decisions.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
 export interface StorageHost {
@@ -150,6 +150,14 @@ export interface PolicyRow {
    * interpreted -- this module only validates the raw shape.
    */
   readonly destinations?: readonly string[];
+  /**
+   * Optional command/process/local-rule scope -- see decisions.ts's
+   * PolicyScope for what the three values mean. Absent means "resolve it"
+   * (resolvePolicyScope in decisions.ts): the shipped seed's own scope for
+   * this same id, or `"command"` when the seed doesn't know this id either.
+   * This module only validates the raw shape.
+   */
+  readonly scope?: PolicyScope;
 }
 
 /** The runtime list of PolicyKind's members, same technique policies.ts already uses for its own isPolicyKind. */
@@ -162,8 +170,22 @@ function isPolicyKind(value: unknown): value is PolicyKind {
   return migratePolicyKind(value) !== null;
 }
 
-/** Exported so the seed reader validates rows against this exact shape rather
- *  than a second, drifting copy of it. */
+// isPolicyScope (PolicyScope's own runtime member check) is imported from
+// decisions.ts, the one shared list every reader uses instead of its own
+// copy (odd/tasks/release-0.5.1.md JEVADV-36).
+
+/**
+ * Exported so the seed reader validates rows against this exact shape rather
+ * than a second, drifting copy of it.
+ *
+ * Deliberately silent on `scope`'s VALUE (only its presence matters here) --
+ * see decisions.ts's withNormalizedPolicyScope, which getPolicies below
+ * applies to every row this returns, for why. Before T10 (odd/tasks/release-
+ * 0.5.1.md, JEVADV-28, R4) this rejected the whole row on an unrecognised
+ * `scope`, which is MORE permissive on what is probably just a typo or a
+ * value this build predates: a policy that should still cover its rule
+ * silently vanished instead of resolving to its seed's scope, or `command`.
+ */
 export function isPolicyRow(value: unknown): value is PolicyRow {
   if (!isRecord(value) || !isString(value.id) || !isString(value.rule) || !isPolicyKind(value.kind)) return false;
   if ("destinations" in value && value.destinations !== undefined && !isArrayOf(value.destinations, isString)) return false;
@@ -200,7 +222,7 @@ export async function getPolicies(host: StorageHost): Promise<readonly PolicyRow
     return [...DEFAULT_POLICIES];
   }
   if (raw === undefined || raw === null || !Array.isArray(raw)) return [...DEFAULT_POLICIES];
-  return raw.filter(isPolicyRow);
+  return raw.filter(isPolicyRow).map(withNormalizedPolicyScope);
 }
 
 export async function setPolicies(host: StorageHost, policies: readonly PolicyRow[]): Promise<void> {
