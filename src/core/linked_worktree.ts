@@ -186,6 +186,45 @@ export function resolveLinkedWorktreeMainCheckout(cwd: string): string | null {
 }
 
 /**
+ * The repository root `cwd` actually sits inside -- its OWN linked
+ * worktree's root when it is one (never the main checkout it was created
+ * from: JEVADV-3's own reasoning, "in-tree" is decided by the worktree
+ * physically holding the files), otherwise the ordinary checkout root (the
+ * directory that directly contains its `.git`). Null when `cwd` is not
+ * inside any git repository this module can positively resolve -- same
+ * fail-to-null discipline as every other step in this file. Part 4
+ * (0.5.2): this is what lets a target OUTSIDE the session's own repository
+ * be told apart from one merely in a different worktree of the SAME one.
+ */
+export function resolveRepoRootForCwd(cwd: string): string | null {
+  const entry = findGitEntry(cwd);
+  if (entry === null) return null;
+  if (entry.isDirectory) return dirname(entry.path);
+  return resolveLinkedWorktreeInfo(cwd)?.worktreeRoot ?? null;
+}
+
+/**
+ * The current branch for `cwd`'s own repository -- reads the exact `HEAD`
+ * file resolveGitDirForHead resolves (per-worktree, never the main
+ * checkout's for a linked worktree -- same reasoning as resolveGitDirForHead
+ * itself). Null for a detached HEAD (a raw commit SHA, never guessed at a
+ * branch name) or when `cwd` is not inside any git repository this module
+ * can positively resolve.
+ */
+export function resolveBranchForCwd(cwd: string): string | null {
+  const gitDir = resolveGitDirForHead(cwd);
+  if (gitDir === null) return null;
+  let head: string;
+  try {
+    head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+  } catch {
+    return null;
+  }
+  const match = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+  return match !== null ? match[1] : null;
+}
+
+/**
  * The `.git` directory that actually holds `config` (and therefore
  * `[remote ...]` sections) for whatever repository `cwd` sits inside --
  * JEVADV-39 (odd/tasks/release-0.5.1.md T-lane-a). For an ordinary checkout

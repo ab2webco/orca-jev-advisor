@@ -42,6 +42,21 @@ export interface GateCacheEntry {
    * itself in either case, never a crash.
    */
   readonly reasonKey?: string;
+  /**
+   * The team policy that decided this verdict (0.5.2's own person-facing
+   * hard-stop/ask line), present only for a `"deny"`/`"ask"` entry decided by
+   * a `prohibits`/`requires_human` policy match -- decideGateAction's own
+   * GateActionResult.policyId can only be non-null for those two verdicts
+   * (a risk-stage 'allow'/'ask' never carries one, and 'ask' with no policy
+   * always becomes an 'advise' entry instead, never a plain 'ask' cache
+   * entry -- see gate-bash.ts's own askJev). Absent on an entry written
+   * before this field existed, or for any other decision.
+   */
+  readonly policyId?: string;
+  /** The matched policy's own configured rule text, verbatim (the team's own words, not translated) -- alongside `policyId`, lets a cache hit rebuild the person-facing hard-stop/ask line without a fresh Jev call. */
+  readonly policyRule?: string;
+  /** Present only on an `"advise"` entry written by the deploy/publish floor (gate-bash.ts's own detectDeployPublish call): which of the two person-facing effect phrasings ("dispara un deploy" / "publica un paquete") a cache hit should use. Absent for a risk-stage `"advise"` entry, which carries `reasonKey` instead. */
+  readonly deployPublishKind?: "deploy" | "publish";
   readonly at: number;
 }
 
@@ -74,6 +89,9 @@ export function isValidGateCacheEntry(value: unknown): value is GateCacheEntry {
     VALID_DECISIONS.has(record.decision) &&
     typeof record.reason === "string" &&
     (record.reasonKey === undefined || typeof record.reasonKey === "string") &&
+    (record.policyId === undefined || typeof record.policyId === "string") &&
+    (record.policyRule === undefined || typeof record.policyRule === "string") &&
+    (record.deployPublishKind === undefined || record.deployPublishKind === "deploy" || record.deployPublishKind === "publish") &&
     typeof record.at === "number" &&
     Number.isFinite(record.at)
   );

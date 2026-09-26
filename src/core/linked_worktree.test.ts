@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { after, test } from "node:test";
 
-import { matchDestinationForCwd, resolveGitDirForConfig, resolveGitDirForHead, resolveLinkedWorktreeMainCheckout } from "./linked_worktree.ts";
+import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveGitDirForHead, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from "./linked_worktree.ts";
 import type { MatchableDestination } from "./destination_match.ts";
 
 /** Every temp root this file creates, removed once after every test has run. */
@@ -331,4 +331,80 @@ test("resolveGitDirForHead: nothing findable resolves to null, never throws", ()
 
   assert.doesNotThrow(() => resolveGitDirForHead(plain));
   assert.equal(resolveGitDirForHead(plain), null);
+});
+
+// ---------------------------------------------------------------------------
+// resolveRepoRootForCwd / resolveBranchForCwd (0.5.2, Part 4): what policy
+// coverage needs to know WHERE a command's own file targets actually sit --
+// two real repositories, one left on its default branch and one moved to a
+// feature branch, so the difference is observed, not assumed.
+// ---------------------------------------------------------------------------
+
+test("resolveRepoRootForCwd: an ordinary checkout resolves to its own root", () => {
+  const base = makeTempRoot("repo-root-ordinary-");
+  const repo = join(base, "repo-a");
+  initRepo(repo);
+  assert.equal(resolveRepoRootForCwd(repo), repo);
+  assert.equal(resolveRepoRootForCwd(join(repo, "nested", "dir")), repo, "resolves from a directory nested inside it too");
+});
+
+test("resolveRepoRootForCwd: a linked worktree resolves to ITS OWN root, never the main checkout's", () => {
+  const base = makeTempRoot("repo-root-worktree-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+  const sibling = join(base, "main-repo-sibling");
+  git(["worktree", "add", "-q", sibling, "-b", "feature/sibling"], main);
+
+  assert.equal(resolveRepoRootForCwd(sibling), sibling);
+  assert.notEqual(resolveRepoRootForCwd(sibling), main);
+});
+
+test("resolveRepoRootForCwd: nothing findable resolves to null, never throws", () => {
+  const base = makeTempRoot("repo-root-none-");
+  const plain = join(base, "just-a-folder");
+  mkdirSync(plain, { recursive: true });
+  assert.doesNotThrow(() => resolveRepoRootForCwd(plain));
+  assert.equal(resolveRepoRootForCwd(plain), null);
+});
+
+test("resolveBranchForCwd: two real repositories, one on its default branch and one moved to a feature branch, are told apart", () => {
+  const base = makeTempRoot("branch-two-repos-");
+  const repoOnMain = join(base, "repo-on-main");
+  initRepo(repoOnMain);
+  const mainBranch = resolveBranchForCwd(repoOnMain);
+  assert.equal(typeof mainBranch, "string");
+
+  const repoOnFeature = join(base, "repo-on-feature");
+  initRepo(repoOnFeature);
+  git(["checkout", "-q", "-b", "fix/plugin-nav-page-close"], repoOnFeature);
+
+  assert.equal(resolveBranchForCwd(repoOnFeature), "fix/plugin-nav-page-close");
+  assert.notEqual(resolveBranchForCwd(repoOnFeature), mainBranch);
+});
+
+test("resolveBranchForCwd: a linked worktree resolves to its OWN branch, not the main checkout's", () => {
+  const base = makeTempRoot("branch-worktree-");
+  const main = join(base, "main-repo");
+  initRepo(main);
+  const sibling = join(base, "main-repo-sibling");
+  git(["worktree", "add", "-q", sibling, "-b", "cin-985"], main);
+
+  assert.equal(resolveBranchForCwd(sibling), "cin-985");
+  assert.notEqual(resolveBranchForCwd(sibling), resolveBranchForCwd(main));
+});
+
+test("resolveBranchForCwd: a detached HEAD resolves to null, never a guessed branch name", () => {
+  const base = makeTempRoot("branch-detached-");
+  const repo = join(base, "repo");
+  initRepo(repo);
+  git(["checkout", "-q", "--detach", "HEAD"], repo);
+  assert.equal(resolveBranchForCwd(repo), null);
+});
+
+test("resolveBranchForCwd: nothing findable resolves to null, never throws", () => {
+  const base = makeTempRoot("branch-none-");
+  const plain = join(base, "just-a-folder");
+  mkdirSync(plain, { recursive: true });
+  assert.doesNotThrow(() => resolveBranchForCwd(plain));
+  assert.equal(resolveBranchForCwd(plain), null);
 });

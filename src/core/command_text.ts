@@ -30,18 +30,34 @@ const SHELL_READERS = /(^|[\s|;&(])(ba|z|k|da|fi)?sh\b/;
  * and indented (`<<-EOF`) spellings, and several heredocs in one command.
  * An unterminated heredoc -- the delimiter never reappears -- drops
  * everything after it, which is what the shell would have consumed anyway.
+ *
+ * SHELL_READERS is checked against each heredoc's own OPENER line, never the
+ * body: a body that merely mentions "bash"/"sh" as ordinary text (a JSON
+ * description, a comment, a string literal) used to make the WHOLE-command
+ * check above true and keep every heredoc's body in the command unstripped
+ * -- exactly the false positive that hard-denied a `python3 -` heredoc
+ * editing a JSON value containing "curl | bash" as data. Reading only the
+ * opener line answers the real question ("is the PROGRAM reading this
+ * heredoc a shell") without also asking "does the DATA inside it happen to
+ * spell a shell's name" -- and it decides each heredoc independently, so one
+ * shell-fed heredoc in a command no longer keeps every OTHER heredoc's body
+ * (fed to some non-shell program) visible too.
  */
 export function withoutHeredocBodies(command: string): string {
   if (!command.includes("<<")) return command;
-  if (SHELL_READERS.test(command)) return command;
 
   const lines = command.split("\n");
   const kept: string[] = [];
   let awaiting: string | null = null;
+  let awaitingIsShell = false;
 
   for (const line of lines) {
     if (awaiting !== null) {
-      if (line.trim() === awaiting) awaiting = null;
+      if (awaitingIsShell) kept.push(line);
+      if (line.trim() === awaiting) {
+        awaiting = null;
+        awaitingIsShell = false;
+      }
       continue;
     }
     kept.push(line);
@@ -49,7 +65,10 @@ export function withoutHeredocBodies(command: string): string {
     // which is also how the shell queues them.
     const openers = [...line.matchAll(/<<-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g)];
     const last = openers.at(-1);
-    if (last) awaiting = last[1] ?? last[2] ?? last[3] ?? null;
+    if (last) {
+      awaiting = last[1] ?? last[2] ?? last[3] ?? null;
+      awaitingIsShell = SHELL_READERS.test(line);
+    }
   }
 
   return kept.join("\n");

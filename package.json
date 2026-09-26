@@ -1,6 +1,6 @@
 {
   "name": "orca-supervisor",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "description": "Multi-project supervisor that routes work to Orca terminals, using Jev (TypeSafe) for judgment and code for the facts.",
@@ -9,8 +9,10 @@
   },
   "scripts": {
     "test": "node --test --experimental-strip-types",
-    "shots": "node scripts/screenshot-panels.mjs",
-    "check": "npm run test && npm run test:panels && npm run shots",
+    "shots": "node scripts/screenshot-panels.mjs --quick",
+    "shots:all": "node scripts/screenshot-panels.mjs",
+    "preflight": "npm run test && npm run shots",
+    "check": "npm run preflight && npm run test:panels",
     "self-check": "node src/supervisor.ts --self-check",
     "test:panels": "node --test scripts/panels.spec.mjs",
     "ab-benchmark": "node --experimental-strip-types adapters/cli/ab_benchmark_cli.ts"

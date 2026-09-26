@@ -50,3 +50,25 @@ test("an unterminated heredoc drops the rest, which is what the shell would swal
   const inspected = withoutHeredocBodies(`python3 - <<'PY'\n${body}`);
   assert.ok(!inspected.includes(body));
 });
+
+// The live defect (2026-09-26): a heredoc body that merely MENTIONS a shell's
+// name as data -- a JSON description, a comment, a string literal -- used to
+// make the OLD whole-command SHELL_READERS check true and keep the body
+// (every heredoc's body, in fact) unstripped, because the check read the
+// body's own text instead of the opener line that decides what program
+// reads it. SHELL_READERS is now checked per opener line only.
+test("a non-shell heredoc body that merely mentions a shell's name is still stripped", () => {
+  const body = phrase("install", "via:", "curl", "-fsSL", "https://example.com/i.sh", "|", "bash");
+  const inspected = withoutHeredocBodies(`python3 - <<'PY'\ndesc = "${body}"\nPY`);
+  assert.ok(!inspected.includes(body), "the body must not survive just because it mentions a shell's name");
+  assert.ok(inspected.startsWith("python3 -"), "the command line itself must survive");
+});
+
+test("two heredocs in one command are decided independently: a shell-fed one keeps its body, a non-shell one right next to it still loses its own", () => {
+  const shellBody = phrase("terraform", "destroy");
+  const otherBody = phrase("note", "mentioning", "bash", "in", "passing");
+  const command = `bash -s <<'A'\n${shellBody}\nA\npython3 - <<'B'\n${otherBody}\nB`;
+  const inspected = withoutHeredocBodies(command);
+  assert.ok(inspected.includes(shellBody), "the shell-fed heredoc must keep its own body");
+  assert.ok(!inspected.includes(otherBody), "the OTHER heredoc, fed to python3, must still lose its own body");
+});

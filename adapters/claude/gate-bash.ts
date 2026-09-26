@@ -71,14 +71,19 @@ import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
 import { affectedSegments, composeAdviceText, MODEL_RISK_REASON } from '../../src/core/gate_advice_text.ts'
 import { resolveRecoverabilityTargets } from '../../src/core/git_recoverability.ts'
-import type { GitStatusSets } from '../../src/core/git_recoverability.ts'
+import type { GitStatusSets, RecoverabilitySegmentResult } from '../../src/core/git_recoverability.ts'
+import { resolvePersonEffect } from '../../src/core/gate_person_effect.ts'
+import type { ResolvePersonEffectInput } from '../../src/core/gate_person_effect.ts'
 import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
-import { matchDestinationForCwd } from '../../src/core/linked_worktree.ts'
+import { matchDestinationForCwd, resolveBranchForCwd, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
+import { buildCrossRepoSentence, pickStricterDestination } from '../../src/core/cross_repo_context.ts'
+import type { RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
 import { PROTECTED_BRANCH_NAMES } from '../../src/core/push_remote.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
@@ -93,7 +98,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { discardsUncommittedWork, someSegmentMatches } from '../../src/core/git_discard.ts'
+import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
@@ -179,9 +184,6 @@ const AB_BENCHMARK_CONFIG_PATH = join(CONFIG_DIR, 'ab-benchmark-config.json')
 // call and no added latency; drained later by adapters/cli/ab_benchmark_cli.ts.
 const AB_BENCHMARK_QUEUE_PATH = join(CACHE_DIR, 'ab-benchmark-queue.jsonl')
 const BUDGET_MS = 1800
-
-/** Since the hook started, so it can say how long deciding cost. */
-const STARTED_AT = Date.now()
 
 /**
  * The config panel's language choice, mirrored to plain text next to (not
@@ -363,10 +365,74 @@ function segmentRule(pattern: { test(segment: string): boolean }): (ctx: RuleCon
   return (ctx) => someSegmentMatches(ctx.command, pattern)
 }
 
-/** A plain whole-command regex, for the six rules with no spanning
- *  quantifier and no two-level model: any match is `'deny'`, never `'ask'`. */
-function commandRule(pattern: RegExp): (ctx: RuleContext) => RuleOutcome {
-  return (ctx) => (pattern.test(ctx.command) ? 'deny' : null)
+/**
+ * A real `curl`/`wget` in COMMAND POSITION piping into a real shell in
+ * COMMAND POSITION of the NEXT pipeline stage -- the fix for a live false
+ * positive (2026-09-26): a heredoc passed to `python3 -` that edited a JSON
+ * description containing the text "curl | bash" was hard-refused as "runs a
+ * downloaded script", even though no shell ever saw that text -- it was a
+ * quoted Python string, not a pipeline.
+ *
+ * curlPipeShell used to be a single whole-command regex
+ * (`/curl[^|]*\|\s*(bash|sh|zsh)\b/`) tested against the RAW, unsplit
+ * command text -- the one NEVER_SILENTLY rule with no mention-vs-command
+ * treatment at all, unlike rmRf/dropTable/kubectl (0.5.1). Fixed here with
+ * TWO checks, both reusing this file's existing pipeline/segment parsing
+ * (splitOnCommandSeparatorsDetailed and someSegmentMatches) rather than a
+ * new parser:
+ *
+ *   1. A genuine TOP-LEVEL pipe: `splitOnCommandSeparatorsDetailed` already
+ *      tells two commands joined by a real, unquoted `|` apart from one
+ *      quoted whole (`grep -n "curl | bash" x`, `echo "... curl | bash"`,
+ *      where the `|` never becomes a joiner at all because it sits inside
+ *      quotes). For each segment immediately preceded by a bare `|` joiner
+ *      (never `||`, which is logical-or, not a pipe), each STAGE is checked
+ *      on its own through someSegmentMatches -- a plain, standalone segment
+ *      with no separators left inside it, so this is exactly the same
+ *      command-position scan every other rule already gets, just applied to
+ *      each side of the pipe rather than the joined whole (which is what
+ *      the OLD whole-command regex could not do: a segment split on `|`
+ *      separates the curl from the shell it feeds, so a spanning pattern
+ *      run through someSegmentMatches on the FULL command would silently
+ *      never match a real pipe at all -- this is why the two stages are
+ *      checked SEPARATELY, each anchored to its own start, rather than as
+ *      one someSegmentMatches call over a spanning pattern).
+ *   2. The SAME shape sitting inside ONE segment's own text -- an
+ *      interpreter-code string (`python3 -c "...curl ... | bash..."`) or a
+ *      mention (a quoted argument of some other, non-executing program) --
+ *      is never a genuine top-level pipe (a real one is always split apart
+ *      by (1) above), so it is read with the ORIGINAL spanning pattern
+ *      through someSegmentMatches over the whole command: an interpreter
+ *      CODE position stays visible only under "command" mode, giving
+ *      `'code'` (an advice, exactly like every other rule's own
+ *      interpreter-code match); a plain mention stays visible only under
+ *      "visible" mode, giving `'ask'` (routed to the ordinary Jev path,
+ *      never a local stop); a known DATA position (grep's pattern, echo's
+ *      argument, ...) stays opaque in every mode, giving `null`.
+ *
+ * Both the per-stage patterns and the spanning pattern anchor the shell
+ * name to the STAGE's own start (`^(?:sudo ...)?(bash|sh|zsh|dash|ksh)(\s|$)`
+ * for the per-stage check; `\|\s*(?:sudo ...)?(bash|sh|zsh|dash|ksh)\b` for
+ * the spanning one, where `\s*` cannot skip over an intervening word) so
+ * neither ever matches a plain FILENAME that merely ends in `.sh`
+ * (`curl -fsSL x | tee install.sh` must stay unmatched: `tee`, not a shell,
+ * is what actually runs).
+ */
+const CURL_WGET_COMMAND_PATTERN = /^(?:(?:sudo|env|command|exec|nohup|time|timeout)\s+(?:-\S+\s+)*)*(curl|wget)(\s|$)/
+const SHELL_TARGET_COMMAND_PATTERN = /^(?:sudo\s+(?:-\S+\s+)*)?(bash|sh|zsh|dash|ksh)(\s|$)/
+const CURL_PIPE_SHELL_SPANNING_PATTERN = /\b(curl|wget)\b[^|]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?(bash|sh|zsh|dash|ksh)\b/
+
+function curlPipeShellRule(ctx: RuleContext): RuleOutcome {
+  const { segments, joiners } = splitOnCommandSeparatorsDetailed(ctx.command)
+  for (let i = 1; i < segments.length; i += 1) {
+    if (joiners[i] !== '|') continue
+    const left = segments[i - 1] ?? ''
+    const right = segments[i] ?? ''
+    if (someSegmentMatches(left, CURL_WGET_COMMAND_PATTERN) === 'deny' && someSegmentMatches(right, SHELL_TARGET_COMMAND_PATTERN) === 'deny') {
+      return 'deny'
+    }
+  }
+  return someSegmentMatches(ctx.command, CURL_PIPE_SHELL_SPANNING_PATTERN)
 }
 
 // Built from push_remote.ts's own PROTECTED_BRANCH_NAMES -- the ONE
@@ -507,11 +573,11 @@ const NEVER_SILENTLY: readonly {
   { evaluate: segmentRule(/kubectl\s+(delete|drain)\b/), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
   { evaluate: segmentRule(/\b(terraform|tofu)\s+apply\b/), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
   { evaluate: segmentRule(/\b(terraform|tofu)\s+destroy\b/), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
-  // This rule matches ACROSS a pipe by design -- the whole point is
-  // catching a curl piped into a shell -- so it stays a plain whole-command
-  // regex, never someSegmentMatches (which would silently disable it: a
-  // segment split on `|` would separate the curl from the shell it feeds).
-  { evaluate: commandRule(/curl[^|]*\|\s*(bash|sh|zsh)\b/), why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
+  // curlPipeShell (see curlPipeShellRule's own doc comment above): a real
+  // curl/wget piping into a real shell, in command position on both sides,
+  // never a mention (a quoted grep/echo argument) or data (a heredoc body
+  // handed to a non-shell program).
+  { evaluate: curlPipeShellRule, why: 'rule.curlPipeShell', denyToggle: 'denyCurlPipeShell' },
 ]
 
 type HookInput = { readonly command: string; readonly cwd: string; readonly toolUseId: string | null; readonly sessionId: string | null }
@@ -550,12 +616,21 @@ function readHookInput(): HookInput | null {
 }
 
 /**
- * `permissionDecisionReason` is only seen when the verdict stops something. A
- * silent permission leaves Jev invisible: nobody can tell whether it weighed
- * in, whether it got it right, or with what numbers -- and what can't be seen
- * can't be calibrated. That's why every model call also leaves a line for the user.
+ * `permissionDecisionReason` is the MODEL-facing text (English for a deny,
+ * the developer's own locale for a policy ask -- unchanged by 0.5.2).
+ * `systemMessage`, when supplied, is the separate PERSON-facing line: 0.5.2
+ * stopped deriving it FROM `reason` (a local rule's hard stop used to show
+ * the model's own English REFUSED text inside the person's status line,
+ * even in `es`) -- every caller now builds its own, already-localized
+ * systemMessage naming the command and a concrete effect or rule, and hands
+ * it in explicitly. Omitted entirely for a silent path (an ordinary clean
+ * `allow`): an 'allow' per command would be noise that buries the one
+ * notice that mattered. The one deliberate exception is the identical-retry
+ * pass (tryAdviceRetryPass): a truthful `allow` that DOES get a visible
+ * line, because a silent success there is indistinguishable from the model
+ * quietly doing something else instead.
  */
-function emit(decision: Decision, reason: string, visible = true): void {
+function emit(decision: Decision, reason: string, systemMessage?: string): void {
   const payload: Record<string, unknown> = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -563,12 +638,7 @@ function emit(decision: Decision, reason: string, visible = true): void {
       permissionDecisionReason: reason,
     },
   }
-  // Only announced when it changes the course of things. An 'allow' per
-  // command is noise that buries the one notice that mattered.
-  if (visible && decision !== 'allow') {
-    const verb = t(decision === 'deny' ? 'verb.blocks' : 'verb.asks')
-    payload['systemMessage'] = t('statusLine', { verb, reason, ms: String(Date.now() - STARTED_AT) })
-  }
+  if (systemMessage !== undefined) payload['systemMessage'] = systemMessage
   process.stdout.write(JSON.stringify(payload))
 }
 
@@ -757,16 +827,69 @@ function getGitStatusSetsForAdvice(repoRoot: string): GitStatusSets {
 }
 
 /**
+ * ~60 chars for the PERSON-facing `<segment>` -- distinct from
+ * gate_advice_text.ts's own SEGMENT_MAX_CHARS (80), which feeds the
+ * MODEL-facing advice text and is a separate budget.
+ */
+const PERSON_SEGMENT_MAX_CHARS = 60
+
+function truncateForPersonLine(text: string): string {
+  const trimmed = text.trim()
+  return trimmed.length <= PERSON_SEGMENT_MAX_CHARS ? trimmed : `${trimmed.slice(0, PERSON_SEGMENT_MAX_CHARS - 1)}…`
+}
+
+/**
+ * The part of `command` that caused a LOCAL rule's own decision (0.5.2's
+ * own person-facing line contract): re-runs `evaluate` on each of the
+ * command's own segments in isolation, in order, and names the first one
+ * that reproduces a match ('deny' or 'code') on its own. A rule that only
+ * matches ACROSS two adjacent segments (curlPipeShellRule's own pipeline
+ * pair) never reproduces on a single isolated segment, so this falls back
+ * to the first segment affectedSegments (gate_advice_text.ts) would already
+ * name -- the same heuristic every Jev-sourced line already uses. Without
+ * this, a compound command (`npm test && rm -rf ~`) would name its FIRST
+ * segment as "the part that caused the decision" even when a LATER one is
+ * what actually matched.
+ */
+function matchedSegmentForRule(command: string, cwd: string, evaluate: (ctx: RuleContext) => RuleOutcome): string {
+  for (const segment of splitOnCommandSeparators(command)) {
+    const outcome = evaluate({ command: segment, cwd })
+    if (outcome === 'deny' || outcome === 'code') return truncateForPersonLine(segment)
+  }
+  return truncateForPersonLine(affectedSegments(command)[0] ?? command)
+}
+
+/**
+ * The part of `command` a Jev-sourced decision (a policy, or the risk
+ * stage) is shown against -- Jev judges the WHOLE command, not one local
+ * rule's own pattern, so the best available naming is the first segment
+ * that changes something at all, same as the model-facing text already
+ * uses (affectedSegments, gate_advice_text.ts).
+ */
+function jevSegmentFor(command: string): string {
+  return truncateForPersonLine(affectedSegments(command)[0] ?? command)
+}
+
+/** Resolves a concrete person-facing effect (gate_person_effect.ts) through GATE_CATALOG's own effect.* keys, in the active locale. */
+function localizePersonEffect(input: ResolvePersonEffectInput): string {
+  const effect = resolvePersonEffect(input)
+  return effect.key === 'effect.namedFiles' ? t('effect.namedFiles', { files: (effect.files ?? []).join(', ') }) : t(effect.key)
+}
+
+/**
  * Composes the full advice, resolving recoverability against the REAL,
  * CURRENT git status -- never a stale, cached one (see gate_cache.ts's own
  * module note on GateCacheDecision's "advise" entry: the shape cache stores
  * only the core English reason, and this is recomputed fresh on every
  * advice, cache hit or not, because the repository's own state can change
- * between two occurrences of the identical command SHAPE).
+ * between two occurrences of the identical command SHAPE). The person-facing
+ * effect is resolved the same way, fresh every time and for the same reason
+ * (a named-files effect can only be known against the CURRENT git status).
  */
-function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: readonly string[], sessionEligibleForRetry: boolean, personEffectSummary: string) {
+function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: readonly string[], sessionEligibleForRetry: boolean, effectSource: Omit<ResolvePersonEffectInput, 'recoverability'>) {
   const repoRoot = getRepoRootForAdvice(cwd)
   const recoverability = repoRoot === null ? undefined : resolveRecoverabilityTargets(command, cwd, repoRoot, getGitStatusSetsForAdvice(repoRoot))
+  const personEffectSummary = localizePersonEffect({ ...effectSource, recoverability })
   return composeAdviceText({ command, reasons: reasonsEnglish, recoverability, sessionEligibleForRetry, personEffectSummary })
 }
 
@@ -777,26 +900,33 @@ function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: rea
  * person sees one short, non-blocking line, always -- unlike an ordinary
  * 'allow' this is never silent, because a person who never sees the model
  * changing course cannot tell an advice from the model simply doing
- * something else on its own.
+ * something else on its own. 0.5.2: the line names the command
+ * (`segment`) alongside the concrete effect -- "avisó al modelo: {{effect}}"
+ * named neither a command nor anything concrete on its own.
  */
-function emitAdvice(effect: string, modelText: string): void {
+function emitAdvice(segment: string, effect: string, modelText: string): void {
   const payload = {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: modelText },
-    systemMessage: t('advisedLine', { effect }),
+    systemMessage: t('advisedLine', { segment, effect }),
   }
   process.stdout.write(JSON.stringify(payload))
 }
 
 /**
  * Whether an identical retry pass fires for (sessionId, command), and if so,
- * emits it: a truthful, silent 'allow' (recorded stopReason 'advice-retry'),
- * never a fresh Jev call and never a fresh advice composition. Returns
- * whether it fired, so a caller that checked this BEFORE calling Jev at all
- * (main()'s own early check, below) knows to stop right there, and
- * resolveAdviceOutcome (which every advice path still funnels through) can
- * reuse the exact same check for the paths that reach it with no earlier
- * chance to ask -- a local rule's own advice, and a cache-hit replay of a
- * previously-cached 'advise' entry.
+ * emits it: a truthful 'allow' (recorded stopReason 'advice-retry'), never a
+ * fresh Jev call and never a fresh advice composition. Returns whether it
+ * fired, so a caller that checked this BEFORE calling Jev at all (main()'s
+ * own early check, below) knows to stop right there, and resolveAdviceOutcome
+ * (which every advice path still funnels through) can reuse the exact same
+ * check for the paths that reach it with no earlier chance to ask -- a local
+ * rule's own advice, and a cache-hit replay of a previously-cached 'advise'
+ * entry.
+ *
+ * 0.5.2: this used to be silent (the person had already seen the original
+ * advice line once) -- but a silent success is indistinguishable from the
+ * model quietly doing something else instead, so it now gets its own
+ * visible line naming the command that went through.
  *
  * `source` records what WOULD have been asked, had the pass not fired --
  * 'jev' for the risk-stage/deploy-floor/cache-hit paths, 'local-rule' for a
@@ -805,10 +935,7 @@ function emitAdvice(effect: string, modelText: string): void {
 function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null): boolean {
   if (!checkAdviceRetryPass(sessionId, command)) return false
   appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null)
-  // No visible systemMessage: emit() only shows one for a non-'allow'
-  // decision, and a truthful, silent 'allow' is exactly right here -- the
-  // person already saw the advice line once, on the original occurrence.
-  emit('allow', 'Jev: identical retry within the advice window; proceeding.')
+  emit('allow', 'Jev: identical retry within the advice window; proceeding.', t('advisedRetryLine', { segment: jevSegmentFor(command) }))
   return true
 }
 
@@ -834,19 +961,21 @@ function resolveAdviceOutcome(input: {
   readonly sessionId: string | null
   readonly toolUseId: string | null
   readonly reasonsEnglish: readonly string[]
-  /** Localized (the developer's own locale) short phrase for the person-facing status line -- see gate_advice_text.ts's own AdviceCompositionInput.personEffectSummary. Every call site supplies one; never the English reasons text. */
-  readonly personEffectSummary: string
+  /** What resolvePersonEffect (gate_person_effect.ts) needs to name a concrete effect -- never the recoverability field itself, which buildAdviceForCommand always resolves fresh. */
+  readonly effectSource: Omit<ResolvePersonEffectInput, 'recoverability'>
+  /** The already-truncated, person-facing `<segment>` -- see matchedSegmentForRule/jevSegmentFor. */
+  readonly segment: string
   readonly source: GateSource
   readonly stopReason: GateStopReason
   readonly latencyMs?: number | null
 }): void {
-  const { command, cwd, sessionId, reasonsEnglish, personEffectSummary, source, stopReason } = input
+  const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
   if (tryAdviceRetryPass(command, cwd, sessionId, source, input.latencyMs ?? null)) return
   const sessionEligible = sessionId !== null
-  const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, personEffectSummary)
+  const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
   appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null)
   recordAdviceIssued(sessionId, command)
-  emitAdvice(advice.effectSummary, advice.modelText)
+  emitAdvice(segment, advice.effectSummary, advice.modelText)
 }
 
 /**
@@ -1224,6 +1353,8 @@ type JevOutcome =
       readonly usage: { readonly inputTokens: number; readonly outputTokens: number }
       /** The policy that resolved this verdict, or null when the risk stage decided (or no policy matched). See decisions.ts's GateActionResult.policyId. */
       readonly policyId: string | null
+      /** The matched policy's own configured rule text, verbatim -- present whenever `policyId` is, null otherwise. 0.5.2's own person-facing hard-stop/ask line (`blockedLine`/`policyAskLine`) needs this alongside `policyId`; the model-facing REFUSED text already carries it too, through `reason` above for a deny. */
+      readonly policyRule: string | null
       /**
        * True when this 'allow' happened because the command already
        * structurally qualified for the local-only allow (own-branch push /
@@ -1256,6 +1387,8 @@ type JevOutcome =
        * other case, including every non-'allow' decision.
        */
       readonly deployPublishAdvice: string | null
+      /** The same detection's own `kind` ("deploy" or "publish"), for the person-facing effect line (gate_person_effect.ts) to pick between "dispara un deploy" and "publica un paquete" -- null exactly when `deployPublishAdvice` is. */
+      readonly deployPublishKind: 'deploy' | 'publish' | null
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none' }
@@ -1264,12 +1397,14 @@ type JevOutcome =
  * Calls Jev (src/core) and translates the verdict into the hook's decision.
  * Never throws.
  *
- * Also resolves the cwd against the (optional) catalog mirror --
- * matchDestinationForCwd (linked_worktree.ts) tries cwd directly first, then
- * falls back to its linked git worktree's main checkout when cwd itself has
- * no match, because Orca creates a worktree NEXT TO its main checkout
- * (JEVADV-3) -- then filters the (optional) policies mirror down to
- * whatever applies at the matched destination, and then to whatever is
+ * `matched` is the destination whose rules apply -- resolved ONCE, in
+ * main() below, before this is ever called (JEVADV-48's own cache key
+ * already needed that resolution; Part 4, 0.5.2, made it cross-repo-aware:
+ * matchDestinationForCwd's own linked-worktree fallback tried against cwd
+ * AND every distinct repository the command's own file targets resolve to,
+ * the stricter of the matches winning -- see cross_repo_context.ts's
+ * pickStricterDestination). Filters the (optional) policies mirror down to
+ * whatever applies at that destination, and then to whatever is
  * `"command"` scoped (see filterPoliciesForCommandScope, decisions.ts) -- a
  * `"process"` policy (e.g. "screenshots get looked at before being called
  * done") describes how the agent works across many commands, not something a
@@ -1294,14 +1429,9 @@ type JevOutcome =
  * deciding while the risk axes never do. `qualifies: false` (the ordinary
  * case) changes nothing here.
  */
-async function askJev(apiKey: string, command: string, context: string, cwd: string, localGitAllow: LocalGitAllowResult): Promise<JevOutcome> {
+async function askJev(apiKey: string, command: string, context: string, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null): Promise<JevOutcome> {
   try {
-    const catalog = readCatalogMirror()
     const policies = readPoliciesMirror()
-    // Only `.destination` (whose rules apply) is needed here -- `.treeRoot`
-    // is for command_shape.ts's cache key, computed once in main() below.
-    const catalogMatch = catalog !== null ? matchDestinationForCwd(cwd, catalog.destinations) : null
-    const matched: MirroredDestination | null = catalogMatch?.destination ?? null
     const filteredPolicies = filterPoliciesForDestination(policies, matched?.id ?? null)
     const commandScopedPolicies = filterPoliciesForCommandScope(filteredPolicies, SEED_SCOPE_BY_ID)
 
@@ -1340,6 +1470,13 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
     // 'deny' on its own). Model-facing REFUSED text, always English, never
     // the locale-resolved `policy.forbidden` string a person would read.
     const isPolicyDeny = gate.verdict === 'deny' && gate.policyId !== null
+    // 0.5.2: the same policy `rule` text policyDenyReasonEnglish reads for a
+    // `prohibits` deny is also what a `requires_human` ask's own reason
+    // carries (decisions.ts's policy.forbidden/policy.needsHuman both carry
+    // `params.rule`) -- resolved once here, for whichever verdict, so the
+    // person-facing hard-stop/ask line never needs a second pass over
+    // `gate.reasons`.
+    const policyRule = gate.policyId !== null ? gate.reasons.find((r) => r.key === 'policy.forbidden' || r.key === 'policy.needsHuman')?.params?.rule ?? null : null
     const reason = viaLocalAllow
       ? t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush')
       : isPolicyDeny
@@ -1354,6 +1491,7 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       destinationKind: matched?.kind ?? null,
       usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
       policyId: gate.policyId,
+      policyRule,
       viaLocalAllow,
       isRiskAdvice,
       riskAdviceReasonsEnglish: isRiskAdvice ? gate.reasons.map(resolveGateActionReasonEnglish) : [],
@@ -1365,6 +1503,7 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
       // permits it outright). Null whenever the verdict is anything but
       // 'allow', or no such command was detected at all.
       deployPublishAdvice: gate.verdict === 'allow' && deployPublish !== null ? deployPublish.description : null,
+      deployPublishKind: gate.verdict === 'allow' && deployPublish !== null ? deployPublish.kind : null,
     }
   } catch (error) {
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
@@ -1456,7 +1595,7 @@ async function main(): Promise<void> {
   // that a LATER rule denies in the same command (review finding
   // R3-ask-short-circuits-later-deny). A deny with its switch on wins
   // outright; otherwise the first downgraded-to-ask rule found speaks.
-  let firstAdvice: { readonly why: GateKey; readonly kind: 'code' | 'toggle-off' } | null = null
+  let firstAdvice: { readonly why: GateKey; readonly kind: 'code' | 'toggle-off'; readonly evaluate: (ctx: RuleContext) => RuleOutcome } | null = null
   for (const { evaluate, why, denyToggle } of NEVER_SILENTLY) {
     if (mentionOnly) break
     const outcome = evaluate({ command: inspected, cwd })
@@ -1482,19 +1621,23 @@ async function main(): Promise<void> {
     // below: the FIRST rule found in NEVER_SILENTLY's own order wins,
     // whether it got there via 'code' or via a toggled-off 'deny'.
     if (outcome === 'code') {
-      if (firstAdvice === null) firstAdvice = { why, kind: 'code' }
+      if (firstAdvice === null) firstAdvice = { why, kind: 'code', evaluate }
       continue
     }
     if (readDenyTierConfig()[denyToggle]) {
       appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
       appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
-      emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }))
+      // 0.5.2: the person-facing line names the command and the rule in
+      // plain words -- never the model-facing REFUSED text (which used to
+      // be reused verbatim for both readers, in English, even in `es`).
+      const segment = matchedSegmentForRule(inspected, cwd, evaluate)
+      emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }), t('blockedLine', { segment, rule: t(why) }))
       return
     }
-    if (firstAdvice === null) firstAdvice = { why, kind: 'toggle-off' }
+    if (firstAdvice === null) firstAdvice = { why, kind: 'toggle-off', evaluate }
   }
   if (firstAdvice !== null) {
-    const { why, kind } = firstAdvice
+    const { why, kind, evaluate } = firstAdvice
     // The advise-model release: a rule that would deny but whose switch was
     // deliberately turned off, or whose only match was an ambiguous
     // interpreter-code position, is now an ADVICE to the coding model --
@@ -1517,26 +1660,60 @@ async function main(): Promise<void> {
       kind === 'code'
         ? `this text appears only inside inline interpreter code, which may be data rather than a command; if it ran, it would: ${tEnglish(why)}`
         : tEnglish(why)
-    // Localized for the person-facing status line only -- the model-facing
-    // reasonEnglish above stays exactly as it was. A 'code' match keeps the
-    // same conditional framing here, through its own catalog key rather than
-    // asserting the rule's effect as settled fact (see the comment above).
-    const personEffectSummary = kind === 'code' ? t('reason.inlineInterpreterCode', { what: t(why) }) : t(why)
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: [reasonEnglish],
-      personEffectSummary,
+      effectSource: { ruleKey: why },
+      segment: matchedSegmentForRule(inspected, cwd, evaluate),
       source: 'local-rule', stopReason: 'local-rule',
     })
     return
   }
 
+  // Part 4 (0.5.2): policy coverage must know WHERE the command acts, not
+  // only the session's own cwd -- the real miss this closes: two `rm` of a
+  // temp file in a DIFFERENT repository, on a feature branch, were
+  // hard-denied by `never_write_to_main` because the session's cwd happened
+  // to be a main-branch checkout. `resolveCommandTargetDirs`
+  // (command_targets.ts) resolves the command's own file targets (rm, mv/cp
+  // destination, a redirection, a `cd`/`git -C` prefix); each target's own
+  // repository root and branch are then resolved with the same filesystem
+  // reads linked_worktree.ts already uses for a linked worktree's own root
+  // (never a `git` subprocess, since this sits on the hot path). The
+  // session's own root/branch are resolved lazily -- only once there is at
+  // least one target to compare against -- so the overwhelming majority of
+  // commands (no rm/mv/cp/redirection/`cd`/`-C` shape at all) pay nothing
+  // extra here.
+  const targetDirs = mentionOnly ? [] : resolveCommandTargetDirs(inspected, cwd)
+  const targetLocations: readonly TargetLocation[] = targetDirs.map((path) => ({
+    path,
+    repoRoot: resolveRepoRootForCwd(path),
+    branch: resolveBranchForCwd(path),
+  }))
+  const sessionLocation: RepoLocation =
+    targetLocations.length > 0 ? { repoRoot: resolveRepoRootForCwd(cwd), branch: resolveBranchForCwd(cwd) } : { repoRoot: null, branch: null }
+  const crossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations) : null
+  // Every DISTINCT repository a target actually resolved to (never the
+  // session's own root twice over, and never a target this module could not
+  // positively resolve to a repository at all -- "outside any repository"
+  // never matches any cataloged destination anyway).
+  const distinctTargetRepoRoots = [...new Set(targetLocations.map((t) => t.repoRoot).filter((root): root is string => root !== null && root !== sessionLocation.repoRoot))]
+
   // The catalog/policies mirror is read here, once, and reused below for the
   // cache key -- the same reads askJev makes on its own later, but resolving
   // the destination here lets the own-branch-push stage right after this
-  // run BEFORE any network call or cache lookup even happens.
+  // run BEFORE any network call or cache lookup even happens. When a target
+  // resolves to a DIFFERENT cataloged destination than cwd's own, the
+  // stricter of the two (the lower consequence-ceiling override) governs --
+  // see cross_repo_context.ts's own pickStricterDestination.
   const catalogMirror = readCatalogMirror()
-  const catalogMatch = catalogMirror !== null ? matchDestinationForCwd(cwd, catalogMirror.destinations) : null
+  const catalogMatch =
+    catalogMirror !== null
+      ? pickStricterDestination([
+          matchDestinationForCwd(cwd, catalogMirror.destinations),
+          ...distinctTargetRepoRoots.map((root) => matchDestinationForCwd(root, catalogMirror.destinations)),
+        ])
+      : null
   const matchedDestination = catalogMatch?.destination ?? null
   const policiesMirror = readPoliciesMirror()
   const commandScopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
@@ -1589,10 +1766,17 @@ async function main(): Promise<void> {
     passThrough()
   }
 
-  const context = repoContext(cwd)
-  // The destination is resolved here as well as inside askJev: it is part of
-  // the cache key, because two repositories with different thresholds must
-  // never share a verdict. Both reads hit the same small mirror file.
+  // Part 4: when a target's own repository/branch differs from the
+  // session's, Jev is told plainly -- folded into the SAME context string
+  // both the policy and risk questions read from (buildActionGateState),
+  // exactly like deployPublishSignal's own precedent -- so a coverage
+  // judgment never mistakes "on main, deleting something" for a command
+  // that actually acts on a different repository, on a different branch.
+  const context = repoContext(cwd) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
+  // The destination is resolved once, above (folding in every target's own
+  // repository too -- see pickStricterDestination): it is part of the cache
+  // key, because two repositories with different thresholds must never
+  // share a verdict.
   //
   // `.treeRoot`, not `.destination.worktreePath`, is what commandShape needs
   // as its in-tree/out-of-tree boundary: for a linked worktree resolved
@@ -1625,8 +1809,21 @@ async function main(): Promise<void> {
     // summary; an absent or unrecognized key falls back to the stored
     // English reason rather than ever showing an empty status line.
     if (hit.decision === 'advise') {
-      const personEffectSummary = hit.reasonKey !== undefined && isGateCatalogKey(hit.reasonKey) ? t(hit.reasonKey) : hit.reason
-      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], personEffectSummary, source: 'cache', stopReason: 'risk' })
+      // The effect is resolved fresh, in whatever locale is active NOW, from
+      // whichever of the two markers this entry actually carries --
+      // deployPublishKind for the deploy/publish floor's own entries,
+      // reasonKey for the risk stage's own axis reasons. An entry written
+      // before either field existed (or one whose key/kind this build no
+      // longer recognises) carries neither, and resolvePersonEffect's own
+      // floor (gate_person_effect.ts) still resolves to the honest,
+      // non-vacuous "others will notice" rather than an empty status line.
+      const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
+        hit.deployPublishKind !== undefined
+          ? { deployPublishKind: hit.deployPublishKind }
+          : hit.reasonKey !== undefined && isGateCatalogKey(hit.reasonKey)
+            ? { riskReasonKey: hit.reasonKey }
+            : {}
+      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk' })
       return
     }
     appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null)
@@ -1639,12 +1836,26 @@ async function main(): Promise<void> {
       // verdict it is replaying.
       appendPendingApproval(toolUseId, cwd, command, key, matchedDestination?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
     }
-    emit(hit.decision, t('cached', { reason: hit.reason }))
+    // A cached deny/ask can only ever have been a policy verdict (see
+    // askJev's own note: the risk stage never returns 'deny', and its own
+    // 'ask' always becomes an 'advise' entry instead) -- policyId/policyRule
+    // are what let this hit rebuild the SAME person-facing hard-stop/ask
+    // line a fresh policy verdict would show, below. An entry written before
+    // either field existed falls back to the stored reason text rather than
+    // an empty line.
+    const cacheHitSegment = jevSegmentFor(command)
+    const cacheHitSystemMessage =
+      hit.decision === 'deny'
+        ? t('blockedLine', { segment: cacheHitSegment, rule: hit.policyRule ?? hit.reason })
+        : hit.decision === 'ask'
+          ? t('policyAskLine', { policyId: hit.policyId ?? hit.reason, segment: cacheHitSegment })
+          : undefined
+    emit(hit.decision, hit.reason, cacheHitSystemMessage)
     return
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, context, cwd, localGitAllow)
+  const outcome = await askJev(apiKey as string, command, context, localGitAllow, matchedDestination)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
@@ -1714,16 +1925,11 @@ async function main(): Promise<void> {
       cache[key] = { decision: 'advise', reason: resolved.riskAdviceReasonsEnglish.join(' · '), reasonKey: resolved.riskAdviceFirstReasonKey ?? undefined, at: Date.now() }
       writeCache(cache)
     }
-    // Localized for the person-facing status line, through the first
-    // reason's own key -- never the joined English reasons above. The
-    // defensive fallback (no key resolved at all) names a concrete,
-    // locale-neutral piece of the command instead of inventing English
-    // prose; see firstGateReasonKey's own doc on when this actually happens.
-    const personEffectSummary = resolved.riskAdviceFirstReasonKey !== null ? t(resolved.riskAdviceFirstReasonKey) : (affectedSegments(command)[0] ?? command)
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
-      personEffectSummary,
+      effectSource: { riskReasonKey: resolved.riskAdviceFirstReasonKey },
+      segment: jevSegmentFor(command),
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
     })
     return
@@ -1735,26 +1941,31 @@ async function main(): Promise<void> {
   // 'advise', never as 'allow'), so a future cache hit for this exact
   // command shape already replays through resolveAdviceOutcome's own
   // cache-hit branch with no special-casing needed there. The person-facing
-  // summary is always the one generic "reason.deployPublish" phrase,
-  // whichever of DEPLOY_PUBLISH_PATTERNS actually matched -- the specific
-  // English description (`resolved.deployPublishAdvice`) stays model-facing
-  // only.
+  // effect picks between "dispara un deploy" and "publica un paquete"
+  // through `deployPublishKind` -- the specific English description
+  // (`resolved.deployPublishAdvice`) stays model-facing only.
   if (resolved.decision === 'allow' && resolved.deployPublishAdvice !== null) {
     if (key !== null) {
-      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, reasonKey: 'reason.deployPublish', at: Date.now() }
+      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, deployPublishKind: resolved.deployPublishKind ?? undefined, at: Date.now() }
       writeCache(cache)
     }
     resolveAdviceOutcome({
       command, cwd, sessionId, toolUseId,
       reasonsEnglish: [resolved.deployPublishAdvice],
-      personEffectSummary: t('reason.deployPublish'),
+      effectSource: { deployPublishKind: resolved.deployPublishKind },
+      segment: jevSegmentFor(command),
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
     })
     return
   }
 
   if (key !== null) {
-    cache[key] = { decision: resolved.decision, reason: resolved.reason, at: Date.now() }
+    cache[key] = {
+      decision: resolved.decision,
+      reason: resolved.reason,
+      ...(resolved.policyId !== null ? { policyId: resolved.policyId, policyRule: resolved.policyRule ?? undefined } : {}),
+      at: Date.now(),
+    }
     writeCache(cache)
   }
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId)
@@ -1769,7 +1980,19 @@ async function main(): Promise<void> {
       jevStopReason, resolved.policyId,
     )
   }
-  emit(resolved.decision, resolved.reason)
+  // A 'deny'/'ask' reaching here is always a policy verdict (see askJev's
+  // own note above jevStopReason) -- policyRule/policyId are always
+  // populated for those two, so the fallbacks below only ever guard a
+  // defensive edge case, never the ordinary path. A clean 'allow' shows
+  // nothing (silent, same as before 0.5.2).
+  const finalSegment = jevSegmentFor(command)
+  const finalSystemMessage =
+    resolved.decision === 'deny'
+      ? t('blockedLine', { segment: finalSegment, rule: resolved.policyRule ?? '' })
+      : resolved.decision === 'ask'
+        ? t('policyAskLine', { policyId: resolved.policyId ?? '', segment: finalSegment })
+        : undefined
+  emit(resolved.decision, resolved.reason, finalSystemMessage)
 }
 
 await main()

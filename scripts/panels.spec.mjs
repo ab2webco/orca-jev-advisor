@@ -1130,6 +1130,53 @@ test('a dirty ladder blocks Apply and shows the inline message, without sending 
   }
 })
 
+// Found by the owner in Orca, not by any of the 448 screenshots the check
+// used to write: a model row's Move up / Move down / Mark unranked buttons sat
+// flush against each other, because `.entry-actions` had no gap. This measures
+// the real rendered boxes, at a desktop and the narrowest width, so the same
+// regression fails the suite instead of waiting for someone to look.
+for (const width of [1440, 320]) {
+  test(`a model row's action buttons keep visible space between them, and stay inside the row, at ${width}px`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const models = [
+      modelRow({ id: 'a', label: 'A', rank: 1, available: true }),
+      modelRow({ id: 'b', label: 'B', rank: 2, available: true }),
+    ]
+    const { browser, page } = await openPanel({ models }, 'es', 'dark', { width, height: 1200 })
+    try {
+      await page.click('#tab-models')
+      const layout = await page.evaluate(() => {
+        const entry = document.querySelector('#models-ladder-list .entry')
+        const actions = entry.querySelector('.entry-actions')
+        const boxes = Array.from(actions.children).map((el) => el.getBoundingClientRect())
+        const row = entry.getBoundingClientRect()
+        return {
+          boxes: boxes.map((b) => ({ left: b.left, right: b.right, top: b.top, bottom: b.bottom })),
+          rowLeft: row.left,
+          rowRight: row.right,
+        }
+      })
+      assert.ok(layout.boxes.length >= 3, `expected at least three actions in a ranked row, got ${layout.boxes.length}`)
+      for (let i = 1; i < layout.boxes.length; i++) {
+        const previous = layout.boxes[i - 1]
+        const current = layout.boxes[i]
+        // Same line when the two boxes overlap vertically: a text link is
+        // shorter than a button and, centred, starts a few pixels lower.
+        const sameLine = current.top < previous.bottom && previous.top < current.bottom
+        if (sameLine) {
+          assert.ok(current.left - previous.right >= 6, `actions ${i - 1} and ${i} are ${current.left - previous.right}px apart; they must not touch`)
+        } else {
+          assert.ok(current.top >= previous.bottom, `a wrapped action must sit below the previous one, not over it`)
+        }
+      }
+      for (const box of layout.boxes) {
+        assert.ok(box.left >= layout.rowLeft && box.right <= layout.rowRight + 0.5, `an action spills outside its row at ${width}px`)
+      }
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
 test('"Discard my edits" reloads the ladder from storage, clears the dirty flag, and unblocks Apply', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const models = [modelRow({ id: 'a', label: 'A', rank: null })]
   const status = {
@@ -1529,6 +1576,63 @@ test('the calibration card renders a real label for every legend row, never a ra
       assert.ok(!/^approvals\./.test(String(label)), `a legend row rendered its raw i18n key: ${label}`)
     }
     assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// Generic guard for the class of bug the owner found by eye in the Models tab:
+// two controls side by side with no space between them. It walks every tab of
+// the settings panel and the board, at a desktop and a phone width, and checks
+// each pair of neighbouring controls that share a parent and a line.
+const CONTROL_SELECTOR = 'button, a[href], select, input:not([type=hidden]), [role=tab]'
+
+async function touchingControls (page) {
+  return page.evaluate((selector) => {
+    const visible = (el) => {
+      const r = el.getBoundingClientRect()
+      const style = getComputedStyle(el)
+      return r.width > 0 && r.height > 0 && style.visibility !== 'hidden' && el.offsetParent !== null
+    }
+    const describe = (el) => (el.id ? `#${el.id}` : '') || (el.textContent || el.getAttribute('aria-label') || el.tagName).trim().slice(0, 30)
+    const problems = []
+    const parents = new Set(Array.from(document.querySelectorAll(selector)).filter(visible).map((el) => el.parentElement))
+    for (const parent of parents) {
+      const controls = Array.from(parent.children).filter((el) => el.matches(selector) && visible(el))
+      for (let i = 1; i < controls.length; i++) {
+        const a = controls[i - 1].getBoundingClientRect()
+        const b = controls[i].getBoundingClientRect()
+        const sameLine = b.top < a.bottom && a.top < b.bottom
+        if (sameLine && b.left - a.right < 4) problems.push(`${describe(controls[i - 1])} | ${describe(controls[i])}: ${Math.round(b.left - a.right)}px`)
+      }
+    }
+    return problems
+  }, CONTROL_SELECTOR)
+}
+
+for (const width of [1440, 390]) {
+  test(`no two neighbouring controls touch on any settings tab at ${width}px`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page } = await openPanel(SCENARIOS.ready, 'es', 'dark', { width, height: 1200 })
+    try {
+      const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('[role=tab]')).map((t) => t.id))
+      assert.ok(tabs.length >= 5, `expected the settings tabs, found ${tabs.length}`)
+      const problems = []
+      for (const tab of tabs) {
+        await page.click(`#${tab}`)
+        for (const p of await touchingControls(page)) problems.push(`${tab}: ${p}`)
+      }
+      assert.deepEqual(problems, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('no two neighbouring controls touch on the board', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openBoardPanel(SCENARIOS.ready, 'es', 'dark')
+  try {
+    await page.waitForTimeout(1500)
+    assert.deepEqual(await touchingControls(page), [])
   } finally {
     await browser.close()
   }

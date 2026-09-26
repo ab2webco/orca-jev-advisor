@@ -665,10 +665,20 @@ function hostBridge(storage) {
 }
 
 async function main() {
+  // --quick is what `npm run check` runs: the populated scenario only, each
+  // panel once at a desktop width in light and once at a phone width in dark,
+  // and one image per panel (config's first tab). Every config tab is still
+  // opened and checked for overflow and script errors; only the photographs
+  // are cut, because nobody reviews hundreds of them per run. The full matrix
+  // stays available as `npm run shots:all` for large UI changes.
+  const quick = process.argv.includes('--quick')
   const requested = process.argv.includes('--scenario')
     ? process.argv[process.argv.indexOf('--scenario') + 1]
-    : 'all'
+    : (quick ? 'ready' : 'all')
   const names = requested === 'all' ? Object.keys(SCENARIOS) : [requested]
+  const combos = quick
+    ? [['light', 1440], ['dark', 390]]
+    : THEMES.flatMap((theme) => WIDTHS.map((width) => [theme, width]))
   for (const name of names) {
     if (!(name in SCENARIOS)) throw new Error(`unknown scenario: ${name}`)
   }
@@ -695,8 +705,8 @@ async function main() {
   try {
     for (const scenario of names) {
       for (const panel of PANELS) {
-        for (const theme of THEMES) {
-          for (const width of WIDTHS) {
+        for (const [theme, width] of combos) {
+          {
             const context = await browser.newContext({
               viewport: { width, height: 900 },
               colorScheme: theme,
@@ -755,8 +765,10 @@ async function main() {
               const name = tabKey
                 ? `${scenario}-${panel.replace('.html', '')}-${theme}-${width}-${tabKey}.png`
                 : `${scenario}-${panel.replace('.html', '')}-${theme}-${width}.png`
-              await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
-              shots += 1
+              if (!quick || tabKey === tabKeys[0]) {
+                await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
+                shots += 1
+              }
             }
             if (failures.length > 0) {
               overflows.push(`${scenario}/${panel}/${theme}/${width}: script error: ${failures[0]}`)

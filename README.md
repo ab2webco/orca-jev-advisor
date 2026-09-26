@@ -74,6 +74,36 @@ commands went from 2 silently allowed (plus the newline bypass this
 release also fixes) to 0 passing without at least an advice or an outright
 refusal. That is one machine's own replay, not a guarantee about yours.
 
+## What changed in 0.5.2
+
+- **The person-facing line finally says WHAT Jev decided and ON WHICH
+  command.** "jev · avisó al modelo: si sale mal, habrá que limpiar
+  después" named neither. Every line now carries the command (truncated to
+  the part that mattered) and a concrete effect, in priority order: named
+  files it would lose, a deploy or a publish, the effect leaving this
+  machine, that it cannot be undone, or — when nothing more specific is
+  known — that other people will see it. The vague "if it goes wrong…"
+  framing is gone from what a person reads; it can still appear in the
+  reason the MODEL gets, where it is a fair description of an uncertain
+  risk score.
+- **An identical retry that actually ran is no longer silent.** It used to
+  say nothing, because the person had already seen the original advice —
+  but a silent success looks exactly like the model quietly doing something
+  else instead. It now gets its own line: "jev · the model confirmed it and
+  it ran: `<command>`".
+- **A hard stop and a human ask both name the rule, not just show the
+  model's own REFUSED text to the person too.** A local deny-tier rule or a
+  `prohibits` policy now reads "jev · blocked `<command>`: `<rule, in plain
+  words>`"; a `requires_human` policy reads "jev · `<policy id>` asks you to
+  decide: `<command>`".
+- **`curlPipeShell` finally gets the same mention-vs-command treatment as
+  the rest of the deny tier, and covers `wget` too.** It used to be the one
+  rule with none: a heredoc handed to `python3 -` that only edited a JSON
+  value containing the text of an install one-liner was hard-refused as if
+  a shell had run it. It now checks each side of a real pipe in command
+  position — a grep pattern, an echoed sentence or a heredoc body naming
+  the shape as data is never enough on its own.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.
@@ -82,18 +112,19 @@ Nothing, most of the time. That is the point.
 git status                        (silent, never leaves your machine)
 npm test                          (silent)
 rm -rf node_modules                allowed — reversible, local and cheap
-git push --force origin main      jev · blocks: force push: rewrites the
-                                   remote — anyone who already pulled breaks
+git push --force origin main      jev · blocked `git push --force origin
+                                   main`: force push: rewrites the remote —
+                                   anyone who already pulled breaks
                                    (the same REFUSED text reaches the MODEL;
-                                   you see this short notice)
-gh workflow run deploy.yml        jev · advised the model: triggers a
-                                   deployment workflow on GitHub Actions
-                                   (one line for you; the model gets the
-                                   full reason and decides)
-gh pr merge 812 --squash          jev · asks: client_always_asks requires
-                                   a person to decide (only because YOUR
-                                   OWN team policy names this — never the
-                                   risk judgement by itself)
+                                   you see this short, concrete notice)
+gh workflow run deploy.yml        jev · advised the model before `gh
+                                   workflow run deploy.yml`: triggers a
+                                   deploy (one line for you; the model gets
+                                   the full reason and decides)
+gh pr merge 812 --squash          jev · client_always_asks asks you to
+                                   decide: `gh pr merge 812 --squash`
+                                   (only because YOUR OWN team policy names
+                                   this — never the risk judgement alone)
 ```
 
 How often it stops a person depends entirely on what your agents do and
