@@ -147,14 +147,32 @@ function hasRedirection(segment: string): boolean {
  * unless a clean token follows, and `<(`/`>(` never leaves one), but this
  * ordering means that question never even has to be asked at call time.
  *
- * Safe against splitSegments' own naive split, too: `String.split` only
- * ever removes the separator text it matches (`&&`, `||`, `;`, `|`), never
- * any other character, so a substitution's opening token can never be torn
- * apart by a split -- it always survives intact inside whichever resulting
- * segment it started in, even when the substitution's own argument (e.g.
- * `$(a; b)`) contains one of those same separator characters.
+ * Safe against splitSegments' own split, too: a substitution's opening
+ * token can never be torn apart by it -- it always survives intact inside
+ * whichever resulting segment it started in, even when the substitution's
+ * own argument (e.g. `$(a; b)`) contains one of the same separator
+ * characters splitSegments itself splits on.
  */
 function isSafeSegment(segment: string): boolean {
+  // SECURITY HOTFIX (release-0.5.1-newline-bypass), review follow-up:
+  // splitSegments now delegates to git_discard.ts's own
+  // splitOnCommandSeparators, which is quote-aware -- an OPEN single or
+  // double quote that never closes (a stray apostrophe in a comment
+  // `ls # it's`, or a genuinely unterminated `"`) makes it believe every
+  // following character, including a REAL newline that starts a second,
+  // unrelated command, is still inside that quote, and so never splits
+  // there. The result is one merged "segment" whose own leading verb
+  // (SAFE_SEGMENT_PATTERNS has no trailing `$` anchor) would otherwise wave
+  // the rest -- including a real `rm -rf $HOME` on the next line -- straight
+  // through, reopening the exact class of bug this hotfix exists to close,
+  // just via a different vector than a missing newline split. A segment
+  // that still carries a raw `\r`/`\n` after splitting is proof the split
+  // could not be trusted here (a real tier-1a verb never legitimately spans
+  // a line; a literal embedded newline INSIDE a quoted argument, e.g.
+  // `echo "a\nb"`, simply falls through to the ordinary path instead of
+  // tier 1a, which the module note above already accepts as the safe
+  // direction), so it is refused before anything else is even checked.
+  if (/[\r\n]/.test(segment)) return false
   if (hasCommandSubstitution(segment)) return false
   if (hasRedirection(segment)) return false
   if (isSafeFindSegment(segment)) return true
@@ -208,5 +226,11 @@ export function mentionsRatherThanRuns(command: string): boolean {
   // Reuses the gate's own splitter rather than a second, drifting copy.
   const segments = splitSegments(command).map((segment) => segment.trim()).filter((s) => s.length > 0);
   if (segments.length === 0) return false;
-  return segments.every((segment) => MENTION_ONLY_VERBS.test(segment));
+  // SECURITY HOTFIX (release-0.5.1-newline-bypass), review follow-up: same
+  // reasoning as isSafeSegment's own `[\r\n]` guard above -- an unbalanced
+  // quote can make splitSegments merge a real, later command into the same
+  // "segment" as an earlier mention verb, with the newline that should have
+  // separated them still literally embedded in the text. A segment must
+  // never be called a mention while it still carries one.
+  return segments.every((segment) => !/[\r\n]/.test(segment) && MENTION_ONLY_VERBS.test(segment));
 }

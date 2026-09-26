@@ -555,6 +555,21 @@ test("does not qualify: a trailing ';' after the only segment", () => {
   assertDoesNotQualify("git branch -d feature/old ;");
 });
 
+// SECURITY HOTFIX (release-0.5.1-newline-bypass): splitOnCommandSeparatorsDetailed
+// (git_discard.ts, shared with this module) already treated a newline as a
+// joiner alongside `;`/`&&`/`|`/`&` -- this only locks that in as an explicit
+// regression test, since a newline-joined sequence must be rejected the same
+// way a `;`/`||`-joined one already is above (only "&&"/"; " qualify past the
+// first segment, never a newline).
+test("does not qualify: a newline joining two segments instead of '&&'/';'", () => {
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push -u origin feature/x\ngit push -u origin feature/y", cwd: NO_REPO_CWD }).qualifies, false);
+  assertDoesNotQualify("git push -u origin feature/x\ngit push -u origin feature/y");
+});
+
+test("does not qualify: a cd prefix joined to the push by a newline instead of '&&'", () => {
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd repo\ngit push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
+});
+
 // ---------------------------------------------------------------------------
 // An unexpanded shell variable or a glob in a guarded-delete/worktree
 // positional: its REAL value is unknown at gate time. `BRANCH='-D main'`

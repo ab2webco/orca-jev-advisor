@@ -8,7 +8,7 @@
 // which specific file or branch, only a coarse command *family* (`git
 // push`, `rm -rf`, `terraform`, ...) and which project it happened in.
 
-import { startsWithGitDiscard } from "./git_discard.ts";
+import { splitOnCommandSeparators, startsWithGitDiscard } from "./git_discard.ts";
 
 /**
  * `"none"` means the gate reached the point of asking Jev and got no answer
@@ -165,10 +165,34 @@ export function commandFamily(command: string): string {
   return programName(segments[0] ?? "");
 }
 
-/** Splits on the shell operators that chain commands, so each part can be classified on its own. */
+/**
+ * Splits on the shell operators that chain commands, so each part can be
+ * classified on its own.
+ *
+ * SECURITY HOTFIX (release-0.5.1-newline-bypass): this used to be a naive,
+ * quote-blind `command.split(/\|\||&&|[;|]/)` -- it never split on a
+ * newline or on a single background `&`, so a command like `ls\nrm -rf
+ * $HOME` or `ls & git push --force origin main` read as ONE segment whose
+ * own leading verb (SAFE_SEGMENT_PATTERNS/MENTION_ONLY_VERBS in
+ * gate_safe_command.ts have no trailing `$` anchor) silently waved the
+ * REST of the string through tier 1a (isObviouslySafeCommand) or the
+ * mention check (mentionsRatherThanRuns) -- before the NEVER_SILENTLY deny
+ * rules or Jev ever saw it, and with no gate-decision record at all.
+ *
+ * Now delegates to git_discard.ts's own `splitOnCommandSeparators` -- the
+ * SAME primitive someSegmentMatches (the deny tier's forcePush/
+ * pushProtected/resetClean two-level rules) already uses, and a sibling of
+ * the one discardsUncommittedWork uses (splitOutsideQuotes), so this side
+ * finally agrees with that one about what separates two commands, instead
+ * of two drifting implementations. It is quote/backtick/paren-aware (a
+ * separator INSIDE a quoted string is not a boundary) and already treats a
+ * newline and a lone `&` as separators exactly like `;`, while `&&` still
+ * joins as one unit and a redirection (`2>&1`, `>&2`, `&>file`, `&>>file`,
+ * `<&0`) is left alone -- see its own module note (the isRedirection
+ * helper) for exactly which `&`/`|` positions are exempt.
+ */
 export function splitSegments(command: string): string[] {
-  return command
-    .split(/\|\||&&|[;|]/)
+  return splitOnCommandSeparators(command)
     .map((part) => stripAssignments(part.trim()))
     .filter((part) => part.length > 0);
 }

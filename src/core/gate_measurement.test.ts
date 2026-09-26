@@ -9,7 +9,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { buildGateDecisionRecord, canonicalCommandFamily, commandFamily, parseGateDecisionRecords, serializeGateRecord } from "./gate_measurement.ts";
+import { buildGateDecisionRecord, canonicalCommandFamily, commandFamily, parseGateDecisionRecords, serializeGateRecord, splitSegments } from "./gate_measurement.ts";
 
 test("an env assignment never reaches the family name", () => {
   assert.equal(commandFamily("TOKEN=ghp_secret123 gh pr merge 812"), "gh cli");
@@ -344,4 +344,42 @@ test("a record written under the old reset/clean label reads as the same family"
   assert.equal(canonicalCommandFamily("git reset/clean"), "git discard");
   assert.equal(canonicalCommandFamily("git discard"), "git discard");
   assert.equal(canonicalCommandFamily("terraform"), "terraform");
+});
+
+// ---------------------------------------------------------------------------
+// SECURITY HOTFIX (release-0.5.1-newline-bypass): splitSegments used to be a
+// naive `command.split(/\|\||&&|[;|]/)` -- it never split on a newline or on
+// a single background `&`, so `ls\nrm -rf $HOME` read as ONE segment whose
+// own leading verb let gate_safe_command.ts's per-segment checks
+// (isObviouslySafeCommand, mentionsRatherThanRuns) wave the rest through
+// silently. It now delegates to git_discard.ts's own
+// splitOnCommandSeparators -- the SAME primitive the deny-tier side
+// (someSegmentMatches, discardsUncommittedWork) already used, so both sides
+// of the gate finally agree on what separates two commands.
+// ---------------------------------------------------------------------------
+
+test("splitSegments splits on a bare newline, exactly like `;`", () => {
+  assert.deepEqual(splitSegments("ls\npwd"), ["ls", "pwd"]);
+  assert.deepEqual(splitSegments("ls\r\npwd"), ["ls", "pwd"]);
+  assert.deepEqual(splitSegments("ls\nrm -rf $HOME"), ["ls", "rm -rf $HOME"]);
+});
+
+test("splitSegments splits on a lone `&`, exactly like `;`, but keeps `&&` as one joiner (still splits into two segments, never three)", () => {
+  assert.deepEqual(splitSegments("ls & pwd"), ["ls", "pwd"]);
+  assert.deepEqual(splitSegments("ls && pwd"), ["ls", "pwd"]);
+  assert.deepEqual(splitSegments("ls & git push --force origin main"), ["ls", "git push --force origin main"]);
+});
+
+test("splitSegments leaves a redirection's own `&`/`|` alone -- never mistaken for a separator", () => {
+  assert.deepEqual(splitSegments("git status 2>&1"), ["git status 2>&1"]);
+  assert.deepEqual(splitSegments("cmd >&2"), ["cmd >&2"]);
+  assert.deepEqual(splitSegments("cmd &>file"), ["cmd &>file"]);
+  assert.deepEqual(splitSegments("cmd &>>file"), ["cmd &>>file"]);
+  assert.deepEqual(splitSegments("cmd <&0"), ["cmd <&0"]);
+  assert.deepEqual(splitSegments("git status 2>&1 | tail -5"), ["git status 2>&1", "tail -5"]);
+});
+
+test("commandFamily still resolves the most dangerous part across a newline or a lone `&`, not just `;`/`&&`", () => {
+  assert.equal(commandFamily("ls\nrm -rf $HOME"), "rm -rf");
+  assert.equal(commandFamily("pwd & git push --force origin main"), "git push");
 });

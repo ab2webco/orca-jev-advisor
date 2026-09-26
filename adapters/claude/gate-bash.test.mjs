@@ -1399,3 +1399,110 @@ test('guarded git delete: a global requires_human command-scoped policy still bl
   assert.match(payload.systemMessage, /jev/i, 'must be the ordinary no-key notice, not this feature\'s own silent reason')
   assert.equal(gateLogRecords(home).length, 0, 'the no-key path writes no gate-decision record at all')
 })
+
+// ---------------------------------------------------------------------------
+// SECURITY HOTFIX (release-0.5.1-newline-bypass). Verified by the parent with
+// a probe calling the real functions: gate_measurement.ts's own splitSegments
+// split only on `&&`/`||`/`;`/`|`, with a naive, quote-blind regex -- never
+// on a newline or on a single background `&`. A compound command joined
+// either way read as ONE segment to gate_safe_command.ts's per-segment
+// checks, and that segment's own leading safe/mention verb (no trailing `$`
+// anchor on SAFE_SEGMENT_PATTERNS/MENTION_ONLY_VERBS) waved the REST of the
+// string through tier 1a (isObviouslySafeCommand) -- main() calls
+// passThrough() on that verdict BEFORE the NEVER_SILENTLY deny rules or Jev
+// ever run, and before any gate-decision record is written at all. Every
+// case below reached the real subprocess with NO API key configured, so a
+// non-'deny' result here can only mean the command passed through silently
+// (empty stdout) or reached the ordinary no-key allow path -- never a
+// legitimate Jev verdict.
+// ---------------------------------------------------------------------------
+
+test('newline bypass: ls then rm -rf $HOME is denied, not silently allowed', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'ls\nrm -rf $HOME'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('newline bypass: pwd then a force push to main is denied', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'pwd\ngit push --force origin main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('newline bypass: the real diff/discard sequence replayed from the owner\'s transcripts is denied', () => {
+  const home = makeHome()
+  const command = 'git diff --stat | head -12\ngit checkout -- package.json && echo restored\ngit diff --stat'
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('newline bypass: echo (a mention-only verb) then a force push is still denied, not waved through as a mention', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'echo x\ngit push --force origin main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('single-& bypass: ls then a force push to main is denied', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'ls & git push --force origin main'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('single-& bypass: true then rm -rf $HOME is denied', () => {
+  const home = makeHome()
+  const payload = JSON.parse(run(home, 'true & rm -rf $HOME'))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('newline-joined all-safe commands still stay silently allowed by tier 1a', () => {
+  const home = makeHome()
+  const stdout = run(home, 'ls\npwd')
+  assert.equal(stdout, '', 'an obviously-safe command must pass through with no verdict at all')
+})
+
+test('two newline-joined read-only git commands still stay silently allowed by tier 1a', () => {
+  const home = makeHome()
+  const stdout = run(home, 'git log --oneline -3\ngit status')
+  assert.equal(stdout, '')
+})
+
+test('a redirection-shaped & ahead of a pipe still stays silently allowed by tier 1a', () => {
+  const home = makeHome()
+  const stdout = run(home, 'git status 2>&1 | tail -5')
+  assert.equal(stdout, '')
+})
+
+test('a heredoc body that merely CONTAINS a dangerous phrase is still not denied (T8/T10 behaviour, unaffected by the splitter fix)', () => {
+  const home = makeHome()
+  const decision = decisionFor(home, "cat > notes.md <<'EOF'\ngit reset --hard\nEOF")
+  assert.notEqual(decision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// Review follow-up: the quote-aware splitter the newline-bypass fix now
+// relies on can itself be fooled by a stray, never-closed apostrophe (a
+// trailing comment, or a genuinely unterminated quote) -- it then believes
+// every following character, including the REAL newline that starts a
+// second, unrelated command, is still inside that open quote, and merges
+// both lines into one "segment". src/core/gate_safe_command.ts's own
+// `[\r\n]` guard (isSafeSegment / mentionsRatherThanRuns) closes this at the
+// tier-1a/mention layer; these two confirm the DENY tier still catches it
+// end to end regardless (rmRf's commandRule and forcePush's someSegmentMatches
+// fallback both already read the raw, unparseable text rather than trusting
+// a failed split). Built from parts, never typed as one literal dangerous
+// string.
+// ---------------------------------------------------------------------------
+
+test('stray-apostrophe bypass: a trailing comment with an apostrophe never swallows the next line\'s rm -rf $HOME', () => {
+  const home = makeHome()
+  const command = ["ls # it's", 'rm -rf $HOME'].join('\n')
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('stray-apostrophe bypass: a trailing comment with an apostrophe never swallows the next line\'s force push', () => {
+  const home = makeHome()
+  const command = ["echo # it's", 'git push --force origin main'].join('\n')
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
