@@ -13,9 +13,9 @@ import test from "node:test";
 
 import { gatePolicyFingerprint } from "./gate_policy_fingerprint.ts";
 import { filterPoliciesForCommandScope, filterPoliciesForDestination } from "./decisions.ts";
-import type { Policy } from "./decisions.ts";
+import type { Policy, PolicyScope } from "./decisions.ts";
 
-const NO_SEED_SCOPES = new Map();
+const NO_SEED_SCOPES = new Map<string, PolicyScope>();
 
 function fp(policies: readonly Policy[], consequenceCeiling?: number): string {
   return gatePolicyFingerprint({ policies, seedScopeById: NO_SEED_SCOPES, consequenceCeiling });

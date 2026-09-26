@@ -14,6 +14,7 @@ import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/den
 import { GATE_CONSEQUENCE_CEILING } from '../../src/core/decisions.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion } from '../../src/core/policy_seed.ts'
 import { decidePolicySeedNotice } from '../../src/core/policy_seed_notice.ts'
+import { getPolicies } from '../../src/core/store.ts'
 
 // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute a
 // real path at all under node's test runner unless an explicit override is
@@ -1000,6 +1001,25 @@ test('migrateLegacyPolicyKinds is idempotent: a second run over an already-migra
 
   assert.deepEqual(host._store.policies, afterFirst)
   assert.equal(setCalls, 0, 'a second, no-op migration must never write to storage again')
+})
+
+test('migrateLegacyPolicyKinds: what mirrorCatalogAndPolicies would actually mirror is English, not the stored legacy spelling', async () => {
+  // mirrorCatalogAndPolicies (this file) serializes getPolicies(storageHost)
+  // verbatim into policies.json -- it never spawns for a fake host (see this
+  // file's own noopMirror note), so this is the cheap, honest proxy for "is
+  // mirrored with English kinds": read back through the SAME function the
+  // real mirror call reads through, and check what IT would have written.
+  const orca = fakeOrca()
+  const host = fakeStorageHost({ policies: [
+    { id: 'p1', rule: 'permite rule', kind: 'permite' },
+    { id: 'p2', rule: 'prohibe rule', kind: 'prohibe' },
+    { id: 'p3', rule: 'pregunta rule', kind: 'pregunta' },
+  ] })
+
+  await migrateLegacyPolicyKinds(orca, host)
+  const mirrored = await getPolicies(host)
+
+  assert.deepEqual(mirrored.map((row) => row.kind), ['permits', 'prohibits', 'requires_human'])
 })
 
 test('migrateLegacyPolicyKinds: a storage that throws is survived rather than propagated', async () => {

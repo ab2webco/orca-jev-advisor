@@ -527,7 +527,7 @@ type CacheEntry = GateCacheEntry
  * the NEW rules would no longer silently allow -- an older entry now simply
  * misses instead of being trusted across a rule change it never saw.
  *
- * JEVADV-49.../JEVADV-48: the hashed material also carries
+ * JEVADV-48: the hashed material also carries
  * gatePolicyFingerprint's own fingerprint of `policies` (the same
  * destination/scope-filtered `commandScopedPolicies` askJev judges this
  * command against) and `consequenceCeiling` (the matched destination's own
