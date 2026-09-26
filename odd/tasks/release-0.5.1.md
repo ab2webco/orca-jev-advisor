@@ -196,12 +196,14 @@ touched.
 | Path | Branch | Purpose | Remove when |
 |---|---|---|---|
 | `../orca-supervisor-next` | `fabolivark/release-0.5.1-next` | First writer lane | Removed 2026-09-25 after merge |
-| `../orca-supervisor-lane-a` | `fabolivark/release-0.5.1-lane-a` | Writer lane A (JEVADV-37/38/39) | Merged: remove the worktree, delete the branch |
+| `../orca-supervisor-lane-a` | `fabolivark/release-0.5.1-lane-a` | Writer lane A (JEVADV-37/38/39) | Removed after merge |
 | `../orca-supervisor-lane-b` | `fabolivark/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-lane-c` | `fabolivark/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-review` | detached | Temporary native-review checkouts | Removed after each review |
+| `../orca-supervisor-lane-m` | `fabolivark/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | After merge |
+| `../orca-supervisor-lane-p` | `fabolivark/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | After merge |
 | `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
-| `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | When the scenario report is recorded |
+| `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | Removed after the scenario report was recorded |
 
 ## Delivery
 
