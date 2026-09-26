@@ -54,7 +54,7 @@
 //     worktree) when the refspec is omitted or `HEAD`.
 
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 
 import { hasCommandSubstitution } from "./command_shape.ts";
 import { isObviouslySafeCommand } from "./gate_safe_command.ts";
@@ -97,10 +97,42 @@ function isPlainBranchRefspec(ref: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref);
 }
 
-/** `cd`'s own segment: exactly two shell words, `cd` and a plain (non-flag) directory argument. Never resolved against the filesystem -- see the module note on why a `cd`-prefixed push requires an EXPLICIT refspec instead. */
-function parseCdSegment(segmentText: string): boolean {
+/**
+ * `cd`'s own segment: exactly two shell words, `cd` and a plain (non-flag)
+ * directory argument -- that argument itself, or `null` when the segment is
+ * not this exact shape.
+ */
+function parseCdSegment(segmentText: string): string | null {
   const tokens = tokenize(segmentText);
-  return tokens.length === 2 && tokens[0] === "cd" && (tokens[1] ?? "").length > 0 && !(tokens[1] ?? "").startsWith("-");
+  if (tokens.length !== 2 || tokens[0] !== "cd") return null;
+  const dir = tokens[1] ?? "";
+  return dir.length > 0 && !dir.startsWith("-") ? dir : null;
+}
+
+/**
+ * The leading `cd <dir> &&` prefix's own target directory, resolved against
+ * `cwd` exactly the way a shell resolves `cd`'s own argument: absolute as
+ * written, or joined onto `cwd` when relative -- never touching the
+ * filesystem itself. This never confirms `dirArg` IS a git worktree root:
+ * readCurrentBranch's own resolveGitDirForHead walks UP from whatever
+ * directory it is given looking for the nearest `.git`, the exact same
+ * tolerance `cwd` itself already gets with no `cd` prefix at all, so a `cd`
+ * into a non-repository subdirectory that merely sits inside a real
+ * worktree still resolves that worktree's branch (harmless: a real shell
+ * would already be running the push from inside that same worktree). Only a
+ * directory this walk cannot resolve to ANY git repository -- `cd
+ * /nonexistent && ...` -- ever fails closed, through readCurrentBranch
+ * returning `null`, never through a check of its own here.
+ *
+ * Real evidence, 2026-09-26: `cd /repo && git push` measured as NOT
+ * qualifying, because the current-branch resolution this module already
+ * does for a bare `git push` never accounted for a leading `cd` changing
+ * which directory that resolution should read from -- exactly the gap
+ * classifyPushSegment's own current-branch case now closes by resolving
+ * against THIS directory instead of `cwd` whenever a `cd` prefix is present.
+ */
+function resolveCdTargetDir(cwd: string, dirArg: string): string {
+  return isAbsolute(dirArg) ? dirArg : resolve(cwd, dirArg);
 }
 
 /**
@@ -157,15 +189,17 @@ function readCurrentBranch(cwd: string, readFile: (path: string) => string): str
  * function's own doc for the full command-level shape this composes into:
  * a single push segment, or one led by exactly `cd <dir> &&`).
  *
- * A `cd`-prefixed push must name its branch explicitly and never `HEAD`:
- * resolving the CURRENT branch would read it from the hook's own `cwd`, not
- * from the directory the push actually runs in, which is not a fact this
- * module can safely assume without also resolving where `cd`'s own argument
- * points (out of scope, per the task's own conservative framing). Without a
- * `cd` prefix, an omitted or explicit `HEAD` refspec resolves the CURRENT
- * branch from `cwd` itself, through resolveGitDirForHead/readCurrentBranch.
+ * An omitted or explicit `HEAD` refspec resolves the CURRENT branch through
+ * resolveGitDirForHead/readCurrentBranch, read from `branchResolutionCwd` --
+ * `cwd` itself with no `cd` prefix, or the leading `cd <dir> &&` prefix's OWN
+ * resolved target (resolveCdTargetDir) when one is present, so a
+ * `cd`-prefixed push's current branch is read from the directory the push
+ * actually runs in, never from the hook's own `cwd` (2026-09-26 fix -- see
+ * resolveCdTargetDir's own doc for the real command this closes). An
+ * explicit, non-`HEAD` refspec never needs any of this: the branch is right
+ * there in the command, `cd`-prefixed or not.
  */
-function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: boolean, readFile: (path: string) => string): string | null {
+function classifyPushSegment(segmentText: string, branchResolutionCwd: string, readFile: (path: string) => string): string | null {
   const positionals = parsePushSegment(segmentText);
   if (positionals === null) return null;
 
@@ -174,15 +208,11 @@ function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: 
   const refspecToken = positionals.length === 2 ? positionals[1] : undefined;
 
   let branch: string | null;
-  if (cdPrefixPresent) {
-    if (refspecToken === undefined || refspecToken === "HEAD") return null;
-    if (!isPlainBranchRefspec(refspecToken)) return null;
-    branch = refspecToken;
-  } else if (refspecToken !== undefined && refspecToken !== "HEAD") {
+  if (refspecToken !== undefined && refspecToken !== "HEAD") {
     if (!isPlainBranchRefspec(refspecToken)) return null;
     branch = refspecToken;
   } else {
-    branch = readCurrentBranch(cwd, readFile);
+    branch = readCurrentBranch(branchResolutionCwd, readFile);
     if (branch === null) return null;
   }
 
@@ -202,7 +232,11 @@ function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: 
 // because it is part of the SAME real-world sequence: adding a fresh
 // worktree right after removing an old one), or already tier-1a-safe on its
 // own (gate_safe_command.ts's isObviouslySafeCommand) -- joined by `&&` or
-// `;` (never `|`, a bare `&`, or a newline).
+// `;` (never a bare `&` or a newline), with one exception: a `|` IS accepted
+// between two real segments when everything after it is a downstream reader
+// already tier-1a-safe on its own (2026-09-26 fix -- see the output-plumbing
+// section further down this file), never a fresh push/delete action in its
+// own right.
 //
 // Real evidence, 2026-09-26: the owner had to confirm by hand
 //   `git worktree remove ../orca-supervisor-lane-m && git branch -d
@@ -328,6 +362,67 @@ function isCdShaped(segmentText: string): boolean {
   return tokenize(segmentText)[0] === "cd";
 }
 
+// ===========================================================================
+// Output plumbing acceptance (2026-09-26 fix, real evidence measured the
+// same day): a plain push or guarded delete/worktree segment almost always
+// arrives from a real agent wrapped in `2>&1`/`>&2`/a `/dev/null` discard, or
+// piped into a read-only summarizer (`| tail -2`) -- none of which can
+// change what the command ITSELF does, only where its own stderr/stdout end
+// up, or what merely READS them afterwards. The bare-form-only match before
+// this fix barely ever recognized either shape, sending almost every real
+// push through the ordinary (noisier) Jev path regardless of how plainly
+// safe it was.
+// ===========================================================================
+
+/**
+ * The exact redirection forms this module accepts, checked as a whole shell
+ * WORD -- via the same `tokenize` every other classifier here already uses,
+ * never a raw-string suffix match: `2>&1`, `>&2` (the reverse merge), and
+ * discarding stdout/stderr to `/dev/null` in each of its three spellings
+ * (`2>`, a bare `>`, or the combined `&>`). A redirect to anywhere else
+ * (`> out.txt`, `>> log`) is deliberately NOT in this set, so
+ * stripQualifyingRedirections' own leftover `<`/`>` check below catches it
+ * and disqualifies -- conservative on purpose, per the task's own framing.
+ *
+ * Checked as an EXACT token, not a suffix, because a suffix match on the raw
+ * text cannot tell a real redirection apart from one glued to a leading file
+ * descriptor digit that is NOT part of it: a real shell reads `1>&2` (no
+ * space) as ONE token -- redirect fd 1 to fd 2, nothing left over -- but a
+ * naive `/>&2$/` suffix strip on the raw string leaves the `1` behind as if
+ * it were a separate word. That stray `1` then read as a perfectly valid,
+ * unprotected explicit branch refspec (`isPlainBranchRefspec("1")` is true),
+ * which silently skipped the protected-branch check entirely for whatever
+ * branch the command REALLY pushes (measured: `git push origin 1>&2` on a
+ * repo checked out on `main` qualified as an explicit push to branch "1",
+ * even though the real command -- `git push origin`, since `1>&2` is pure
+ * redirection -- pushes `main` itself). Token-exact matching closes this:
+ * `1>&2` tokenizes to one word that is not `>&2`, so it is simply not in
+ * this set, and the segment disqualifies rather than partially parses.
+ */
+const SAFE_REDIRECTION_TOKENS: ReadonlySet<string> = new Set(["2>&1", ">&2", "2>/dev/null", ">/dev/null", "&>/dev/null"]);
+
+/**
+ * `segmentText` with every trailing safe redirection TOKEN (see
+ * SAFE_REDIRECTION_TOKENS above) removed, or `null` when any OTHER token
+ * carries a `<`/`>` -- a redirect this module does not positively recognise
+ * as safe must disqualify the whole segment, never silently pass through to
+ * the classifiers below (parsePushSegment, classifyBranchDeleteSegment, ...),
+ * which have no redirection vocabulary of their own and would otherwise
+ * misread it as a stray positional argument -- a fake remote name, a fake
+ * branch to delete.
+ */
+function stripQualifyingRedirections(segmentText: string): string | null {
+  const kept: string[] = [];
+  for (const token of tokenize(segmentText)) {
+    if (token.includes("<") || token.includes(">")) {
+      if (!SAFE_REDIRECTION_TOKENS.has(token)) return null;
+      continue;
+    }
+    kept.push(token);
+  }
+  return kept.join(" ");
+}
+
 export type LocalGitAllowReasonKind = "ownBranchPush" | "guardedGitDelete";
 
 export interface LocalGitAllowResult {
@@ -342,9 +437,13 @@ const DOES_NOT_QUALIFY: LocalGitAllowResult = { qualifies: false };
  * The general local-allow check: a plain own-branch push, one or more of
  * git's own guarded delete/worktree operations, or a mix of either with an
  * already tier-1a-safe command, optionally led by exactly one `cd <dir> &&`
- * -- see the module note above for the full shape and the real command this
- * generalizes from. Composes with (never replaces) gate-bash.ts's own deny
- * tier and destination-policy check.
+ * (current-branch resolution running against THAT directory, not `cwd`,
+ * when one is present -- 2026-09-26 fix) and optionally carrying the output
+ * plumbing real agents almost always add: `2>&1`/`>&2`/a `/dev/null`
+ * discard, or a pipe into a downstream reader already tier-1a-safe on its
+ * own -- see the module note above for the full shape and the real command
+ * this generalizes from. Composes with (never replaces) gate-bash.ts's own
+ * deny tier and destination-policy check.
  */
 export function qualifiesForLocalGitAllow(input: OwnBranchPushInput): LocalGitAllowResult {
   const { command, cwd } = input;
@@ -361,41 +460,55 @@ export function qualifiesForLocalGitAllow(input: OwnBranchPushInput): LocalGitAl
   if (trailing !== null) return DOES_NOT_QUALIFY;
 
   const firstSegment = segments[0] ?? "";
-  let cdPrefixPresent = false;
   let firstActionIndex = 0;
+  // `cwd` unless a leading `cd <dir> &&` resolves to a different directory --
+  // the directory every push segment's own omitted/`HEAD` refspec resolves
+  // its CURRENT branch from (classifyPushSegment), not just the first one.
+  let branchResolutionCwd = cwd;
   if (isCdShaped(firstSegment)) {
     // A `cd`-shaped FIRST segment is only ever handled here, as the
     // prefix -- never falls through to be judged an ordinary action segment
     // (which would let it slip in via isObviouslySafeCommand's own,
     // position-blind "bare cd is safe" rule and bypass the "&&"-only,
     // "at most one" constraints below).
-    if (segments.length < 2 || !parseCdSegment(firstSegment) || joiners[1] !== "&&") return DOES_NOT_QUALIFY;
-    cdPrefixPresent = true;
+    const cdDir = parseCdSegment(firstSegment);
+    if (segments.length < 2 || cdDir === null || joiners[1] !== "&&") return DOES_NOT_QUALIFY;
+    branchResolutionCwd = resolveCdTargetDir(cwd, cdDir);
     firstActionIndex = 1;
-  }
-
-  for (let i = firstActionIndex + 1; i < segments.length; i += 1) {
-    if (joiners[i] !== "&&" && joiners[i] !== ";") return DOES_NOT_QUALIFY;
   }
 
   let sawPush = false;
   let sawGuardedDelete = false;
   for (let i = firstActionIndex; i < segments.length; i += 1) {
-    const segmentText = segments[i] ?? "";
-    // A `cd` anywhere other than the already-consumed leading prefix is
-    // never a valid action segment -- see isCdShaped's own doc comment.
-    if (isCdShaped(segmentText)) return DOES_NOT_QUALIFY;
+    const joiner = i === firstActionIndex ? null : joiners[i];
+    if (joiner !== null && joiner !== "&&" && joiner !== ";" && joiner !== "|") return DOES_NOT_QUALIFY;
 
-    const isFirstActionSegment = i === firstActionIndex;
-    if (classifyPushSegment(segmentText, cwd, isFirstActionSegment && cdPrefixPresent, readFile) !== null) {
+    const cleaned = stripQualifyingRedirections(segments[i] ?? "");
+    if (cleaned === null) return DOES_NOT_QUALIFY;
+
+    // A `cd` anywhere other than the already-consumed leading prefix is
+    // never a valid action segment, piped-to or not -- see isCdShaped's own
+    // doc comment.
+    if (isCdShaped(cleaned)) return DOES_NOT_QUALIFY;
+
+    if (joiner === "|") {
+      // Downstream of a pipe: never a fresh action in its own right, only
+      // ever accepted when it is already tier-1a-safe -- a read-only reader
+      // (`tail`, `head`, `grep`, `cat`, `sed -n`, `jq`, ...), reusing
+      // gate_safe_command.ts's own list rather than a second one.
+      if (!isObviouslySafeCommand(cleaned)) return DOES_NOT_QUALIFY;
+      continue;
+    }
+
+    if (classifyPushSegment(cleaned, branchResolutionCwd, readFile) !== null) {
       sawPush = true;
       continue;
     }
-    if (classifyBranchDeleteSegment(segmentText) || classifyWorktreeRemoveSegment(segmentText) || classifyWorktreePruneSegment(segmentText) || classifyWorktreeAddSegment(segmentText)) {
+    if (classifyBranchDeleteSegment(cleaned) || classifyWorktreeRemoveSegment(cleaned) || classifyWorktreePruneSegment(cleaned) || classifyWorktreeAddSegment(cleaned)) {
       sawGuardedDelete = true;
       continue;
     }
-    if (isObviouslySafeCommand(segmentText)) continue;
+    if (isObviouslySafeCommand(cleaned)) continue;
     return DOES_NOT_QUALIFY;
   }
 

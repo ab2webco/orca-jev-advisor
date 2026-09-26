@@ -7,12 +7,14 @@
 //
 // Cases that only need an EXPLICIT, non-HEAD refspec never touch a real
 // repository at all (the branch name is right there in the command). Cases
-// that resolve the CURRENT branch (an omitted or explicit `HEAD` refspec,
-// with no `cd` prefix) use a real temp git repository, same discipline as
-// this project's other git-reading modules (linked_worktree.test.ts,
-// push_remote.test.ts): the whole point is reading exactly what git itself
-// writes to `.git/HEAD`, so a fake filesystem would only prove this module
-// agrees with its own assumptions.
+// that resolve the CURRENT branch (an omitted or explicit `HEAD` refspec) use
+// a real temp git repository, same discipline as this project's other
+// git-reading modules (linked_worktree.test.ts, push_remote.test.ts): the
+// whole point is reading exactly what git itself writes to `.git/HEAD`, so a
+// fake filesystem would only prove this module agrees with its own
+// assumptions. A leading `cd <dir> &&` (2026-09-26 fix) resolves that same
+// CURRENT branch from `<dir>` instead of `cwd` -- see the cd-prefix section
+// further down, which needs a real repository too.
 //
 // Run with: node --test src/core/push_own_branch.test.ts
 
@@ -224,11 +226,11 @@ test("does not qualify: a stray leading separator before the first segment", () 
 // Does not qualify: the cd-prefix's own constraints.
 // ---------------------------------------------------------------------------
 
-test("does not qualify: cd prefix with an omitted refspec -- must not resolve HEAD from the wrong directory", () => {
+test("does not qualify: cd prefix with an omitted refspec -- the cd TARGET itself does not resolve to a real git worktree here", () => {
   assert.equal(qualifiesForLocalGitAllow({ command: "cd repo && git push origin", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
-test("does not qualify: cd prefix with an explicit HEAD refspec -- HEAD would still resolve from cwd, not from the cd target", () => {
+test("does not qualify: cd prefix with an explicit HEAD refspec -- HEAD now resolves from the cd TARGET (2026-09-26 fix), which does not exist here either", () => {
   assert.equal(qualifiesForLocalGitAllow({ command: "cd repo && git push origin HEAD", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
@@ -243,6 +245,163 @@ test("does not qualify: cd joined by '||'", () => {
 test("does not qualify: a 'cd' segment with flags or more than one argument", () => {
   assert.equal(qualifiesForLocalGitAllow({ command: "cd -L repo && git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
   assert.equal(qualifiesForLocalGitAllow({ command: "cd repo extra && git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
+});
+
+// ---------------------------------------------------------------------------
+// Qualifies: the cd-prefix's own constraints, extended (2026-09-26 fix) --
+// current-branch resolution now runs against the cd TARGET, absolute or
+// relative to cwd, instead of never resolving at all for an omitted/HEAD
+// refspec. Still refuses whenever that target cannot be resolved to a real
+// git worktree.
+// ---------------------------------------------------------------------------
+
+test("qualifies: cd <absolute-dir> && git push -- resolves the current branch from the cd TARGET, not cwd", () => {
+  const repo = repoOnBranch("push-own-branch-cd-absolute-", "feature/x");
+  assertQualifies(`cd ${repo} && git push`, NO_REPO_CWD, "ownBranchPush");
+});
+
+test("qualifies: cd <relative-dir> && git push -- the relative dir resolves against cwd", () => {
+  const parent = makeTempRoot("push-own-branch-cd-relative-");
+  const repo = join(parent, "repo");
+  initRepo(repo);
+  git(["checkout", "-q", "-b", "feature/x"], repo);
+  assertQualifies("cd repo && git push", parent, "ownBranchPush");
+});
+
+test("does not qualify: cd <dir> && git push while the cd TARGET is on main", () => {
+  const repo = join(makeTempRoot("push-own-branch-cd-main-"), "repo");
+  initRepo(repo);
+  git(["branch", "-M", "main"], repo);
+  assertDoesNotQualify(`cd ${repo} && git push`, NO_REPO_CWD);
+});
+
+test("does not qualify: cd /nonexistent && git push -- a cd target that cannot be resolved to a git worktree at all", () => {
+  assertDoesNotQualify("cd /nonexistent-cd-target-does-not-exist-anywhere && git push", NO_REPO_CWD);
+});
+
+// ---------------------------------------------------------------------------
+// Qualifies: output plumbing that cannot change what the command itself
+// does (2026-09-26 fix) -- a redirect that only discards or merges a
+// stream, or a pipe into a downstream reader gate_safe_command.ts's own
+// isObviouslySafeCommand already treats as safe. Real evidence, 2026-09-26:
+// real agents almost always add one of these, and the bare-form-only match
+// before this fix barely ever recognized either shape.
+// ---------------------------------------------------------------------------
+
+test("qualifies: git push 2>&1 -- stderr merged into stdout", () => {
+  const repo = repoOnBranch("push-own-branch-redirect-2and1-", "feature/x");
+  assertQualifies("git push 2>&1", repo, "ownBranchPush");
+});
+
+test("qualifies: git push | tail -2 -- piped into an already-safe reader", () => {
+  const repo = repoOnBranch("push-own-branch-pipe-tail-", "feature/x");
+  assertQualifies("git push | tail -2", repo, "ownBranchPush");
+});
+
+test("qualifies: cd <dir> && git push 2>&1 | tail -2 -- cd, a redirect and a pipe together", () => {
+  const repo = repoOnBranch("push-own-branch-cd-redirect-pipe-", "feature/x");
+  assertQualifies(`cd ${repo} && git push 2>&1 | tail -2`, NO_REPO_CWD, "ownBranchPush");
+});
+
+test("qualifies: git push -u origin feature/x 2>&1 | tail -3 -- explicit refspec, no repository needed", () => {
+  assertQualifies("git push -u origin feature/x 2>&1 | tail -3", NO_REPO_CWD, "ownBranchPush");
+});
+
+test("qualifies: git push >&2 -- the reverse merge, stdout into stderr", () => {
+  const repo = repoOnBranch("push-own-branch-redirect-gt-and2-", "feature/x");
+  assertQualifies("git push >&2", repo, "ownBranchPush");
+});
+
+test("qualifies: git push 2>/dev/null -- discarding stderr", () => {
+  const repo = repoOnBranch("push-own-branch-redirect-2devnull-", "feature/x");
+  assertQualifies("git push 2>/dev/null", repo, "ownBranchPush");
+});
+
+test("qualifies: git push >/dev/null -- discarding stdout", () => {
+  const repo = repoOnBranch("push-own-branch-redirect-devnull-", "feature/x");
+  assertQualifies("git push >/dev/null", repo, "ownBranchPush");
+});
+
+test("qualifies: git push &>/dev/null -- discarding both combined", () => {
+  const repo = repoOnBranch("push-own-branch-redirect-combined-devnull-", "feature/x");
+  assertQualifies("git push &>/dev/null", repo, "ownBranchPush");
+});
+
+test("qualifies: git worktree remove p 2>&1 -- the redirection acceptance applies to guarded deletes too", () => {
+  assertQualifies("git worktree remove p 2>&1", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: git branch -d x 2>&1 | tail -1 -- a guarded delete, redirected and piped", () => {
+  assertQualifies("git branch -d x 2>&1 | tail -1", undefined, "guardedGitDelete");
+});
+
+test("does not qualify: git push > out.txt -- a redirect to anywhere other than /dev/null stays conservative", () => {
+  assertDoesNotQualify("git push > out.txt");
+});
+
+test("does not qualify: git push >> log -- the append form is not one of the accepted discard/merge forms", () => {
+  assertDoesNotQualify("git push >> log");
+});
+
+test("does not qualify: git push --force origin feature/x 2>&1 | tail -1 -- force still disqualifies through plumbing", () => {
+  assertDoesNotQualify("git push --force origin feature/x 2>&1 | tail -1");
+});
+
+test("does not qualify: git push -u origin main 2>&1 | tail -3 -- an explicit protected branch still disqualifies through plumbing", () => {
+  assertDoesNotQualify("git push -u origin main 2>&1 | tail -3");
+});
+
+// A fd digit glued directly to a redirection operator (`1>&2`, no space) is
+// NOT one of the five accepted forms -- it must disqualify the WHOLE
+// segment, never have only the `>&2` half stripped away and the leading `1`
+// left behind to be misread as an explicit (unprotected-looking) branch
+// refspec. Measured bug: a naive `$`-anchored suffix strip on the raw text
+// turned `git push origin 1>&2` into `git push origin 1`, which then
+// qualified as an explicit push to branch "1" -- silently skipping the
+// protected-branch check entirely for whatever branch this REALLY pushes
+// (the shell reads `1>&2` as a redirection, not an argument, so the real
+// command is `git push origin`, which pushes the CURRENT branch -- main
+// included).
+test("does not qualify: git push origin 1>&2 -- an fd-prefixed redirection must not leave a fake branch-name token behind", () => {
+  assertDoesNotQualify("git push origin 1>&2");
+});
+
+test("does not qualify: git push origin 1>&2 while ON main -- the exact shape that would otherwise silently bypass protected-branch detection", () => {
+  const repo = join(makeTempRoot("push-own-branch-fd-digit-main-"), "repo");
+  initRepo(repo);
+  git(["branch", "-M", "main"], repo);
+  assertDoesNotQualify("git push origin 1>&2", repo);
+});
+
+test("does not qualify: git push 2>&1 | sh -- sh is not a read-only reader", () => {
+  const repo = repoOnBranch("push-own-branch-pipe-sh-", "feature/x");
+  assertDoesNotQualify("git push 2>&1 | sh", repo);
+});
+
+test("does not qualify: git push | tee file -- tee WRITES, it does not merely read", () => {
+  const repo = repoOnBranch("push-own-branch-pipe-tee-", "feature/x");
+  assertDoesNotQualify("git push | tee file", repo);
+});
+
+test("does not qualify: git push 2>&1 while ON main", () => {
+  const repo = join(makeTempRoot("push-own-branch-redirect-main-"), "repo");
+  initRepo(repo);
+  git(["branch", "-M", "main"], repo);
+  assertDoesNotQualify("git push 2>&1", repo);
+});
+
+test("does not qualify: git push | tail -2 while ON main", () => {
+  const repo = join(makeTempRoot("push-own-branch-pipe-main-"), "repo");
+  initRepo(repo);
+  git(["branch", "-M", "main"], repo);
+  assertDoesNotQualify("git push | tail -2", repo);
+});
+
+test("does not qualify: cd <dir> && git push 2>&1 | tail -2 while the cd TARGET is on main", () => {
+  const repo = join(makeTempRoot("push-own-branch-cd-redirect-pipe-main-"), "repo");
+  initRepo(repo);
+  git(["branch", "-M", "main"], repo);
+  assertDoesNotQualify(`cd ${repo} && git push 2>&1 | tail -2`, NO_REPO_CWD);
 });
 
 // ---------------------------------------------------------------------------
