@@ -1998,3 +1998,63 @@ test("the replay's own B38 shape: a routine commit on main under never_write_to_
   const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-b38' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'no human is asked for a policy that names nobody to ask')
 })
+
+// ---------------------------------------------------------------------------
+// Follow-up: the retry pass is checked BEFORE any Jev call, even for an
+// uncacheable command shape, so a retry never spends a wasted network round
+// trip -- while a requires_human/prohibits outcome (never written to the
+// retry state at all) is never bypassed by it.
+// ---------------------------------------------------------------------------
+
+// A command substitution makes commandShape() return null (see
+// src/core/command_shape.ts's hasCommandSubstitution guard, reused by
+// gate_safe_command.ts and this file's own cacheKey()) -- "uncacheable" in
+// exactly the sense the task means: no shape, so no verdict-cache entry is
+// ever consulted or written for it, and the ONLY way a retry can pass at all
+// is the pre-Jev retry-state check this follow-up adds.
+const UNCACHEABLE_COMMAND = 'some-unmeasured-tool-with-sub $(echo x)'
+
+function writeAdviceRetryStateEntry (home, sessionId, command, at) {
+  const path = adviceRetryStatePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({ [adviceRetryKey(sessionId, command)]: at }))
+}
+
+test('an identical retry for an UNCACHEABLE command makes no Jev call at all -- proven by no API key ever being resolved', () => {
+  const home = makeHome()
+  const sessionId = 'session-uncacheable-retry'
+  // Simulates exactly what a genuine advice would have written moments
+  // earlier: a fresh retry-state entry for (sessionId, UNCACHEABLE_COMMAND).
+  writeAdviceRetryStateEntry(home, sessionId, UNCACHEABLE_COMMAND, Date.now())
+
+  // Deliberately NO apiKey at all: if the retry pass fires before the
+  // apiKey/no-key-notice machinery, this must never touch it -- proven by
+  // the no-key-warned marker never being written, which only ever happens
+  // once main() actually reaches that check.
+  const payload = JSON.parse(run(home, UNCACHEABLE_COMMAND, { sessionId }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(existsSync(noKeyWarnedPath(home)), false, 'the retry pass must fire before the no-key path is ever reached -- proof no Jev call was attempted')
+  assert.equal(existsSync(verdictCachePath(home)), false, 'an uncacheable command must never touch the shape cache either')
+
+  const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
+  assert.equal(record.verdict, 'allow')
+  assert.equal(record.stopReason, 'advice-retry')
+})
+
+test('a command whose first outcome was a policy ask (never an advice) gets no retry-pass -- the same session, same command, stays ask', () => {
+  const home = makeHome()
+  const command = 'some-policy-scoped-retry-command --flag'
+  const sessionId = 'session-policy-no-retry'
+  const key = expectedCacheKey(command, home, home)
+  // A policy 'ask' cache entry is never advice-eligible: recordAdviceIssued
+  // is only ever called from resolveAdviceOutcome, which a policy ask never
+  // reaches (see decideGateAction's own policyId-gated 'ask' branch).
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'a person needs to decide: client_always_asks', at: Date.now() })
+
+  const first = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId }))
+  assert.equal(first.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(existsSync(adviceRetryStatePath(home)), false, 'a policy ask must never write a retry-pass entry')
+
+  const second = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId }))
+  assert.equal(second.hookSpecificOutput.permissionDecision, 'ask', 'no retry pass exists, so the identical retry stays a human ask, never allow')
+})

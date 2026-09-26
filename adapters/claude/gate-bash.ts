@@ -759,12 +759,45 @@ function emitAdvice(effect: string, modelText: string): void {
 }
 
 /**
+ * Whether an identical retry pass fires for (sessionId, command), and if so,
+ * emits it: a truthful, silent 'allow' (recorded stopReason 'advice-retry'),
+ * never a fresh Jev call and never a fresh advice composition. Returns
+ * whether it fired, so a caller that checked this BEFORE calling Jev at all
+ * (main()'s own early check, below) knows to stop right there, and
+ * resolveAdviceOutcome (which every advice path still funnels through) can
+ * reuse the exact same check for the paths that reach it with no earlier
+ * chance to ask -- a local rule's own advice, and a cache-hit replay of a
+ * previously-cached 'advise' entry.
+ *
+ * `source` records what WOULD have been asked, had the pass not fired --
+ * 'jev' for the risk-stage/deploy-floor/cache-hit paths, 'local-rule' for a
+ * local rule's own toggled-off/interpreter-code advice.
+ */
+function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null): boolean {
+  if (!checkAdviceRetryPass(sessionId, command)) return false
+  appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null)
+  // No visible systemMessage: emit() only shows one for a non-'allow'
+  // decision, and a truthful, silent 'allow' is exactly right here -- the
+  // person already saw the advice line once, on the original occurrence.
+  emit('allow', 'Jev: identical retry within the advice window; proceeding.')
+  return true
+}
+
+/**
  * The single choke point every advice path (the risk stage, fresh or
  * replayed from the shape cache; a local rule whose deny-tier switch is
  * off; an interpreter-code-only local-rule match) resolves through: the
  * retry pass is checked FIRST, so an identical retry always passes
  * regardless of which path produced the ORIGINAL advice, and only a fresh
  * (non-retry) occurrence ever composes and shows the advice text.
+ *
+ * By the time either of THIS function's own callers reaches it, main()'s own
+ * early check (tryAdviceRetryPass, called before any Jev call -- see below)
+ * has already run and found no pass; this call is therefore never redundant
+ * with it -- it covers the two paths that never go anywhere NEAR that early
+ * check at all: a local rule's own advice (decided before Jev is even
+ * considered) and a cache-hit replay of a previously-cached 'advise' entry
+ * (which also never calls Jev).
  */
 function resolveAdviceOutcome(input: {
   readonly command: string
@@ -777,14 +810,7 @@ function resolveAdviceOutcome(input: {
   readonly latencyMs?: number | null
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, source, stopReason } = input
-  if (checkAdviceRetryPass(sessionId, command)) {
-    appendGateRecord(cwd, command, source, 'allow', input.latencyMs ?? null, 'advice-retry', null)
-    // No visible systemMessage: emit() only shows one for a non-'allow'
-    // decision, and a truthful, silent 'allow' is exactly right here -- the
-    // person already saw the advice line once, on the original occurrence.
-    emit('allow', 'Jev: identical retry within the advice window; proceeding.')
-    return
-  }
+  if (tryAdviceRetryPass(command, cwd, sessionId, source, input.latencyMs ?? null)) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible)
   appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null)
@@ -1500,6 +1526,19 @@ async function main(): Promise<void> {
     emit('allow', t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush'))
     return
   }
+
+  // The advise-model release: local rules and Option D's own policy-stage
+  // authority have both already had their say above -- NEITHER stopped this
+  // command, and neither ever writes a retry-pass entry (recordAdviceIssued
+  // is only ever called from an advice path). So a fresh entry here can only
+  // mean one thing: this exact command, in this exact session, already
+  // received a genuine advice within the window -- never a policy ask or a
+  // hard stop, which never reach this state at all. Checked BEFORE resolving
+  // an API key, before any cache read, and before any Jev call, so a retry
+  // costs neither a wasted network round trip nor even the no-key notice
+  // machinery below -- true for an uncacheable command shape exactly as much
+  // as a cacheable one.
+  if (tryAdviceRetryPass(command, cwd, sessionId, 'jev')) return
 
   const apiKey = await resolveApiKey()
   const previouslyWarnedNoKey = readNoKeyWarned()
