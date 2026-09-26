@@ -21,6 +21,7 @@ import { after, test } from 'node:test'
 
 import { commandShape } from '../../src/core/command_shape.ts'
 import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
+import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCRIPT_PATH = join(__dirname, 'gate-bash.ts')
@@ -86,21 +87,35 @@ function verdictCachePath (home) {
  *  from `cwd` under `home`, given the destination match (or lack of one)
  *  gate-bash.ts itself would resolve. Mirrors cacheKey() in gate-bash.ts
  *  exactly, including the GATE_DECISION_RULES_VERSION prefix (JEVADV-35,
- *  review-3ca73b9da09b0927 R3/R4) -- a drift between this helper and that
- *  private function would show up as every "honoured" test below silently
- *  falling through to a cache MISS instead of failing on a key mismatch. */
-function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean' } = {}) {
+ *  review-3ca73b9da09b0927 R3/R4) and the JEVADV-48 policy fingerprint -- a
+ *  drift between this helper and that private function would show up as
+ *  every "honoured" test below silently falling through to a cache MISS
+ *  instead of failing on a key mismatch.
+ *
+ *  `policies`/`seedScopeById`/`consequenceCeiling` default to the shape
+ *  every pre-JEVADV-48 test in this file exercises: no policies mirror file
+ *  present at all, so gate-bash.ts's own readPoliciesMirror() (and, after
+ *  destination/scope filtering, commandScopedPolicies) resolves to `[]`. */
+function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean', policies = [], seedScopeById = new Map(), consequenceCeiling } = {}) {
   const shape = commandShape(command, { cwd, home, destinationId, treeRoot, repoContext })
   if (shape === null) throw new Error('test command must have a non-null shape to exercise the cache path')
-  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}`).digest('hex').slice(0, 24)
+  const fingerprint = gatePolicyFingerprint({ policies, seedScopeById, consequenceCeiling })
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}`).digest('hex').slice(0, 24)
 }
 
-/** No catalog mirror present (destinationId/treeRoot null) and `cwd` outside
- *  any git repository (repoContext resolves to this fixed, branch-less
- *  string) -- the shape every existing cache test in this file exercises. */
+/** No catalog mirror present (destinationId/treeRoot null), no policies
+ *  mirror present (policies stay `[]`) and `cwd` outside any git repository
+ *  (repoContext resolves to this fixed, branch-less string) -- the shape
+ *  every existing cache test in this file exercises. */
 function expectedCacheKey (command, cwd, home) {
   return computeCacheKey(command, cwd, home)
 }
+
+// writePoliciesMirror (writes `<home>/.config/orca-supervisor/policies.json`,
+// the same mirror gate-bash.ts's readPoliciesMirror() reads -- see
+// POLICIES_MIRROR_PATH in gate-bash.ts) is defined further down in this
+// file, next to the own-branch-push policy tests that introduced it; reused
+// here as-is rather than duplicated.
 
 test('no API key: the first command passes through with a one-time notice', () => {
   const home = makeHome()
@@ -225,6 +240,159 @@ test('JEVADV-29: the cache key for a command with a secret-shaped value is still
   const payload = JSON.parse(stdout)
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
   assert.match(payload.systemMessage, /unredacted cache key test/)
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-48 -- the verdict cache key must fold in a fingerprint of the
+// policies that would apply to this command (src/core/gate_policy_
+// fingerprint.ts's own unit tests cover the fingerprint formula itself in
+// isolation; these prove gate-bash.ts's real, private cacheKey() actually
+// WIRES it in, and honours/misses exactly where it should).
+//
+// None of these tests ever reach Jev over the network: src/core/jev.ts
+// hardcodes its endpoint with no injectable override for a test to redirect
+// (checked before writing these), so there is no way to prove "a cache miss
+// reaches the Jev path" by actually letting it call out -- doing so would
+// either hang on a sandboxed network with no egress, or genuinely call a
+// real production endpoint with a fake key, which is exactly what this
+// file's own header note says this suite never does. Instead, a MISS is
+// proven the same indirect way this file's existing GATE_DECISION_RULES_
+// VERSION test already does: by showing gate-bash.ts's real cacheKey(), for
+// two known inputs, produces the same two keys expectedCacheKey/
+// computeCacheKey (this file's own mirror of that formula) would -- so a
+// key that differs between "no policy" and "a covering policy exists" MUST
+// miss in the real hook exactly where it would miss in this mirror.
+// ---------------------------------------------------------------------------
+
+test('JEVADV-48: the cache key for a command differs once a covering requires_human policy exists, and is honoured once it does', () => {
+  const home = makeHome()
+  const cwd = home
+  const covering = { id: 'jevadv48-covering-policy', rule: 'anything matching this shape needs a human', kind: 'requires_human' }
+
+  // The formula-level proof: a key computed with no policies must never
+  // equal one computed with this policy present -- if it did, the real
+  // hook (which computes cacheKey() the same way) would keep honouring a
+  // verdict cached before the policy existed.
+  const keyWithoutPolicy = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
+  const keyWithPolicy = computeCacheKey(MIDDLE_TIER_COMMAND, cwd, home, { policies: [covering] })
+  assert.notEqual(keyWithPolicy, keyWithoutPolicy,
+    'a fingerprint that ignores the covering policy would let a stale allow keep replaying after the policy was added')
+
+  // The end-to-end proof that the real (private) cacheKey() computes
+  // EXACTLY keyWithPolicy once this policy is really in the mirror gate-
+  // bash.ts reads: pre-populate the cache under keyWithPolicy, write the
+  // policy to the real POLICIES_MIRROR_PATH, and confirm a run against it
+  // is a genuine cache HIT -- which only happens if gate-bash.ts's own
+  // cacheKey() landed on this same key for this same input.
+  writePoliciesMirror(home, [covering])
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [keyWithPolicy]: { decision: 'ask', reason: 'covered by the requires_human policy', at: Date.now() - 1000 },
+  }))
+  const stdout = run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.systemMessage, /covered by the requires_human policy/)
+
+  // Chained with the notEqual assertion above: a cache entry written under
+  // keyWithoutPolicy (what gate-bash.ts would have computed and cached
+  // BEFORE this policy existed) is provably a different key from
+  // keyWithPolicy (what it computes and honours NOW, proven above) -- so
+  // that stale entry cannot be served once the policy exists. This is the
+  // exact incident (a policy added on 2026-09-26 not taking effect) this
+  // task closes.
+})
+
+test('JEVADV-48: a changed kind on an otherwise-identical policy changes the cache key', () => {
+  const home = makeHome()
+  const cwd = home
+  const permits = { id: 'jevadv48-kind-change', rule: 'same rule text throughout', kind: 'permits' }
+  const requiresHuman = { id: 'jevadv48-kind-change', rule: 'same rule text throughout', kind: 'requires_human' }
+  assert.notEqual(
+    computeCacheKey(MIDDLE_TIER_COMMAND, cwd, home, { policies: [permits] }),
+    computeCacheKey(MIDDLE_TIER_COMMAND, cwd, home, { policies: [requiresHuman] }),
+  )
+})
+
+test('JEVADV-48: changed rule text on an otherwise-identical policy changes the cache key', () => {
+  const home = makeHome()
+  const cwd = home
+  const before = { id: 'jevadv48-rule-change', rule: 'the original rule text', kind: 'prohibits' }
+  const after = { id: 'jevadv48-rule-change', rule: 'an edited rule text', kind: 'prohibits' }
+  assert.notEqual(
+    computeCacheKey(MIDDLE_TIER_COMMAND, cwd, home, { policies: [before] }),
+    computeCacheKey(MIDDLE_TIER_COMMAND, cwd, home, { policies: [after] }),
+  )
+})
+
+test('JEVADV-48: unchanged policies produce the same cache key, and a stale cached verdict is still honoured', () => {
+  const home = makeHome()
+  const cwd = home
+  const policy = { id: 'jevadv48-unchanged', rule: 'this rule never changes', kind: 'requires_human' }
+  writePoliciesMirror(home, [policy])
+  const key = computeCacheKey(MIDDLE_TIER_COMMAND, cwd, home, { policies: [policy] })
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  // 'ask', not 'allow': emit() only ever writes a systemMessage for a
+  // non-'allow' decision (an 'allow' is noise on every ordinary command --
+  // see emit()'s own doc), so this is how every other cache-hit test in
+  // this file makes the hit observable in stdout at all.
+  writeFileSync(cachePath, JSON.stringify({
+    [key]: { decision: 'ask', reason: 'unchanged policy still hits the cache', at: Date.now() - 1000 },
+  }))
+
+  const stdout = run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.systemMessage, /unchanged policy still hits the cache/)
+})
+
+test('JEVADV-48: a policy scoped to a DIFFERENT destination never changes the cache key -- still a hit', () => {
+  const home = makeHome()
+  const cwd = home
+  // No catalog.json is written, so gate-bash.ts never matches a destination
+  // (destinationId stays null) -- filterPoliciesForDestination excludes
+  // every destination-scoped policy in exactly that case (decisions.ts's
+  // own doc: "an id it can't confirm it is inside of must never apply by
+  // default"), so this policy never reaches commandScopedPolicies at all.
+  const scopedElsewhere = { id: 'jevadv48-other-destination', rule: 'only applies to another destination', kind: 'prohibits', destinations: ['some-other-destination-id'] }
+  writePoliciesMirror(home, [scopedElsewhere])
+
+  const key = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [key]: { decision: 'ask', reason: 'destination-filtered policy never touches this key', at: Date.now() - 1000 },
+  }))
+
+  const stdout = run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.systemMessage, /destination-filtered policy never touches this key/)
+})
+
+test('JEVADV-48: a policy scoped to "process" (not "command") never changes the cache key -- still a hit', () => {
+  const home = makeHome()
+  const cwd = home
+  // filterPoliciesForCommandScope excludes every policy that resolves to
+  // "process" or "local-rule" (decisions.ts) -- a claim about the whole
+  // workflow, never a single command's text -- so this one never reaches
+  // commandScopedPolicies either.
+  const processScoped = { id: 'jevadv48-process-scope', rule: 'a claim about the whole workflow, not one command', kind: 'requires_human', scope: 'process' }
+  writePoliciesMirror(home, [processScoped])
+
+  const key = expectedCacheKey(MIDDLE_TIER_COMMAND, cwd, home)
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [key]: { decision: 'ask', reason: 'process-scoped policy never touches this key', at: Date.now() - 1000 },
+  }))
+
+  const stdout = run(home, MIDDLE_TIER_COMMAND, { cwd, apiKey: 'test-key-unused-on-cache-hit' })
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.systemMessage, /process-scoped policy never touches this key/)
 })
 
 // ---------------------------------------------------------------------------
@@ -1262,13 +1430,20 @@ test('own-branch push: a global requires_human command-scoped policy still block
 test('own-branch push: a requires_human policy still "asks" -- observed literally, not just inferred from the no-key notice', () => {
   const home = makeHome()
   const cwd = home
-  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
+  const policy = { id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }
+  writePoliciesMirror(home, [policy])
   // Pre-populate the verdict cache with a literal 'ask' for this exact
   // shape. If (and only if) the policy correctly blocked the local-allow
   // shortcut, the command reaches the cache section and this entry is
   // honoured verbatim -- a direct, unambiguous observation of "still asks",
   // rather than inferring it from the ordinary no-key notice.
-  const key = expectedCacheKey('git push -u origin feature/x', cwd, home)
+  //
+  // JEVADV-48: the cache key now folds in a fingerprint of the policies
+  // that survive destination/scope filtering (see cacheKey in gate-bash.ts)
+  // -- this policy is command-scoped and global, so it survives and must be
+  // passed here too, or this pre-populated entry would sit under a key the
+  // real hook never looks up (a cache MISS reaching for the real network).
+  const key = computeCacheKey('git push -u origin feature/x', cwd, home, { policies: [policy] })
   const cachePath = verdictCachePath(home)
   mkdirSync(dirname(cachePath), { recursive: true })
   writeFileSync(cachePath, JSON.stringify({

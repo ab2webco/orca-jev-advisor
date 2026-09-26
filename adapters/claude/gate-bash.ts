@@ -67,6 +67,7 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
 import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
+import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
@@ -525,10 +526,26 @@ type CacheEntry = GateCacheEntry
  * MARGIN's introduction) keeps replaying after the upgrade, for a command
  * the NEW rules would no longer silently allow -- an older entry now simply
  * misses instead of being trusted across a rule change it never saw.
+ *
+ * JEVADV-49.../JEVADV-48: the hashed material also carries
+ * gatePolicyFingerprint's own fingerprint of `policies` (the same
+ * destination/scope-filtered `commandScopedPolicies` askJev judges this
+ * command against) and `consequenceCeiling` (the matched destination's own
+ * autonomy override, when it has one). Without this, an `allow` cached
+ * before a team added a `requires_human`/`prohibits` policy that covers
+ * this exact command kept being served from the cache for up to
+ * gate_cache.ts's own GATE_CACHE_TTL_MS (30 days) after the policy was
+ * added -- verified on the owner's own machine, 2026-09-26. Unchanged
+ * policies (including one filtered out for this destination or command
+ * scope, or one whose stored `kind` merely got migrated from its legacy
+ * Spanish spelling to English) fingerprint identically, so this never
+ * costs a hit it didn't have to.
  */
-function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null): string | null {
+function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null, policies: readonly Policy[], consequenceCeiling: number | undefined): string | null {
   const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
-  return shape === null ? null : createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}`).digest('hex').slice(0, 24)
+  if (shape === null) return null
+  const fingerprint = gatePolicyFingerprint({ policies, seedScopeById: SEED_SCOPE_BY_ID, consequenceCeiling })
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}`).digest('hex').slice(0, 24)
 }
 
 /**
@@ -1221,7 +1238,11 @@ async function main(): Promise<void> {
   // path audit already fixed once, for a different cause.
   // catalogMatch/matchedDestination were already resolved above, before the
   // own-branch-push check -- reused here rather than read a second time.
-  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null)
+  // commandScopedPolicies (resolved further above, same destination/scope
+  // filtering askJev's own path applies) and the matched destination's own
+  // ceiling override are what JEVADV-48 folds into the key -- see cacheKey's
+  // own doc.
+  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null, commandScopedPolicies, matchedDestination?.autonomy?.consequenceCeiling)
   const cache = key === null ? {} : readCache()
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
