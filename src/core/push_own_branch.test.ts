@@ -23,7 +23,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { qualifiesForOwnBranchPush } from "./push_own_branch.ts";
+import { qualifiesForLocalGitAllow, qualifiesForOwnBranchPush } from "./push_own_branch.ts";
 
 const TEMP_ROOTS: string[] = [];
 function makeTempRoot(prefix: string): string {
@@ -260,4 +260,116 @@ test("injected readFile: an ordinary checkout's HEAD is read straight through", 
   initRepo(root);
   assert.equal(qualifiesForOwnBranchPush({ command: "git push", cwd: root, readFile }), true);
   assert.ok(reads.some((p) => p.endsWith("HEAD")), "the injected reader must actually be consulted for HEAD");
+});
+
+// ===========================================================================
+// qualifiesForLocalGitAllow -- the guarded-deletes extension. Real evidence,
+// 2026-09-26: the owner had to confirm by hand
+//   `git worktree remove ../orca-supervisor-lane-m && git branch -d
+//   fabolivark/release-0.5.1-lane-m && git worktree add -q -b <new>
+//   ../lane-s 9ebb862`
+// -- Jev's reason was "no automatic way to undo it", but none of it can
+// actually lose work: `git worktree remove` without `--force` already
+// refuses a worktree with uncommitted/untracked changes, and
+// `git branch -d` already refuses an unmerged branch.
+// ===========================================================================
+
+function assertQualifies(command: string, cwd: string | undefined, expectedReasonKind: "ownBranchPush" | "guardedGitDelete"): void {
+  const result = qualifiesForLocalGitAllow({ command, cwd: cwd ?? NO_REPO_CWD });
+  assert.equal(result.qualifies, true, `expected "${command}" to qualify`);
+  assert.equal(result.reasonKind, expectedReasonKind);
+}
+
+function assertDoesNotQualify(command: string, cwd?: string): void {
+  const result = qualifiesForLocalGitAllow({ command, cwd: cwd ?? NO_REPO_CWD });
+  assert.equal(result.qualifies, false, `expected "${command}" NOT to qualify`);
+}
+
+test("qualifiesForLocalGitAllow: a plain git branch -d qualifies as a guarded delete", () => {
+  assertQualifies("git branch -d feature/old", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: --delete is the same flag as -d", () => {
+  assertQualifies("git branch --delete feature/old", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: branch -d accepts more than one name", () => {
+  assertQualifies("git branch -d feature/old feature/older", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git branch -D (force-delete, skips the merged check)", () => {
+  assertDoesNotQualify("git branch -D feature/old");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git branch -d -f (force alongside -d)", () => {
+  assertDoesNotQualify("git branch -d -f feature/old");
+});
+
+test("qualifiesForLocalGitAllow: a plain git worktree remove qualifies", () => {
+  assertQualifies("git worktree remove ../some-worktree", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git worktree remove --force", () => {
+  assertDoesNotQualify("git worktree remove --force ../some-worktree");
+});
+
+test("qualifiesForLocalGitAllow: git worktree prune with no arguments qualifies", () => {
+  assertQualifies("git worktree prune", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git worktree prune with an extra argument", () => {
+  assertDoesNotQualify("git worktree prune --verbose");
+});
+
+test("qualifiesForLocalGitAllow: git worktree add with -q and -b <name> qualifies", () => {
+  assertQualifies("git worktree add -q -b new-branch ../new-worktree", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git worktree add -B (force-resets an existing branch)", () => {
+  assertDoesNotQualify("git worktree add -B new-branch ../new-worktree");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git worktree add --force", () => {
+  assertDoesNotQualify("git worktree add --force ../new-worktree");
+});
+
+test("qualifiesForLocalGitAllow: the owner's own real three-segment sequence qualifies as a guarded delete", () => {
+  assertQualifies(
+    "git worktree remove ../orca-supervisor-lane-m && git branch -d fabolivark/release-0.5.1-lane-m && git worktree add -q -b release-0.5.1-lane-s ../lane-s 9ebb862",
+    undefined,
+    "guardedGitDelete",
+  );
+});
+
+test("qualifiesForLocalGitAllow: segments may be joined by ';' too, not only '&&'", () => {
+  assertQualifies("git worktree remove ../a ; git worktree prune", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- git branch -d x && rm -rf build", () => {
+  assertDoesNotQualify("git branch -d feature/old && rm -rf build");
+});
+
+test("qualifiesForLocalGitAllow: does NOT qualify -- a cd appearing mid-sequence, not as the leading prefix", () => {
+  assertDoesNotQualify("git worktree remove ../a && cd elsewhere && git branch -d feature/old");
+});
+
+test("qualifiesForLocalGitAllow: a mix of push and guarded delete qualifies, with the delete reason winning", () => {
+  assertQualifies("git push -u origin feature/x && git branch -d feature/old", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: a mix of push and an already tier-1a-safe segment qualifies, with the push reason", () => {
+  assertQualifies("git push -u origin feature/x && git status", undefined, "ownBranchPush");
+});
+
+test("qualifiesForLocalGitAllow: cd prefix before a guarded delete needs no branch resolution -- it does not touch cwd at all", () => {
+  assertQualifies("cd repo && git worktree prune", undefined, "guardedGitDelete");
+});
+
+test("qualifiesForLocalGitAllow: a requires_human policy is not this module's concern -- gate-bash.ts checks that itself before ever calling in", () => {
+  // Documented here rather than asserted: qualifiesForLocalGitAllow has no
+  // knowledge of destination policies at all (see gate-bash.ts's own
+  // hasBlockingCommandPolicy check, tested end-to-end in
+  // adapters/claude/gate-bash.test.mjs). This module always answers the
+  // same way regardless of what policies are configured.
+  assertQualifies("git branch -d feature/old", undefined, "guardedGitDelete");
 });

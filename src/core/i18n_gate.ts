@@ -32,7 +32,8 @@ export type GateKey =
   | "reason.needsCleanupAfter"
   | "reason.tooCloseToTheLine"
   | "reason.noDestinationMatched"
-  | "reason.ownBranchPush";
+  | "reason.ownBranchPush"
+  | "reason.guardedGitDelete";
 
 export const GATE_CATALOG: Catalog<GateKey> = {
   es: {
@@ -67,6 +68,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.tooCloseToTheLine": "quedó justo en el límite, así que prefiere confirmarlo contigo antes que dejarlo pasar solo",
     "reason.noDestinationMatched": "este directorio no corresponde a ningún destino del catálogo, así que se usaron los umbrales globales",
     "reason.ownBranchPush": "sube tu propia rama, sin force y sin tocar ramas compartidas",
+    "reason.guardedGitDelete": "solo usa borrados que git mismo protege: se niega si hay trabajo sin guardar o sin integrar",
   },
   en: {
     "rule.forcePush": "force push: rewrites the remote — anyone who already pulled breaks",
@@ -107,5 +109,6 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.tooCloseToTheLine": "right at the limit, so it checks with you instead of letting it through on its own",
     "reason.noDestinationMatched": "this directory doesn't match any catalog destination, so the global thresholds were used",
     "reason.ownBranchPush": "pushes your own branch, with no force and no shared branch",
+    "reason.guardedGitDelete": "only uses deletes git itself guards: it refuses when there is unsaved or unmerged work",
   },
 };

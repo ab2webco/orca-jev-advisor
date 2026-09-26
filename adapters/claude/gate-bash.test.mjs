@@ -1045,15 +1045,18 @@ function gateLogRecords (home) {
 }
 
 const OWN_BRANCH_PUSH_REASON_TEXT = 'pushes your own branch, with no force and no shared branch'
+const GUARDED_GIT_DELETE_REASON_TEXT = 'only uses deletes git itself guards: it refuses when there is unsaved or unmerged work'
 
 /** Runs `command` with no API key and asserts it was allowed by THIS
  *  stage specifically -- not by the ordinary no-key fallback, which would
- *  never carry this reason text or write this log shape. */
-function assertAllowedByOwnBranchPush (home, command, cwd) {
+ *  never carry this reason text or write this log shape. `reasonText`
+ *  defaults to the own-branch-push reason; pass GUARDED_GIT_DELETE_REASON_TEXT
+ *  for a guarded git-delete/worktree sequence. */
+function assertAllowedByOwnBranchPush (home, command, cwd, reasonText = OWN_BRANCH_PUSH_REASON_TEXT) {
   const stdout = run(home, command, { cwd })
   const payload = JSON.parse(stdout)
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
-  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, OWN_BRANCH_PUSH_REASON_TEXT)
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, reasonText)
   assert.equal(payload.systemMessage, undefined, 'an allow is never announced with a systemMessage')
   const records = gateLogRecords(home)
   assert.equal(records.length, 1)
@@ -1256,4 +1259,80 @@ test('own-branch push: a pre-existing cached "ask" for this exact shape does not
 
   const persistedCache = JSON.parse(readFileSync(cachePath, 'utf8'))
   assert.ok(Object.hasOwn(persistedCache, key), 'the stale entry is left on disk untouched -- this stage never reads or writes the cache at all')
+})
+
+// ---------------------------------------------------------------------------
+// Guarded git deletes -- the own-branch-push shortcut's follow-up. Same
+// treatment: the deny tier and any destination policy run first, unchanged;
+// only then does a qualifying sequence of git's own GUARDED destructive-
+// looking operations skip Jev and allow locally. Real evidence, 2026-09-26:
+// the owner had to confirm by hand
+//   `git worktree remove ../orca-supervisor-lane-m && git branch -d
+//   fabolivark/release-0.5.1-lane-m && git worktree add -q -b <new>
+//   ../lane-s 9ebb862`
+// -- Jev's own reason was "no automatic way to undo it", but none of it can
+// actually lose work: `git worktree remove` without `--force` already
+// refuses a worktree carrying uncommitted/untracked changes, and
+// `git branch -d` (lowercase) already refuses an unmerged branch.
+// ---------------------------------------------------------------------------
+
+test('guarded git delete: a plain git branch -d is allowed with no Jev call', () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'git branch -d feature/old', home, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test('guarded git delete: a plain git worktree remove is allowed with no Jev call', () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'git worktree remove ../some-worktree', home, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test('guarded git delete: git worktree prune with no arguments is allowed with no Jev call', () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'git worktree prune', home, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test('guarded git delete: git worktree add (no --force/-B) is allowed with no Jev call', () => {
+  const home = makeHome()
+  assertAllowedByOwnBranchPush(home, 'git worktree add -q -b new-branch ../new-worktree', home, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test("guarded git delete: the owner's own real three-segment sequence is allowed with no Jev call", () => {
+  const home = makeHome()
+  const command = 'git worktree remove ../orca-supervisor-lane-m && git branch -d fabolivark/release-0.5.1-lane-m && git worktree add -q -b release-0.5.1-lane-s ../lane-s 9ebb862'
+  assertAllowedByOwnBranchPush(home, command, home, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test('guarded git delete: git branch -D is NOT allowed by the new path -- force-delete skips the merged check', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git branch -D feature/old')
+})
+
+test('guarded git delete: git branch -d -f is NOT allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git branch -d -f feature/old')
+})
+
+test('guarded git delete: git worktree remove --force is NOT allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git worktree remove --force ../some-worktree')
+})
+
+test('guarded git delete: git worktree add -B is NOT allowed by the new path -- force-resets an existing branch', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git worktree add -B new-branch ../new-worktree')
+})
+
+test('guarded git delete: git branch -d x && rm -rf build is NOT allowed by the new path', () => {
+  const home = makeHome()
+  assertNotAllowedByOwnBranchPush(home, 'git branch -d feature/old && rm -rf build')
+})
+
+test('guarded git delete: a global requires_human command-scoped policy still blocks the shortcut, falling through to the ordinary path', () => {
+  const home = makeHome()
+  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
+  const stdout = run(home, 'git branch -d feature/old')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'fails open on no key, same as any other command')
+  assert.match(payload.systemMessage, /jev/i, 'must be the ordinary no-key notice, not this feature\'s own silent reason')
+  assert.equal(gateLogRecords(home).length, 0, 'the no-key path writes no gate-decision record at all')
 })

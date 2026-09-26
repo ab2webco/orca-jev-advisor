@@ -74,7 +74,7 @@ import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
 import { matchDestinationForCwd } from '../../src/core/linked_worktree.ts'
 import { PROTECTED_BRANCH_NAMES } from '../../src/core/push_remote.ts'
-import { qualifiesForOwnBranchPush } from '../../src/core/push_own_branch.ts'
+import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -1126,11 +1126,15 @@ async function main(): Promise<void> {
   const policiesMirror = readPoliciesMirror()
   const commandScopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
 
-  // Own-branch-push local allow (odd/tasks/release-0.5.1-push-own-branch.md):
-  // a plain, non-force push of the agent's own, non-shared branch cannot
-  // destroy anything, so it never needs Jev's judgment -- but only once
-  // everything above (the deny tier) AND everything a destination policy
-  // could still say about it have both had their say.
+  // Own-branch-push / guarded-git-delete local allow
+  // (odd/tasks/release-0.5.1-push-own-branch.md): a plain, non-force push of
+  // the agent's own non-shared branch, or one of git's own GUARDED
+  // delete/worktree operations (a plain `git branch -d`, `git worktree
+  // remove` with no `--force`, `git worktree prune`, or `git worktree add`
+  // with no `--force`/`-B`), cannot destroy anything on its own, so it never
+  // needs Jev's judgment -- but only once everything above (the deny tier)
+  // AND everything a destination policy could still say about it have both
+  // had their say.
   //
   // A policy can only make the gate MORE careful (decisions.ts's own
   // decideGateAction composes it this way too): a `permits` match can never
@@ -1148,9 +1152,10 @@ async function main(): Promise<void> {
     const kind = migratePolicyKind(policy.kind)
     return kind === 'requires_human' || kind === 'prohibits'
   })
-  if (!mentionOnly && !hasBlockingCommandPolicy && qualifiesForOwnBranchPush({ command, cwd })) {
+  const localGitAllow = mentionOnly || hasBlockingCommandPolicy ? { qualifies: false as const } : qualifiesForLocalGitAllow({ command, cwd })
+  if (localGitAllow.qualifies) {
     appendGateRecord(cwd, command, 'local-rule', 'allow', null, 'local-allow', null)
-    emit('allow', t('reason.ownBranchPush'))
+    emit('allow', t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush'))
     return
   }
 
