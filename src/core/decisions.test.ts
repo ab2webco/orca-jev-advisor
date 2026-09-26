@@ -424,7 +424,7 @@ test("decideGateAction: a permits policy leaves an already-safe command alone", 
   assert.equal(decideGateAction({ action: ACTION, policies: [permits], answers: safe }).verdict, "allow");
 });
 
-test("decideGateAction: a prohibits policy match turns what would otherwise be a safe allow into ask", () => {
+test("decideGateAction: a prohibits policy match turns what would otherwise be a safe allow into a hard stop -- deny, never a human ask", () => {
   const prohibits: Policy = { id: "rule", rule: "a forbidding rule", kind: "prohibits" };
   const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
 
@@ -432,7 +432,7 @@ test("decideGateAction: a prohibits policy match turns what would otherwise be a
   assert.equal(withoutPolicy.verdict, "allow");
 
   const withPolicy = decideGateAction({ action: ACTION, policies: [prohibits], answers: safe });
-  assert.equal(withPolicy.verdict, "ask");
+  assert.equal(withPolicy.verdict, "deny", "a prohibits match is unambiguous destruction of policy, per the decision doc: nobody is interrupted, the model is refused");
   assert.deepEqual(withPolicy.reasons, [{ key: "policy.forbidden", params: { policyId: "rule", rule: prohibits.rule } }]);
 });
 
@@ -548,13 +548,26 @@ test("decideGateAction: localAllowQualifies still asks when a policy resolves to
   assert.equal(result.policyId, "client_always_asks");
 });
 
-test("decideGateAction: localAllowQualifies still asks when a policy resolves to prohibits (the gate's own 2-way verdict, same as without localAllowQualifies)", () => {
+test("decideGateAction: localAllowQualifies still hard-stops when a policy resolves to prohibits, same as without localAllowQualifies -- Option D never softens a real prohibition", () => {
   const policies: Policy[] = [{ id: "never_write_to_main", rule: "Never write directly on main.", kind: "prohibits" }];
   const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
 
   const result = decideGateAction({ action: ACTION, policies, answers: covered, localAllowQualifies: true });
-  assert.equal(result.verdict, "ask");
+  assert.equal(result.verdict, "deny");
   assert.equal(result.policyId, "never_write_to_main");
+});
+
+// The replay case (matrix.jsonl, scenario B38): a routine own-branch commit
+// while covered by never_write_to_main (a prohibits policy) must deny, not ask
+// -- the exact scenario the live 151-scenario replay caught as a miss before
+// this fix (a human was asked for a policy that names nobody to ask).
+test("decideGateAction: a commit covered by never_write_to_main denies -- the replay's own B38 shape", () => {
+  const neverWriteToMain: Policy = { id: "never_write_to_main", rule: "Never write directly on main or develop, not even a one-line fix.", kind: "prohibits" };
+  const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.95, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const result = decideGateAction({ action: "git add + git commit on main", policies: [neverWriteToMain], answers: covered });
+  assert.equal(result.verdict, "deny");
+  assert.equal(result.policyId, "never_write_to_main");
+  assert.deepEqual(result.reasons, [{ key: "policy.forbidden", params: { policyId: "never_write_to_main", rule: neverWriteToMain.rule } }]);
 });
 
 test("decideGateAction: localAllowQualifies with no policies configured at all still allows regardless of risk", () => {

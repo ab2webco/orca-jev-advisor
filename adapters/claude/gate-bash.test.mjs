@@ -23,6 +23,8 @@ import { commandShape } from '../../src/core/command_shape.ts'
 import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey } from '../../src/core/gate_advice_retry.ts'
+import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
+import { translate } from '../../src/core/i18n.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const SCRIPT_PATH = join(__dirname, 'gate-bash.ts')
@@ -1944,4 +1946,55 @@ test('a deploy command that Jev would silently allow is floored into an advice n
 
   const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
   assert.equal(record.verdict, 'advise')
+})
+
+// ---------------------------------------------------------------------------
+// Follow-up: a `prohibits` policy match is a HARD STOP addressed to the
+// model -- the decision doc's own table, never a human ask. `requires_human`
+// stays a human ask, unchanged.
+// ---------------------------------------------------------------------------
+
+test("i18n_gate.ts's policyDeny catalog key: REFUSED-style, names the policy id and rule, identical in both locales, no retry clause", () => {
+  const params = { policyId: 'never_write_to_main', rule: 'Never write directly on main.' }
+  const en = translate(GATE_CATALOG, 'en', 'policyDeny', params)
+  const es = translate(GATE_CATALOG, 'es', 'policyDeny', params)
+  assert.equal(en, es, 'model-facing text stays English regardless of the developer locale, exactly like localRuleDeny')
+  assert.match(en, /^REFUSED:/)
+  assert.match(en, /never_write_to_main/)
+  assert.match(en, /Never write directly on main\./)
+  assert.doesNotMatch(en, /run the same command again/, 'a hard stop is not an advice and carries no retry clause')
+})
+
+test('a prohibits policy match denies with the policy text, REFUSED-style, addressed to the model -- never a human ask', () => {
+  const home = makeHome()
+  const command = 'git add . && git commit -m "routine change"'
+  const key = expectedCacheKey(command, home, home)
+  // Simulates what gate-bash.ts itself would cache for a fresh prohibits
+  // hard stop: decision 'deny', reason the REFUSED-style, policy-naming
+  // English text (i18n_gate.ts's own policyDeny key).
+  writeVerdictCacheEntry(home, key, {
+    decision: 'deny',
+    reason: "REFUSED: forbidden by the team policy never_write_to_main (Never write directly on main or develop, not even a one-line fix.). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    at: Date.now(),
+  })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-prohibits' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.match(reason, /REFUSED/)
+  assert.match(reason, /never_write_to_main/)
+  assert.match(reason, /Never write directly on main or develop/)
+  assert.doesNotMatch(reason, /run the same command again unchanged and it will go through/, 'a hard stop carries no retry clause -- it is not an advice')
+})
+
+test("the replay's own B38 shape: a routine commit on main under never_write_to_main denies, not asks", () => {
+  const home = makeHome()
+  const command = 'git add test/userdata.test.mjs && git commit -q -m "docs: update header"'
+  const key = expectedCacheKey(command, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'deny',
+    reason: 'REFUSED: forbidden by the team policy never_write_to_main (Never write directly on main or develop, not even a one-line fix.). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.',
+    at: Date.now(),
+  })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-b38' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'no human is asked for a policy that names nobody to ask')
 })

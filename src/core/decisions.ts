@@ -463,7 +463,14 @@ export function decideDestination(input: DecideDestinationInput): DestinationDec
 // Family 2: decideAction -- the command gate's three axes
 // ===========================================================================
 
-export type GateVerdict = "allow" | "ask";
+/**
+ * `"deny"` (added for the prohibits-hard-stop fix): decideAction itself
+ * (the risk stage) never produces it -- only decideGateAction's own policy
+ * branch does, for a `prohibits` match. Widened here rather than kept a
+ * separate type because GateActionResult.verdict (below) reuses this same
+ * type, and decideAction's own three-axis logic is otherwise untouched.
+ */
+export type GateVerdict = "allow" | "ask" | "deny";
 
 export interface GateDecision {
   readonly verdict: GateVerdict;
@@ -854,17 +861,23 @@ export interface DecideGateActionInput {
  * actual decision order:
  *
  *   1. A matching `permits` policy allows.
- *   2. A matching `prohibits` or `requires_human` policy asks -- the gate
- *      itself is only 2-way (allow/ask), so both 3-way DestinationOutcomes
- *      (`do_not`, `ask`) collapse onto the same `ask` verdict here.
+ *   2. A matching `prohibits` policy DENIES -- a hard stop addressed to the
+ *      model, exactly like a NEVER_SILENTLY local rule, never a human ask:
+ *      the decision doc's own table is explicit that a policy the team
+ *      wrote to forbid something names no person to ask, so nobody is
+ *      interrupted. A matching `requires_human` policy still asks a
+ *      person -- that IS what the policy names. The gate's own
+ *      DestinationOutcome (`do_not` | `ask`) maps 1:1 onto `deny` | `ask`
+ *      here, no longer collapsed onto one shared verdict.
  *   3. No policy resolves it (none configured, or none matched strongly
  *      enough) -> fall through to decideAction's consequence-ceiling rule,
  *      which keeps its own fail-open guarantee completely intact.
  *
- * A policy match can move the verdict in EITHER direction relative to what
- * the risk rule alone would have said: `permits` can turn a would-be `ask`
- * into `allow`, and `prohibits`/`requires_human` can turn a would-be `allow`
- * into `ask`. Nothing else overrides the risk rule's outcome.
+ * A policy match can move the verdict in ANY direction relative to what the
+ * risk rule alone would have said: `permits` can turn a would-be `ask` into
+ * `allow`; `requires_human` can turn a would-be `allow` into `ask`;
+ * `prohibits` can turn a would-be `allow` OR `ask` into `deny`. Nothing else
+ * overrides the risk rule's outcome.
  */
 export function decideGateAction(input: DecideGateActionInput): GateActionResult {
   if (input.policies.length > 0) {
@@ -879,16 +892,20 @@ export function decideGateAction(input: DecideGateActionInput): GateActionResult
     // waved through by a policy about reading code and running tests, at a
     // coverage confidence of 1.00.
     //
-    // A wrong stop costs a prompt. A wrong pass is how something
-    // irreversible happens. So `prohibits` and `requires_human` are honoured,
-    // because they only ever add caution, and `permits` falls through to the
-    // risk rule instead of short-circuiting it. Nothing is lost in practice:
-    // the commands a policy would permit are cheap ones the risk rule already
+    // A wrong stop costs a prompt (or, for `prohibits`, a refusal the model
+    // reads and works around). A wrong pass is how something irreversible
+    // happens. So `prohibits` and `requires_human` are both honoured --
+    // they only ever add caution -- and `permits` falls through to the risk
+    // rule instead of short-circuiting it. Nothing is lost in practice: the
+    // commands a policy would permit are cheap ones the risk rule already
     // allows on its own.
     if (policyDecision !== null && policyDecision.outcome !== "act") {
       // A policy settled it, so the risk stage never ran and there are no
-      // scores to record against this stop.
-      return { verdict: "ask", reasons: policyDecision.rationale, axes: null, policyId: policyDecision.policyId };
+      // scores to record against this stop. `do_not` (prohibits) denies
+      // outright -- see this function's own doc for why that is a hard
+      // stop, never a human ask; `ask` (requires_human) still asks a person.
+      const verdict: GateVerdict = policyDecision.outcome === "do_not" ? "deny" : "ask";
+      return { verdict, reasons: policyDecision.rationale, axes: null, policyId: policyDecision.policyId };
     }
   }
 

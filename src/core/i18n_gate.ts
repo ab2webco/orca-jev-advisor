@@ -17,6 +17,7 @@ export type GateKey =
   | "verb.asks"
   | "localRule"
   | "localRuleDeny"
+  | "policyDeny"
   | "cached"
   | "statusLine"
   | "advisedLine"
@@ -53,6 +54,11 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // Deliberately identical to the English entry: this string is read by the
     // model, not by a person. See the note on the English one.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    // A `prohibits` team policy match: the same REFUSED wording pattern as
+    // localRuleDeny above, naming the policy instead of a local rule -- also
+    // deliberately identical in both catalogs (model-facing, never a person).
+    // No retry clause: this is a hard stop, not an advice.
+    policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cacheado",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     // The advise-model release: nobody is interrupted here -- the model was
@@ -98,6 +104,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // model that only learns "this was blocked" tends to try the same effect
     // by another route, which is the outcome the rule exists to prevent.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     cached: "{{reason}} · cached",
     statusLine: "jev · {{verb}}: {{reason}} · {{ms}}ms",
     advisedLine: "jev · advised the model: {{effect}}",

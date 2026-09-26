@@ -66,7 +66,7 @@ import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
-import type { GateActionReason, Policy, PolicyScope } from '../../src/core/decisions.ts'
+import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
 import { composeAdviceText } from '../../src/core/gate_advice_text.ts'
@@ -234,6 +234,23 @@ function resolveGateActionReasonEnglish(reason: GateActionReason): string {
     return translateReason(DESTINATION_CATALOG, 'en', { key: reason.key, params: reason.params })
   }
   return translateReason(GATE_CATALOG, 'en', { key: reason.key as GateKey, params: reason.params })
+}
+
+/**
+ * The REFUSED-style, model-facing message for a `prohibits` policy's own
+ * hard stop -- decideGateAction's `verdict: 'deny'` with a non-null
+ * `policyId`. Same wording pattern as localRuleDeny (see i18n_gate.ts's own
+ * `policyDeny` key): the model is told plainly it cannot run this and must
+ * not route around it, naming the policy and its rule rather than a local
+ * rule's own catalog description. `gate.reasons` always carries exactly the
+ * one `policy.forbidden` rationale entry for this case (see
+ * interpretDestinationPolicy in decisions.ts); a missing `rule` param
+ * (never happens in practice) falls back to the empty string rather than
+ * throwing -- this text must never be the reason a stop fails to emit.
+ */
+function policyDenyReasonEnglish(gate: GateActionResult): string {
+  const rule = gate.reasons.find((r) => r.key === 'policy.forbidden')?.params?.rule ?? ''
+  return tEnglish('policyDeny', { policyId: gate.policyId ?? '', rule })
 }
 
 type Decision = 'allow' | 'deny' | 'ask'
@@ -1259,9 +1276,16 @@ async function askJev(apiKey: string, command: string, context: string, cwd: str
     // null) IS the risk stage's own ask -- viaLocalAllow already implies
     // 'allow', so the two conditions never overlap.
     const isRiskAdvice = gate.verdict === 'ask' && gate.policyId === null
+    // A `prohibits` policy match: decideGateAction's own hard stop
+    // (verdict 'deny', policyId non-null -- the risk stage never produces
+    // 'deny' on its own). Model-facing REFUSED text, always English, never
+    // the locale-resolved `policy.forbidden` string a person would read.
+    const isPolicyDeny = gate.verdict === 'deny' && gate.policyId !== null
     const reason = viaLocalAllow
       ? t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush')
-      : gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
+      : isPolicyDeny
+        ? policyDenyReasonEnglish(gate)
+        : gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
     return {
       kind: 'verdict',
       decision: gate.verdict,
@@ -1579,13 +1603,17 @@ async function main(): Promise<void> {
   // otherwise the consequence-ceiling risk rule decided it, including a
   // clean 'allow'.
   const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : resolved.viaLocalAllow ? 'local-allow' : 'risk'
-  // AB benchmark: 'deny' never reaches here -- decideGateAction's Jev-sourced
-  // verdict is always allow/ask (GateVerdict, decisions.ts) -- but the guard
-  // is kept explicit rather than trusting the cast, matching this file's own
-  // fail-open discipline: an unexpected value is skipped, never forced into
-  // the sample's narrower type. Sampled on the RAW Jev verdict, always --
-  // whether it then became a human ask or an advice is this file's own
-  // presentation choice, not Jev's own judgment, which the benchmark
+  // AB benchmark: 'deny' never reaches here -- decideGateAction can now
+  // return it (a `prohibits` policy's own hard stop), but the AB benchmark
+  // never samples that case: its own BigModelVerdict/GateLikeVerdict
+  // vocabulary (ab_benchmark.ts) only ever compares allow/ask, and a policy
+  // stop is a team's own written rule, not a risk judgment to calibrate
+  // against a second model. The guard is kept explicit rather than trusting
+  // the cast, matching this file's own fail-open discipline: an unexpected
+  // value is skipped, never forced into the sample's narrower type. Sampled
+  // on the RAW Jev verdict, always -- whether it then became a human ask or
+  // an advice is this file's own presentation choice, not Jev's own
+  // judgment, which the benchmark
   // compares against the big model exactly as Jev gave it.
   if (resolved.decision === 'allow' || resolved.decision === 'ask') {
     appendAbBenchmarkSample(command, resolved.decision, jevLatencyMs, resolved.usage, resolved.destinationKind)
