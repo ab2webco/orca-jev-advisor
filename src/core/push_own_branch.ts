@@ -15,7 +15,7 @@
 //      only ever consulted for a command that already survived them.
 //   2. A destination policy that resolves to `requires_human` or
 //      `prohibits` (decisions.ts's PolicyKind) still wins -- gate-bash.ts
-//      checks that itself, before ever calling qualifiesForOwnBranchPush,
+//      checks that itself, before ever calling qualifiesForLocalGitAllow,
 //      because a policy's own coverage question can only be answered by
 //      Jev, which this module exists to avoid calling in the first place.
 //   3. Only then does this module decide whether the command qualifies for
@@ -145,11 +145,18 @@ function readCurrentBranch(cwd: string, readFile: (path: string) => string): str
 
 /**
  * One push segment's own resolved (non-protected) destination branch, or
- * `null` when the segment is not a qualifying push at all -- the shared
- * building block both `qualifiesForOwnBranchPush` (below, its own narrower,
- * single-segment contract, unchanged since it first shipped) and
- * `qualifiesForLocalGitAllow` (the guarded-deletes extension, below) call,
- * so the push-qualification rule is never duplicated between the two.
+ * `null` when the segment is not a qualifying push at all -- called once per
+ * push-shaped segment by `qualifiesForLocalGitAllow` below (see that
+ * function's own doc for the full command-level shape this composes into:
+ * a single push segment, or one led by exactly `cd <dir> &&`).
+ *
+ * A `cd`-prefixed push must name its branch explicitly and never `HEAD`:
+ * resolving the CURRENT branch would read it from the hook's own `cwd`, not
+ * from the directory the push actually runs in, which is not a fact this
+ * module can safely assume without also resolving where `cd`'s own argument
+ * points (out of scope, per the task's own conservative framing). Without a
+ * `cd` prefix, an omitted or explicit `HEAD` refspec resolves the CURRENT
+ * branch from `cwd` itself, through resolveGitDirForHead/readCurrentBranch.
  */
 function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: boolean, readFile: (path: string) => string): string | null {
   const positionals = parsePushSegment(segmentText);
@@ -161,9 +168,6 @@ function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: 
 
   let branch: string | null;
   if (cdPrefixPresent) {
-    // See qualifiesForOwnBranchPush's own doc: a `cd`-prefixed push must
-    // name its branch explicitly, never resolve HEAD from the wrong
-    // directory.
     if (refspecToken === undefined || refspecToken === "HEAD") return null;
     if (!isPlainBranchRefspec(refspecToken)) return null;
     branch = refspecToken;
@@ -176,62 +180,6 @@ function classifyPushSegment(segmentText: string, cwd: string, cdPrefixPresent: 
   }
 
   return PROTECTED_BRANCH_NAMES.includes(branch) ? null : branch;
-}
-
-/**
- * Whether `input.command` qualifies for the own-branch-push local allow --
- * see the module note above for the full decision this composes with (the
- * deny tier and the destination-policy check both run BEFORE this, in
- * gate-bash.ts's own main(), not here). Pure except for the one HEAD read
- * this needs when the refspec is omitted or `HEAD`; injectable via
- * `input.readFile` for tests, exactly like push_remote.ts's own
- * resolvePushRemoteIsLocal.
- *
- * Qualifies only when ALL of these hold:
- *   - `command` carries no command/process substitution.
- *   - It is either exactly one `git push` segment, or exactly
- *     `cd <dir> && git push ...` (that literal `&&`, nothing else) --
- *     never any other segment, joiner or count.
- *   - The push carries only allowlisted options (see ALLOWED_PUSH_OPTIONS)
- *     and 0-2 positional arguments (`[remote] [refspec]`).
- *   - A given remote is a bare remote NAME, never a URL or a path.
- *   - The destination branch resolves to something OTHER than one of
- *     PROTECTED_BRANCH_NAMES. With a `cd` prefix, the refspec must be given
- *     explicitly and must not be `HEAD` -- resolving the CURRENT branch
- *     would read it from the hook's own `cwd`, not from the directory the
- *     push actually runs in, which is not a fact this module can safely
- *     assume without also resolving where `cd`'s own argument points (out
- *     of scope, per the task's own conservative framing). Without a `cd`
- *     prefix, an omitted or explicit `HEAD` refspec resolves the CURRENT
- *     branch from `cwd` itself.
- */
-export function qualifiesForOwnBranchPush(input: OwnBranchPushInput): boolean {
-  const { command, cwd } = input;
-  const readFile = input.readFile ?? ((path: string) => readFileSync(path, "utf8"));
-
-  if (hasCommandSubstitution(command)) return false;
-
-  const { segments, joiners, trailing } = splitOnCommandSeparatorsDetailed(command);
-  if (segments.length === 0 || segments.length > 2) return false;
-  if (joiners[0] !== null) return false;
-  // A trailing separator with nothing real after it -- most notably a bare
-  // `&`, which BACKGROUNDS the push instead of joining it to anything --
-  // disqualifies: see CommandSeparatorSplit.trailing's own doc comment.
-  if (trailing !== null) return false;
-
-  let pushSegmentText: string;
-  let cdPrefixPresent: boolean;
-  if (segments.length === 1) {
-    pushSegmentText = segments[0] ?? "";
-    cdPrefixPresent = false;
-  } else {
-    if (joiners[1] !== "&&") return false;
-    if (!parseCdSegment(segments[0] ?? "")) return false;
-    pushSegmentText = segments[1] ?? "";
-    cdPrefixPresent = true;
-  }
-
-  return classifyPushSegment(pushSegmentText, cwd, cdPrefixPresent, readFile) !== null;
 }
 
 // ===========================================================================
@@ -389,7 +337,7 @@ const DOES_NOT_QUALIFY: LocalGitAllowResult = { qualifies: false };
  * already tier-1a-safe command, optionally led by exactly one `cd <dir> &&`
  * -- see the module note above for the full shape and the real command this
  * generalizes from. Composes with (never replaces) gate-bash.ts's own deny
- * tier and destination-policy check, exactly like qualifiesForOwnBranchPush.
+ * tier and destination-policy check.
  */
 export function qualifiesForLocalGitAllow(input: OwnBranchPushInput): LocalGitAllowResult {
   const { command, cwd } = input;
@@ -400,8 +348,9 @@ export function qualifiesForLocalGitAllow(input: OwnBranchPushInput): LocalGitAl
   const { segments, joiners, trailing } = splitOnCommandSeparatorsDetailed(command);
   if (segments.length === 0) return DOES_NOT_QUALIFY;
   if (joiners[0] !== null) return DOES_NOT_QUALIFY;
-  // See qualifiesForOwnBranchPush's own comment: a trailing separator (most
-  // notably a bare `&`, which backgrounds the last segment) disqualifies.
+  // A trailing separator with nothing real after it -- most notably a bare
+  // `&`, which BACKGROUNDS the last segment instead of joining it to
+  // anything -- disqualifies: see CommandSeparatorSplit.trailing's own doc.
   if (trailing !== null) return DOES_NOT_QUALIFY;
 
   const firstSegment = segments[0] ?? "";

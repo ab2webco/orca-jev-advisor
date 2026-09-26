@@ -23,7 +23,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { qualifiesForLocalGitAllow, qualifiesForOwnBranchPush } from "./push_own_branch.ts";
+import { qualifiesForLocalGitAllow } from "./push_own_branch.ts";
 
 const TEMP_ROOTS: string[] = [];
 function makeTempRoot(prefix: string): string {
@@ -65,20 +65,20 @@ const NO_REPO_CWD = "/nonexistent/not-a-repository";
 // ---------------------------------------------------------------------------
 
 test("qualifies: a plain push with -u, origin and an explicit feature branch", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push -u origin feature/x", cwd: NO_REPO_CWD }), true);
+  assertQualifies("git push -u origin feature/x", NO_REPO_CWD, "ownBranchPush");
 });
 
 test("qualifies: cd <dir> && git push -u origin feature/x -- the explicit refspec, not cwd, decides the branch", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd repo && git push -u origin feature/x", cwd: NO_REPO_CWD }), true);
+  assertQualifies("cd repo && git push -u origin feature/x", NO_REPO_CWD, "ownBranchPush");
 });
 
 test("qualifies: no options at all, just remote and an explicit branch", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin feature/x", cwd: NO_REPO_CWD }), true);
+  assertQualifies("git push origin feature/x", NO_REPO_CWD, "ownBranchPush");
 });
 
 test("qualifies: remote only, no refspec at all, resolves the CURRENT branch", () => {
   const repo = repoOnBranch("push-own-branch-remote-only-", "feature/x");
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin", cwd: repo }), true);
+  assertQualifies("git push origin", repo, "ownBranchPush");
 });
 
 // ---------------------------------------------------------------------------
@@ -87,12 +87,12 @@ test("qualifies: remote only, no refspec at all, resolves the CURRENT branch", (
 
 test("qualifies: bare `git push`, resolves the current (non-shared) branch", () => {
   const repo = repoOnBranch("push-own-branch-bare-", "feature/x");
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push", cwd: repo }), true);
+  assertQualifies("git push", repo, "ownBranchPush");
 });
 
 test("qualifies: `git push origin HEAD` resolves the current branch explicitly named HEAD", () => {
   const repo = repoOnBranch("push-own-branch-head-", "feature/x");
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin HEAD", cwd: repo }), true);
+  assertQualifies("git push origin HEAD", repo, "ownBranchPush");
 });
 
 // ---------------------------------------------------------------------------
@@ -100,19 +100,19 @@ test("qualifies: `git push origin HEAD` resolves the current branch explicitly n
 // ---------------------------------------------------------------------------
 
 test("does not qualify: an explicit push to main", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin main", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push origin main", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: bare `git push` while ON main -- pushProtectedRule's own regex never even sees the word \"main\" here, so this module must catch it independently", () => {
   const repo = join(makeTempRoot("push-own-branch-on-main-"), "repo");
   initRepo(repo); // stays on whatever git's own default branch is -- forced to "main" explicitly below
   git(["branch", "-M", "main"], repo);
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push", cwd: repo }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push", cwd: repo }).qualifies, false);
 });
 
 test("does not qualify: master and production are protected too, same list pushProtectedRule uses", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin master", cwd: NO_REPO_CWD }), false);
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin production", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push origin master", cwd: NO_REPO_CWD }).qualifies, false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push origin production", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -124,7 +124,7 @@ test("does not qualify: detached HEAD, bare `git push` -- nothing to resolve wit
   initRepo(root);
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   git(["checkout", "-q", sha], root);
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push", cwd: root }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push", cwd: root }).qualifies, false);
 });
 
 test("does not qualify: detached HEAD, `git push origin HEAD`", () => {
@@ -132,11 +132,11 @@ test("does not qualify: detached HEAD, `git push origin HEAD`", () => {
   initRepo(root);
   const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
   git(["checkout", "-q", sha], root);
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin HEAD", cwd: root }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push origin HEAD", cwd: root }).qualifies, false);
 });
 
 test("does not qualify: no repository at all when the branch must be resolved from cwd", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,7 @@ const DISALLOWED_OPTION_COMMANDS = [
 
 for (const command of DISALLOWED_OPTION_COMMANDS) {
   test(`does not qualify: disallowed option -- ${command}`, () => {
-    assert.equal(qualifiesForOwnBranchPush({ command, cwd: NO_REPO_CWD }), false);
+    assert.equal(qualifiesForLocalGitAllow({ command, cwd: NO_REPO_CWD }).qualifies, false);
   });
 }
 
@@ -184,7 +184,7 @@ const DISALLOWED_REFSPEC_COMMANDS = [
 
 for (const command of DISALLOWED_REFSPEC_COMMANDS) {
   test(`does not qualify: not a plain branch refspec -- ${command}`, () => {
-    assert.equal(qualifiesForOwnBranchPush({ command, cwd: NO_REPO_CWD }), false);
+    assert.equal(qualifiesForLocalGitAllow({ command, cwd: NO_REPO_CWD }).qualifies, false);
   });
 }
 
@@ -193,7 +193,7 @@ for (const command of DISALLOWED_REFSPEC_COMMANDS) {
 // ---------------------------------------------------------------------------
 
 test("does not qualify: the remote positional is a URL, not a bare remote name", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push https://github.com/example/repo.git feature/x", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push https://github.com/example/repo.git feature/x", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -201,23 +201,23 @@ test("does not qualify: the remote positional is a URL, not a bare remote name",
 // ---------------------------------------------------------------------------
 
 test("does not qualify: a second command chained after the push", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin feature/x && rm -rf build", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push origin feature/x && rm -rf build", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: a mention, not a run -- the push text sits inside another program's own argument", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: 'echo "git push origin feature/x"', cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: 'echo "git push origin feature/x"', cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: command substitution present anywhere in the line", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push origin $(echo feature/x)", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push origin $(echo feature/x)", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: three segments -- more than one cd prefix", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd a && cd b && git push origin feature/x", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd a && cd b && git push origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: a stray leading separator before the first segment", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "; git push -u origin feature/x", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "; git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -225,24 +225,24 @@ test("does not qualify: a stray leading separator before the first segment", () 
 // ---------------------------------------------------------------------------
 
 test("does not qualify: cd prefix with an omitted refspec -- must not resolve HEAD from the wrong directory", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd repo && git push origin", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd repo && git push origin", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: cd prefix with an explicit HEAD refspec -- HEAD would still resolve from cwd, not from the cd target", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd repo && git push origin HEAD", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd repo && git push origin HEAD", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: cd joined by ';' instead of '&&'", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd repo ; git push -u origin feature/x", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd repo ; git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: cd joined by '||'", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd repo || git push -u origin feature/x", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd repo || git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 test("does not qualify: a 'cd' segment with flags or more than one argument", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd -L repo && git push -u origin feature/x", cwd: NO_REPO_CWD }), false);
-  assert.equal(qualifiesForOwnBranchPush({ command: "cd repo extra && git push -u origin feature/x", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd -L repo && git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "cd repo extra && git push -u origin feature/x", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
 // ---------------------------------------------------------------------------
@@ -258,7 +258,9 @@ test("injected readFile: an ordinary checkout's HEAD is read straight through", 
   };
   const root = join(makeTempRoot("push-own-branch-injected-"), "repo");
   initRepo(root);
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push", cwd: root, readFile }), true);
+  const result = qualifiesForLocalGitAllow({ command: "git push", cwd: root, readFile });
+  assert.equal(result.qualifies, true);
+  assert.equal(result.reasonKind, "ownBranchPush");
   assert.ok(reads.some((p) => p.endsWith("HEAD")), "the injected reader must actually be consulted for HEAD");
 });
 
@@ -383,14 +385,14 @@ test("qualifiesForLocalGitAllow: a requires_human policy is not this module's co
 // ---------------------------------------------------------------------------
 
 test("does not qualify: a trailing '&' backgrounds the push instead of joining it to anything", () => {
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push -u origin feature/x &", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push -u origin feature/x &", cwd: NO_REPO_CWD }).qualifies, false);
   assertDoesNotQualify("git push -u origin feature/x &");
 });
 
 test("does not qualify: a trailing ';' after the only segment", () => {
   // Inert in a real shell (an empty statement), but still rejected: no
   // "does this really run" analysis is worth building for zero benefit.
-  assert.equal(qualifiesForOwnBranchPush({ command: "git push -u origin feature/x ;", cwd: NO_REPO_CWD }), false);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push -u origin feature/x ;", cwd: NO_REPO_CWD }).qualifies, false);
   assertDoesNotQualify("git branch -d feature/old ;");
 });
 
