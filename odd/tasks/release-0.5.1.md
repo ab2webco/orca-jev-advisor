@@ -120,15 +120,15 @@ evolution" holds JEVADV-12..23.
   policies in `seed/policies.json` and bump the seed version. For a stored
   row without the field: use the seed's scope for that id, else `command`.
   Route: delegated writer.
-- [ ] **T3 — Sibling worktrees match their repository's destination.**
+- [x] **T3 — Sibling worktrees match their repository's destination.** Done in 67cdce7.
   When the cwd's worktree is a linked worktree, resolve its main checkout
   (`.git` file → `gitdir:` → `<main>/.git/worktrees/<name>`) and match the
   catalog against the main checkout too. A nested path match still wins
   over a sibling match. Route: delegated writer.
-- [ ] **T4 — mod-skills never hides skills it did not replace.** Keep the
+- [x] **T4 — mod-skills never hides skills it did not replace.** Done in 455ffb2 and 181d2d8. Keep the
   real listing whenever no skill is injected, and sample the tool path the
   same way as the skill path. Route: delegated writer.
-- [ ] **T5 — Suite runs without playwright.** `fixture_shape.test.mjs`
+- [x] **T5 — Suite runs without playwright.** Done in bda6bb8. `fixture_shape.test.mjs`
   skips cleanly when `playwright` is absent. Route: inline (one file).
 - [x] **T6 — Seed notice compares normalized kinds.** Done in `648e508`
   (delegated writer). Compares the migrated kind and the resolved scope.
@@ -136,12 +136,12 @@ evolution" holds JEVADV-12..23.
   `$(…)`/backtick was opaque to the force-push rule, which is a deny-tier
   bypass introduced by T8. Bodies are now spliced back in per token, after
   tokenizing. RED/GREEN, 2063/2063.
-- [ ] **T10 — Quoted text opaque only in known data positions (JEVADV-28).**
+- [x] **T10 — Quoted text opaque only in known data positions (JEVADV-28).** Done in 7a64807, 43b110d, 2ee8d47 and fa9fec2.
   Review follow-ups: ssh/su -c/python -c/watch/script -c commands must stay
   visible; `git checkout main --` allowed; an unknown policy scope resolves
   as command instead of dropping the row; fix the misleading comment and
   the function name. Blocks the release.
-- [ ] **T11 — Pending baseline policy updates stay visible (JEVADV-27).**
+- [x] **T11 — Pending baseline policy updates stay visible (JEVADV-27).** Done in eab4897.
   Worker/panel side, so it needs a plugin reload to verify.
 - [x] **T8 — Deny tier ignores quoted data (JEVADV-24).** Done in
   eab080a, dd7975f and 44862a3; reopened by T10. Observed live:
