@@ -295,6 +295,10 @@ export interface RouterDecisionRecord {
   readonly stepSaving: number | null;
   readonly expectedSteps: number | null;
   readonly quotaBand: QuotaBand;
+  /** JEV-061: the submitted prompt's `PromptOrigin` kind this decision answers, when known -- never its text. null for a subagent spawn (no submitted prompt) or when `prompt.submit` never stamped one for this turn. */
+  readonly origin: string | null;
+  /** JEV-061 slice 2: the subagent's own target effort for its first step and after, when the router set one at spawn; null otherwise (every other point, or a subagent with no explicit model/no guard/active-mode requirement unmet). Never raised past what the step already carries -- see subagentStepEffort. */
+  readonly effort: SessionEffort | null;
 }
 
 export interface RouterDecisionRecordInput {
@@ -307,6 +311,8 @@ export interface RouterDecisionRecordInput {
   readonly applied: boolean;
   readonly quotaBand: QuotaBand;
   readonly breakEven?: { readonly contextTokens: number; readonly switchCost: number; readonly stepSaving: number; readonly expectedSteps: number } | null;
+  readonly origin?: string | null;
+  readonly effort?: SessionEffort | null;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -327,5 +333,7 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     stepSaving: breakEven?.stepSaving ?? null,
     expectedSteps: breakEven?.expectedSteps ?? null,
     quotaBand: input.quotaBand,
+    origin: input.origin ?? null,
+    effort: input.effort ?? null,
   };
 }

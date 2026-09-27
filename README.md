@@ -193,6 +193,36 @@ refusal. That is one machine's own replay, not a guarantee about yours.
     does not change it. The model that really answered is the one on the
     status line and in the API's own usage records.
 
+## What changed in 0.6.1
+
+- **A background task's notification can no longer downgrade a session in
+  the middle of its own work.** `$.session.messages()` carries no origin,
+  so the router used to treat a notification exactly like a person's own
+  prompt: it ran a full stage decision and counted toward the two-turn
+  downgrade hysteresis. Two notifications landing back to back could
+  satisfy that hysteresis and switch a small-context session to a cheaper
+  model mid-task with nobody having asked for it (on a large context, only
+  the break-even check happened to hold the floor). The router now reads
+  `prompt.submit`'s own `origin.kind` — the one place that actually says
+  whether a prompt came from a person (typed, Remote Control, `claude -p`)
+  or from something else (a task notification, a scheduled trigger, a peer
+  session, ...) — and skips Jev and the hysteresis count for anything that
+  is not a person's own prompt, the same way it already skips both for a
+  turn the engine starts by itself. The local floor guards (a previous
+  failure, a sensitive topic) still hold, without asking Jev, exactly as
+  before.
+- **A subagent's own effort now matches the tier it was routed to, instead
+  of the parent's, clamped.** A subagent starts with a cold context, so its
+  first step is another place a switch is free — but effort had no field of
+  its own there yet: a subagent the router sent to Sonnet for standard work
+  ran every step at `high`, the parent's own `xhigh` clamped down to what
+  Sonnet supports, never the tier's own `medium`. The router now sets that
+  subagent's effort to its tier's own on its first step and keeps it there
+  for every step after, active mode only, and only when the parent gave no
+  explicit model (that is intent) and no guard held at spawn. It only ever
+  lowers effort, never raises it, and it never touches a person's own `max`
+  or numeric budget.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.

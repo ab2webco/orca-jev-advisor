@@ -11,13 +11,23 @@
 //   - always a FULL model id: a family alias (`opus`) collapses to the
 //     parent's exact model when the parent is already in that family (§2.6).
 //
-// Subagent effort has no field (§2.6): out of scope. Pure: no I/O.
+// JEV-061 slice 2: a subagent's FIRST step is the other place a switch costs
+// nothing (a cold context, same as its model), but it inherits the parent's
+// own effort, clamped to whatever the subagent's model supports -- a
+// standard-work subagent on Sonnet ran every step at the parent's `xhigh`,
+// clamped to `high`, never the tier's own `medium`. `subagentStepEffort`
+// below is that lowering, applied by the hooks module on every one of that
+// agent's steps (see hooks/index.ts's own `subagentEffortTarget` map): the
+// tier and eligibility (no explicit model, no guard, active mode) are
+// decided once at spawn time, same as the model above; this is only ever a
+// LOWERING of what the step already carries, never a raise, and never
+// touches a person's own `max` or numeric budget. Pure: no I/O.
 // ---------------------------------------------------------------------------
 
 import { FABLE_ID, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { activeGuards, shiftForPressure } from "./model_router_decide.ts";
-import type { GuardContext, QuotaBand, RouterGuard, TierJudgment } from "./model_router_decide.ts";
+import type { GuardContext, QuotaBand, RouterEffort, RouterGuard, SessionEffort, TierJudgment } from "./model_router_decide.ts";
 
 const ALIAS_TIER: Readonly<Record<string, RouterTier>> = { haiku: "simple", sonnet: "standard", opus: "complex", fable: "frontier" };
 
@@ -80,4 +90,29 @@ export function decideSubagent(input: SubagentDecisionInput): SubagentDecision {
   if (isDowngrade && guards.length > 0) return { ...stay, ...base, reason: "held-by-guard", guard: guards[0] ?? null };
   if (target.modelId === baseModelId(input.parentModel)) return { ...stay, ...base, reason: "same", guard: null };
   return { ...base, current, model: target.modelId, changed: true, reason: "switch", guard: null };
+}
+
+// ---------------------------------------------------------------------------
+// JEV-061 slice 2: the subagent's own first-step effort.
+// ---------------------------------------------------------------------------
+
+const EFFORT_RANK: Readonly<Record<RouterEffort, number>> = { low: 0, medium: 1, high: 2, xhigh: 3 };
+
+/**
+ * What a subagent's step should actually send for `effort`, given the tier
+ * the router chose for it at spawn (`target`; null when that tier's model
+ * takes no effort at all, Haiku) and what the step already carries
+ * (`current`: the parent's own, inherited and clamped to what the
+ * subagent's model supports).
+ *
+ * Never raises: a `current` at or below `target` is left alone. A person's
+ * own `max` or numeric budget is never touched, the same floor
+ * `isPersonEffort` (model_router_decide.ts) protects elsewhere in the
+ * router -- it is intent, not something inherited.
+ */
+export function subagentStepEffort(target: RouterEffort | null, current: SessionEffort | undefined): SessionEffort | undefined {
+  if (current === "max" || typeof current === "number") return current;
+  if (current === undefined) return target ?? undefined;
+  if (target === null) return undefined;
+  return EFFORT_RANK[target] < EFFORT_RANK[current] ? target : current;
 }

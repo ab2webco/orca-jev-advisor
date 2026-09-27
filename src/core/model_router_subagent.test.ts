@@ -4,7 +4,7 @@ import test from "node:test";
 import type { ModelEntry } from "./model_catalog.ts";
 import { resolveAccountTiers } from "./model_router_accounts.ts";
 import type { GuardContext } from "./model_router_decide.ts";
-import { decideSubagent, explicitModelRank } from "./model_router_subagent.ts";
+import { decideSubagent, explicitModelRank, subagentStepEffort } from "./model_router_subagent.ts";
 
 function entry(id: string, rank: number, available: boolean): ModelEntry {
   return { id, provider: "anthropic", label: id, rank, agentModel: id, source: "", available };
@@ -74,4 +74,36 @@ test("subagent: the parent's own model with a context-window suffix is the same 
   const decision = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, parentModel: "claude-opus-5-5[1m]", explicitModel: undefined, guards: CALM });
   assert.equal(decision.changed, false);
   assert.equal(decision.reason, "same");
+});
+
+// ---------------------------------------------------------------------------
+// JEV-061 slice 2: the subagent's own first-step effort
+// ---------------------------------------------------------------------------
+
+test("subagentStepEffort: a standard-tier subagent is lowered from the parent's inherited xhigh/high to medium", () => {
+  assert.equal(subagentStepEffort("medium", "xhigh"), "medium");
+  assert.equal(subagentStepEffort("medium", "high"), "medium");
+});
+
+test("subagentStepEffort: never raises -- a lower inherited effort than the tier's own is left alone", () => {
+  assert.equal(subagentStepEffort("high", "low"), "low");
+  assert.equal(subagentStepEffort("xhigh", "medium"), "medium");
+});
+
+test("subagentStepEffort: exactly the tier's own effort is left as it is", () => {
+  assert.equal(subagentStepEffort("medium", "medium"), "medium");
+});
+
+test("subagentStepEffort: a person's own max or numeric budget is never touched", () => {
+  assert.equal(subagentStepEffort("low", "max"), "max");
+  assert.equal(subagentStepEffort("low", 12000), 12000);
+});
+
+test("subagentStepEffort: a no-effort tier (Haiku) removes whatever effort was inherited", () => {
+  assert.equal(subagentStepEffort(null, "high"), undefined);
+  assert.equal(subagentStepEffort(null, undefined), undefined);
+});
+
+test("subagentStepEffort: nothing inherited (no current effort) simply takes the tier's own", () => {
+  assert.equal(subagentStepEffort("medium", undefined), "medium");
 });

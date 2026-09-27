@@ -51,8 +51,21 @@ export type RouterSessionStats = {
   outputSteps: number
 }
 
+/**
+ * JEV-061: the `kind` of the most recently submitted prompt's origin
+ * (`PromptOrigin`, claude-code.d.ts), stamped by `prompt.submit` on every
+ * submission -- before that hook's own early returns, so an empty prompt or
+ * a slash command still updates it. Read at points A and C to tell a
+ * person's own prompt from an engine- or agent-authored one (a task
+ * notification, a scheduled trigger, a peer session, ...), which
+ * `$.session.messages()` rows cannot say on their own.
+ */
+export type RouterPromptOrigin = {
+  kind: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'orca-jev-mod-skills': { routerSticky: RouterSticky }
+    'orca-jev-mod-skills': { routerSticky: RouterSticky; routerPromptOrigin: RouterPromptOrigin }
   }
 }

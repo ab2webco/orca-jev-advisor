@@ -224,10 +224,24 @@ test("decision log: hourly file name, like turn-usage", () => {
 test("decision log record: exactly the spec's fields, no prompt text", () => {
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: { ...CALM, text: "secret prompt words" } });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal" });
-  assert.deepEqual(Object.keys(record).sort(), ["account", "applied", "at", "confidence", "contextTokens", "current", "expectedSteps", "guard", "point", "proposed", "quotaBand", "reason", "stepSaving", "switchCost", "tier"].sort());
+  assert.deepEqual(Object.keys(record).sort(), ["account", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "proposed", "quotaBand", "reason", "stepSaving", "switchCost", "tier"].sort());
   assert.equal(record.proposed, "claude-haiku-4-5-20251001");
   assert.equal(record.contextTokens, null);
+  assert.equal(record.origin, null, "no origin given -- defaults to null");
+  assert.equal(record.effort, null, "no effort given -- defaults to null");
   assert.equal(JSON.stringify(record).includes("prompt words"), false);
+});
+
+test("decision log record: origin is the PromptOrigin kind, never the notification's text (JEV-061)", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "stage", decision, applied: false, quotaBand: "normal", origin: "task-notification" });
+  assert.equal(record.origin, "task-notification");
+});
+
+test("decision log record: effort is the subagent's own target effort, when the router set one (JEV-061 slice 2)", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "subagent", decision, applied: true, quotaBand: "normal", effort: "medium" });
+  assert.equal(record.effort, "medium");
 });
 
 test("start: quota pressure never shifts the first prompt's tier -- there is no previous turn to show it was read-only (G4)", () => {

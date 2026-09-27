@@ -243,6 +243,13 @@ async function submitPromptCapture(handlers: Map<string, Hook>, engine: unknown,
   return captured;
 }
 
+/** Fires `prompt.submit` purely to stamp the router's own origin state (JEV-061) -- the text is irrelevant here, only `origin.kind` matters to the router's point A/C gate. */
+async function submitOrigin(handlers: Map<string, Hook>, engine: unknown, kind: string): Promise<void> {
+  const submit = handlers.get("prompt.submit");
+  assert.ok(submit, "prompt.submit was never registered");
+  await submit(engine, { text: "irrelevant to the router's own gate", wait: false, origin: { kind } }, async (e: unknown) => e);
+}
+
 /** Fires `skill.prompt` (the model's own load, correlated by hooks/index.ts's `pendingMeasurementId`). */
 async function fireSkillPrompt(handlers: Map<string, Hook>, engine: unknown, skill: string): Promise<void> {
   const skillPrompt = handlers.get("skill.prompt");
@@ -1229,6 +1236,75 @@ test("router, subagent: a fork, off mode, or a Jev failure change nothing", asyn
 });
 
 // ---------------------------------------------------------------------------
+// JEV-061 slice 2: a subagent's own first-step effort. A cold context makes
+// its FIRST step, like its model, free to set -- but it used to inherit the
+// parent's own effort, clamped to what its model supports, never the tier's
+// own (a standard-work subagent on Sonnet ran every step at the parent's
+// `xhigh`, clamped to `high`, never `medium`). `agent.spawn`'s fake `next`
+// (spawnThrough, above) always hands back `agentId: "agent-1"`, which
+// `turn.step` events below name the same way.
+// ---------------------------------------------------------------------------
+
+test("JEV-061 slice 2: a subagent routed to Sonnet for standard work gets medium on its first step and keeps it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent());
+
+  const first = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(first.effort, "medium");
+
+  const second = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(second.effort, "medium", "kept sticky on a later step of the same agent");
+});
+
+test("JEV-061 slice 2: an explicit parent model leaves the subagent's effort untouched", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent({ model: "sonnet" }));
+
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(step.effort, "xhigh");
+});
+
+test("JEV-061 slice 2: a guard at spawn leaves the subagent's effort untouched", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent({ prompt: "Rotate the production database credentials." }));
+
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "xhigh" }));
+  assert.equal(step.effort, "xhigh");
+});
+
+test("JEV-061 slice 2: a subagent's effort is never raised, even when the chosen tier asks for more", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent({ parentModel: "claude-sonnet-5" }));
+
+  // complex -> high, but this step already carries only "low".
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "low" }));
+  assert.equal(step.effort, "low");
+});
+
+test("JEV-061 slice 2: measure mode changes nothing", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnThrough(handlers, engine, spawnEvent());
+
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(step.effort, "xhigh");
+});
+
+// ---------------------------------------------------------------------------
 // Review round 2: findings 1, 2, 3, 4 and 12 at the hook
 // ---------------------------------------------------------------------------
 
@@ -1486,4 +1562,124 @@ test("N3: the same prompt after /compact is not a new prompt (no second decision
   const calls = host.fetchCalls.length;
   await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, ...OPUS_XHIGH }));
   assert.equal(host.fetchCalls.length, calls);
+});
+
+// ---------------------------------------------------------------------------
+// JEV-061: the router's own personhood gate (point A/C). `$.session.messages()`
+// rows carry no origin, so a background task's notification used to read as
+// a brand-new real prompt and run a full stage decision -- counting toward
+// the downgrade hysteresis exactly like a person's own prompt. `prompt.submit`
+// now stamps `e.origin.kind` into the router's own `$.state` on every
+// submission; a turn whose latest prompt is not a person's own is routed
+// exactly like an engine-started turn (N2): no Jev call, no hysteresis count.
+// ---------------------------------------------------------------------------
+
+test("JEV-061: two task notifications after a person prompt cause no Jev call and no downgrade -- the next person prompt is still judged", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+
+  host.fetchQueue.push(tierAnswer("complex"));
+  await submitOrigin(handlers, engine, "composer");
+  const turn1 = await promptTurn(host, handlers, engine, 1, "design the cache invalidation across both services", OPUS_XHIGH);
+  assert.equal(turn1.model, "claude-opus-5-5");
+
+  const callsBefore = host.fetchCalls.length;
+  const decisionsBefore = routerDecisionLines(host).length;
+
+  await submitOrigin(handlers, engine, "task-notification");
+  const note1 = await promptTurn(host, handlers, engine, 2, "Task finished: the build succeeded.", OPUS_XHIGH);
+  assert.equal(note1.model, "claude-opus-5-5", "a notification must never rewrite the sticky model");
+
+  await submitOrigin(handlers, engine, "task-notification");
+  const note2 = await promptTurn(host, handlers, engine, 3, "Task finished: tests are green.", OPUS_XHIGH);
+  assert.equal(note2.model, "claude-opus-5-5");
+
+  assert.equal(host.fetchCalls.length, callsBefore, "no Jev call for either notification");
+  assert.equal(routerDecisionLines(host).length, decisionsBefore, "no stage decision logged for either notification -- none counted toward hysteresis");
+
+  host.fetchQueue.push(tierAnswer("simple"));
+  await submitOrigin(handlers, engine, "composer");
+  await promptTurn(host, handlers, engine, 4, "thanks, now list the files you touched", OPUS_XHIGH);
+  assert.equal(host.fetchCalls.length, callsBefore + 1, "the next person prompt gets its own stage decision");
+  const decisions = routerDecisionLines(host);
+  assert.equal(decisions.at(-1)?.point, "stage");
+});
+
+test("JEV-061: a notification after a failing test restores the floor without asking Jev", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+
+  await submitOrigin(handlers, engine, "composer");
+  const first = await promptTurn(host, handlers, engine, 1, "run the tests in the background", OPUS_XHIGH, FAILED_TESTS);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+
+  const calls = host.fetchCalls.length;
+  await submitOrigin(handlers, engine, "task-notification");
+  // Different text from the person's own prompt -- would read as a brand
+  // new real prompt if `$.session.messages()` were the only signal.
+  const note = await promptTurn(host, handlers, engine, 2, "Task finished: the background tests are still failing.", OPUS_XHIGH);
+  assert.equal(note.model, "claude-opus-5-5", "the floor is restored");
+  assert.equal(note.effort, "xhigh");
+  assert.equal(host.fetchCalls.length, calls, "no Jev call for the notification");
+  const restore = routerDecisionLines(host).at(-1);
+  assert.equal(restore?.reason, "floor-restore");
+  assert.equal(restore?.guard, "previous-failure");
+  assert.equal(restore?.origin, "task-notification");
+});
+
+test("JEV-061, point A: a first prompt that is a notification keeps the session's own model -- the router decides at the first person prompt", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+
+  await submitOrigin(handlers, engine, "task-notification");
+  host.messages = [{ role: "user", text: "Task finished: the setup script ran.", toolUses: [] }];
+  const first = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(first.model, "claude-opus-5-5", "the session's own model, unrouted");
+  assert.equal(host.fetchCalls.length, 0, "no Jev call for the very first, non-person prompt");
+  assert.equal(routerDecisionLines(host).length, 0, "nothing decided yet");
+
+  host.messages = [...host.messages, { role: "assistant", text: "ok", toolUses: [] }, { role: "user", text: "hola", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  await submitOrigin(handlers, engine, "composer");
+  await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  assert.equal(host.fetchCalls.length, 1, "the first person prompt is what gets judged");
+  const decisions = routerDecisionLines(host);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0]?.point, "stage");
+  assert.equal(decisions[0]?.tier, "simple");
+});
+
+test("JEV-061: prompt.submit passes the event through unchanged, origin included -- it never alters or blocks the prompt", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const submit = handlers.get("prompt.submit");
+  assert.ok(submit, "prompt.submit was never registered");
+  const event = { text: "Task finished: the build succeeded.", wait: false, origin: { kind: "task-notification" } };
+  let seen: unknown;
+  await submit(engine, event, async (e: unknown) => {
+    seen = e;
+    return e;
+  });
+  assert.deepEqual(seen, event);
+});
+
+test("JEV-061: if prompt.submit never fired for a turn (state lost to a hot reload), today's behaviour is kept -- a new prompt is still judged", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  // Router tests above this one already exercise this path with no
+  // `prompt.submit` ever fired (state.get returns undefined for
+  // `routerPromptOrigin`); this test names that behaviour explicitly.
+  await playTurn(host, handlers, engine, 1, "design the cache invalidation across both services", 4);
+  const turn2 = await playTurn(host, handlers, engine, 2, "now something completely different", 4);
+  assert.equal(host.fetchCalls.length, 2, "both turns were judged -- no stamped origin defaults to a person's own prompt");
+  void turn2;
 });
