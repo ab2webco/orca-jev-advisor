@@ -614,7 +614,90 @@ const CATALOG_PROPOSALS = {
   },
 }
 
-const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'catalog-proposals': CATALOG_PROPOSALS }
+/**
+ * JEV-060 slice 1, T7 -- `ready` above has no `consumptionSummary` at all, so
+ * the base `--quick` run photographs the Consumption card in its EMPTY
+ * state, not populated. Same realistic numbers as
+ * scripts/panels.spec.mjs's own POPULATED_CONSUMPTION fixture (two models,
+ * one quota account near its weekly limit, every recommendation trigger
+ * present) so the two dedicated screenshots this task also asks for --
+ * board.html at 1440 light and 390 dark -- actually show the card doing its
+ * job, not its honest-but-uninteresting empty state.
+ */
+const CONSUMPTION_READY = {
+  ...READY,
+  consumptionSummary: {
+    ok: true,
+    usage: {
+      last24h: {
+        stepCount: 42,
+        byModel: [
+          { model: 'claude-sonnet-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+          { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
+        ],
+        avgMainStepContextReread: 162345,
+        subagentShare: 0.47,
+      },
+      last7d: {
+        stepCount: 300,
+        byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+        avgMainStepContextReread: 150500,
+        subagentShare: 0.3,
+      },
+    },
+    quota: {
+      accounts: [
+        { id: 'acct-primary', status: 'ok', sessionUsedPercent: 12.4, weeklyUsedPercent: 81.2, resetsAt: Date.parse('2026-10-03T23:00:00.000Z') },
+      ],
+      checkedAt: iso,
+    },
+    recommendations: {
+      claudeMdSize: { estimatedTokens: 9000, overThreshold: true },
+      mcpServerCount: { count: 5 },
+      longSession: { avgMainStepContextReread: 162345, overThreshold: true },
+      subagentShare: { subagentSharePercent: 47, overThreshold: true },
+    },
+    checkedAt: iso,
+  },
+}
+
+/**
+ * JEV-060 slice 2, §7/§9 T9 -- the config panel's "Jev model router" section
+ * (one row per target, off/measure/active) and the board's Consumption
+ * card's own "Model router" subsection, both populated at once: this
+ * computer in `measure`, one Orca account in `active`, and a realistic
+ * decision summary (real current model ids: Sonnet 5/Opus 5.5/Haiku 4.5,
+ * same as CONSUMPTION_READY above) with decisions at all three points, an
+ * applied switch, and a real dollar estimate -- so both new UI pieces show
+ * their populated state, not the honest-but-uninteresting empty one.
+ */
+const ROUTER_READY = {
+  ...CONSUMPTION_READY,
+  modelRouterStatus: {
+    targets: [
+      { target: 'home', mode: 'measure' },
+      { target: '00000000-0000-4000-8000-000000000003', mode: 'active' },
+    ],
+    checkedAt: iso,
+  },
+  consumptionSummary: {
+    ...CONSUMPTION_READY.consumptionSummary,
+    modelRouter: {
+      total: 9,
+      applied: 5,
+      measured: 4,
+      byPoint: {
+        start: { simple: 3, standard: 0, complex: 0, frontier: 0 },
+        stage: { simple: 0, standard: 2, complex: 2, frontier: 1 },
+        subagent: { simple: 1, standard: 0, complex: 0, frontier: 0 },
+      },
+      savedEstimate: 0.0847,
+      switchesEstimated: 3,
+    },
+  },
+}
+
+const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'catalog-proposals': CATALOG_PROPOSALS, 'consumption-ready': CONSUMPTION_READY, 'router-ready': ROUTER_READY }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */

@@ -98,6 +98,13 @@ const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
 // covering every Orca-managed account, so granting it once is enough; the
 // sidecar itself discovers which account subdirectories actually exist.
 const CLAUDE_HOME_DIR = homeConfigTarget(PLATFORM, HOME_PATHS.home).configDir
+// The global `.claude.json` is a SIBLING of ~/.claude, not inside it (see
+// read-consumption.mjs's own comment) -- Node's `--permission` sandbox does
+// exact/ancestor-directory matching, not naive string-prefix matching, so
+// granting CLAUDE_HOME_DIR alone does NOT cover this file (verified: a
+// sidecar given only `--allow-fs-read=<home>/.claude` gets ERR_ACCESS_DENIED
+// reading `<home>/.claude.json`). It needs its own explicit grant below.
+const CLAUDE_JSON_PATH = join(HOME_PATHS.home, '.claude.json')
 const ORCA_USER_DATA_DIR = resolveOrcaUserDataDir(PLATFORM, { home: HOME_PATHS.home, appDataDir: HOME_PATHS.appDataDir, xdgConfigHome: process.env.XDG_CONFIG_HOME, orcaUserDataPath: process.env[ORCA_USER_DATA_ENV] }).path
 const CLAUDE_ACCOUNTS_DIR = claudeAccountsDir(PLATFORM, ORCA_USER_DATA_DIR)
 
@@ -244,6 +251,128 @@ async function mirrorCatalogAndPolicies (orca, storageHost) {
   const policiesResult = await runSecretMirrorScript('policies-save', JSON.stringify(policies))
   if (!policiesResult.ok) {
     orca.log(`policies mirror failed: ${String(policiesResult.reason ?? 'unknown')} -- ${String(policiesResult.detail ?? '').slice(0, 160)}`)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Account quota mirror (JEV-060 slice 1) -- `orca account list --json`
+// reshaped to quota.json, so gate-bash.ts and the board panel (neither has
+// a channel into this worker directly) can eventually read weekly/session
+// usage without a Jev call of their own. Read-only on the CLI side (this
+// worker already calls `orca` directly for worktreePs/worktreeList/status,
+// unsandboxed -- see src/core/orca_cli.ts); the WRITE side cannot go direct,
+// same measured constraint as mirrorCatalogAndPolicies just above (the
+// worker's own permission sandbox only allows reading its plugin root), so
+// it goes through the same write-secret-mirror.mjs sidecar, a new
+// 'quota-save' mode there.
+//
+// No email, no auth token, no session token ever reaches the mirrored
+// file -- only what accountQuotaEntry below explicitly keeps.
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_QUOTA_REFRESH_MS = 10 * 60 * 1000
+
+/** Runs `orca account list --json` and returns the raw accounts array (Orca's
+ *  own `{ok, result: {accounts}}` envelope unwrapped) -- never throws: a
+ *  fetch that cannot run reports its detail rather than swallowing it, same
+ *  shape as fetchOrcaWorktrees above. */
+async function fetchAccountQuotas (orca) {
+  try {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.accountList, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
+    const parsed = JSON.parse(stdout)
+    const accounts = parsed?.result?.accounts
+    if (!Array.isArray(accounts)) return { accounts: [], failure: 'orca account list --json returned no accounts array' }
+    return { accounts, failure: null }
+  } catch (error) {
+    return { accounts: [], failure: String(error?.message ?? error).slice(0, 200) }
+  }
+}
+
+/** One raw CLI account -> the quota-only shape this plugin mirrors: id,
+ *  status, session/weekly usedPercent, the weekly reset time, and
+ *  fableWeekly ONLY when the CLI actually reported one -- never a
+ *  fabricated `{usedPercent: 0}` for an account that has none. Never the
+ *  email, never `auth`, never a session/auth token: those never leave this
+ *  function. Tolerant of a missing/malformed quota sub-object -- an account
+ *  the CLI could not check yet reads as all-null rather than throwing. */
+function accountQuotaEntry (account) {
+  const quota = isRecord(account.quota) ? account.quota : {}
+  const session = isRecord(quota.session) ? quota.session : {}
+  const weekly = isRecord(quota.weekly) ? quota.weekly : {}
+  const entry = {
+    id: account.id,
+    status: typeof quota.status === 'string' ? quota.status : null,
+    sessionUsedPercent: typeof session.usedPercent === 'number' ? session.usedPercent : null,
+    weeklyUsedPercent: typeof weekly.usedPercent === 'number' ? weekly.usedPercent : null,
+    resetsAt: typeof weekly.resetsAt === 'number' ? weekly.resetsAt : null
+  }
+  if (isRecord(quota.fableWeekly)) {
+    entry.fableWeekly = {
+      usedPercent: typeof quota.fableWeekly.usedPercent === 'number' ? quota.fableWeekly.usedPercent : null,
+      resetsAt: typeof quota.fableWeekly.resetsAt === 'number' ? quota.fableWeekly.resetsAt : null
+    }
+  }
+  return entry
+}
+
+/** Dedup for mirrorAccountQuota's own failure logging below: the exact
+ *  detail string last logged (fetch OR write side, whichever fired last),
+ *  or null once a cycle has fully succeeded. A repeat of the SAME detail on
+ *  the next call (10 minutes later) is silent; a different detail, or a
+ *  first failure after a success, logs again. Module-level by design, same
+ *  as worktreeListCache above -- one worker process, one mirror cycle at a
+ *  time. */
+let quotaMirrorLastLoggedFailure = null
+
+function logQuotaMirrorFailureOnce (orca, detail) {
+  if (quotaMirrorLastLoggedFailure === detail) return
+  orca.log(`account quota mirror failed: ${detail}`)
+  quotaMirrorLastLoggedFailure = detail
+}
+
+/** Fetches `orca account list --json`, reshapes it to accountQuotaEntry's
+ *  quota-only fields for the Claude accounts only, and mirrors it to
+ *  quota.json via the write-secret-mirror.mjs sidecar's 'quota-save' mode.
+ *  Never throws, on either side: a fetch failure or a write failure is
+ *  logged once (see logQuotaMirrorFailureOnce) and this simply returns
+ *  `{ok: false, failure}` instead of writing anything.
+ *
+ *  `options.fetchAccountQuotas`/`options.saveQuota` default to the real CLI
+ *  call and the real sidecar write; tests inject fakes for both, the same
+ *  "options override the default" convention computeCatalogProposals'
+ *  fetchOrcaWorktrees override already uses -- never a real spawn under
+ *  `node --test`. */
+async function mirrorAccountQuota (orca, options = {}) {
+  const fetchQuotas = options.fetchAccountQuotas ?? fetchAccountQuotas
+  const saveQuota = options.saveQuota ?? ((payload) => runSecretMirrorScript('quota-save', JSON.stringify(payload)))
+  try {
+    const { accounts, failure } = await fetchQuotas(orca)
+    if (failure !== null) {
+      logQuotaMirrorFailureOnce(orca, failure)
+      return { ok: false, failure }
+    }
+    const payload = {
+      accounts: accounts.filter((account) => isRecord(account) && account.provider === 'claude' && typeof account.id === 'string').map(accountQuotaEntry),
+      checkedAt: new Date().toISOString()
+    }
+    const result = await saveQuota(payload)
+    if (!result || result.ok !== true) {
+      const detail = String(result?.detail ?? result?.reason ?? 'unknown').slice(0, 160)
+      logQuotaMirrorFailureOnce(orca, detail)
+      return { ok: false, failure: detail }
+    }
+    quotaMirrorLastLoggedFailure = null
+    return { ok: true }
+  } catch (error) {
+    // Belt-and-suspenders: fetchQuotas/saveQuota above already fail open on
+    // their own, but this must never throw regardless of what a future
+    // caller-supplied override does.
+    const detail = String(error?.message ?? error).slice(0, 200)
+    logQuotaMirrorFailureOnce(orca, detail)
+    return { ok: false, failure: detail }
   }
 }
 
@@ -649,7 +778,17 @@ const ORCA_CLI_BIN = 'orca'
 const CLAUDE_INTEGRATION_SCRIPT = join(__dirname, 'install-claude-integration.mjs')
 const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 
-function runClaudeIntegrationScript (mode) {
+// JEV-060 slice 2, §9 T9: `router-mode-status`/`router-mode-set` read/write
+// the exact same settings.json files as status/install/uninstall (CONFIG_DIR,
+// CLAUDE_HOME_DIR, CLAUDE_ACCOUNTS_DIR) -- no new permission grant needed.
+// `router-mode-status` is read-only, like `status`; every other mode
+// (install, uninstall, router-mode-set) needs the write grants too.
+const READ_ONLY_MODES = ['status', 'router-mode-status']
+
+/** `extraArgs` replaces the single positional `pluginRoot` every OTHER mode
+ *  passes by default -- router-mode-status needs none, router-mode-set
+ *  needs `[target, mode]` instead, and neither touches the plugin tree. */
+function runClaudeIntegrationScript (mode, extraArgs = [PLUGIN_ROOT]) {
   return new Promise((resolve) => {
     try {
       const permissionArgs = [
@@ -659,10 +798,10 @@ function runClaudeIntegrationScript (mode) {
         `--allow-fs-read=${CLAUDE_HOME_DIR}`,
         `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
       ]
-      if (mode !== 'status') {
+      if (!READ_ONLY_MODES.includes(mode)) {
         permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
       }
-      execFile(process.execPath, [...permissionArgs, CLAUDE_INTEGRATION_SCRIPT, mode, PLUGIN_ROOT], {
+      execFile(process.execPath, [...permissionArgs, CLAUDE_INTEGRATION_SCRIPT, mode, ...extraArgs], {
         timeout: CLAUDE_INTEGRATION_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
         env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
@@ -1069,6 +1208,83 @@ function runReadModelMeasurementsScript (catalog) {
  *  call sites below cannot drift onto two different mirror/readSummary
  *  implementations. */
 const MODELS_WORKER_OPTIONS = { mirror: runSecretMirrorScript, readSummary: runReadModelMeasurementsScript }
+
+// ---------------------------------------------------------------------------
+// Consumption summary (JEV-060 slice 1, T4) -- aggregates T1's hourly
+// turn-usage-*.jsonl files and T2's quota.json mirror, plus the global
+// CLAUDE.md/.claude.json, into the one summary the board's consumption
+// card renders. Unlike read-measurements.mjs/read-model-measurements.mjs,
+// this sidecar also WRITES (it prunes turn-usage-*.jsonl files older than
+// 8 days -- see read-consumption.mjs's own header for why pruning lives
+// there instead of in the hook or a separate sidecar), so it needs
+// `--allow-fs-write` on CACHE_DIR in addition to the read-only grants every
+// other measurements-style sidecar gets. It also needs read access to
+// CONFIG_DIR (quota.json), CLAUDE_HOME_DIR (the global CLAUDE.md), and
+// CLAUDE_JSON_PATH (~/.claude.json) as its OWN explicit grant -- confirmed
+// by direct test that the sandbox does not extend a directory grant to a
+// same-prefix sibling file (see CLAUDE_JSON_PATH's own comment above).
+// ---------------------------------------------------------------------------
+
+const CONSUMPTION_SCRIPT = join(__dirname, 'read-consumption.mjs')
+const CONSUMPTION_STATUS_KEY = 'consumptionSummary'
+// Deliberately NOT the 15s MEASUREMENTS_REFRESH_MS cadence: this sidecar
+// scans up to 8 days of hourly turn-usage files (up to ~192 of them) and
+// runs a prune pass every call, real directory-listing and multi-file I/O
+// that the 15s cadence was never sized for. Quota and consumption both
+// change only as slowly as the account is actually used, so the existing
+// 10-minute ACCOUNT_QUOTA_REFRESH_MS cadence is the right neighbourhood --
+// reused outright rather than inventing a third distinct interval value.
+const CONSUMPTION_REFRESH_MS = ACCOUNT_QUOTA_REFRESH_MS
+
+/** The exact argv `readConsumptionSummary` spawns -- pulled out on its own
+ *  so a test can spawn the REAL sidecar under the REAL permission flags
+ *  (rather than only exercising it unsandboxed, or only exercising
+ *  `publishConsumptionSummary` with a faked-away spawn) and so this list
+ *  has exactly one place to go stale. A grant missing here fails silently
+ *  in production -- the sidecar degrades the one section it couldn't read
+ *  rather than crashing (see read-consumption.mjs) -- so nothing short of
+ *  a real sandboxed run catches it; this is exported for exactly that. */
+function consumptionSidecarArgv () {
+  return [
+    '--permission',
+    `--allow-fs-read=${PLUGIN_ROOT}`,
+    `--allow-fs-read=${CACHE_DIR}`,
+    `--allow-fs-write=${CACHE_DIR}`,
+    `--allow-fs-read=${CONFIG_DIR}`,
+    `--allow-fs-read=${CLAUDE_HOME_DIR}`,
+    `--allow-fs-read=${CLAUDE_JSON_PATH}`,
+    CONSUMPTION_SCRIPT
+  ]
+}
+
+function readConsumptionSummary () {
+  return spawnSidecar(
+    consumptionSidecarArgv(),
+    {
+      timeout: MEASUREMENTS_TIMEOUT_MS,
+      maxBuffer: 4 * 1024 * 1024,
+      env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    }
+  )
+}
+
+/** `options.readConsumptionSummary` overrides the real sidecar spawn --
+ *  same "options override the default" convention as mirrorAccountQuota's
+ *  own fetchAccountQuotas/saveQuota, so tests never spawn a real
+ *  read-consumption.mjs child (that script has its own dedicated test
+ *  file, read-consumption.test.mjs, exercising it directly as the CLI it
+ *  actually is). An `{ok:false}` summary is still published, same as
+ *  publishMeasurementsSummary above: an honest failure state on the board
+ *  beats silently keeping the previous (possibly stale) one. */
+async function publishConsumptionSummary (orca, storageHost, options = {}) {
+  const readSummary = options.readConsumptionSummary ?? readConsumptionSummary
+  const summary = await readSummary()
+  if (!summary.ok) {
+    orca.log(`consumption summary failed: ${String(summary.reason ?? 'unknown')} -- ${String(summary.detail ?? '').slice(0, 200)}`)
+  }
+  await storageHost.set(CONSUMPTION_STATUS_KEY, { ...summary, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`consumption summary publish failed: ${error.message}`))
+}
 
 // ---------------------------------------------------------------------------
 // Secret request/result channel -- sandboxed panels may call ONLY
@@ -1569,6 +1785,75 @@ async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
   }).catch((err) => orca.log(`mod-skills config result publish failed: ${err.message}`))
 
   await publishModSkillsStatus(orca, storageHost, options)
+}
+
+// ---------------------------------------------------------------------------
+// Jev model router switch (JEV-060 slice 2, §7/§9 T9) -- the config panel's
+// own off/measure/active picker, per Orca account. Same request/result/TTL
+// shape as the skill/tool switches above, but the worker side is
+// install-claude-integration.mjs's `router-mode-status`/`router-mode-set`
+// CLI modes, run through runClaudeIntegrationScript (§7: the panel never
+// adds a second source of truth -- it only ever reads/writes the same
+// `pluginConfigs[...].options.routerMode` the plugin's own userConfig
+// picker writes). No new permission grant: both modes touch only the same
+// settings.json files `status`/`install`/`uninstall` already read/write.
+// ---------------------------------------------------------------------------
+
+const MODEL_ROUTER_CONFIG_REQUEST_KEY = 'modelRouterConfigRequest'
+const MODEL_ROUTER_CONFIG_RESULT_KEY = 'modelRouterConfigResult'
+const MODEL_ROUTER_STATUS_KEY = 'modelRouterStatus'
+
+/** Reads every target's current router mode through the installer
+ *  script's read-only `router-mode-status` mode. `options.runScript`
+ *  overrides the real subprocess for tests, same convention as
+ *  `options.mirror` above. A script failure (or malformed JSON) degrades
+ *  to an empty target list rather than throwing -- an honest empty config
+ *  section beats a crashed publish. */
+async function readModelRouterTargets (options = {}) {
+  const runScript = options.runScript ?? runClaudeIntegrationScript
+  const result = await runScript('router-mode-status', [])
+  return result.ok && Array.isArray(result.targets) ? result.targets : []
+}
+
+/** Publishes every target's current router mode for the config panel to
+ *  render on load -- same one-shot-plus-refresh shape as
+ *  publishModSkillsStatus: called at activation, and again after every
+ *  successful (or failed) router-mode-set. */
+async function publishModelRouterStatus (orca, storageHost, options = {}) {
+  const targets = await readModelRouterTargets(options)
+  await storageHost.set(MODEL_ROUTER_STATUS_KEY, { targets, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`model router status publish failed: ${error.message}`))
+}
+
+/** Attends one pending "set this target's router mode" request from the
+ *  panel, if any. */
+async function attendModelRouterConfigRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(MODEL_ROUTER_CONFIG_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string' ||
+      typeof request.target !== 'string' || typeof request.mode !== 'string') return
+
+  await storageHost.delete(MODEL_ROUTER_CONFIG_REQUEST_KEY).catch((error) =>
+    orca.log(`model router config request cleanup failed: ${error.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await storageHost.set(MODEL_ROUTER_CONFIG_RESULT_KEY, {
+      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
+    }).catch((err) => orca.log(`model router config result publish failed: ${err.message}`))
+    return
+  }
+
+  const runScript = options.runScript ?? runClaudeIntegrationScript
+  const result = await runScript('router-mode-set', [request.target, request.mode])
+  if (!result.ok) {
+    orca.log(`model router config script (set) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+  }
+
+  await storageHost.set(MODEL_ROUTER_CONFIG_RESULT_KEY, {
+    id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
+  }).catch((err) => orca.log(`model router config result publish failed: ${err.message}`))
+
+  await publishModelRouterStatus(orca, storageHost, options)
 }
 
 // ---------------------------------------------------------------------------
@@ -2091,6 +2376,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
       .then(() => attendModSkillsConfigRequest(orca, storageHost))
       .catch((error) => orca.log(`mod-skills config request handling failed: ${error.message}`))
+      .then(() => attendModelRouterConfigRequest(orca, storageHost))
+      .catch((error) => orca.log(`model router config request handling failed: ${error.message}`))
       .then(() => attendDenyTierConfigRequest(orca, storageHost))
       .catch((error) => orca.log(`deny-tier config request handling failed: ${error.message}`))
       .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
@@ -2198,6 +2485,8 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial locale status failed: ${error.message}`))
   publishModSkillsStatus(orca, storageHost)
     .catch((error) => orca.log(`initial mod-skills status failed: ${error.message}`))
+  publishModelRouterStatus(orca, storageHost)
+    .catch((error) => orca.log(`initial model router status failed: ${error.message}`))
   publishDenyTierStatus(orca, storageHost)
     .catch((error) => orca.log(`initial deny-tier status failed: ${error.message}`))
   publishWorkerHeartbeat(orca, storageHost)
@@ -2223,6 +2512,29 @@ export default function activate (orca) {
   }, MEASUREMENTS_REFRESH_MS)
   if (typeof measurementsTimer.unref === 'function') measurementsTimer.unref()
 
+  // Account quota mirror (JEV-060 slice 1) -- one call now, then every 10
+  // minutes: quota changes only as the account is actually used, so there
+  // is no need for the secret/panel poll's fast cadence, same reasoning as
+  // the measurements refresh just above.
+  mirrorAccountQuota(orca)
+    .catch((error) => orca.log(`initial account quota mirror failed: ${error.message}`))
+  const accountQuotaTimer = setInterval(() => {
+    mirrorAccountQuota(orca)
+      .catch((error) => orca.log(`account quota mirror refresh failed: ${error.message}`))
+  }, ACCOUNT_QUOTA_REFRESH_MS)
+  if (typeof accountQuotaTimer.unref === 'function') accountQuotaTimer.unref()
+
+  // Consumption summary (JEV-060 slice 1, T4) -- one call now, then on its
+  // own CONSUMPTION_REFRESH_MS cadence (see that constant's own comment for
+  // why it is not tied to the 15s measurements cadence).
+  publishConsumptionSummary(orca, storageHost)
+    .catch((error) => orca.log(`initial consumption summary failed: ${error.message}`))
+  const consumptionTimer = setInterval(() => {
+    publishConsumptionSummary(orca, storageHost)
+      .catch((error) => orca.log(`consumption summary refresh failed: ${error.message}`))
+  }, CONSUMPTION_REFRESH_MS)
+  if (typeof consumptionTimer.unref === 'function') consumptionTimer.unref()
+
   // Deliberately NOT wired here: Orca reaps an idle worker (or restarts one
   // for any other reason) by calling this same teardown, and that is a
   // routine event, not the user disabling the plugin -- there is no
@@ -2239,6 +2551,8 @@ export default function activate (orca) {
     secretPollStopped = true
     if (secretTimer) clearTimeout(secretTimer)
     clearInterval(measurementsTimer)
+    clearInterval(accountQuotaTimer)
+    clearInterval(consumptionTimer)
   }
 }
 
@@ -2257,6 +2571,7 @@ export {
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
   attendLocaleRequest,
+  attendModelRouterConfigRequest,
   attendModSkillsConfigRequest,
   attendPolicySeedDismissRequest,
   attendPolicySeedImportRequest,
@@ -2269,6 +2584,8 @@ export {
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
+  consumptionSidecarArgv,
+  CONSUMPTION_STATUS_KEY,
   DENY_TIER_CONFIG_RESULT_KEY,
   DENY_TIER_STATUS_KEY,
   deriveCatalogFromOrca,
@@ -2278,6 +2595,9 @@ export {
   LOCALE_RESULT_KEY,
   LOCALE_STATUS_KEY,
   migrateLegacyPolicyKinds,
+  mirrorAccountQuota,
+  MODEL_ROUTER_CONFIG_RESULT_KEY,
+  MODEL_ROUTER_STATUS_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
   POLICIES_WITHOUT_KIND_STATUS_KEY,
@@ -2286,8 +2606,10 @@ export {
   POLICY_SEED_NOTICE_STATUS_KEY,
   POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
+  publishConsumptionSummary,
   publishGateDefaults,
   publishLocaleStatus,
+  publishModelRouterStatus,
   publishModSkillsStatus,
   publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,

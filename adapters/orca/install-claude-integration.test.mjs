@@ -14,8 +14,8 @@
 // disturbing the other three.
 
 import { strict as assert } from 'node:assert'
-import { execFileSync } from 'node:child_process'
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -850,4 +850,163 @@ test('uninstall removes the hook regardless of which locale wrote its status tex
   run('uninstall', home)
   const raw = readFileSync(settingsPathFor(home), 'utf8')
   assert.equal(raw, '{}\n', 'the Spanish-authored entry must still be found and removed even though the CURRENT locale is now English')
+})
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 2, §9 T9: the Orca config panel's own switch, without a
+// second source of truth (§7) -- these two CLI modes are its whole worker
+// side, exercised the same way as install/uninstall/status above (a real
+// subprocess against a throwaway HOME). `runRouter` never passes a
+// pluginRoot -- routerModeStatus/routerModeSet touch only settings.json,
+// never the plugin tree.
+// ---------------------------------------------------------------------------
+
+const ROUTER_SETTINGS_KEY = 'orca-jev-mod-skills@skills-dir'
+
+function runRouter (args, home, userDataDir) {
+  const env = { ...process.env, HOME: home }
+  if (userDataDir === undefined) delete env.ORCA_USER_DATA_PATH
+  else env.ORCA_USER_DATA_PATH = userDataDir
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  const stdout = execFileSync(process.execPath, [SCRIPT_PATH, ...args], { env, encoding: 'utf8' })
+  return JSON.parse(stdout)
+}
+
+/** A throwaway Orca `userData` dir with one fake account directory under
+ *  `claude-accounts/<accountId>` -- all discoverTargets() itself needs to
+ *  find it (settingsPathFor's own `auth/settings.json` is created lazily by
+ *  writeSettingsAtomic on the first router-mode-set, exactly like a real
+ *  account Orca has never written a hook into yet). */
+function makeUserDataWithAccount (home, accountId) {
+  const userDataDir = join(home, 'orca-userdata')
+  mkdirSync(join(userDataDir, 'claude-accounts', accountId), { recursive: true })
+  return userDataDir
+}
+
+test('router-mode-status: with no Orca accounts reachable, reports only "home", default "measure"', () => {
+  const home = makeHome()
+  const result = runRouter(['router-mode-status'], home)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.targets, [{ target: 'home', mode: 'measure' }])
+})
+
+test('router-mode-status: reads back a mode already set in settings.json, home and an account both', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const userDataDir = makeUserDataWithAccount(home, accountId)
+  writeSettings(home, { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: 'active' } } } })
+  const result = runRouter(['router-mode-status'], home, userDataDir)
+  const byTarget = Object.fromEntries(result.targets.map((t) => [t.target, t.mode]))
+  assert.equal(byTarget.home, 'active')
+  assert.equal(byTarget[accountId], 'measure', 'an account with no settings.json yet defaults to measure')
+})
+
+test('router-mode-set: writes routerMode into home settings.json, creating the file, keeping every other key', () => {
+  const home = makeHome()
+  writeSettings(home, { env: { SOME_OTHER_VAR: '1' } })
+  const result = runRouter(['router-mode-set', 'home', 'active'], home)
+  assert.equal(result.ok, true)
+  assert.equal(result.target, 'home')
+  assert.equal(result.mode, 'active')
+  const settings = readSettings(home)
+  assert.equal(settings.env.SOME_OTHER_VAR, '1', 'an unrelated existing key must survive the write')
+  assert.equal(settings.pluginConfigs[ROUTER_SETTINGS_KEY].options.routerMode, 'active')
+})
+
+test('router-mode-set: writes into the ACCOUNT settings.json the target names, never the home one', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const userDataDir = makeUserDataWithAccount(home, accountId)
+  const result = runRouter(['router-mode-set', accountId, 'off'], home, userDataDir)
+  assert.equal(result.ok, true)
+  const accountSettingsPath = join(userDataDir, 'claude-accounts', accountId, 'auth', 'settings.json')
+  const accountSettings = JSON.parse(readFileSync(accountSettingsPath, 'utf8'))
+  assert.equal(accountSettings.pluginConfigs[ROUTER_SETTINGS_KEY].options.routerMode, 'off')
+  assert.equal(existsSync(settingsPathFor(home)), false, 'the home settings.json must never be touched by an account-targeted set')
+})
+
+test('router-mode-set: an unknown mode is rejected, never guessed at or silently defaulted', () => {
+  const home = makeHome()
+  const result = runRouter(['router-mode-set', 'home', 'turbo'], home)
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'unknown-mode')
+  assert.equal(existsSync(settingsPathFor(home)), false, 'a rejected mode must never write settings.json')
+})
+
+test('router-mode-set: an unknown target is rejected', () => {
+  const home = makeHome()
+  const result = runRouter(['router-mode-set', 'account:not-a-real-account', 'active'], home)
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'unknown-target')
+})
+
+// Review round 2, finding 6: Claude Code and the person edit settings.json
+// too. The router-mode writer must never lose their edit, never rewrite an
+// unchanged file, keep its formatting, and never overwrite a non-object.
+
+function runRouterAsync (args, home, extraEnv) {
+  const env = { ...process.env, HOME: home, ...extraEnv }
+  delete env.ORCA_USER_DATA_PATH
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCRIPT_PATH, ...args], { env })
+    let stdout = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.on('error', reject)
+    child.on('close', () => resolve(JSON.parse(stdout)))
+  })
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('finding 6: an edit made while the router mode is being written survives (re-read, then merge again)', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  const pending = runRouterAsync(['router-mode-set', 'home', 'active'], home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
+  await sleep(250)
+  writeSettings(home, { model: 'opus', permissions: { allow: ['Bash(ls)'] } })
+  const result = await pending
+  assert.equal(result.ok, true)
+  const settings = readSettings(home)
+  assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] }, 'the concurrent edit must not be lost')
+  assert.equal(settings.pluginConfigs[ROUTER_SETTINGS_KEY].options.routerMode, 'active')
+})
+
+test('finding 6: a file that keeps changing under the writer is reported as a failure, never clobbered', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  const pending = runRouterAsync(['router-mode-set', 'home', 'active'], home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800' })
+  await sleep(300)
+  writeSettings(home, { model: 'opus', edit: 1 })
+  await sleep(1000)
+  writeSettings(home, { model: 'opus', edit: 2 })
+  const result = await pending
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'concurrent-change')
+  assert.deepEqual(readSettings(home), { model: 'opus', edit: 2 })
+})
+
+test('finding 6: the requested mode already set means no write at all, byte for byte', () => {
+  const home = makeHome()
+  const raw = `{\n    "pluginConfigs": {\n        "${ROUTER_SETTINGS_KEY}": { "options": { "routerMode": "active" } }\n    }\n}\n`
+  mkdirSync(dirname(settingsPathFor(home)), { recursive: true })
+  writeFileSync(settingsPathFor(home), raw)
+  const result = runRouter(['router-mode-set', 'home', 'active'], home)
+  assert.equal(result.ok, true)
+  assert.equal(result.unchanged, true)
+  assert.equal(readFileSync(settingsPathFor(home), 'utf8'), raw)
+})
+
+test('finding 6: a settings.json that is not a JSON object is refused and left as it is', () => {
+  const home = makeHome()
+  mkdirSync(dirname(settingsPathFor(home)), { recursive: true })
+  writeFileSync(settingsPathFor(home), '[]\n')
+  const result = runRouter(['router-mode-set', 'home', 'active'], home)
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'not-an-object')
+  assert.equal(readFileSync(settingsPathFor(home), 'utf8'), '[]\n')
 })

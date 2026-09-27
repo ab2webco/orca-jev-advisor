@@ -163,10 +163,21 @@ export interface ModSkillsPluginManifestInput {
   readonly version: string;
   readonly description: string;
   readonly authorName: string;
+  /** The manifest's `userConfig` fields (Claude Code's own config menu rows), when the plugin declares any. */
+  readonly userConfig?: Readonly<Record<string, unknown>>;
+  /** The plugin's type contract (its `$.state` values), relative to the copy's root. */
+  readonly types?: string;
 }
 
 export function buildModSkillsPluginManifest(input: ModSkillsPluginManifestInput): string {
-  const manifest = { name: input.name, version: input.version, description: input.description, author: { name: input.authorName } };
+  const manifest = {
+    name: input.name,
+    version: input.version,
+    description: input.description,
+    author: { name: input.authorName },
+    ...(input.userConfig !== undefined ? { userConfig: input.userConfig } : {}),
+    ...(input.types !== undefined ? { types: input.types } : {}),
+  };
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 

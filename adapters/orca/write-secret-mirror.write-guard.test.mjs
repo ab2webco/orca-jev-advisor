@@ -29,6 +29,10 @@ const FAKE_CATALOG_PATH = join(FAKE_REAL_HOME, '.config', 'orca-supervisor', 'ca
 // this same script, through the same CONFIG_DIR resolution -- the same
 // incident class applies to it as to catalog.json/policies.json above.
 const FAKE_MODELS_PATH = join(FAKE_REAL_HOME, '.config', 'orca-supervisor', 'models-catalog.json')
+// The account quota mirror (JEV-060 slice 1, main.mjs's mirrorAccountQuota)
+// is written by this same script, through the same CONFIG_DIR resolution --
+// the same incident class applies to it as to the two paths above.
+const FAKE_QUOTA_PATH = join(FAKE_REAL_HOME, '.config', 'orca-supervisor', 'quota.json')
 
 function resetFixture () {
   rmSync(FAKE_REAL_HOME, { recursive: true, force: true })
@@ -131,6 +135,36 @@ test('models-save rejects a payload that is not {active: boolean, ready: boolean
     assert.equal(result.ok, false)
     assert.equal(result.reason, 'invalid-shape')
     assert.equal(existsSync(join(tempHome, '.config', 'orca-supervisor', 'models-catalog.json')), false)
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})
+
+test('refuses quota-save against a real-looking, non-isolated HOME under the test runner', () => {
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'fixture must not pre-exist')
+
+  const result = runMirrorAgainst(FAKE_REAL_HOME, 'quota-save', JSON.stringify({ accounts: [], checkedAt: new Date().toISOString() }))
+
+  // Same guard, same reason -- see the catalog-save test above for why this
+  // fires one layer earlier than a per-write check.
+  assert.equal(result.ok, false, `expected the paths guard to refuse quota-save, got: ${JSON.stringify(result)}`)
+  assert.equal(result.reason, 'exception')
+  assert.match(result.detail, /paths guard/i)
+  assert.match(result.detail, /refused to hand back/i)
+  assert.equal(existsSync(FAKE_QUOTA_PATH), false, 'the guard must fire before any file is created')
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'the guard must fire before even the directory is created')
+})
+
+test('quota-save still saves normally against an isolated (mkdtemp-style) HOME', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-quota-sanity-'))
+  try {
+    const payload = { accounts: [{ id: 'a1', status: 'ok', sessionUsedPercent: 2, weeklyUsedPercent: 55, resetsAt: 1790568000000 }], checkedAt: '2026-09-26T00:00:00.000Z' }
+    const result = runMirrorAgainst(tempHome, 'quota-save', JSON.stringify(payload), {
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
+    assert.equal(result.ok, true, `expected a normal quota-save to succeed, got: ${JSON.stringify(result)}`)
+    const written = JSON.parse(readFileSync(join(tempHome, '.config', 'orca-supervisor', 'quota.json'), 'utf8'))
+    assert.deepEqual(written, payload)
   } finally {
     rmSync(tempHome, { recursive: true, force: true })
   }

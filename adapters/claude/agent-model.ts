@@ -37,6 +37,7 @@ import { resolveApiKey } from '../../src/core/secrets.ts'
 import { MODEL_MEASUREMENT_FILE, serializeModelRecord } from '../../src/core/model_measurement.ts'
 import type { ModelMeasurementRecord } from '../../src/core/model_measurement.ts'
 import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
+import { routerModeFromSettings } from '../../src/core/model_router_mode.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 import { handleAgentModelHook } from './agent-model-hook.ts'
 
@@ -79,6 +80,22 @@ function readHookInput(): unknown {
     return JSON.parse(raw)
   } catch {
     return null
+  }
+}
+
+/** JEV-060 slice 2: whether the mod-skills model router is active on this
+ *  account -- its `routerMode` in the account's own settings.json
+ *  (`$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`),
+ *  where Claude Code's config menu stores a plugin's userConfig. The router
+ *  then owns subagent models and this hook only measures. Missing or
+ *  unreadable reads as not active (the router's own default, measure). */
+function readRouterActive(): boolean {
+  const configDir = process.env.CLAUDE_CONFIG_DIR
+  const settingsPath = configDir !== undefined && configDir.length > 0 ? join(configDir, 'settings.json') : join(homedir(), '.claude', 'settings.json')
+  try {
+    return routerModeFromSettings(JSON.parse(readFileSync(settingsPath, 'utf8'))) === 'active'
+  } catch {
+    return false
   }
 }
 
@@ -159,6 +176,7 @@ async function main(): Promise<void> {
   const payload = readHookInput()
   const apiKey = await resolveApiKey()
   const mirror = readMirror()
+  const routerActive = readRouterActive()
 
   const result = await handleAgentModelHook(payload, {
     mirror,
@@ -166,6 +184,7 @@ async function main(): Promise<void> {
     askJev: (key, state, questions) => callJev(key, state, questions, { budgetMs: BUDGET_MS }),
     now: () => new Date(),
     clockMs: () => Date.now(),
+    routerActive,
   })
 
   if (result.record !== null) appendRecord(result.record)

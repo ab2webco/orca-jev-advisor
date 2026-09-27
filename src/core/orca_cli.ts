@@ -55,6 +55,7 @@ export const ORCA_CLI_ARGUMENTS = {
   worktreePs: ["worktree", "ps", "--json"],
   worktreeList: ["worktree", "list", "--json"],
   status: ["status", "--json"],
+  accountList: ["account", "list", "--json"],
 } as const;
 
 /** How long any one CLI call may take before it is abandoned. */

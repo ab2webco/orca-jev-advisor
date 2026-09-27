@@ -31,4 +31,59 @@ for (const file of PANELS) {
     const offenders = translationValues(file).filter(({ value }) => value.includes(' -- ')).map(({ key }) => key)
     assert.deepEqual(offenders, [])
   })
+
+}
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 2, T9: key parity for the keys THIS task adds -- a key
+// declared in one locale block and forgotten in the other renders as a raw
+// i18n key on screen, never a translated sentence. Scoped to the new keys
+// only: a full-catalog parity sweep would also fail on pre-existing gaps
+// this task did not touch and is not the one to fix. Each key must appear
+// exactly twice in the file's flat 'key': 'value' line list -- once in the
+// `es` block, once in `en` -- never once (missing from a locale) or three+
+// times (accidentally duplicated within a block).
+// ---------------------------------------------------------------------------
+
+const NEW_ROUTER_KEYS_BY_FILE = {
+  'board.html': [
+    'consumption.accountHome',
+    'consumption.accountLabel',
+    'consumption.modelRouterHeading',
+    'consumption.modelRouterEmpty',
+    'consumption.modelRouterNoDecisions',
+    'consumption.modelRouterPointStart',
+    'consumption.modelRouterPointStage',
+    'consumption.modelRouterPointSubagent',
+    'consumption.modelRouterTierSimple',
+    'consumption.modelRouterTierStandard',
+    'consumption.modelRouterTierComplex',
+    'consumption.modelRouterTierFrontier',
+    'consumption.modelRouterAppliedMeasured',
+    'consumption.modelRouterSavedEstimate',
+    'consumption.modelRouterNoEstimateYet',
+  ],
+  'config.html': [
+    'modelRouter.heading',
+    'modelRouter.explanation',
+    'modelRouter.targetHome',
+    'modelRouter.targetAccount',
+    'modelRouter.modeOff',
+    'modelRouter.modeMeasure',
+    'modelRouter.modeActive',
+    'modelRouter.save',
+    'modelRouter.saving',
+    'modelRouter.saved',
+    'modelRouter.empty',
+  ],
+}
+
+for (const [file, keys] of Object.entries(NEW_ROUTER_KEYS_BY_FILE)) {
+  test(`${file}: JEV-060 slice 2 T9's new i18n keys are each declared once in es and once in en`, () => {
+    const values = translationValues(file)
+    for (const key of keys) {
+      const occurrences = values.filter((v) => v.key === key).length
+      assert.equal(occurrences, 2, `expected "${key}" to appear exactly twice (once per locale) in ${file}, found ${occurrences}`)
+    }
+  })
 }

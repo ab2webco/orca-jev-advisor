@@ -133,6 +133,66 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   place — an entry written under either locale is still recognised as
   ours, so nothing is ever duplicated or orphaned.
 
+## What changed in 0.6.0
+
+- **Jev picks the model and effort each session needs (model router).**
+  On a Claude Max plan the weekly limit is spent mostly on re-reading the
+  conversation, not on answers: over three days of real sessions, cache
+  reads were 74% of Sonnet's usage and 57% of Opus's, with an average of
+  243k (Sonnet) and 379k (Opus) tokens of context re-read per response.
+  So the router saves by running simple work on a cheaper model, and it
+  never switches in the middle of a warm conversation: the prompt cache is
+  kept per model and per effort level, and a switch writes the whole
+  context again (measured: every switch started from zero cache reads).
+  - **Where it decides.** At the first prompt of a session (nothing cached
+    yet), when a subagent starts (its context is new), and at a later turn
+    only when it pays: an upgrade happens at once; a downgrade needs the
+    same lower tier on two turns in a row AND an estimated saving over the
+    remaining steps that beats the cache rewrite by 20%.
+  - **What it picks from.** Four tiers per account: Haiku 4.5 (no effort),
+    Sonnet 5 (medium), Opus 5.5 (high), and Fable 5.1 (extra high) only
+    when the catalog marks it available and the account has an open Fable
+    weekly window; otherwise the top tier is Opus. A gateway account (a
+    non-Anthropic `ANTHROPIC_BASE_URL`) uses the models its own
+    `ANTHROPIC_DEFAULT_*_MODEL` settings name; its prices are unknown, so
+    it never downgrades on cost.
+  - **The quality floor wins.** It never goes below the session's own
+    model when the work mentions security, credentials, a release, a
+    deploy, a migration or production (in English or Spanish); when the
+    previous turn had a tool error or a failing test; or when Jev is less
+    than 70% sure. Upgrading is always allowed. A model you pick yourself
+    mid-session wins. It also never goes below it when the session's
+    folder is a client site in the destination catalog, or when a
+    `requires_human` / `prohibits` policy is scoped to that destination
+    (the same catalog and policies the command gate reads). Global
+    policies do not hold the floor on their own: the command gate already
+    applies them to every command. If the catalog is missing or cannot be
+    read, the destination counts as unknown and changes nothing.
+  - **Measure first.** The switch has three positions: `measure` (the
+    default: it decides, logs and shows "would use:" on the status line,
+    and changes nothing), `active`, and `off`. Set it per account in the
+    Advisor settings (Models → Jev model router), or in Claude Code's own
+    `/config` ("Jev model router"); both are the same setting, stored in
+    that account's settings.json. It applies to new sessions.
+  - **On the board.** The Consumption card gains a "Model router" part:
+    the last 24 hours of decisions by point and tier, applied against
+    measured, and an estimated saving at list prices for applied switches.
+  - **What is measured.** Every decision is one line in
+    `model-router-decisions-<hour>.jsonl` under the cache folder: the
+    point (start, stage, subagent), the tier, Jev's confidence, the model
+    before and after, whether it was applied, the reason and guard, and,
+    for a downgrade, the context size, rewrite cost, per-step saving and
+    expected steps. Never the prompt text.
+  - **Near the weekly limit.** From 95% of the weekly quota, standard
+    work may drop to the simple tier, but only right after a turn that
+    edited no files and had no failing tool or test. Between 80% and 94%
+    no tier moves; a downgrade just needs one agreeing turn instead of two.
+  - **The model does not know it was switched.** After a switch, if you
+    ask the model which model it is, it may still name the session's
+    configured model: its system prompt names that one and the router
+    does not change it. The model that really answered is the one on the
+    status line and in the API's own usage records.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.

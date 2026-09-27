@@ -10,6 +10,7 @@ import { ADVISOR_CATALOG } from "./i18n_advisor.ts";
 import { DESTINATION_CATALOG } from "./i18n_destination.ts";
 import { GATE_CATALOG } from "./i18n_gate.ts";
 import { MOD_SKILLS_CATALOG } from "./i18n_mod_skills.ts";
+import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
 import { TOOLS_CATALOG } from "./i18n_tools.ts";
 
 const CATALOGS: ReadonlyArray<readonly [string, Readonly<Record<string, string>>]> = [
@@ -17,6 +18,7 @@ const CATALOGS: ReadonlyArray<readonly [string, Readonly<Record<string, string>>
   ["destination", DESTINATION_CATALOG.es],
   ["gate", GATE_CATALOG.es],
   ["mod_skills", MOD_SKILLS_CATALOG.es],
+  ["model_router", MODEL_ROUTER_CATALOG.es],
   ["tools", TOOLS_CATALOG.es],
 ];
 

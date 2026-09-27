@@ -309,3 +309,13 @@ test("never throws: an unexpected exception OUTSIDE the Jev call still fails ope
   assert.equal(record.failOpen, "jev-unreachable");
   assert.equal(record.source, "none");
 });
+
+test("JEV-060 slice 2: with the function-hook model router active, this classic hook never rewrites -- it only measures", async () => {
+  const payload = preToolUsePayload({
+    permission_mode: "bypassPermissions",
+    tool_input: { prompt: "do the thing", description: "a task", subagent_type: "general-purpose", model: "haiku" },
+  });
+  const result = await handleAgentModelHook(payload, baseDeps({ mirror: { active: true, ready: true, models: LADDER }, routerActive: true }));
+  assert.equal(result.stdout, null);
+  assert.equal(decisionRecord(result).mode, "measurement");
+});

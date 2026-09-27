@@ -60,6 +60,13 @@ export interface AgentModelHookDeps {
   readonly askJev: (apiKey: string, state: JsonValue, questions: Record<string, Question>) => Promise<JevResponse>;
   readonly now: () => Date;
   readonly clockMs: () => number;
+  /**
+   * JEV-060 slice 2: the function-hook model router (mod-skills'
+   * `agent.spawn`) is active on this account. It owns subagent models then,
+   * so this hook never rewrites and only keeps measuring -- the two never
+   * both rewrite one spawn.
+   */
+  readonly routerActive?: boolean;
 }
 
 export interface AgentModelHookResult {
@@ -126,7 +133,7 @@ async function handlePreToolUse(payload: Record<string, unknown>, id: string, de
 
   const mirror = parseModelsMirror(deps.mirror);
   const ladder: readonly ModelEntry[] = availableLadder(mirror.models);
-  const mode: "measurement" | "active" = mirror.active ? "active" : "measurement";
+  const mode: "measurement" | "active" = mirror.active && deps.routerActive !== true ? "active" : "measurement";
   const promptChars = input.prompt.length;
 
   const questions = buildModelQuestions(ladder, input);

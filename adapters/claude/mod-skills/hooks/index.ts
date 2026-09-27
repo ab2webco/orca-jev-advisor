@@ -76,7 +76,7 @@
  * the engine refuses; they are top-level functions now too, taking their
  * cache explicitly instead of closing over it.
  */
-import type { EngineInterface, On, PluginOptions, Register } from 'claude-code'
+import type { AgentSpawnInput, AgentSpawnResult, EngineInterface, Frozen, Next, On, PluginOptions, Register, StreamHookBody, StreamNext, TurnStepChunk, TurnStepInput, TurnStepResult } from 'claude-code'
 import { callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
 import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
@@ -130,6 +130,22 @@ import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readine
 import type { JevFetch, JevFetchResponse, JevSleep } from '../../../../src/core/jev.ts'
 import { computeHomePaths, parseEnvFile, resolveUserSkillsDir } from './runtime.ts'
 import type { ModHomePaths } from './runtime.ts'
+import { parseQuota } from '../../../../src/core/consumption.ts'
+import { parseModelsMirror } from '../../../../src/core/model_mirror.ts'
+import { parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
+import type { ResolvedTiers } from '../../../../src/core/model_router_accounts.ts'
+import { buildTierQuestions, buildTierState, decideStart, interpretTier, routerDecisionFileName, routerDecisionRecord, toRouterEffort } from '../../../../src/core/model_router_decide.ts'
+import type { RouterDecision, TierJudgment } from '../../../../src/core/model_router_decide.ts'
+import { parseRouterMode } from '../../../../src/core/model_router_mode.ts'
+import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
+import { routerStatusText } from '../../../../src/core/model_router_status.ts'
+import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaBandOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
+import type { ActivityMessage, SessionUsage, StageDecision } from '../../../../src/core/model_router_stage.ts'
+import type { DestinationKind, QuotaBand, TurnActivity } from '../../../../src/core/model_router_decide.ts'
+import { resolveRouterDestination } from '../../../../src/core/model_router_destination.ts'
+import type { RouterDestination } from '../../../../src/core/model_router_destination.ts'
+import { decideSubagent } from '../../../../src/core/model_router_subagent.ts'
+import type { RouterSessionStats, RouterSticky } from '../types/index.d.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -471,6 +487,467 @@ export async function appendToolMeasurement($: EngineInterface, line: string): P
 }
 
 // ---------------------------------------------------------------------------
+// turn.step usage recording (JEV-060 slice 1) -- a pass-through hook that
+// records per-step token usage under the cache dir. No prompt text or
+// content is ever recorded here, only usage numbers/metadata.
+//
+// $.fs has no append: appendToFile above always reads the whole file then
+// rewrites it, the same shape appendMeasurement/appendToolMeasurement use.
+// Those fire once per prompt; turn.step fires once per model step, so an
+// ever-growing single file would mean re-reading and rewriting a multi-MB
+// log on every step -- and $.fs.read/write both reject outright above 4 MiB,
+// so a single growing file would silently stop recording well before any
+// line-count rotation ever ran. Instead, each hour gets its own small file
+// (`turn-usage-YYYY-MM-DDTHH.jsonl`, ~200 lines/~50 KB at typical volume):
+// an append only ever rewrites the current hour's file, never an older one.
+// The worker (T4) aggregates the hourly files into its summary and prunes
+// ones older than 8 days; this hook does no rotation of its own.
+// ---------------------------------------------------------------------------
+
+/** The account uuid embedded in `CLAUDE_CONFIG_DIR` (`.../claude-accounts/<uuid>/auth`), or `"home"` when it is absent or does not match -- see src/core/orca_accounts.ts for the same convention on the Node side. Pure: no `$`, so it stays reusable by anything that already has the env value in hand. */
+function accountFromConfigDir(claudeConfigDir: string | undefined): string {
+  if (claudeConfigDir === undefined) return 'home'
+  const match = /claude-accounts[\/]([^\/]+)[\/]auth/.exec(claudeConfigDir)
+  return match?.[1] ?? 'home'
+}
+
+/** `accountFromConfigDir` wired to the live env -- the literal `'CLAUDE_CONFIG_DIR'` at the call site, same convention as every other `$.env.get` read in this file. */
+async function resolveAccountId($: EngineInterface): Promise<string> {
+  const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+  return accountFromConfigDir(claudeConfigDir)
+}
+
+/** `turn-usage-YYYY-MM-DDTHH.jsonl` for the hour `atIso` (an ISO instant) falls in -- pure, so it is reusable by the worker-side aggregator without `$`. */
+function turnUsageFileName(atIso: string): string {
+  return `turn-usage-${atIso.slice(0, 13)}.jsonl`
+}
+
+/** Appends one usage line to the current hour's own `turn-usage-*.jsonl` file under the cache dir -- same append-then-best-effort shape appendMeasurement uses, but scoped to one hour so an append never touches an older file. */
+async function appendTurnUsage($: EngineInterface, atIso: string, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/${turnUsageFileName(atIso)}`, line)
+  } catch {
+    // Recording is best-effort and must never block or fail a turn.
+  }
+}
+
+/** Builds and appends this step's usage line. Never touches `e` beyond reading it, and never throws (appendTurnUsage already swallows its own errors; a `$.clock.now()` rejection here is the only other failure mode, left to the caller's own try/catch). */
+async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: TurnStepResult): Promise<void> {
+  const at = new Date(await $.clock.now()).toISOString()
+  const account = await resolveAccountId($)
+  const line = JSON.stringify({
+    at,
+    agent: e.agentId === undefined ? 'main' : 'subagent',
+    model: r.usage?.model ?? e.model,
+    effort: e.effort ?? null,
+    input: r.usage?.input_tokens ?? null,
+    output: r.usage?.output_tokens ?? null,
+    cacheRead: r.usage?.cache_read_input_tokens ?? null,
+    cacheWrite: r.usage?.cache_creation_input_tokens ?? null,
+    stopReason: r.stopReason,
+    account,
+  })
+  await appendTurnUsage($, at, `${line}\n`)
+}
+
+// ---------------------------------------------------------------------------
+// Model router (JEV-060 slice 2, odd/tasks/jev-060-router.md): Jev picks the
+// model and effort a session needs, where switching costs nothing -- a cold
+// context. The prompt cache is per model AND per effort (§2), so a switch
+// inside a warm conversation re-writes the whole context; that is why the
+// decision is made once at session start (point A) and then kept STICKY on
+// every later main-loop step, in `$.state` (it survives a hot reload; a
+// module variable would not).
+//
+// Mode (`options.routerMode`, the manifest's userConfig picker, §7):
+//   off      -- nothing runs;
+//   measure  -- decide, log, show "would use:", change nothing (default);
+//   active   -- apply the decision.
+// Fails open like every other path here: any error leaves the step as it was.
+// ---------------------------------------------------------------------------
+
+const ROUTER_BUDGET_MS = 800
+
+/** A JSON file through `$.fs`, or null when missing, unreadable or malformed. */
+async function readJsonFile($: EngineInterface, path: string): Promise<unknown> {
+  try {
+    if (!(await $.fs.exists(path))) return null
+    return JSON.parse(await $.fs.read(path))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * This account's tier → model map (§5): the vault settings.json `env`
+ * (`<CLAUDE_CONFIG_DIR>/settings.json`, or `~/.claude/settings.json` with no
+ * vault), with the live process env filling what the vault does not set;
+ * the worker's models-catalog.json and quota.json mirrors.
+ */
+async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand }> {
+  const paths = await resolveHomePaths($)
+  const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+  const vaultDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
+  const vaultEnv = vaultDir === null ? {} : parseVaultEnv(await readJsonFile($, `${vaultDir}/settings.json`))
+  const [baseUrl, opusModel, sonnetModel, haikuModel, mainModel] = await Promise.all([
+    $.env.get('ANTHROPIC_BASE_URL'),
+    $.env.get('ANTHROPIC_DEFAULT_OPUS_MODEL'),
+    $.env.get('ANTHROPIC_DEFAULT_SONNET_MODEL'),
+    $.env.get('ANTHROPIC_DEFAULT_HAIKU_MODEL'),
+    $.env.get('ANTHROPIC_MODEL'),
+  ])
+  const processEnv: Record<string, string> = {}
+  const pairs: readonly (readonly [string, string | undefined])[] = [
+    ['ANTHROPIC_BASE_URL', baseUrl],
+    ['ANTHROPIC_DEFAULT_OPUS_MODEL', opusModel],
+    ['ANTHROPIC_DEFAULT_SONNET_MODEL', sonnetModel],
+    ['ANTHROPIC_DEFAULT_HAIKU_MODEL', haikuModel],
+    ['ANTHROPIC_MODEL', mainModel],
+  ]
+  for (const [key, value] of pairs) if (value !== undefined && value.length > 0) processEnv[key] = value
+  const catalog = paths ? parseModelsMirror(await readJsonFile($, `${paths.configDir}/models-catalog.json`)).models : []
+  const quotaFile = paths ? parseQuota(await readJsonFile($, `${paths.configDir}/quota.json`)) : { accounts: [], checkedAt: null }
+  const quota = quotaFile.accounts.find((row) => row.id === account) ?? null
+  const tiers = resolveAccountTiers({ env: { ...processEnv, ...vaultEnv }, catalog, quota })
+  return { tiers, band: quotaBandOf(quota, quotaFile.checkedAt, await $.clock.now()) }
+}
+
+/** Appends one decision line to the current hour's `model-router-decisions-*.jsonl`, best-effort. */
+async function appendRouterDecision($: EngineInterface, atIso: string, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/${routerDecisionFileName(atIso)}`, line)
+  } catch {
+    // Logging is best-effort and must never block or fail a turn.
+  }
+}
+
+/**
+ * The destination guard's input for `cwd` (gap G6): the Bash gate's own
+ * `catalog.json` / `policies.json` mirrors, matched on the cwd and then on
+ * its linked worktree's main checkout (the gate's own fallback, resolved
+ * here through git since the hooks module has no Node filesystem calls).
+ * Any failure is "unknown", which never holds the floor on its own.
+ */
+async function resolveSessionDestination($: EngineInterface, cwd: string): Promise<RouterDestination> {
+  const unknown: RouterDestination = { destinationKind: null, destinationId: null, policyHit: false, status: 'unknown' }
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return unknown
+    const catalog = await readJsonFile($, `${paths.configDir}/catalog.json`)
+    const policies = await readJsonFile($, `${paths.configDir}/policies.json`)
+    const candidates = [cwd]
+    try {
+      const commonDir = await makeProcessRun($)(['git', '-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
+      const dir = commonDir.exitCode === 0 ? commonDir.stdout.trim() : ''
+      if (dir.endsWith('/.git')) candidates.push(dir.slice(0, -'/.git'.length))
+    } catch {
+      // No git, or git too slow: the cwd alone is matched.
+    }
+    return resolveRouterDestination({ catalog, policies, candidates })
+  } catch {
+    return unknown
+  }
+}
+
+/** Jev's tier judgment for this turn's prompt, or null on any failure (no key, timeout, malformed answer). */
+async function askTierJudgment($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null): Promise<TierJudgment | null> {
+  try {
+    const apiKey = await resolveApiKey($, options)
+    if (apiKey === null) return null
+    const state = buildTierState({ promptText, activity, destinationKind, quotaBand: band })
+    const response = await callJev(apiKey, state, buildTierQuestions(), { budgetMs: ROUTER_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
+    return interpretTier(response.answers)
+  } catch {
+    return null
+  }
+}
+
+function stickyEffort(effort: TurnStepInput['effort']): RouterSticky['effort'] {
+  return effort === undefined ? null : effort
+}
+
+/** `e` with `model`/`effort` replaced; an effort of null is left out of the request altogether (Haiku, a gateway). */
+function withModel(e: Frozen<TurnStepInput>, model: string, effort: RouterSticky['effort']): TurnStepInput {
+  const { effort: _dropped, ...rest } = e
+  void _dropped
+  return effort === null ? { ...rest, model } : { ...rest, model, effort }
+}
+
+/** The status-line text for a decision, or null when there is nothing to say (Jev failed). */
+function routerStatusFor(decision: Pick<RouterDecision, 'tier' | 'model' | 'effort'>, tiers: ResolvedTiers, mode: 'measure' | 'active', locale: Locale): string | null {
+  if (decision.tier === null) return null
+  const tier = tierOfModel(tiers, decision.model)
+  const label = tier === null ? decision.model : tiers[tier].label
+  const effort = typeof decision.effort === 'string' ? toRouterEffort(decision.effort) : null
+  return routerStatusText(locale, mode, { label, effort, tier: decision.tier })
+}
+
+/** Real prompts in the transcript: user messages with text and no tool results. */
+function isRealPrompt(message: ActivityMessage): boolean {
+  return message.role === 'user' && message.text.trim().length > 0 && (message.toolResults === undefined || message.toolResults.length === 0)
+}
+
+/**
+ * What a step carries under the sticky choice: rewritten only in ACTIVE
+ * mode (review finding 3 -- a sticky value written in active mode survives
+ * the reload into measure mode, and measure must change nothing) and only
+ * while the session still runs the model the router took over from.
+ */
+function stickyStepInput(e: Frozen<TurnStepInput>, sticky: RouterSticky | undefined, mode: RouterMode): TurnStepInput | Frozen<TurnStepInput> {
+  if (sticky === undefined || mode !== 'active' || !sticky.rewrite) return e
+  if (e.model !== sticky.configuredModel || stickyEffort(e.effort) !== sticky.configuredEffort) return e
+  return withModel(e, sticky.model, sticky.effort)
+}
+
+interface RoutedStep {
+  readonly input: TurnStepInput | Frozen<TurnStepInput>
+  /** New status-line text; null leaves the status line as it is. */
+  readonly status: string | null
+}
+
+const EMPTY_STATS: RouterSessionStats = { turnId: null, turnSteps: 0, stepsPerTurn: [], lastContext: null, outputTotal: 0, outputSteps: 0 }
+
+/** The last real prompt of the transcript (a user message with text and no tool results). */
+function lastPromptText(messages: readonly ActivityMessage[]): string {
+  const found = [...messages].reverse().find(isRealPrompt)
+  return found?.text ?? ''
+}
+
+/** This session's usage for break-even, or null before any step recorded one. Counts the turn in progress as completed: it is, once a new turn starts. */
+function sessionUsageOf(stats: RouterSessionStats): SessionUsage | null {
+  if (stats.lastContext === null || stats.outputSteps === 0) return null
+  const turns = stats.turnId === null ? stats.stepsPerTurn : [...stats.stepsPerTurn, stats.turnSteps]
+  return { contextTokens: stats.lastContext, avgOutput: stats.outputTotal / stats.outputSteps, medianStepsPerTurn: medianOf(turns) }
+}
+
+/**
+ * The router's part of one MAIN-loop step (§3): point A on a fresh
+ * session's first step, point C on the first step of every later turn, the
+ * sticky choice on every other step, adoption of the session's own model
+ * on a warm session or after the person switched.
+ */
+async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', options: PluginOptions): Promise<RoutedStep> {
+  const stickyRead = await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })
+  const sticky = stickyRead.value
+  const adopt = async (lastPrompt: RouterSticky['lastPrompt']): Promise<RoutedStep> => {
+    const own: RouterSticky = { model: e.model, effort: stickyEffort(e.effort), rewrite: false, configuredModel: e.model, configuredEffort: stickyEffort(e.effort), tier: null, pendingLower: null, stats: EMPTY_STATS, lastPrompt }
+    await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, own)
+    return { input: e, status: null }
+  }
+
+  if (sticky !== undefined) {
+    // The person (or the engine's fallback) moved the session off the
+    // model the router took over from: their choice wins from here on.
+    if (e.model !== sticky.configuredModel || stickyEffort(e.effort) !== sticky.configuredEffort) return adopt(sticky.lastPrompt)
+    if (e.index !== 0 || sticky.stats.turnId === e.turnId) return { input: stickyStepInput(e, sticky, mode), status: null }
+    // A new turn: point C only when a new real prompt started it (review
+    // finding 4), keyed on the prompt's identity so /compact cannot hide
+    // one (N3). A turn the engine started by itself asks Jev nothing, but
+    // its local guards still hold the floor (N2).
+    const turnMessages = await $.session.messages()
+    const promptKey = lastPromptKey(turnMessages)
+    if (!isNewPrompt(sticky.lastPrompt, promptKey)) return routeEngineTurn($, e, mode, sticky, turnMessages)
+    return routeStage($, e, mode, options, sticky, turnMessages, promptKey)
+  }
+
+  const messages = await $.session.messages()
+  const promptKey = lastPromptKey(messages)
+  // Warm: the mode was switched on mid-session or the module reloaded
+  // without its state. Adopt, change nothing (§3); from here only point C.
+  if (e.index !== 0 || messages.some((message) => message.role === 'assistant')) return adopt(promptKey)
+
+  const promptText = lastPromptText(messages)
+  const account = await resolveAccountId($)
+  const { tiers, band } = await resolveRouterAccount($, account)
+  const destination = await resolveSessionDestination($, await $.session.cwd())
+  const jev = await askTierJudgment($, options, promptText, null, band, destination.destinationKind)
+  const decision = decideStart({
+    tiers,
+    jev,
+    configuredModel: e.model,
+    configuredEffort: stickyEffort(e.effort),
+    guards: { destinationKind: destination.destinationKind, policyHit: destination.policyHit, text: promptText, activity: null, confidence: jev?.confidence ?? null },
+    band,
+  })
+  const applied = mode === 'active' && decision.changed
+  const at = new Date(await $.clock.now()).toISOString()
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band }))}\n`)
+
+  const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey }
+  const next: RouterSticky = decision.changed
+    ? { ...own, model: decision.model, effort: decision.effort, rewrite: applied, tier: decision.tier }
+    : { ...own, model: e.model, effort: stickyEffort(e.effort), rewrite: false, tier: decision.tier }
+  await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
+
+  const status = routerStatusFor(decision, tiers, mode, await resolveLocale($))
+  return { input: stickyStepInput(e, next, mode), status }
+}
+
+/** Point C (§6.4): the first step of a later turn. Asks Jev about the new prompt with the previous turn's activity, and moves the sticky model only as decideStage allows. */
+/**
+ * A turn the engine started by itself (no new real prompt, N2): no Jev
+ * call, but the local guards over the work since the last prompt. When the
+ * sticky model is below the session's own and that work failed or touches
+ * a sensitive topic, the session's own model and effort come back.
+ */
+async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', sticky: RouterSticky, messages: readonly ActivityMessage[]): Promise<RoutedStep> {
+  const account = await resolveAccountId($)
+  const { tiers, band } = await resolveRouterAccount($, account)
+  const decision = decideEngineTurn({
+    tiers,
+    currentModel: sticky.model,
+    configuredModel: sticky.configuredModel,
+    configuredEffort: sticky.configuredEffort,
+    text: lastPromptText(messages),
+    activity: summarizeSinceLastPrompt(messages),
+  })
+  if (decision === null) return { input: stickyStepInput(e, sticky, mode), status: null }
+  const at = new Date(await $.clock.now()).toISOString()
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band }))}\n`)
+  const next: RouterSticky = { ...sticky, model: decision.model, effort: decision.effort, rewrite: false, pendingLower: null }
+  await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
+  return { input: stickyStepInput(e, next, mode), status: null }
+}
+
+async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', options: PluginOptions, sticky: RouterSticky, messages: readonly ActivityMessage[], promptKey: RouterSticky['lastPrompt']): Promise<RoutedStep> {
+  const promptText = lastPromptText(messages)
+  const activity = summarizePreviousTurn(messages)
+  const account = await resolveAccountId($)
+  const { tiers, band } = await resolveRouterAccount($, account)
+  const destination = await resolveSessionDestination($, await $.session.cwd())
+  const jev = await askTierJudgment($, options, promptText, activity, band, destination.destinationKind)
+  const decision: StageDecision = decideStage({
+    tiers,
+    jev,
+    currentModel: sticky.model,
+    currentEffort: sticky.effort,
+    configuredModel: sticky.configuredModel,
+    configuredEffort: sticky.configuredEffort,
+    guards: { destinationKind: destination.destinationKind, policyHit: destination.policyHit, text: promptText, activity, confidence: jev?.confidence ?? null },
+    band,
+    pending: sticky.pendingLower,
+    usage: sessionUsageOf(sticky.stats),
+  })
+  const applied = mode === 'active' && decision.changed
+  const at = new Date(await $.clock.now()).toISOString()
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, breakEven: decision.breakEven }))}\n`)
+
+  const next: RouterSticky = decision.changed
+    ? {
+        ...sticky,
+        model: decision.model,
+        effort: decision.effort,
+        rewrite: mode === 'active' && (decision.model !== sticky.configuredModel || decision.effort !== sticky.configuredEffort),
+        tier: decision.tier ?? sticky.tier,
+        pendingLower: null,
+        lastPrompt: promptKey,
+      }
+    : { ...sticky, pendingLower: decision.pending, lastPrompt: promptKey }
+  await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
+
+  const status = decision.tier === null ? null : routerStatusFor({ tier: decision.tier, model: next.model, effort: next.effort }, tiers, mode, await resolveLocale($))
+  return { input: stickyStepInput(e, next, mode), status }
+}
+
+/** After each main step: this session's usage for break-even (§6.4), kept in the sticky state. Best-effort. */
+async function recordRouterStats($: EngineInterface, e: Frozen<TurnStepInput>, r: TurnStepResult): Promise<void> {
+  const read = await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })
+  const sticky = read.value
+  if (sticky === undefined) return
+  const stats = sticky.stats
+  const newTurn = stats.turnId !== e.turnId
+  const stepsPerTurn = newTurn && stats.turnId !== null ? [...stats.stepsPerTurn, stats.turnSteps].slice(-20) : stats.stepsPerTurn
+  const usage = r.usage
+  const context = usage === null ? null : usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0) + usage.output_tokens
+  const next: RouterSessionStats = {
+    turnId: e.turnId,
+    turnSteps: newTurn ? 1 : Math.max(stats.turnSteps, e.index + 1),
+    stepsPerTurn,
+    lastContext: context ?? stats.lastContext,
+    outputTotal: stats.outputTotal + (usage?.output_tokens ?? 0),
+    outputSteps: stats.outputSteps + (usage === null ? 0 : 1),
+  }
+  await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, { ...sticky, stats: next })
+}
+
+/**
+ * `agent.spawn` -- point B (§3, T8). A subagent starts cold, so its model
+ * is chosen for free: Jev reads the task the parent gave it. A fork keeps
+ * the parent's model by definition (its `model` is ignored), so it is left
+ * alone. Measure mode logs; active mode sets a full model id. Fails open.
+ */
+async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, next: Next<'agent.spawn'>, mode: RouterMode, options: PluginOptions): Promise<AgentSpawnResult> {
+  if (mode === 'off' || e.fork) return next(e)
+  let input: AgentSpawnInput | Frozen<AgentSpawnInput> = e
+  try {
+    const account = await resolveAccountId($)
+    const { tiers, band } = await resolveRouterAccount($, account)
+    const text = `${e.description}\n${e.prompt}`
+    const destination = await resolveSessionDestination($, e.cwd ?? (await $.session.cwd()))
+    const jev = await askTierJudgment($, options, text, null, band, destination.destinationKind)
+    const decision = decideSubagent({
+      tiers,
+      jev,
+      parentModel: e.parentModel,
+      explicitModel: e.model,
+      guards: { destinationKind: destination.destinationKind, policyHit: destination.policyHit, text, activity: null, confidence: jev?.confidence ?? null },
+      band,
+    })
+    const applied = mode === 'active' && decision.changed
+    const at = new Date(await $.clock.now()).toISOString()
+    const record = routerDecisionRecord({ at, account, point: 'subagent', decision: { ...decision, effort: null }, applied, quotaBand: band })
+    await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
+    if (applied) input = { ...e, model: decision.model }
+  } catch {
+    input = e
+  }
+  return next(input)
+}
+
+/**
+ * `turn.step` -- the router (main loop only, when not off) rewrites
+ * `model`/`effort` going down; everything else streams through unchanged
+ * (`yield* next(...)`), and this step's usage is recorded once the response
+ * is whole. Both halves fail open: a routing failure sends the step as it
+ * was, a recording failure is swallowed.
+ */
+async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void): StreamHookBody<TurnStepChunk, TurnStepResult> {
+  let input: TurnStepInput | Frozen<TurnStepInput> = e
+  if (mode !== 'off' && e.agentId === undefined) {
+    let held: RouterSticky | undefined
+    try {
+      held = (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value
+      const routed = await routeMainStep($, e, mode, options)
+      input = routed.input
+      if (routed.status !== null) showRouterStatus(routed.status)
+    } catch {
+      // A routing failure keeps the sticky choice rather than flipping this
+      // one step to the session's model and back (two cache rewrites for
+      // one failure, review finding 12).
+      input = stickyStepInput(e, held, mode)
+    }
+  }
+  const r = yield* next(input)
+  try {
+    await recordTurnUsage($, input, r)
+  } catch {
+    // Recording is best-effort and must never affect the turn.
+  }
+  if (mode !== 'off' && e.agentId === undefined) {
+    try {
+      await recordRouterStats($, e, r)
+    } catch {
+      // Best-effort: without stats a downgrade simply cannot pass break-even.
+    }
+  }
+  return r
+}
+
+// ---------------------------------------------------------------------------
 // Active-mode switches -- hoisted out of `register` (JEVADV-43): the engine
 // refuses `$` passed into a closure declared INSIDE register, only a
 // top-level function. These take the option value already resolved from
@@ -516,9 +993,10 @@ export function register(on: On, options: PluginOptions): void {
   // `options.active`/`options.activeTools` only ever carry a value once a
   // manifest declares `userConfig` (see claude-code.d.ts's own note on
   // `options`) -- the manifest install-claude-integration.mjs generates for
-  // this plugin deliberately declares none (T10,
-  // odd/tasks/panel-worker-wakeup.md), so `options` is always `{}` here and
-  // these two are unreachable through it by design, not by oversight: the
+  // this plugin deliberately declares neither (T10,
+  // odd/tasks/panel-worker-wakeup.md; its one declared field is the model
+  // router's `routerMode`, JEV-060 slice 2), so these two are always absent
+  // from `options` and unreachable through it by design, not by oversight: the
   // panel's own config file (src/core/mod_skills_config.ts, read by
   // resolveModSkillsSwitches above) is the actual source of truth, and
   // declaring `userConfig` for the same fields would let Claude Code's own
@@ -530,6 +1008,7 @@ export function register(on: On, options: PluginOptions): void {
   const optionActive = typeof options.active === 'boolean' ? (options.active as boolean) : null
   const optionActiveTools = typeof options.activeTools === 'boolean' ? (options.activeTools as boolean) : null
   const modSkillsSwitchesCache: ModSkillsSwitchesCache = { value: null }
+  const routerMode = parseRouterMode(options.routerMode)
 
   const budgetMs = number('budgetMs', DEFAULT_BUDGET_MS)
   const gateThreshold = number('gateThreshold', DEFAULT_GATE_THRESHOLD)
@@ -578,6 +1057,12 @@ export function register(on: On, options: PluginOptions): void {
   // mode, an unsampled prompt, no skill needed, nothing fit, or a failed
   // read) always leaves this false and the real listing goes through.
   let pendingListingWithheld = false
+
+  // The status line is one entry per plugin: the skill/tool path's text
+  // (prompt.submit) and the router's (turn.step) are kept apart here and
+  // always shown together, so neither erases the other.
+  let promptStatusText: string | null = null
+  let routerStatusText: string | null = null
 
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
     // A subagent's own listing is left alone, since nothing here suggests
@@ -937,7 +1422,9 @@ export function register(on: On, options: PluginOptions): void {
     })()
 
     const statusParts = [skillOutcome.status, toolOutcome.status].filter((part): part is string => part !== null)
-    if (statusParts.length > 0) $.ui.status(statusParts.join(' · '))
+    promptStatusText = statusParts.length > 0 ? statusParts.join(' · ') : null
+    const shown = [promptStatusText, routerStatusText].filter((part): part is string => part !== null)
+    if (shown.length > 0) $.ui.status(shown.join(' · '))
 
     const extraContext = [skillOutcome.block, toolOutcome.block].filter((block): block is string => block !== null)
     if (extraContext.length === 0) return next(e)
@@ -953,6 +1440,16 @@ export function register(on: On, options: PluginOptions): void {
     }
     return next(e)
   })
+
+  on('turn.step', async function* ($, e, next) {
+    const showRouterStatus = (text: string): void => {
+      routerStatusText = text
+      $.ui.status([promptStatusText, routerStatusText].filter((part): part is string => part !== null).join(' · '))
+    }
+    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus)
+  })
+
+  on('agent.spawn', async ($, e, next) => routeSubagent($, e, next, routerMode, options))
 
   // The tool-selection equivalent of `skill.prompt`: observes, purely for
   // measurement, which tool the model actually reached for first after a

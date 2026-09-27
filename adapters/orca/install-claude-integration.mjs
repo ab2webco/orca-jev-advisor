@@ -9,6 +9,8 @@
  * root, and every one of these lives outside it.
  *
  * Usage: node install-claude-integration.mjs <install|uninstall|status> <pluginRoot>
+ *        node install-claude-integration.mjs router-mode-status
+ *        node install-claude-integration.mjs router-mode-set <target> <mode>
  *
  * Seven hook entries are managed in total: four in each event's own
  * `Bash`-matcher group (the command gate), and three more in a separate
@@ -59,6 +61,15 @@
  *             as found.
  * status      Read-only: reports whether each of the seven is in place
  *             right now, for the config panel and advisor.doctor.
+ * router-mode-status  Read-only, no pluginRoot needed: `{ok, targets: [
+ *             {target: "home" | "<account uuid>", mode}, ...]}`, one row
+ *             per target discoverTargets() finds -- JEV-060 slice 2 §7/§9,
+ *             the same routerMode the plugin's own userConfig picker
+ *             writes, wrapped for the Orca config panel (T9).
+ * router-mode-set <target> <mode>  Writes that ONE target's routerMode
+ *             into its settings.json (creating the file if missing),
+ *             every other key kept exactly as found. Rejects an unknown
+ *             target or mode.
  *
  * Always prints exactly one JSON line to stdout, nothing else. Never
  * touches anything but ~/.claude/settings.json, ~/.claude/skills/
@@ -92,6 +103,7 @@ import {
   skillsDirFor
 } from '../../src/core/orca_accounts.ts'
 import { buildModSkillsHooksManifest, buildModSkillsPluginManifest, computeModSkillsDigest, walkModSkillsClosure } from '../../src/core/mod_skills_copy.ts'
+import { ROUTER_MODES, ROUTER_USER_CONFIG, planRouterModeWrite, routerModeFromSettings } from '../../src/core/model_router_mode.ts'
 
 // `~/.claude/...` is Claude Code's own convention, not ours to redefine --
 // it stays home-relative on every platform (Claude Code's own docs give no
@@ -669,6 +681,9 @@ function uninstallEnvVar (settings, state) {
 // ---------------------------------------------------------------------------
 
 const MOD_SKILLS_ENTRY = 'adapters/claude/mod-skills/hooks/index.ts'
+// The plugin's type contract (its `$.state` values, JEV-060 slice 2): copied
+// with the closure because hooks/index.ts imports its types from it.
+const MOD_SKILLS_TYPES = 'adapters/claude/mod-skills/types/index.d.ts'
 const MOD_SKILLS_PLUGIN_NAME = 'orca-jev-mod-skills'
 const MOD_SKILLS_AUTHOR_NAME = 'Ab2Web'
 const MOD_SKILLS_MANIFEST_PATH = '.claude-plugin/plugin.json'
@@ -735,7 +750,7 @@ export async function planModSkillsCopy (pluginRoot) {
   const description = isRecord(sourceHooksJson) && typeof sourceHooksJson.description === 'string' ? sourceHooksJson.description : MOD_SKILLS_PLUGIN_NAME
 
   const generatedFiles = [
-    { path: MOD_SKILLS_MANIFEST_PATH, content: buildModSkillsPluginManifest({ name: MOD_SKILLS_PLUGIN_NAME, version, description, authorName: MOD_SKILLS_AUTHOR_NAME }) },
+    { path: MOD_SKILLS_MANIFEST_PATH, content: buildModSkillsPluginManifest({ name: MOD_SKILLS_PLUGIN_NAME, version, description, authorName: MOD_SKILLS_AUTHOR_NAME, userConfig: ROUTER_USER_CONFIG, types: `./${MOD_SKILLS_TYPES}` }) },
     { path: MOD_SKILLS_HOOKS_JSON_PATH, content: buildModSkillsHooksManifest({ description, modulePath: `../${MOD_SKILLS_ENTRY}` }) }
   ]
 
@@ -1189,22 +1204,126 @@ async function status (pluginRoot) {
   }
 }
 
+/**
+ * JEV-060 slice 2, §7/§9 T9: the id `router-mode-status`/`router-mode-set`
+ * use for a target -- `home`, or the bare account uuid -- never
+ * `discoverTargets()`'s own `account:<uuid>` bookkeeping key (chosen there
+ * only so state/backup files never collide across targets; the panel and
+ * this CLI's own callers never see it).
+ */
+function routerTargetId (target) {
+  return target.id === 'home' ? 'home' : target.id.slice('account:'.length)
+}
+
+function findRouterTarget (targets, targetId) {
+  return targets.find((target) => routerTargetId(target) === targetId)
+}
+
+/**
+ * router-mode-status: read-only, one `{target, mode}` row per target
+ * discoverTargets() finds -- the config panel's own source for what to
+ * show. `routerModeFromSettings` (pure, src/core/model_router_mode.ts)
+ * already defaults an unset or missing routerMode to "measure"; a target
+ * with no settings.json yet reads the same as one whose file exists but
+ * never set it.
+ */
+async function routerModeStatus () {
+  const discovery = await discoverTargets()
+  const targets = []
+  for (const target of discovery.targets) {
+    const settings = await readSettings(settingsPathFor(PLATFORM, target))
+    targets.push({ target: routerTargetId(target), mode: routerModeFromSettings(settings) })
+  }
+  return { ok: true, targets }
+}
+
+/**
+ * router-mode-set <target> <mode>: writes ONLY `pluginConfigs[<router key>]
+ * .options.routerMode` into that target's settings.json (`withRouterMode`,
+ * pure, keeps every other key exactly as found), creating the file if it
+ * does not exist yet -- same atomic write (`writeSettingsAtomic`) install/
+ * uninstall already use for every other settings.json change. Rejects an
+ * unknown target or mode rather than guessing one; neither reaches disk.
+ */
+async function routerModeSet (targetId, modeArg) {
+  if (typeof targetId !== 'string' || targetId.length === 0) {
+    return { ok: false, reason: 'missing-target', detail: 'usage: router-mode-set <target> <mode>' }
+  }
+  if (!(ROUTER_MODES).includes(modeArg)) {
+    return { ok: false, reason: 'unknown-mode', detail: `unrecognized router mode: ${String(modeArg).slice(0, 60)}` }
+  }
+  const discovery = await discoverTargets()
+  const target = findRouterTarget(discovery.targets, targetId)
+  if (target === undefined) {
+    return { ok: false, reason: 'unknown-target', detail: `unrecognized target: ${String(targetId).slice(0, 60)}` }
+  }
+  const settingsPath = settingsPathFor(PLATFORM, target)
+  // Claude Code (and the person) write this file too: plan from the raw
+  // text, write a temp file, then re-read right before the rename and only
+  // replace the file if it is still what was planned from. One retry on a
+  // concurrent change, then a reported failure -- never a lost edit
+  // (review finding 6).
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await readRawSettings(settingsPath)
+    const plan = planRouterModeWrite(raw, modeArg)
+    if (plan.kind === 'refuse') return { ok: false, reason: plan.reason, detail: `settings.json at ${settingsPath} is not a JSON object; left as it is` }
+    if (plan.kind === 'unchanged') return { ok: true, target: targetId, mode: modeArg, unchanged: true }
+    if (await writeSettingsIfUnchanged(settingsPath, plan.text, raw)) return { ok: true, target: targetId, mode: modeArg }
+  }
+  return { ok: false, reason: 'concurrent-change', detail: `settings.json at ${settingsPath} kept changing while the router mode was being written; nothing was written` }
+}
+
+/** settings.json's raw text, or null when there is no file yet. */
+async function readRawSettings (settingsPath) {
+  try {
+    return await readFile(settingsPath, 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Writes `text` through a temp file and renames it over settings.json only
+ *  if the file still reads exactly `expectedRaw` (null: still absent) right
+ *  before the rename; otherwise removes the temp file and returns false.
+ *  Honors the same test-only ORCA_TEST_DELAY_BEFORE_RENAME_MS as
+ *  writeSettingsAtomic, before the re-read. */
+async function writeSettingsIfUnchanged (settingsPath, text, expectedRaw) {
+  await mkdir(dirname(settingsPath), { recursive: true })
+  const tempPath = `${settingsPath}.${randomUUID()}.tmp`
+  await writeFile(tempPath, text, 'utf8')
+  const testDelay = Number(process.env.ORCA_TEST_DELAY_BEFORE_RENAME_MS ?? '0')
+  if (testDelay > 0) await new Promise((resolve) => setTimeout(resolve, testDelay))
+  if ((await readRawSettings(settingsPath)) !== expectedRaw) {
+    await rm(tempPath, { force: true })
+    return false
+  }
+  await rename(tempPath, settingsPath)
+  return true
+}
+
 async function main () {
   const mode = process.argv[2]
-  const pluginRoot = process.argv[3]
   let result
   try {
     if (STATE_DIR_RESOLUTION_ERROR) throw STATE_DIR_RESOLUTION_ERROR
-    if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
-      result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status> <pluginRoot>' }
-    } else if (mode === 'install') {
-      result = await install(pluginRoot)
-    } else if (mode === 'uninstall') {
-      result = await uninstall(pluginRoot)
-    } else if (mode === 'status') {
-      result = await status(pluginRoot)
+    if (mode === 'router-mode-status') {
+      result = await routerModeStatus()
+    } else if (mode === 'router-mode-set') {
+      result = await routerModeSet(process.argv[3], process.argv[4])
     } else {
-      result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
+      const pluginRoot = process.argv[3]
+      if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
+        result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status> <pluginRoot>' }
+      } else if (mode === 'install') {
+        result = await install(pluginRoot)
+      } else if (mode === 'uninstall') {
+        result = await uninstall(pluginRoot)
+      } else if (mode === 'status') {
+        result = await status(pluginRoot)
+      } else {
+        result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
+      }
     }
   } catch (error) {
     result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 500) }

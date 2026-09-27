@@ -181,6 +181,11 @@ function hostBridge (storage) {
         }
       } else if (key === 'policySeedDismissResult' && window.__written.policySeedDismissRequest) {
         value = { ok: true, ...storage.__policySeedDismissResult, id: window.__written.policySeedDismissRequest.id }
+      } else if (key === 'modelRouterConfigResult' && window.__written.modelRouterConfigRequest) {
+        // JEV-060 slice 2, T9: same request/result handshake as the other
+        // channels above -- `storage.__modelRouterConfigResult` lets a test
+        // override ok/reason/detail; a plain "it worked" is the default.
+        value = { ok: true, ...storage.__modelRouterConfigResult, id: window.__written.modelRouterConfigRequest.id }
       } else if (key === 'modelsSeedResult' && window.__written.modelsSeedRequest) {
         // odd/tasks/model-reclassification.md T7: models-worker.mjs answers
         // one request/result channel for both apply and dismiss (unlike the
@@ -1575,6 +1580,354 @@ test('the calibration card renders a real label for every legend row, never a ra
     for (const label of labels) {
       assert.ok(!/^approvals\./.test(String(label)), `a legend row rendered its raw i18n key: ${label}`)
     }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// config.html -- the "Jev model router" section (JEV-060 slice 2, §7/§9,
+// T9). One row per target from MODEL_ROUTER_STATUS_KEY, each with its own
+// off/measure/active `<select>` and its own save button/request.
+// ---------------------------------------------------------------------------
+
+const MODEL_ROUTER_STATUS_TWO_TARGETS = {
+  targets: [
+    { target: 'home', mode: 'measure' },
+    { target: '11112222-3333-4444-5555-666677778888', mode: 'active' }
+  ],
+  checkedAt: new Date().toISOString()
+}
+
+test('the model router section renders one row per target, with its current mode selected', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_TWO_TARGETS })
+  try {
+    await page.click('#tab-models')
+    const rows = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('#model-router-rows select')).map((select) => ({
+        target: select.getAttribute('data-model-router-target'),
+        value: select.value
+      }))
+    })
+    assert.deepEqual(rows, [
+      { target: 'home', value: 'measure' },
+      { target: '11112222-3333-4444-5555-666677778888', value: 'active' }
+    ])
+    const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
+    assert.match(text, /This computer/, 'the "home" target label did not render')
+    assert.match(text, /Account 11112222/, 'the account\'s short label did not render')
+    assert.doesNotMatch(text, /11112222-3333-4444-5555-666677778888/, 'the full uuid must not be the visible text')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('with no targets at all, the section shows its own empty sentence rather than nothing', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: { targets: [], checkedAt: new Date().toISOString() } })
+  try {
+    await page.click('#tab-models')
+    const visible = await page.evaluate(() => getComputedStyle(document.getElementById('model-router-empty')).display !== 'none')
+    assert.equal(visible, true)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('changing a row\'s mode and clicking its save button sends a modelRouterConfigRequest with that target and mode', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_TWO_TARGETS })
+  try {
+    await page.click('#tab-models')
+    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
+    await page.click('#model-router-rows .checkbox-row button')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.equal(typeof request.id, 'string')
+    assert.equal(request.target, 'home')
+    assert.equal(request.mode, 'active')
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// board.html -- the Consumption card (JEV-060 slice 1, T5/T6). Reads the
+// worker's `consumptionSummary` (adapters/orca/read-consumption.mjs's own
+// published shape, mirrored via main.mjs's publishConsumptionSummary) and
+// renders per-model cache shares, the main-step context re-read average, the
+// main-vs-subagent split, quota bars per account, and the plain-language
+// recommendations whose trigger key is present. Three honest states, never
+// two, same convention as config.html's own modelsRenderMeasurements for
+// modelMeasurements: no summary yet (or a genuine ok:true empty payload)
+// reads as "no data yet"; `ok:false` reads as a distinct failure sentence;
+// only real numbers ever render as a populated card.
+// ---------------------------------------------------------------------------
+
+/** A realistic populated consumptionSummary, shaped exactly like
+ *  read-consumption.mjs's own stdout (src/core/consumption.ts's
+ *  TurnUsageAggregation/ParsedQuota/trigger interfaces) -- never hand-typed
+ *  loosely. Two models, one quota account near its weekly limit, and every
+ *  one of the four recommendation triggers present with overThreshold: true
+ *  so the populated test can assert on every warning line at once. */
+const POPULATED_CONSUMPTION = {
+  ok: true,
+  usage: {
+    last24h: {
+      stepCount: 42,
+      byModel: [
+        { model: 'claude-sonnet-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+        { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
+      ],
+      avgMainStepContextReread: 162345,
+      subagentShare: 0.47
+    },
+    last7d: {
+      stepCount: 300,
+      byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+      avgMainStepContextReread: 150500,
+      subagentShare: 0.3
+    }
+  },
+  quota: {
+    accounts: [
+      { id: 'acct-primary', status: 'ok', sessionUsedPercent: 12.4, weeklyUsedPercent: 81.2, resetsAt: Date.parse('2026-10-03T23:00:00.000Z') }
+    ],
+    checkedAt: new Date().toISOString()
+  },
+  recommendations: {
+    claudeMdSize: { estimatedTokens: 9000, overThreshold: true },
+    mcpServerCount: { count: 5 },
+    longSession: { avgMainStepContextReread: 162345, overThreshold: true },
+    subagentShare: { subagentSharePercent: 47, overThreshold: true }
+  },
+  checkedAt: new Date().toISOString()
+}
+
+/** The worker's own honest "nobody has recorded anything yet" shape -- see
+ *  read-consumption.mjs's module doc: `ok: true` with a zero step count and
+ *  no quota accounts, `recommendations` holding only `mcpServerCount` (0 is
+ *  real data, never omitted). Must render distinctly from both the populated
+ *  card above and the `ok:false` failure below. */
+const EMPTY_CONSUMPTION = {
+  ok: true,
+  usage: {
+    last24h: { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null },
+    last7d: { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
+  },
+  quota: { accounts: [], checkedAt: null },
+  recommendations: { mcpServerCount: { count: 0 } },
+  checkedAt: new Date().toISOString()
+}
+
+test('a populated consumptionSummary renders real per-model shares, quota bars, and every present overThreshold recommendation', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Sonnet 5/, 'the first model\'s friendly name did not render')
+    assert.match(text, /74(\.0)?%/, 'the first model\'s cache-read share (74%) did not render')
+    assert.match(text, /Opus 5\.5/, 'the second model\'s friendly name did not render')
+    assert.match(text, /57(\.0)?%/, 'the second model\'s cache-read share (57%) did not render')
+    assert.match(text, /12\.4%/, 'the account session usedPercent (12.4%) did not render')
+    assert.match(text, /81\.2%/, 'the account weekly usedPercent (81.2%) did not render')
+    assert.match(text, /47(\.0)?%/, 'the subagent share (47%) did not render')
+    assert.match(text, /9,000|9000/, 'the CLAUDE.md estimated token count (9000) did not render')
+    assert.match(text, /\b5\b/, 'the MCP server count (5) did not render')
+    assert.match(text, /5 MCP server\(s\) in the global ~\/\.claude\.json/, 'review finding 9: the MCP count must say it is the global file, not the account in use')
+    assert.match(text, /\/clear/, 'the long-session recommendation copy did not render')
+    // JEV-060 slice 2, T9: the raw id is no longer the visible text -- a
+    // short "Account <first 8 chars>" label is, so a person reads a name
+    // rather than a uuid. The raw id must still be recoverable from the
+    // element's title attribute, the same "friendly text, raw id on hover"
+    // discipline the model rows already use (modelTitles below).
+    assert.match(text, /Account acct-pri/, 'the account\'s short label did not render')
+    assert.doesNotMatch(text, /acct-primary/, 'the raw account id must not be the visible text any more')
+    const quotaTitle = await page.evaluate(() => {
+      const b = Array.from(document.querySelectorAll('#consumption-body .kpi-sub b')).find((el) => el.title === 'acct-primary')
+      return b ? b.title : null
+    })
+    assert.equal(quotaTitle, 'acct-primary', 'the raw account id must still be recoverable from a title attribute')
+    // JEV-060 slice 1 round 4: the owner's own review -- Sonnet's three
+    // rendered shares (74 + 10 + 5) summed to 89, not 100, because the
+    // uncached-input share had no row at all. Each model's own set of
+    // rendered bar percentages must now sum to 100 +/- 1.
+    const modelBarSums = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('#consumption-body .hrows')).map((hrows) => {
+        return Array.from(hrows.querySelectorAll('.hv')).reduce((total, el) => {
+          const n = parseFloat(el.textContent)
+          return total + (Number.isFinite(n) ? n : 0)
+        }, 0)
+      })
+    })
+    for (const sum of modelBarSums.slice(0, 2)) {
+      assert.ok(Math.abs(sum - 100) <= 1, `a model's rendered bar percentages should sum to ~100, got ${sum}`)
+    }
+    // The friendly name is what a person reads; the raw model id must still
+    // be recoverable (e.g. on hover) from the element's title attribute.
+    const modelTitles = await page.evaluate(() => Array.from(document.querySelectorAll('#consumption-body .kpi-sub b')).map((el) => el.title))
+    assert.ok(modelTitles.includes('claude-sonnet-5'), `raw id claude-sonnet-5 missing from any model's title attribute, got: ${JSON.stringify(modelTitles)}`)
+    assert.ok(modelTitles.includes('claude-opus-5-5'), `raw id claude-opus-5-5 missing from any model's title attribute, got: ${JSON.stringify(modelTitles)}`)
+    assert.deepEqual(errors, [], 'the board threw while rendering a populated consumption card')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the consumptionSummary empty state ("no data yet") never reads as a populated-but-zero card, and is never blank', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: EMPTY_CONSUMPTION })
+  try {
+    const text = await page.evaluate(() => document.getElementById('card-consumption').innerText.trim())
+    assert.notEqual(text, '', 'the empty state must never render as a blank card')
+    assert.match(text, /no consumption data yet/i, 'the empty state did not render its honest "no data yet" sentence')
+    assert.doesNotMatch(text, /0%|claude-sonnet|acct-/i, 'the empty state must not look like a populated-but-zero card')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an {ok:false} consumptionSummary renders as a failure, never as "no data yet"', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    consumptionSummary: { ok: false, reason: 'exception', detail: 'boom', checkedAt: new Date().toISOString() }
+  })
+  try {
+    const text = await page.evaluate(() => document.getElementById('card-consumption').innerText.trim())
+    assert.notEqual(text, '', 'a failure must never render as a blank card')
+    assert.doesNotMatch(text, /no consumption data yet/i, 'an ok:false summary must not read as the honest empty state')
+    assert.match(text, /could not be calculated/i, 'the ok:false state did not render its own distinct failure sentence')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every consumption.* key in one language catalog exists in the other, and the es values are accented with no \' -- \'', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openBoardPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('consumption.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('consumption.') === 0)
+    assert.ok(esKeys.length > 0, 'no consumption.* keys found in the es catalog')
+    const missingInEn = esKeys.filter((key) => enKeys.indexOf(key) === -1)
+    const missingInEs = enKeys.filter((key) => esKeys.indexOf(key) === -1)
+    assert.deepEqual(missingInEn, [], `es-only consumption.* keys missing from en: ${missingInEn.join(', ')}`)
+    assert.deepEqual(missingInEs, [], `en-only consumption.* keys missing from es: ${missingInEs.join(', ')}`)
+
+    // Same technique as src/core/i18n_catalogs.test.ts, scoped to just the
+    // new keys -- that file never reads board.html's own inline CATALOG (see
+    // odd/tasks/jev-060-consumption.md's board-copy-test correction).
+    const mustBeAccented = [
+      'limite', 'podria', 'podrian', 'maquina', 'automatica', 'automaticamente', 'despues', 'ningun',
+      'catalogo', 'politica', 'politicas', 'aqui', 'alli', 'leido', 'codigo', 'sesion', 'tambien',
+      'todavia', 'ademas', 'numero', 'ultimo', 'ultima', 'pagina', 'accion', 'opcion', 'configuracion',
+      'revision', 'decision', 'informacion', 'funcion', 'razon', 'deberia', 'tendria', 'habria',
+      'seria', 'estara', 'sera', 'facil', 'rapido', 'unico', 'unica', 'metodo'
+    ]
+    const problems = []
+    for (const key of esKeys) {
+      const value = catalog.es[key]
+      if (value.includes(' -- ')) problems.push(`${key}: uses ' -- '`)
+      const words = value.toLowerCase().split(/[^a-záéíóúüñ]+/u).filter((w) => w.length > 0)
+      const missingAccents = words.filter((w) => mustBeAccented.includes(w))
+      if (missingAccents.length > 0) problems.push(`${key}: missing accents on ${missingAccents.join(', ')}`)
+    }
+    assert.deepEqual(problems, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// board.html -- the Consumption card's "Model router" subsection (JEV-060
+// slice 2, §8, T9). `modelRouter` is summarizeRouterDecisions' own summary
+// (read-consumption.mjs), attached to consumptionSummary, or absent/null
+// when no model-router-decisions-*.jsonl file exists at all.
+// ---------------------------------------------------------------------------
+
+const POPULATED_MODEL_ROUTER = {
+  total: 5,
+  applied: 3,
+  measured: 2,
+  byPoint: {
+    start: { simple: 2, standard: 0, complex: 0, frontier: 0 },
+    stage: { simple: 0, standard: 1, complex: 1, frontier: 0 },
+    subagent: { simple: 1, standard: 0, complex: 0, frontier: 0 }
+  },
+  savedEstimate: 0.0421,
+  switchesEstimated: 2
+}
+
+const NO_ESTIMATE_MODEL_ROUTER = {
+  total: 2,
+  applied: 0,
+  measured: 2,
+  byPoint: {
+    start: { simple: 1, standard: 0, complex: 0, frontier: 0 },
+    stage: { simple: 0, standard: 0, complex: 1, frontier: 0 },
+    subagent: { simple: 0, standard: 0, complex: 0, frontier: 0 }
+  },
+  savedEstimate: null,
+  switchesEstimated: 0
+}
+
+test('a populated modelRouter renders decisions by point/tier, applied vs measured, and the dollar estimate', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: POPULATED_MODEL_ROUTER }
+  })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Model router/, 'the Model router heading did not render')
+    assert.match(text, /Session start/, 'the "start" point label did not render')
+    assert.match(text, /Stage change/, 'the "stage" point label did not render')
+    assert.match(text, /Subagent/, 'the "subagent" point label did not render')
+    assert.match(text, /Ask/, 'the simple-tier label did not render')
+    assert.match(text, /Implement/, 'the standard-tier label did not render')
+    assert.match(text, /Analyse/, 'the complex-tier label did not render')
+    assert.match(text, /Applied 3 · not applied 2/, 'the applied/not-applied counts did not render')
+    assert.match(text, /Estimated saving at list prices: \$0\.04/, 'the estimated saving did not render')
+    assert.doesNotMatch(text, /estimate[ds]?\b[^\n]*\bestimate/i, 'the saving line says "estimate" twice')
+    assert.match(text, /Covers downgrades at a stage change only/, 'the estimate does not say what it covers')
+    assert.deepEqual(errors, [], 'the board threw while rendering a populated model router section')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an absent modelRouter renders one honest "no decisions yet" line, never a zeroed summary', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /No router decisions yet/i)
+    assert.doesNotMatch(text, /Applied \d/, 'an absent modelRouter must never render applied/measured counts')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a modelRouter with no applied switch yet renders "no applied switch to estimate" instead of a dollar amount', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: NO_ESTIMATE_MODEL_ROUTER }
+  })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /No downgrade at a stage change to estimate yet/i)
+    assert.doesNotMatch(text, /\$\d/, 'no dollar amount should render when savedEstimate is null')
+    assert.match(text, /Applied 0 · not applied 2/, 'the applied/not-applied counts did not render')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('review finding 8: a negative estimate is shown as an extra cost, never as a negative saving', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: { ...POPULATED_MODEL_ROUTER, savedEstimate: -0.0912 } }
+  })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Estimated extra cost at list prices: \$0\.09/)
+    assert.doesNotMatch(text, /\$-|-\$/, 'a negative dollar amount must never render')
+    assert.doesNotMatch(text, /Estimated saving/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

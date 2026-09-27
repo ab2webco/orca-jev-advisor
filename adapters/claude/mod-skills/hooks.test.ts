@@ -54,6 +54,16 @@ interface FakeHost {
   readonly fetchCalls: { url: string }[];
   toolList: { name: string; description: string; mcp: boolean }[];
   readonly statusLines: (string | undefined)[];
+  /** Process env beyond HOME (which is fixed), for the router's CLAUDE_CONFIG_DIR / ANTHROPIC_* reads. */
+  readonly env: Map<string, string>;
+  /** `$.state`, by key (this plugin's own values only). */
+  readonly state: Map<string, unknown>;
+  /** `$.session.messages()` rows. */
+  messages: { role: "user" | "assistant"; text: string; toolUses: unknown[] }[];
+  /** When true, `$.session.messages()` rejects (a host failure). */
+  failMessages: boolean;
+  /** When true, `$.process.run` rejects (a missing or broken binary). */
+  failProcess: boolean;
 }
 
 function makeFakeHost(): FakeHost {
@@ -64,6 +74,11 @@ function makeFakeHost(): FakeHost {
     fetchCalls: [],
     toolList: [],
     statusLines: [],
+    env: new Map<string, string>(),
+    state: new Map<string, unknown>(),
+    messages: [],
+    failMessages: false,
+    failProcess: false,
   };
 }
 
@@ -87,8 +102,21 @@ const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
 function makeFakeEngine(host: FakeHost): unknown {
   let clockNow = Date.parse("2026-09-25T10:00:00.000Z");
   return {
-    session: { cwd: async () => CWD },
-    env: { get: async (name: string) => (name === "HOME" ? HOME : undefined) },
+    session: {
+      cwd: async () => CWD,
+      messages: async () => {
+        if (host.failMessages) throw new Error("fake host: session.messages failed");
+        return host.messages;
+      },
+    },
+    env: { get: async (name: string) => (name === "HOME" ? HOME : host.env.get(name)) },
+    state: {
+      get: async (ref: { key: string }) => ({ value: host.state.get(ref.key), version: host.state.has(ref.key) ? 1 : 0 }),
+      set: async (ref: { key: string }, value: unknown) => {
+        host.state.set(ref.key, value);
+        return { isSet: true, version: 1 };
+      },
+    },
     fs: {
       // A path "exists" either as a literal file key, or as a directory
       // prefix of one (`.claude/skills` must exist once
@@ -136,7 +164,10 @@ function makeFakeEngine(host: FakeHost): unknown {
     process: {
       // No real `orca` binary: resolveOrcaContext falls back to its
       // cwd-only shape, deterministically, on any non-success exit.
-      run: async () => ({ exitCode: 1, stdout: "", stderr: "" }),
+      run: async () => {
+        if (host.failProcess) throw new Error("fake host: process.run failed");
+        return { exitCode: 1, stdout: "", stderr: "" };
+      },
     },
     tool: { list: async () => host.toolList },
     ui: { status: (text: string | undefined) => { host.statusLines.push(text); } },
@@ -639,4 +670,820 @@ test("a withheld turn followed by a restored turn: pendingListingWithheld never 
   await submitPrompt(handlers, engine, "what time is it");
   const secondAttachment = await askAttachment(handlers, engine, REAL_LISTING);
   assert.deepEqual(secondAttachment, { text: REAL_LISTING }, "today's bug: a stale pendingListingWithheld from turn 1 would withhold turn 2's listing too");
+});
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 1, T1: turn.step -- a pass-through hook that records per-step
+// token usage to the current hour's own turn-usage-*.jsonl file and never changes the event or the result
+// beneath it. `next` for a streaming event is itself an async generator
+// (HookStream): the fakes below mirror that shape directly rather than the
+// plain-Promise `next` the other hooks in this file use.
+// ---------------------------------------------------------------------------
+
+// The fake clock (see makeFakeEngine) starts at 2026-09-25T10:00:00.000Z and
+// only ever advances by whole milliseconds within a test, so every record
+// these tests produce falls in the "2026-09-25T10" hour bucket.
+const TURN_USAGE_HOUR = "2026-09-25T10";
+const TURN_USAGE_PATH = `${CACHE_DIR}/turn-usage-${TURN_USAGE_HOUR}.jsonl`;
+
+/** Runs a `turn.step` hook's own generator (as `on('turn.step', ...)` returns) to completion, returning what it `return`ed. */
+async function drainTurnStep(stream: AsyncGenerator<unknown, unknown>): Promise<unknown> {
+  for (;;) {
+    const step = await stream.next();
+    if (step.done) return step.value;
+  }
+}
+
+function turnStepEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    turnId: "turn-1",
+    index: 0,
+    model: "claude-sonnet-5",
+    effort: "high",
+    messageCount: 3,
+    ...overrides,
+  };
+}
+
+function turnStepResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    turnId: "turn-1",
+    index: 0,
+    answer: "done",
+    toolUses: [],
+    stopReason: "end_turn",
+    usage: {
+      model: "claude-sonnet-5-20260101",
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_input_tokens: 5000,
+      cache_creation_input_tokens: 200,
+    },
+    ...overrides,
+  };
+}
+
+function lastTurnUsageLine(host: FakeHost): Record<string, unknown> {
+  const content = host.files.get(TURN_USAGE_PATH);
+  assert.ok(content, "the current hour's turn-usage file was never written");
+  const lines = content.split("\n").filter((line) => line.length > 0);
+  return JSON.parse(lines[lines.length - 1]) as Record<string, unknown>;
+}
+
+test("turn.step: pass-through -- e is never rewritten and next(e)'s result is returned unchanged", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+
+  const event = turnStepEvent();
+  const result = turnStepResult();
+  async function* fakeNext(e: unknown): AsyncGenerator<unknown, unknown> {
+    assert.deepEqual(e, event, "the hook must call next with the event unchanged");
+    return result;
+  }
+
+  const stream = hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>;
+  const returned = await drainTurnStep(stream);
+
+  assert.deepEqual(event, turnStepEvent(), "the hook must never mutate e");
+  assert.deepEqual(returned, result, "the hook must yield/return next(e)'s result unchanged");
+});
+
+test("turn.step: appends exactly one usage line to the current hour's file, main loop", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+
+  const event = turnStepEvent();
+  const result = turnStepResult();
+  async function* fakeNext(): AsyncGenerator<unknown, unknown> {
+    return result;
+  }
+
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+
+  const content = host.files.get(TURN_USAGE_PATH);
+  assert.ok(content, "the current hour's turn-usage file was never written");
+  const lines = content.split("\n").filter((line) => line.length > 0);
+  assert.equal(lines.length, 1, "exactly one line should have been appended");
+
+  const record = lastTurnUsageLine(host);
+  assert.equal(record.agent, "main");
+  assert.equal(record.model, "claude-sonnet-5-20260101");
+  assert.equal(record.effort, "high");
+  assert.equal(record.input, 100);
+  assert.equal(record.output, 20);
+  assert.equal(record.cacheRead, 5000);
+  assert.equal(record.cacheWrite, 200);
+  assert.equal(record.stopReason, "end_turn");
+  assert.equal(record.account, "home", "no CLAUDE_CONFIG_DIR in the fake env: falls back to 'home'");
+  assert.equal(typeof record.at, "string");
+});
+
+test("turn.step: a subagent's step is recorded as agent 'subagent'", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+
+  const event = turnStepEvent({ agentId: "sub-1" });
+  const result = turnStepResult();
+  async function* fakeNext(): AsyncGenerator<unknown, unknown> {
+    return result;
+  }
+
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+
+  assert.equal(lastTurnUsageLine(host).agent, "subagent");
+});
+
+test("turn.step: account id is parsed from CLAUDE_CONFIG_DIR when it matches the claude-accounts uuid convention", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+
+  const baseEngine = engine as { env: { get: (name: string) => Promise<string | undefined> } };
+  baseEngine.env.get = async (name: string) =>
+    name === "CLAUDE_CONFIG_DIR"
+      ? "/Users/dev/Library/Application Support/orca/claude-accounts/acct0003-1234/auth"
+      : name === "HOME"
+        ? HOME
+        : undefined;
+
+  const event = turnStepEvent();
+  const result = turnStepResult();
+  async function* fakeNext(): AsyncGenerator<unknown, unknown> {
+    return result;
+  }
+
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+
+  assert.equal(lastTurnUsageLine(host).account, "acct0003-1234");
+});
+
+test("turn.step: an append only ever touches the current hour's file, never an older hour's", async () => {
+  const host = makeFakeHost();
+  const olderHourPath = `${CACHE_DIR}/turn-usage-2026-09-25T09.jsonl`;
+  const olderHourContent = `${JSON.stringify({ seq: "kept-from-a-previous-hour" })}\n`;
+  host.files.set(olderHourPath, olderHourContent);
+  const { handlers, engine } = loadHooks(host);
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+
+  const event = turnStepEvent();
+  const result = turnStepResult();
+  async function* fakeNext(): AsyncGenerator<unknown, unknown> {
+    return result;
+  }
+
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+
+  assert.equal(
+    host.files.get(olderHourPath),
+    olderHourContent,
+    "an older hour's file must never be read or rewritten by a step recorded in the current hour",
+  );
+  const currentHourContent = host.files.get(TURN_USAGE_PATH);
+  assert.ok(currentHourContent, "the current hour's own file should have been written");
+  const lines = (currentHourContent as string).split("\n").filter((line) => line.length > 0);
+  assert.equal(lines.length, 1, "exactly one line should have been appended to the current hour's file");
+});
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 2, T6: the model router's session-start decision (point A)
+// and its stickiness, on the same turn.step hook as the usage recorder.
+// ---------------------------------------------------------------------------
+
+const ACCOUNT_DIR = "/orca/claude-accounts/acct-1/auth";
+const ROUTER_DECISIONS_PATH = `${CACHE_DIR}/model-router-decisions-${TURN_USAGE_HOUR}.jsonl`;
+
+const SEED_MODELS = [
+  { id: "claude-fable-5-1", provider: "anthropic", label: "Claude Fable 5.1", rank: 1, agentModel: "fable", source: "", available: false },
+  { id: "claude-opus-5-5", provider: "anthropic", label: "Claude Opus 5.5", rank: 2, agentModel: "opus", source: "", available: true },
+  { id: "claude-sonnet-5", provider: "anthropic", label: "Claude Sonnet 5", rank: 3, agentModel: "sonnet", source: "", available: true },
+  { id: "claude-haiku-4-5-20251001", provider: "anthropic", label: "Claude Haiku 4.5", rank: 4, agentModel: "haiku", source: "", available: true },
+];
+
+function seedRouterAccount(host: FakeHost, vaultEnv: Record<string, string> = {}): void {
+  host.env.set("CLAUDE_CONFIG_DIR", ACCOUNT_DIR);
+  host.files.set(`${ACCOUNT_DIR}/settings.json`, JSON.stringify({ env: vaultEnv }));
+  host.files.set(`${CONFIG_DIR}/models-catalog.json`, JSON.stringify({ active: false, ready: false, models: SEED_MODELS }));
+}
+
+function loadHooksWith(host: FakeHost, options: Record<string, unknown>): { handlers: Map<string, Hook>; engine: unknown } {
+  const on = fakeOn(host);
+  register(on as never, { typesafeApiKey: "test-key", ...options } as never);
+  return { handlers: host.handlers, engine: makeFakeEngine(host) };
+}
+
+function tierAnswer(tier: string, confidence = 0.9): unknown {
+  return jevResponse({ tier: { type: "choice", choice: tier, probabilities: { [tier]: confidence }, confidence } });
+}
+
+/** Runs one turn.step through the hook and returns the event `next` received. */
+async function stepThrough(handlers: Map<string, Hook>, engine: unknown, event: Record<string, unknown>, result: Record<string, unknown> = turnStepResult()): Promise<Record<string, unknown>> {
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+  let seen: Record<string, unknown> | null = null;
+  async function* fakeNext(e: unknown): AsyncGenerator<unknown, unknown> {
+    seen = e as Record<string, unknown>;
+    return result;
+  }
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+  assert.ok(seen !== null, "next was never called");
+  return seen;
+}
+
+function routerDecisionLines(host: FakeHost): Record<string, unknown>[] {
+  const content = host.files.get(ROUTER_DECISIONS_PATH) ?? "";
+  return content.split("\n").filter((line) => line.length > 0).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+const FRESH_START = { index: 0, model: "claude-opus-5-5", effort: "high" };
+
+test("router, measure (the default): decides and logs at session start, changes nothing", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+
+  const event = turnStepEvent(FRESH_START);
+  const seen = await stepThrough(handlers, engine, event);
+  assert.deepEqual(seen, event);
+
+  const [decision] = routerDecisionLines(host);
+  assert.ok(decision, "no decision was logged");
+  assert.equal(decision.point, "start");
+  assert.equal(decision.tier, "simple");
+  assert.equal(decision.current, "claude-opus-5-5");
+  assert.equal(decision.proposed, "claude-haiku-4-5-20251001");
+  assert.equal(decision.applied, false);
+  assert.equal(decision.account, "acct-1");
+  assert.equal(decision.quotaBand, "normal");
+  for (const key of ["at", "confidence", "reason", "guard", "contextTokens", "switchCost", "stepSaving", "expectedSteps"]) assert.ok(key in decision, key);
+  assert.equal(JSON.stringify(decision).includes("what time"), false, "no prompt text in the decision log");
+  assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5 (stage: ask)");
+});
+
+test("router, active: a simple first prompt runs on Haiku with no effort, and every later step sticks to it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+
+  const first = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  assert.equal("effort" in first, false);
+  assert.equal(routerDecisionLines(host)[0]?.applied, true);
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
+
+  host.messages = [...host.messages, { role: "assistant", text: "", toolUses: [] }];
+  const second = await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, index: 1 }));
+  assert.equal(second.model, "claude-haiku-4-5-20251001");
+  assert.equal("effort" in second, false);
+  assert.equal(host.fetchCalls.length, 1, "a later step never asks Jev again");
+});
+
+test("router, active: a standard prompt runs on Sonnet at medium effort", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "implement the plan in PLAN.md", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(seen.model, "claude-sonnet-5");
+  assert.equal(seen.effort, "medium");
+});
+
+test("router, active: a Jev failure changes nothing, and the session keeps its own model afterwards", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  // Nothing queued: the fake fetch rejects, as a network failure would.
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = turnStepEvent(FRESH_START);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  assert.equal(routerDecisionLines(host)[0]?.reason, "jev-failed");
+  const later = turnStepEvent({ ...FRESH_START, index: 1 });
+  assert.deepEqual(await stepThrough(handlers, engine, later), later);
+});
+
+test("router, active: a guard holds the session's own model on a sensitive prompt", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "deploy this to production", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = turnStepEvent(FRESH_START);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.guard, "sensitive-topic");
+  assert.equal(decision?.applied, false);
+});
+
+test("router: a warm session (assistant messages already, no sticky state) adopts its own model and asks nobody", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [
+    { role: "user", text: "hi", toolUses: [] },
+    { role: "assistant", text: "hello", toolUses: [] },
+    { role: "user", text: "now something else", toolUses: [] },
+  ];
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = turnStepEvent(FRESH_START);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  assert.equal(host.fetchCalls.length, 0);
+  assert.equal(routerDecisionLines(host).length, 0);
+});
+
+test("router, off: nothing at all -- no Jev call, no log, no change", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  const event = turnStepEvent(FRESH_START);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  assert.equal(host.fetchCalls.length, 0);
+  assert.equal(routerDecisionLines(host).length, 0);
+});
+
+test("router: a subagent's steps are never routed here (point B is agent.spawn)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = turnStepEvent({ ...FRESH_START, agentId: "agent-7" });
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  assert.equal(host.fetchCalls.length, 0);
+});
+
+test("router, active: a gateway account routes to its own model ids, never effort", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host, { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.3", ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-5.2", ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air" });
+  host.messages = [{ role: "user", text: "implement it", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent({ index: 0, model: "glm-5.3" }));
+  assert.equal(seen.model, "glm-5.2");
+  assert.equal("effort" in seen, false);
+});
+
+test("router, active: the person switching model mid-session wins -- the router adopts it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
+  const manual = turnStepEvent({ index: 1, model: "claude-sonnet-5", effort: "medium" });
+  assert.deepEqual(await stepThrough(handlers, engine, manual), manual);
+});
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 2, T7: stage switching (point C) -- the first step of every
+// later turn may move the sticky model, under hysteresis and break-even.
+// ---------------------------------------------------------------------------
+
+const BIG_USAGE = turnStepResult({
+  usage: { model: "claude-opus-5-5", input_tokens: 300, output_tokens: 700, cache_read_input_tokens: 79_000, cache_creation_input_tokens: 0 },
+});
+
+type Row = { role: "user" | "assistant"; text: string; toolUses: unknown[] };
+
+/** Plays one whole turn: a fresh user prompt, `steps` main-loop steps with a large context, then the assistant's reply in the transcript. Returns the event the turn's FIRST step sent. */
+async function playTurn(host: FakeHost, handlers: Map<string, Hook>, engine: unknown, turn: number, prompt: string, steps: number, assistant: Row[] = [{ role: "assistant", text: "ok", toolUses: [] }]): Promise<Record<string, unknown>> {
+  host.messages = [...host.messages, { role: "user", text: prompt, toolUses: [] }];
+  let first: Record<string, unknown> | null = null;
+  for (let index = 0; index < steps; index += 1) {
+    const seen = await stepThrough(handlers, engine, turnStepEvent({ turnId: `turn-${turn}`, index, model: "claude-opus-5-5", effort: "high" }), BIG_USAGE);
+    if (index === 0) first = seen;
+  }
+  host.messages = [...host.messages, ...assistant];
+  assert.ok(first !== null);
+  return first;
+}
+
+test("router, active, stage: a downgrade needs the same lower tier on 2 turns and a positive break-even", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+
+  const turn1 = await playTurn(host, handlers, engine, 1, "design the cache invalidation across both services", 4);
+  assert.equal(turn1.model, "claude-opus-5-5");
+  const turn2 = await playTurn(host, handlers, engine, 2, "thanks, now list the files you touched", 4);
+  assert.equal(turn2.model, "claude-opus-5-5", "one lower turn is not enough (hysteresis)");
+  const turn3 = await playTurn(host, handlers, engine, 3, "and summarise them in one line", 4);
+  assert.equal(turn3.model, "claude-haiku-4-5-20251001", "the second lower turn with a positive break-even switches");
+
+  const decisions = routerDecisionLines(host);
+  assert.deepEqual(decisions.map((row) => row.point), ["start", "stage", "stage"]);
+  assert.equal(decisions[1]?.reason, "hysteresis");
+  const last = decisions[2];
+  assert.equal(last?.reason, "downgrade");
+  assert.equal(last?.applied, true);
+  assert.equal(last?.contextTokens, 80_000);
+  assert.equal(last?.expectedSteps, 12);
+  assert.equal(typeof last?.switchCost, "number");
+  assert.equal(typeof last?.stepSaving, "number");
+});
+
+test("router, active, stage: no downgrade under a guard", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await playTurn(host, handlers, engine, 1, "design the cache invalidation across both services", 4);
+  await playTurn(host, handlers, engine, 2, "thanks, now list the files you touched", 4);
+  const turn3 = await playTurn(host, handlers, engine, 3, "now deploy it to production", 4);
+  assert.equal(turn3.model, "claude-opus-5-5");
+  assert.equal(routerDecisionLines(host)[2]?.guard, "sensitive-topic");
+});
+
+test("router, active, stage: a failure on the weaker model upgrades on the next turn, whatever Jev's confidence", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple", 0.5));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const turn1 = await playTurn(host, handlers, engine, 1, "run the tests", 2, [
+    { role: "assistant", text: "", toolUses: [{ tool_use_id: "t1", tool: "Bash", input: { command: "npm test" }, text: "✖ 3 failing", isError: true }] },
+    { role: "assistant", text: "they fail", toolUses: [] },
+  ]);
+  assert.equal(turn1.model, "claude-haiku-4-5-20251001");
+  const turn2 = await playTurn(host, handlers, engine, 2, "fix them", 1);
+  assert.equal(turn2.model, "claude-opus-5-5");
+  assert.equal(turn2.effort, "high");
+  const stage = routerDecisionLines(host)[1];
+  assert.equal(stage?.reason, "floor-restore");
+  assert.equal(stage?.guard, "previous-failure");
+});
+
+test("router, measure, stage: logs stage decisions and changes nothing", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  for (const [turn, prompt] of [[1, "design it"], [2, "list files"], [3, "summarise"]] as const) {
+    const first = await playTurn(host, handlers, engine, turn, prompt, 4);
+    assert.equal(first.model, "claude-opus-5-5");
+    assert.equal(first.effort, "high");
+  }
+  const decisions = routerDecisionLines(host);
+  assert.equal(decisions.length, 3);
+  assert.equal(decisions[2]?.reason, "downgrade");
+  assert.equal(decisions[2]?.applied, false);
+});
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 2, T8: subagent routing (point B) on agent.spawn.
+// ---------------------------------------------------------------------------
+
+function spawnEvent(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    tool_use_id: "toolu_1",
+    prompt: "List every file under src/ and summarise what each one does in one line.",
+    description: "List files",
+    subagentType: "general-purpose",
+    provider: { plugin: "engine", tier: "core" },
+    parentModel: "claude-opus-5-5",
+    background: false,
+    fork: false,
+    ...overrides,
+  };
+}
+
+async function spawnThrough(handlers: Map<string, Hook>, engine: unknown, event: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const hook = handlers.get("agent.spawn");
+  assert.ok(hook, "agent.spawn was never registered");
+  let seen: Record<string, unknown> | null = null;
+  await hook(engine, event, async (e: unknown) => {
+    seen = e as Record<string, unknown>;
+    return { model: String((e as { model?: string }).model ?? "inherit"), agentId: "agent-1" };
+  });
+  assert.ok(seen !== null, "next was never called");
+  return seen;
+}
+
+test("router, active, subagent: no explicit model -- the tier's full id", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent());
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.point, "subagent");
+  assert.equal(decision?.applied, true);
+  assert.equal(JSON.stringify(decision).includes("summarise"), false, "no prompt text in the log");
+});
+
+test("router, measure, subagent: logs, changes nothing", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  const event = spawnEvent();
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  assert.equal(routerDecisionLines(host)[0]?.applied, false);
+});
+
+test("router, active, subagent: an explicit model is never downgraded", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = spawnEvent({ model: "sonnet" });
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+});
+
+test("router, active, subagent: guards hold the parent's model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = spawnEvent({ prompt: "Rotate the production database credentials." });
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  assert.equal(routerDecisionLines(host)[0]?.guard, "sensitive-topic");
+});
+
+test("router, subagent: a fork, off mode, or a Jev failure change nothing", async () => {
+  for (const [options, event, queued] of [
+    [{ routerMode: "active" }, spawnEvent({ fork: true }), true],
+    [{ routerMode: "off" }, spawnEvent(), true],
+    [{ routerMode: "active" }, spawnEvent(), false],
+  ] as const) {
+    const host = makeFakeHost();
+    seedRouterAccount(host);
+    if (queued) host.fetchQueue.push(tierAnswer("simple"));
+    const { handlers, engine } = loadHooksWith(host, options);
+    assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Review round 2: findings 1, 2, 3, 4 and 12 at the hook
+// ---------------------------------------------------------------------------
+
+const OPUS_XHIGH = { model: "claude-opus-5-5", effort: "xhigh" };
+
+/** One turn with a new real prompt, one step, the given effort; returns what the step sent. */
+async function promptTurn(host: FakeHost, handlers: Map<string, Hook>, engine: unknown, turn: number, prompt: string, session: Record<string, unknown>, assistant: Row[] = [{ role: "assistant", text: "ok", toolUses: [] }]): Promise<Record<string, unknown>> {
+  host.messages = [...host.messages, { role: "user", text: prompt, toolUses: [] }];
+  const seen = await stepThrough(handlers, engine, turnStepEvent({ turnId: `turn-${turn}`, index: 0, ...session }));
+  host.messages = [...host.messages, ...assistant];
+  return seen;
+}
+
+const FAILED_TESTS: Row[] = [
+  { role: "assistant", text: "", toolUses: [{ tool_use_id: "t1", tool: "Bash", input: { command: "npm test" }, text: "✖ 2 failing", isError: true }] },
+  { role: "assistant", text: "they fail", toolUses: [] },
+];
+
+test("finding 1 (hook): a Jev failure on a sensitive turn below the floor sends the session's own model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH, FAILED_TESTS);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  // Nothing queued: Jev fails.
+  const second = await promptTurn(host, handlers, engine, 2, "deploy the migration to production", OPUS_XHIGH);
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(second.effort, "xhigh");
+});
+
+test("finding 2 (hook): a floor-restore sends the session's max effort, not none", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const session = { model: "claude-opus-5-5", effort: "max" };
+  await promptTurn(host, handlers, engine, 1, "hola", session, FAILED_TESTS);
+  const second = await promptTurn(host, handlers, engine, 2, "fix them", session);
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(second.effort, "max");
+});
+
+test("finding 3: after the mode goes from active to measure, no step is rewritten any more", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  const active = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, active.handlers, active.engine, 1, "hola", OPUS_XHIGH);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  // The person picks measure: the module reloads, $.state survives.
+  const measure = loadHooksWith(host, { routerMode: "measure" });
+  const later = turnStepEvent({ turnId: "turn-1", index: 1, ...OPUS_XHIGH });
+  assert.deepEqual(await stepThrough(measure.handlers, measure.engine, later), later);
+  const second = await promptTurn(host, measure.handlers, measure.engine, 2, "thanks", OPUS_XHIGH);
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(second.effort, "xhigh");
+});
+
+test("finding 4: an engine-started turn (no new prompt) neither asks Jev nor counts toward hysteresis", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await playTurn(host, handlers, engine, 1, "design the cache invalidation across both services", 4);
+  await playTurn(host, handlers, engine, 2, "list the files you touched", 4);
+  const callsBefore = host.fetchCalls.length;
+  // The engine starts turn 3 by itself (a subagent finished): same last prompt.
+  const engineTurn = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-3", index: 0, model: "claude-opus-5-5", effort: "high" }), BIG_USAGE);
+  assert.equal(host.fetchCalls.length, callsBefore, "no Jev call for an engine-started turn");
+  assert.equal(engineTurn.model, "claude-opus-5-5");
+  assert.equal(routerDecisionLines(host).length, 2, "no stage decision logged for it");
+});
+
+test("finding 12: a routing error on a later step keeps the sticky model instead of flipping to the session's", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
+  host.failMessages = true;
+  host.messages = [...host.messages, { role: "user", text: "and now?", toolUses: [] }];
+  const second = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, ...OPUS_XHIGH }));
+  assert.equal(second.model, "claude-haiku-4-5-20251001");
+});
+
+// ---------------------------------------------------------------------------
+// Gap G6: the destination and policy guard, from the gate's own mirrors.
+// ---------------------------------------------------------------------------
+
+function seedCatalog(host: FakeHost, kind: string, policies: unknown[] = []): void {
+  host.files.set(`${CONFIG_DIR}/catalog.json`, JSON.stringify({ destinations: [{ id: "here", label: "Here", kind, worktreePath: CWD, autonomy: {} }] }));
+  host.files.set(`${CONFIG_DIR}/policies.json`, JSON.stringify(policies));
+}
+
+test("G6, point A: a client-site cwd keeps the session's own model on a simple prompt", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedCatalog(host, "client-site");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
+  assert.equal(seen.model, "claude-opus-5-5");
+  assert.equal(seen.effort, "xhigh");
+  assert.equal(routerDecisionLines(host)[0]?.guard, "client-site");
+});
+
+test("G6, point A: a prohibits policy scoped to this destination holds the floor; a global one does not", async () => {
+  const scoped = makeFakeHost();
+  seedRouterAccount(scoped);
+  seedCatalog(scoped, "project", [{ id: "freeze", rule: "no changes this week", kind: "prohibits", destinations: ["here"] }]);
+  scoped.fetchQueue.push(tierAnswer("simple"));
+  const a = loadHooksWith(scoped, { routerMode: "active" });
+  assert.equal((await promptTurn(scoped, a.handlers, a.engine, 1, "hola", OPUS_XHIGH)).model, "claude-opus-5-5");
+  assert.equal(routerDecisionLines(scoped)[0]?.guard, "policy");
+
+  const global = makeFakeHost();
+  seedRouterAccount(global);
+  seedCatalog(global, "project", [{ id: "production", rule: "ask before production", kind: "requires_human" }]);
+  global.fetchQueue.push(tierAnswer("simple"));
+  const b = loadHooksWith(global, { routerMode: "active" });
+  assert.equal((await promptTurn(global, b.handlers, b.engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
+});
+
+test("G6, point B: a subagent spawned in a client-site keeps the parent's model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedCatalog(host, "client-site");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = spawnEvent();
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  assert.equal(routerDecisionLines(host)[0]?.guard, "client-site");
+});
+
+test("G6, point C: a sticky model below the session's is restored once the cwd resolves to a client site", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  assert.equal((await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
+  seedCatalog(host, "client-site");
+  const second = await promptTurn(host, handlers, engine, 2, "thanks", OPUS_XHIGH);
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(routerDecisionLines(host)[1]?.guard, "client-site");
+});
+
+test("G6: a missing catalog is unknown and keeps today's behaviour", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  assert.equal((await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
+});
+
+test("G6: a lookup error (unreadable catalog, failing git) is unknown and keeps today's behaviour", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/catalog.json`, "{ not json");
+  host.failProcess = true;
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  assert.equal((await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
+});
+
+// ---------------------------------------------------------------------------
+// Round 3: N1, N2 and N3 at the hook
+// ---------------------------------------------------------------------------
+
+/** One whole turn on the given session model/effort: a new real prompt, `steps` main steps with a large context, then `assistant` in the transcript. Returns the first step's event. */
+async function playTurnAs(host: FakeHost, handlers: Map<string, Hook>, engine: unknown, turn: number, prompt: string, steps: number, session: Record<string, unknown>, assistant: Row[] = [{ role: "assistant", text: "ok", toolUses: [] }]): Promise<Record<string, unknown>> {
+  host.messages = [...host.messages, { role: "user", text: prompt, toolUses: [] }];
+  let first: Record<string, unknown> | null = null;
+  for (let index = 0; index < steps; index += 1) {
+    const seen = await stepThrough(handlers, engine, turnStepEvent({ turnId: `turn-${turn}`, index, ...session }), BIG_USAGE);
+    if (index === 0) first = seen;
+  }
+  host.messages = [...host.messages, ...assistant];
+  assert.ok(first !== null);
+  return first;
+}
+
+test("N1 (hook): a downgrade back to the session's own [1m] model sends the session's own step, unrewritten", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const session = { model: "claude-haiku-4-5-20251001[1m]" };
+  const own = { ...session };
+  const up = await playTurnAs(host, handlers, engine, 1, "design the sync protocol", 4, own);
+  assert.equal(up.model, "claude-opus-5-5");
+  await playTurnAs(host, handlers, engine, 2, "list the files", 4, own);
+  const back = await playTurnAs(host, handlers, engine, 3, "summarise them", 4, own);
+  assert.equal(routerDecisionLines(host)[2]?.reason, "downgrade");
+  assert.equal(back.model, "claude-haiku-4-5-20251001[1m]");
+  assert.equal(back.effort, "high", "the session's own effort, as its own step carried it");
+  const later = turnStepEvent({ turnId: "turn-3", index: 1, ...own });
+  assert.deepEqual(await stepThrough(handlers, engine, later), later, "no rewrite on the session's own model");
+});
+
+test("N2: an engine-started turn after a failing test restores the session's own model, without asking Jev", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "run the tests in the background", OPUS_XHIGH, FAILED_TESTS);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  const calls = host.fetchCalls.length;
+  // A subagent finished: the engine starts turn 2 by itself, no new prompt.
+  const engineTurn = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, ...OPUS_XHIGH }));
+  assert.equal(engineTurn.model, "claude-opus-5-5");
+  assert.equal(engineTurn.effort, "xhigh");
+  assert.equal(host.fetchCalls.length, calls, "no Jev call on an engine-started turn");
+  const restore = routerDecisionLines(host)[1];
+  assert.equal(restore?.reason, "floor-restore");
+  assert.equal(restore?.guard, "previous-failure");
+});
+
+test("N2: an engine-started turn with clean work keeps the sticky choice", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
+  const engineTurn = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, ...OPUS_XHIGH }));
+  assert.equal(engineTurn.model, "claude-haiku-4-5-20251001");
+  assert.equal(routerDecisionLines(host).length, 1);
+});
+
+test("N3: a new prompt after /compact is seen even when the real-prompt count is back to the stored one", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"), tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
+  await promptTurn(host, handlers, engine, 2, "sigue", OPUS_XHIGH);
+  // /compact: the transcript becomes a summary, then the person types a new prompt.
+  host.messages = [
+    { role: "user", text: "This session is being continued from a previous conversation. Summary: greetings.", toolUses: [] },
+    { role: "assistant", text: "ok", toolUses: [] },
+  ];
+  const calls = host.fetchCalls.length;
+  const next = await promptTurn(host, handlers, engine, 3, "diseña la sincronización offline de la app", OPUS_XHIGH);
+  assert.equal(host.fetchCalls.length, calls + 1, "the new prompt got its stage decision");
+  assert.equal(next.model, "claude-opus-5-5");
+});
+
+test("N3: the same prompt after /compact is not a new prompt (no second decision for it)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
+  host.messages = [{ role: "user", text: "hola", toolUses: [] }];
+  const calls = host.fetchCalls.length;
+  await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, ...OPUS_XHIGH }));
+  assert.equal(host.fetchCalls.length, calls);
 });

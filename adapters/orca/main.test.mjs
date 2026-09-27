@@ -7,7 +7,7 @@
 import { strict as assert } from 'node:assert'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { after, test } from 'node:test'
 
 import { DEFAULT_DENY_TIER_SWITCHES, DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
@@ -37,6 +37,7 @@ const {
   attendClaudeIntegrationRequest,
   attendDenyTierConfigRequest,
   attendLocaleRequest,
+  attendModelRouterConfigRequest,
   attendModSkillsConfigRequest,
   attendPolicySeedDismissRequest,
   attendPolicySeedImportRequest,
@@ -49,6 +50,8 @@ const {
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
+  consumptionSidecarArgv,
+  CONSUMPTION_STATUS_KEY,
   DENY_TIER_CONFIG_RESULT_KEY,
   DENY_TIER_STATUS_KEY,
   deriveCatalogFromOrca,
@@ -58,6 +61,9 @@ const {
   LOCALE_RESULT_KEY,
   LOCALE_STATUS_KEY,
   migrateLegacyPolicyKinds,
+  mirrorAccountQuota,
+  MODEL_ROUTER_CONFIG_RESULT_KEY,
+  MODEL_ROUTER_STATUS_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
   MOD_SKILLS_STATUS_KEY,
   POLICIES_WITHOUT_KIND_STATUS_KEY,
@@ -66,8 +72,10 @@ const {
   POLICY_SEED_NOTICE_STATUS_KEY,
   POLICY_SEED_OFFERED_VERSION_KEY,
   publishDenyTierStatus,
+  publishConsumptionSummary,
   publishGateDefaults,
   publishLocaleStatus,
+  publishModelRouterStatus,
   publishModSkillsStatus,
   publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
@@ -423,6 +431,100 @@ test('attendModSkillsConfigRequest: a mirror failure is reported, not silently s
   assert.equal(result.id, 'msc-4')
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'exception')
+})
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 2 (§9 T9): the config panel's own Jev model router switch.
+// Same request/result/TTL shape as mod-skills config above, but the
+// worker side is install-claude-integration.mjs's router-mode-status/
+// router-mode-set CLI modes (§7 says the panel never adds a second source
+// of truth), run through runClaudeIntegrationScript -- never the real
+// subprocess in a test: every test that can reach a save/status MUST
+// inject a fake `options.runScript`.
+// ---------------------------------------------------------------------------
+
+test('attendModelRouterConfigRequest: an expired request publishes reason "expired"', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: { id: 'mrc-1', at: TEN_MINUTES_AGO, target: 'home', mode: 'active' }
+  })
+  await attendModelRouterConfigRequest(orca, storageHost)
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-1')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'expired')
+  // Expiry must never reach the script -- no status republish either.
+  assert.equal(await storageHost.get(MODEL_ROUTER_STATUS_KEY), null)
+})
+
+test('attendModelRouterConfigRequest: a fresh request runs router-mode-set and publishes an ok result, then republishes status', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: { id: 'mrc-2', at: new Date().toISOString(), target: 'home', mode: 'active' }
+  })
+  const calls = []
+  const runScript = async (mode, extraArgs) => {
+    calls.push([mode, extraArgs])
+    if (mode === 'router-mode-set') return { ok: true, target: 'home', mode: 'active' }
+    if (mode === 'router-mode-status') return { ok: true, targets: [{ target: 'home', mode: 'active' }] }
+    throw new Error(`unexpected mode: ${mode}`)
+  }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-2')
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls[0], ['router-mode-set', ['home', 'active']])
+  const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
+  assert.deepEqual(status.targets, [{ target: 'home', mode: 'active' }])
+  assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('attendModelRouterConfigRequest: a script failure is reported, not silently swallowed as success', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: { id: 'mrc-3', at: new Date().toISOString(), target: 'home', mode: 'active' }
+  })
+  const runScript = async (mode) => {
+    if (mode === 'router-mode-set') return { ok: false, reason: 'unknown-target', detail: 'no such target' }
+    return { ok: true, targets: [] }
+  }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-3')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'unknown-target')
+})
+
+test('attendModelRouterConfigRequest: a malformed request (missing target/mode) is never attended', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: { id: 'mrc-4', at: new Date().toISOString() }
+  })
+  const runScript = async () => { throw new Error('must never be called') }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  assert.equal(await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY), null)
+})
+
+test('publishModelRouterStatus: publishes the targets the script reports', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const runScript = async (mode) => {
+    assert.equal(mode, 'router-mode-status')
+    return { ok: true, targets: [{ target: 'home', mode: 'measure' }, { target: 'abc12345', mode: 'off' }] }
+  }
+  await publishModelRouterStatus(orca, storageHost, { runScript })
+  const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
+  assert.deepEqual(status.targets, [{ target: 'home', mode: 'measure' }, { target: 'abc12345', mode: 'off' }])
+  assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('publishModelRouterStatus: a script failure degrades to an empty target list, never throws', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const runScript = async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' })
+  await publishModelRouterStatus(orca, storageHost, { runScript })
+  const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
+  assert.deepEqual(status.targets, [])
 })
 
 test('publishModSkillsStatus: a failed mirror read normalizes to both switches off, never throws', async () => {
@@ -1423,4 +1525,179 @@ test('spawnSidecar settles an ordinary failure, never an unhandled error, when t
   const oversizedPayload = 'x'.repeat(2 * 1024 * 1024)
   const result = await spawnSidecar([script], { timeout: 5000, maxBuffer: 64 * 1024 }, oversizedPayload)
   assert.equal(result.ok, false)
+})
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 1, T2 -- mirrorAccountQuota. Both the CLI fetch and the
+// sidecar write are injectable (options.fetchAccountQuotas/options.saveQuota),
+// same "options override the default" convention computeCatalogProposals'
+// own fetchOrcaWorktrees override already uses -- so these never shell out
+// to a real `orca` binary or spawn a real write-secret-mirror.mjs child
+// (which, per this file's own noopMirror note above, would otherwise write
+// to this developer's REAL ~/.config/orca-supervisor).
+// ---------------------------------------------------------------------------
+
+function fakeAccountQuotaFetch (accounts, failure = null) {
+  return async () => ({ accounts, failure })
+}
+
+test('mirrorAccountQuota: writes id/status/session/weekly/fableWeekly only, drops email and auth, keeps only Claude accounts', async () => {
+  const orca = fakeOrca()
+  const rawAccounts = [
+    {
+      provider: 'claude',
+      id: '00000000-0000-4000-8000-000000000002',
+      email: 'someone@example.com',
+      active: false,
+      quota: {
+        status: 'ok',
+        session: { usedPercent: 2, windowMinutes: 300, resetsAt: 1790482200000, resetDescription: '11:10 PM' },
+        weekly: { usedPercent: 55, windowMinutes: 10080, resetsAt: 1790568000000, resetDescription: 'Sun 11:00 PM' },
+        updatedAt: 1790465200475,
+        error: null
+      },
+      auth: { accountId: '00000000-0000-4000-8000-000000000002', state: 'authenticated' }
+    },
+    {
+      provider: 'claude',
+      id: '00000000-0000-4000-8000-000000000001',
+      email: 'other@example.com',
+      quota: {
+        status: 'error',
+        session: { usedPercent: 0, resetsAt: null },
+        weekly: { usedPercent: 100, resetsAt: 1790593199962 },
+        fableWeekly: { usedPercent: 0, windowMinutes: 10080, resetsAt: 1790593200000, resetDescription: 'Mon 6:00 AM' },
+        error: 'Rate limited by the token endpoint'
+      }
+    },
+    { provider: 'codex', id: 'not-a-claude-account', quota: { status: 'ok', session: { usedPercent: 1 }, weekly: { usedPercent: 1 } } }
+  ]
+
+  let savedPayload = null
+  await mirrorAccountQuota(orca, {
+    fetchAccountQuotas: fakeAccountQuotaFetch(rawAccounts),
+    saveQuota: async (payload) => { savedPayload = payload; return { ok: true } }
+  })
+
+  assert.ok(savedPayload, 'saveQuota was never called')
+  assert.equal(typeof savedPayload.checkedAt, 'string')
+  assert.equal(savedPayload.accounts.length, 2, 'the codex account must never be mirrored -- Claude accounts only')
+
+  const [first, second] = savedPayload.accounts
+  assert.equal(first.id, '00000000-0000-4000-8000-000000000002')
+  assert.equal(first.status, 'ok')
+  assert.equal(first.sessionUsedPercent, 2)
+  assert.equal(first.weeklyUsedPercent, 55)
+  assert.equal(first.resetsAt, 1790568000000)
+  assert.equal(first.fableWeekly, undefined, 'no fableWeekly on this account: must not be fabricated')
+  assert.equal(first.email, undefined, 'no email in the mirrored file')
+  assert.equal(first.auth, undefined, 'no auth object in the mirrored file')
+
+  assert.equal(second.status, 'error')
+  assert.deepEqual(second.fableWeekly, { usedPercent: 0, resetsAt: 1790593200000 })
+})
+
+test('mirrorAccountQuota: a CLI failure is handled without throwing, without writing, and is logged once for repeats of the same detail', async () => {
+  const orca = fakeOrca()
+  let saveCalls = 0
+  const options = {
+    fetchAccountQuotas: fakeAccountQuotaFetch([], 'ENOENT: orca-jev-060-test-cli-missing'),
+    saveQuota: async () => { saveCalls += 1; return { ok: true } }
+  }
+  await assert.doesNotReject(mirrorAccountQuota(orca, options))
+  await mirrorAccountQuota(orca, options) // identical failure again
+  assert.equal(saveCalls, 0, 'a fetch failure must never reach the write step')
+  assert.equal(
+    orca._logs.filter((line) => line.includes('orca-jev-060-test-cli-missing')).length,
+    1,
+    'an identical failure must be logged once, not on every call'
+  )
+})
+
+test('mirrorAccountQuota: the dedup resets on a success in between, so a later failure logs again', async () => {
+  const orca = fakeOrca()
+  const failing = { fetchAccountQuotas: fakeAccountQuotaFetch([], 'orca-jev-060-test-flaky-cli'), saveQuota: async () => ({ ok: true }) }
+  const succeeding = { fetchAccountQuotas: fakeAccountQuotaFetch([]), saveQuota: async () => ({ ok: true }) }
+  await mirrorAccountQuota(orca, failing)
+  await mirrorAccountQuota(orca, succeeding)
+  await mirrorAccountQuota(orca, failing)
+  assert.equal(orca._logs.filter((line) => line.includes('orca-jev-060-test-flaky-cli')).length, 2)
+})
+
+test('mirrorAccountQuota: a write (sidecar) failure is handled without throwing and is logged', async () => {
+  const orca = fakeOrca()
+  await assert.doesNotReject(mirrorAccountQuota(orca, {
+    fetchAccountQuotas: fakeAccountQuotaFetch([
+      { provider: 'claude', id: 'a1', quota: { status: 'ok', session: { usedPercent: 1 }, weekly: { usedPercent: 1, resetsAt: 1 } } }
+    ]),
+    saveQuota: async () => ({ ok: false, reason: 'launch-failed', detail: 'orca-jev-060-test-write-boom' })
+  }))
+  assert.ok(orca._logs.some((line) => line.includes('orca-jev-060-test-write-boom')))
+})
+
+// ---------------------------------------------------------------------------
+// JEV-060 slice 1, T4 -- publishConsumptionSummary. The sidecar-spawning
+// side is injectable (options.readConsumptionSummary), same "options
+// override the default" convention as mirrorAccountQuota's own
+// fetchAccountQuotas/saveQuota above -- so these never spawn a real
+// read-consumption.mjs child (that has its own dedicated test file,
+// read-consumption.test.mjs, exercising it as the CLI it actually is).
+// ---------------------------------------------------------------------------
+
+test('publishConsumptionSummary: writes the summary plus a fresh checkedAt to storage under CONSUMPTION_STATUS_KEY', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const fakeSummary = { ok: true, usage: { last24h: { stepCount: 3 }, last7d: { stepCount: 10 } }, quota: { accounts: [], checkedAt: null }, recommendations: {} }
+  await publishConsumptionSummary(orca, storageHost, { readConsumptionSummary: async () => fakeSummary })
+  const stored = await storageHost.get(CONSUMPTION_STATUS_KEY)
+  assert.equal(stored.ok, true)
+  assert.deepEqual(stored.usage, fakeSummary.usage)
+  assert.deepEqual(stored.recommendations, fakeSummary.recommendations)
+  assert.equal(typeof stored.checkedAt, 'string')
+})
+
+test('publishConsumptionSummary: an {ok:false} summary is still published (an honest failure state), and logged once', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const failure = { ok: false, reason: 'no-json', detail: 'orca-jev-060-test-consumption-boom' }
+  await publishConsumptionSummary(orca, storageHost, { readConsumptionSummary: async () => failure })
+  const stored = await storageHost.get(CONSUMPTION_STATUS_KEY)
+  assert.equal(stored.ok, false)
+  assert.equal(stored.reason, 'no-json')
+  assert.ok(orca._logs.some((line) => line.includes('orca-jev-060-test-consumption-boom')))
+})
+
+test('publishConsumptionSummary: a storage.set failure is caught and logged, never thrown', async () => {
+  const orca = fakeOrca()
+  const storageHost = { set: async () => { throw new Error('orca-jev-060-test-storage-boom') } }
+  await assert.doesNotReject(publishConsumptionSummary(orca, storageHost, { readConsumptionSummary: async () => ({ ok: true, usage: {}, quota: {}, recommendations: {} }) }))
+  assert.ok(orca._logs.some((line) => line.includes('orca-jev-060-test-storage-boom')))
+})
+
+// Today's bug: the real sidecar was granted --allow-fs-read on ~/.claude
+// (CLAUDE_HOME_DIR) but never on the SIBLING file ~/.claude.json --
+// verified by hand that Node's --permission sandbox denies a directory
+// grant's same-prefix sibling file rather than extending to it, so the real
+// spawn would have silently read mcpServerCount as 0 forever, with every
+// test still green (the injectable-options tests above never exercise the
+// real argv, and read-consumption.test.mjs runs the script unsandboxed).
+// This cannot run the real sidecar here (this file never overrides HOME,
+// see this file's own header note, so a real spawn would touch the actual
+// developer's ~/.claude* -- forbidden); it only pins the argv shape.
+test('consumptionSidecarArgv: grants the sidecar its own explicit read on ~/.claude.json, not just its ~/.claude directory', () => {
+  const argv = consumptionSidecarArgv()
+  const readGrants = argv.filter((arg) => arg.startsWith('--allow-fs-read='))
+  assert.ok(
+    readGrants.some((grant) => grant.endsWith(`${sep}.claude.json`)),
+    `expected an explicit --allow-fs-read for the .claude.json file itself, got: ${JSON.stringify(readGrants)}`,
+  )
+})
+
+test('consumptionSidecarArgv: grants read on the config dir (quota.json) and read+write on the cache dir (turn-usage files plus pruning)', () => {
+  const argv = consumptionSidecarArgv()
+  const expectedConfigDir = join(PATHS_OVERRIDE_DIR, 'config')
+  const expectedCacheDir = join(PATHS_OVERRIDE_DIR, 'cache')
+  assert.ok(argv.some((arg) => arg === `--allow-fs-read=${expectedConfigDir}`))
+  assert.ok(argv.some((arg) => arg === `--allow-fs-read=${expectedCacheDir}`))
+  assert.ok(argv.some((arg) => arg === `--allow-fs-write=${expectedCacheDir}`))
 })

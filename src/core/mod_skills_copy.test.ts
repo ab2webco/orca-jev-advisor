@@ -174,3 +174,13 @@ test("buildModSkillsHooksManifest: modules names exactly the one entry, at the g
   assert.deepEqual(json.modules, ["../adapters/claude/mod-skills/hooks/index.ts"]);
   assert.equal(json.description, "x");
 });
+
+test("buildModSkillsPluginManifest: carries userConfig and the $.state types contract when given (JEV-060 slice 2)", () => {
+  const userConfig = { routerMode: { type: "string", title: "Model router", description: "x", options: ["off", "measure", "active"], default: "measure" } };
+  const json = JSON.parse(buildModSkillsPluginManifest({ name: "orca-jev-mod-skills", version: "0.6.0", description: "x", authorName: "Ab2Web", userConfig, types: "./adapters/claude/mod-skills/types/index.d.ts" }));
+  assert.deepEqual(json.userConfig, userConfig);
+  assert.equal(json.types, "./adapters/claude/mod-skills/types/index.d.ts");
+  const bare = JSON.parse(buildModSkillsPluginManifest({ name: "n", version: "1", description: "x", authorName: "A" }));
+  assert.equal("userConfig" in bare, false);
+  assert.equal("types" in bare, false);
+});

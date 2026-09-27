@@ -339,6 +339,12 @@
         <div id="skills-body"></div>
       </section>
 
+      <section class="card wide" id="card-consumption">
+        <h2 data-i18n="consumption.heading"></h2>
+        <div id="consumption-empty" class="empty-line" style="display:none"></div>
+        <div id="consumption-body"></div>
+      </section>
+
       <section class="card wide" id="card-unmeasured">
         <h2 data-i18n="unmeasured.heading"></h2>
         <ul class="unmeasured" id="unmeasured-body"></ul>
@@ -468,6 +474,53 @@
           'unmeasured.quality': 'Quién acierta más. Una discrepancia dice que difieren, no cuál de los dos tenía razón.',
           'unmeasured.counterfactual': 'Qué habría pasado sin el gate. Nadie ha corrido esos comandos sin él.',
           'error.unexpected': 'Algo falló y no se pudo completar. Vuelve a intentarlo; si sigue pasando, revisa el registro de Orca.',
+          // JEV-060 slice 1, T5: the Consumption card, sourced entirely from
+          // the worker's own `consumptionSummary` (main.mjs's
+          // publishConsumptionSummary / adapters/orca/read-consumption.mjs).
+          'consumption.heading': 'Consumo',
+          'consumption.usageHeading': 'Uso de tokens',
+          'consumption.quotaHeading': 'Cupo de la cuenta',
+          'consumption.recommendationsHeading': 'Recomendaciones',
+          'consumption.empty': 'Todavía no hay datos de consumo. Se llenan cuando el proceso del plugin registre los primeros pasos.',
+          'consumption.unavailable': 'No se pudo calcular el consumo esta vez. Se vuelve a intentar en el próximo refresco.',
+          'consumption.steps': '{{n}} paso(s)',
+          'consumption.input': 'Entrada sin caché',
+          'consumption.cacheRead': 'Relectura de caché',
+          'consumption.cacheWrite': 'Escritura de caché',
+          'consumption.output': 'Salida',
+          'consumption.na': 'N/D',
+          'consumption.noModelData': 'Todavía no hay datos por modelo.',
+          'consumption.avgContext': 'Contexto promedio releído por paso principal: {{tokens}} tokens.',
+          'consumption.noContextData': 'Todavía no hay datos de contexto por paso principal.',
+          'consumption.subagentSplit': 'Los subagentes usan el {{percent}}% del consumo; lo principal usa el resto.',
+          'consumption.noSubagentData': 'Todavía no hay datos del reparto entre lo principal y los subagentes.',
+          'consumption.session': 'Sesión',
+          'consumption.weekly': 'Semanal',
+          'consumption.resetsAt': 'Reinicia: {{when}}',
+          'consumption.claudeMdSize': 'El CLAUDE.md global pesa unos {{tokens}} tokens estimados.',
+          'consumption.claudeMdSizeSuggestion': 'Considera acortarlo para ahorrar tokens en cada llamada.',
+          'consumption.mcpServerCount': 'Tienes {{count}} servidor(es) MCP en el ~/.claude.json global; cada cuenta de Orca puede tener su propia lista.',
+          'consumption.longSessionWarning': 'El contexto promedio por paso principal es alto ({{tokens}} tokens); considera usar /clear entre tareas.',
+          'consumption.longSessionOk': 'El contexto promedio por paso principal está en un rango sano ({{tokens}} tokens).',
+          'consumption.subagentShareWarning': 'Los subagentes consumen el {{percent}}% del uso; considera reducir su alcance.',
+          'consumption.subagentShareOk': 'Los subagentes consumen el {{percent}}% del uso, dentro de un rango razonable.',
+          'consumption.accountHome': 'Este equipo',
+          'consumption.accountLabel': 'Cuenta {{id}}',
+          'consumption.modelRouterHeading': 'Enrutador de modelo',
+          'consumption.modelRouterEmpty': 'Todavía no hay decisiones del enrutador.',
+          'consumption.modelRouterNoDecisions': 'Ningún punto tiene decisiones todavía.',
+          'consumption.modelRouterPointStart': 'Inicio de sesión',
+          'consumption.modelRouterPointStage': 'Cambio de etapa',
+          'consumption.modelRouterPointSubagent': 'Subagente',
+          'consumption.modelRouterTierSimple': 'Consultar',
+          'consumption.modelRouterTierStandard': 'Implementar',
+          'consumption.modelRouterTierComplex': 'Analizar',
+          'consumption.modelRouterTierFrontier': 'Razonar a fondo',
+          'consumption.modelRouterAppliedMeasured': 'Aplicadas {{applied}} · no aplicadas {{measured}}',
+          'consumption.modelRouterSavedEstimate': 'Ahorro estimado a precio de lista: ${{amount}}.',
+          'consumption.modelRouterExtraCost': 'Costo extra estimado a precio de lista: ${{amount}}.',
+          'consumption.modelRouterEstimateScope': 'Cubre solo las bajadas de modelo en un cambio de etapa: los pasos que corrieron en el modelo más barato, menos la reescritura de caché que costó cada cambio.',
+          'consumption.modelRouterNoEstimateYet': 'Todavía no hay ninguna bajada en un cambio de etapa que estimar.',
         },
         en: {
           'window.label': 'Time window',
@@ -582,6 +635,50 @@
           'unmeasured.quality': 'Who is more often right. A disagreement says the two differ, not which one was correct.',
           'unmeasured.counterfactual': 'What would have happened without the gate. Nobody has run those commands without it.',
           'error.unexpected': "Something went wrong and it could not finish. Try again; if it keeps happening, check Orca's log.",
+          'consumption.heading': 'Consumption',
+          'consumption.usageHeading': 'Token usage',
+          'consumption.quotaHeading': 'Account quota',
+          'consumption.recommendationsHeading': 'Recommendations',
+          'consumption.empty': "No consumption data yet. It fills in once the plugin's background process records its first steps.",
+          'consumption.unavailable': 'Consumption could not be calculated this time. It will try again on the next refresh.',
+          'consumption.steps': '{{n}} step(s)',
+          'consumption.input': 'Input (uncached)',
+          'consumption.cacheRead': 'Cache read',
+          'consumption.cacheWrite': 'Cache write',
+          'consumption.output': 'Output',
+          'consumption.na': 'N/A',
+          'consumption.noModelData': 'No per-model data yet.',
+          'consumption.avgContext': 'Average context re-read per main step: {{tokens}} tokens.',
+          'consumption.noContextData': 'No per-step context data yet.',
+          'consumption.subagentSplit': 'Subagents use {{percent}}% of usage; the main agent uses the rest.',
+          'consumption.noSubagentData': 'No main-vs-subagent split data yet.',
+          'consumption.session': 'Session',
+          'consumption.weekly': 'Weekly',
+          'consumption.resetsAt': 'Resets: {{when}}',
+          'consumption.claudeMdSize': 'The global CLAUDE.md is about {{tokens}} estimated tokens.',
+          'consumption.claudeMdSizeSuggestion': 'Consider trimming it to save tokens on every call.',
+          'consumption.mcpServerCount': 'You have {{count}} MCP server(s) in the global ~/.claude.json; each Orca account can have its own list.',
+          'consumption.longSessionWarning': 'Average context per main step is high ({{tokens}} tokens); consider using /clear between tasks.',
+          'consumption.longSessionOk': 'Average context per main step is in a healthy range ({{tokens}} tokens).',
+          'consumption.subagentShareWarning': 'Subagents consume {{percent}}% of usage; consider narrowing their scope.',
+          'consumption.subagentShareOk': 'Subagents consume {{percent}}% of usage, within a reasonable range.',
+          'consumption.accountHome': 'This computer',
+          'consumption.accountLabel': 'Account {{id}}',
+          'consumption.modelRouterHeading': 'Model router',
+          'consumption.modelRouterEmpty': 'No router decisions yet.',
+          'consumption.modelRouterNoDecisions': 'No point has any decisions yet.',
+          'consumption.modelRouterPointStart': 'Session start',
+          'consumption.modelRouterPointStage': 'Stage change',
+          'consumption.modelRouterPointSubagent': 'Subagent',
+          'consumption.modelRouterTierSimple': 'Ask',
+          'consumption.modelRouterTierStandard': 'Implement',
+          'consumption.modelRouterTierComplex': 'Analyse',
+          'consumption.modelRouterTierFrontier': 'Deep reasoning',
+          'consumption.modelRouterAppliedMeasured': 'Applied {{applied}} · not applied {{measured}}',
+          'consumption.modelRouterSavedEstimate': 'Estimated saving at list prices: ${{amount}}.',
+          'consumption.modelRouterExtraCost': 'Estimated extra cost at list prices: ${{amount}}.',
+          'consumption.modelRouterEstimateScope': 'Covers downgrades at a stage change only: the steps that ran on the cheaper model, minus the cache rewrite each switch cost.',
+          'consumption.modelRouterNoEstimateYet': 'No downgrade at a stage change to estimate yet.',
         }
       }
       /**
@@ -1152,6 +1249,285 @@
         fill('skills-body', null, parts.join(''), '')
       }
 
+      // ---------- render: consumption (JEV-060 slice 1, T5) -----------------
+      // Three honest states, never two -- same convention config.html's own
+      // modelsRenderMeasurements already uses for modelMeasurements: no
+      // summary yet (or a genuine ok:true empty payload) reads as "no data
+      // yet"; ok:false reads as its own distinct failure sentence; only a
+      // real ok:true payload with real numbers ever renders the populated
+      // card. Every number below comes straight from consumptionSummary
+      // (main.mjs's publishConsumptionSummary / read-consumption.mjs), never
+      // invented -- a null field renders as consumption.na, never a
+      // fabricated zero.
+
+      /** A percentage row using the same .hrow/.htrack/.hfill markup as
+       *  hbars() above, but for a value that IS already the percentage to
+       *  show (0-100 or null) -- hbars itself scales against the largest row
+       *  in its own list, which is the wrong shape for an independent share
+       *  or quota percentage. */
+      function barRow (label, percent, cls) {
+        var rounded = (percent === null || percent === undefined || !isFinite(percent)) ? null : Math.round(percent * 10) / 10
+        var widthPercent = rounded === null ? 0 : Math.min(100, Math.max(0, rounded))
+        var valueText = rounded === null ? t('consumption.na') : (rounded + '%')
+        return '<div class="hrow v1">' +
+          '<span class="hl" title="' + esc(label) + '">' + esc(label) + '</span>' +
+          '<span class="htrack"><span class="hfill ' + (cls || 'v1') + '" style="width:' + widthPercent + '%"></span></span>' +
+          '<span class="hv">' + esc(valueText) + '</span></div>'
+      }
+
+      /** `resetsAt` is epoch milliseconds (verified by hand against a real
+       *  `orca account list --json` fixture in main.test.mjs -- 13-digit
+       *  values in the current era), never an ISO string or epoch seconds --
+       *  `new Date(ms)` is the correct read. `null`/unparseable renders as
+       *  consumption.na via the caller, never a raw epoch number. */
+      function formatResetsAt (resetsAtMs) {
+        if (typeof resetsAtMs !== 'number' || !isFinite(resetsAtMs)) return null
+        var date = new Date(resetsAtMs)
+        if (isNaN(date.getTime())) return null
+        try {
+          return date.toLocaleString(currentLocale === 'es' ? 'es-ES' : 'en-US',
+            { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+        } catch (error) {
+          return date.toISOString()
+        }
+      }
+
+      /** The current model catalog (seed/models.json), shortened for this
+       *  card's compact rows -- the catalog's own `label` carries a
+       *  redundant "Claude " prefix ("Claude Sonnet 5") that this card drops.
+       *  An id outside this small known set (a future or renamed model)
+       *  falls back to itself, never blank -- see friendlyModelName below. */
+      var MODEL_FRIENDLY_NAMES = {
+        'claude-fable-5-1': 'Fable 5.1',
+        'claude-opus-5-5': 'Opus 5.5',
+        'claude-sonnet-5': 'Sonnet 5',
+        'claude-haiku-4-5-20251001': 'Haiku 4.5'
+      }
+
+      /** The friendly label for a model id, or the id itself when it is not
+       *  in MODEL_FRIENDLY_NAMES -- the raw id is never lost, it just moves
+       *  to the caller's `title` attribute instead of the visible text. */
+      function friendlyModelName (id) {
+        return MODEL_FRIENDLY_NAMES[id] || id
+      }
+
+      /** One model's input/cache-read/cache-write/output shares -- each a
+       *  0..1 fraction of that model's OWN total tokens (src/core/
+       *  consumption.ts's own doc on ModelUsageShare), never a share of the
+       *  window's whole traffic. All four together account for the model's
+       *  own total, so the four rendered bars sum to ~100% -- rendering
+       *  fewer than four is exactly what let a Sonnet row read as 74+10+5=89
+       *  before `inputShare` existed. `pct()` both converts to a percent and
+       *  rounds. The visible name is friendly (friendlyModelName); the raw
+       *  id a person would need to cross-reference elsewhere lives in the
+       *  same element's `title`, never dropped. */
+      function consumptionModelBlock (modelShare) {
+        return '<p class="kpi-sub"><b title="' + esc(modelShare.model) + '">' + esc(friendlyModelName(modelShare.model)) + '</b> · ' +
+          esc(t('consumption.steps', { n: num(modelShare.stepCount) })) + '</p>' +
+          '<div class="hrows">' +
+            barRow(t('consumption.input'), pct(modelShare.inputShare), 'v1') +
+            barRow(t('consumption.cacheRead'), pct(modelShare.cacheReadShare), 'v2') +
+            barRow(t('consumption.cacheWrite'), pct(modelShare.cacheWriteShare), 'v3') +
+            barRow(t('consumption.output'), pct(modelShare.outputShare), 'v1') +
+          '</div>'
+      }
+
+      /** The short label a quota row shows in place of the raw account id
+       *  (JEV-060 slice 2, T9): "This computer" for `home` (kept in case a
+       *  future quota source ever reports it -- today's `orca account list
+       *  --json` never does), else "Account " plus the id's first 8
+       *  characters, same truncation `accountConfigTarget`
+       *  (src/core/orca_accounts.ts) already uses for its own `label`. The
+       *  raw id is never lost -- it moves to the element's `title`. */
+      function accountShortLabel (id) {
+        return id === 'home' ? t('consumption.accountHome') : t('consumption.accountLabel', { id: String(id).slice(0, 8) })
+      }
+
+      /** One quota account's session/weekly usage bars and its weekly reset
+       *  time. `sessionUsedPercent`/`weeklyUsedPercent` are already 0-100
+       *  percentages on the wire (main.mjs's accountQuotaEntry mirrors
+       *  `orca account list --json`'s own usedPercent fields verbatim), unlike
+       *  the 0..1 fractions above -- passed to barRow directly, never through
+       *  pct(). */
+      function consumptionQuotaBlock (account) {
+        var label = accountShortLabel(account.id)
+        var heading = account.status ? (label + ' · ' + account.status) : label
+        var resetText = formatResetsAt(account.resetsAt)
+        return '<p class="kpi-sub"><b title="' + esc(account.id) + '">' + esc(heading) + '</b></p>' +
+          '<div class="hrows">' +
+            barRow(t('consumption.session'), account.sessionUsedPercent, 'v1') +
+            barRow(t('consumption.weekly'), account.weeklyUsedPercent, 'v3') +
+          '</div>' +
+          line(t('consumption.resetsAt', { when: resetText || t('consumption.na') }))
+      }
+
+      /**
+       * The plain-language recommendations, gated key-by-key: a trigger's
+       * key is present in `recommendations` only when the worker actually
+       * had real data for it (mcpServerCount is the one exception -- see
+       * src/core/consumption.ts's own doc, 0 is honest data there). A
+       * present trigger with `overThreshold: false` still gets a quiet
+       * confirming line (for longSession/subagentShare -- reassurance that
+       * real data was checked and it is fine) rather than nothing; the
+       * MCP server count is purely informational and never takes the
+       * `.stale` warning tone, since the brief specifies no threshold for
+       * it.
+       */
+      function consumptionRecommendationLines (recommendations) {
+        var recs = recommendations || {}
+        var parts = []
+        if (recs.claudeMdSize) {
+          parts.push(line(t('consumption.claudeMdSize', { tokens: num(Math.round(recs.claudeMdSize.estimatedTokens)) }),
+            recs.claudeMdSize.overThreshold ? 'stale' : 'empty-line'))
+          if (recs.claudeMdSize.overThreshold) parts.push(line(t('consumption.claudeMdSizeSuggestion'), 'stale'))
+        }
+        if (recs.mcpServerCount) {
+          parts.push(line(t('consumption.mcpServerCount', { count: num(recs.mcpServerCount.count) }), 'empty-line'))
+        }
+        if (recs.longSession) {
+          var longSessionKey = recs.longSession.overThreshold ? 'consumption.longSessionWarning' : 'consumption.longSessionOk'
+          parts.push(line(t(longSessionKey, { tokens: num(Math.round(recs.longSession.avgMainStepContextReread)) }),
+            recs.longSession.overThreshold ? 'stale' : 'empty-line'))
+        }
+        if (recs.subagentShare) {
+          var subagentShareKey = recs.subagentShare.overThreshold ? 'consumption.subagentShareWarning' : 'consumption.subagentShareOk'
+          parts.push(line(t(subagentShareKey, { percent: String(Math.round(recs.subagentShare.subagentSharePercent * 10) / 10) }),
+            recs.subagentShare.overThreshold ? 'stale' : 'empty-line'))
+        }
+        return parts.join('')
+      }
+
+      /** The router's own three decision points and four tiers (JEV-060
+       *  slice 2, §3/§4), in the fixed order the spec lists them -- never
+       *  derived from whatever keys happen to be present, so an empty point
+       *  or tier still has a place in the layout rather than reordering
+       *  around whatever the log happened to contain. Tier wording matches
+       *  src/core/i18n_model_router.ts's own "stage.*" status-line words
+       *  (consultar/implementar/analizar/razonar a fondo) on purpose -- the
+       *  same tier must read the same word wherever the person sees it. */
+      var MODEL_ROUTER_POINTS = ['start', 'stage', 'subagent']
+      var MODEL_ROUTER_POINT_KEYS = {
+        start: 'consumption.modelRouterPointStart',
+        stage: 'consumption.modelRouterPointStage',
+        subagent: 'consumption.modelRouterPointSubagent'
+      }
+      var MODEL_ROUTER_TIERS = ['simple', 'standard', 'complex', 'frontier']
+      var MODEL_ROUTER_TIER_KEYS = {
+        simple: 'consumption.modelRouterTierSimple',
+        standard: 'consumption.modelRouterTierStandard',
+        complex: 'consumption.modelRouterTierComplex',
+        frontier: 'consumption.modelRouterTierFrontier'
+      }
+
+      /** One decision point's tier counts as hbars() rows -- a point with
+       *  every tier at zero renders no bars at all (hbars' own "max <= 0"
+       *  guard), so a point with no decisions yet is left out of the
+       *  section entirely rather than shown as four empty bars. */
+      function modelRouterPointRows (counts) {
+        return MODEL_ROUTER_TIERS.map(function (tier) {
+          return { label: t(MODEL_ROUTER_TIER_KEYS[tier]), value: (counts && counts[tier]) || 0 }
+        })
+      }
+
+      /**
+       * The board's "Model router" subsection (JEV-060 slice 2, §8, T9):
+       * `modelRouter` is `summarizeRouterDecisions`'s own summary
+       * (read-consumption.mjs), or `null`/`undefined` when no
+       * model-router-decisions-*.jsonl file exists at all (the router has
+       * never run, or is `off`) -- rendered as one honest line, never a
+       * zeroed-out summary that would look like a router that ran and
+       * decided nothing.
+       */
+      function consumptionModelRouterBlock (modelRouter) {
+        if (!modelRouter) return line(t('consumption.modelRouterEmpty'), 'empty-line')
+
+        var parts = []
+        var anyPoint = false
+        MODEL_ROUTER_POINTS.forEach(function (point) {
+          var bars = hbars(modelRouterPointRows(modelRouter.byPoint && modelRouter.byPoint[point]), 'v2')
+          if (!bars) return
+          anyPoint = true
+          parts.push('<p class="kpi-sub"><b>' + esc(t(MODEL_ROUTER_POINT_KEYS[point])) + '</b></p>' + bars)
+        })
+        if (!anyPoint) parts.push(line(t('consumption.modelRouterNoDecisions'), 'empty-line'))
+
+        parts.push(line(t('consumption.modelRouterAppliedMeasured', { applied: num(modelRouter.applied), measured: num(modelRouter.measured) })))
+        // Never a negative "saving": a total below zero is what the
+        // switches cost (review finding 8), and the line always says what
+        // the estimate covers.
+        var estimate = modelRouter.savedEstimate
+        if (estimate === null || estimate === undefined) {
+          parts.push(line(t('consumption.modelRouterNoEstimateYet'), 'empty-line'))
+        } else {
+          parts.push(line(t(estimate < 0 ? 'consumption.modelRouterExtraCost' : 'consumption.modelRouterSavedEstimate', { amount: Math.abs(estimate).toFixed(2) })))
+          parts.push(line(t('consumption.modelRouterEstimateScope'), 'empty-line'))
+        }
+        return parts.join('')
+      }
+
+      /**
+       * `summary`: the raw `consumptionSummary` storage value, or `null`
+       * before the worker's first publish. Primary window: last24h when it
+       * has any steps, else last7d -- last24h is the more actionable window,
+       * but falling back avoids showing "no data" right after an hour/day
+       * boundary when the 7-day window still has real history. The four
+       * recommendation triggers are NOT re-derived from this choice: they
+       * come straight from `recommendations`, which read-consumption.mjs
+       * always computes from last24h specifically (its own trigger
+       * functions), independent of which window this function picks to
+       * display the raw per-model/context/subagent numbers.
+       */
+      function renderConsumption (summary) {
+        if (!summary) { fill('consumption-body', 'consumption-empty', '', t('consumption.empty')); return }
+        if (summary.ok === false) { fill('consumption-body', 'consumption-empty', '', t('consumption.unavailable')); return }
+
+        var usage = summary.usage || {}
+        var last24h = usage.last24h || { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
+        var last7d = usage.last7d || { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
+        var quota = summary.quota || { accounts: [], checkedAt: null }
+        var accounts = Array.isArray(quota.accounts) ? quota.accounts : []
+        var hasUsage = (last24h.stepCount || 0) > 0 || (last7d.stepCount || 0) > 0
+        var hasQuota = accounts.length > 0
+        var hasModelRouter = !!summary.modelRouter
+
+        if (!hasUsage && !hasQuota && !hasModelRouter) {
+          fill('consumption-body', 'consumption-empty', '', t('consumption.empty'))
+          return
+        }
+
+        var w = (last24h.stepCount || 0) > 0 ? last24h : last7d
+        var parts = []
+
+        parts.push('<p class="kpi-sub"><b>' + esc(t('consumption.usageHeading')) + '</b></p>')
+        if (w.byModel && w.byModel.length > 0) {
+          parts.push(w.byModel.map(consumptionModelBlock).join('<div class="divider"></div>'))
+        } else {
+          parts.push(line(t('consumption.noModelData'), 'empty-line'))
+        }
+        parts.push(w.avgMainStepContextReread === null
+          ? line(t('consumption.noContextData'), 'empty-line')
+          : line(t('consumption.avgContext', { tokens: num(Math.round(w.avgMainStepContextReread)) })))
+        parts.push(w.subagentShare === null
+          ? line(t('consumption.noSubagentData'), 'empty-line')
+          : line(t('consumption.subagentSplit', { percent: String(Math.round(w.subagentShare * 1000) / 10) })))
+
+        if (hasQuota) {
+          parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.quotaHeading')) + '</b></p>')
+          parts.push(accounts.map(consumptionQuotaBlock).join('<div class="divider"></div>'))
+        }
+
+        var recLines = consumptionRecommendationLines(summary.recommendations)
+        if (recLines) {
+          parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.recommendationsHeading')) + '</b></p>')
+          parts.push(recLines)
+        }
+
+        parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.modelRouterHeading')) + '</b></p>')
+        parts.push(consumptionModelRouterBlock(summary.modelRouter))
+
+        fill('consumption-body', 'consumption-empty', parts.join(''), '')
+      }
+
       function renderUnmeasured () {
         el('unmeasured-body').innerHTML = [
           'unmeasured.money', 'unmeasured.extrapolation',
@@ -1323,11 +1699,13 @@
           read('board', usuario),
           read('measurementsSummary', usuario),
           read(WORKER_HEARTBEAT_KEY, false),
-          read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null })
+          read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null }),
+          read('consumptionSummary', usuario)
         ]).then(function (results) {
           render(results[0] || { entries: [] })
           renderStats(results[1], results[3])
           renderWorkerNote(results[2])
+          renderConsumption(results[4])
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
           // Same rule as config.html: a raw fault message is written for

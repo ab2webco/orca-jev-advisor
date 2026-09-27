@@ -18,7 +18,7 @@
  * works the same way on Windows, unlike the wrapper this project used
  * before), where the sandbox does not apply.
  *
- * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|models-save|orca-ui-language-read>
+ * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|models-save|quota-save|orca-ui-language-read>
  *   save   reads the new key from stdin (never argv, never logged), and
  *          atomically (temp file + rename) writes or replaces its
  *          TYPESAFE_API_KEY= line in the mirror file, mode 0600. Other
@@ -65,6 +65,12 @@
  *          file permissions, same as catalog-save/policies-save -- the Agent
  *          PreToolUse/PostToolUse hooks (adapters/claude/agent-model.ts)
  *          read this file directly.
+ *   quota-save  reads the per-account quota mirror as JSON from stdin
+ *          (JEV-060 slice 1: main.mjs's mirrorAccountQuota, `orca account
+ *          list --json` reshaped to id/status/session/weekly/fableWeekly
+ *          only -- no email, no auth token) and atomically writes it,
+ *          pretty-printed, to quota.json in the config dir. Not secret,
+ *          same ordinary file permissions as catalog-save/policies-save.
  *   orca-ui-language-read  reads Orca's OWN `settings.uiLanguage` from the
  *          path given as the next argv (always the running Orca's
  *          `<userData>/orca-data.json`) and reports the concrete `es`/`en`
@@ -127,6 +133,7 @@ let POLICIES_PATH = ''
 let MOD_SKILLS_CONFIG_PATH = ''
 let DENY_TIER_CONFIG_PATH = ''
 let MODELS_PATH = ''
+let QUOTA_PATH = ''
 let CONFIG_DIR_RESOLUTION_ERROR = null
 try {
   CONFIG_DIR = resolveConfigDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME })
@@ -161,6 +168,11 @@ try {
   // parseModelsMirror) is documented against, so the two sides can never
   // silently drift onto different filenames.
   MODELS_PATH = join(CONFIG_DIR, MODELS_MIRROR_FILE)
+  // The per-account quota mirror (JEV-060 slice 1) -- main.mjs's
+  // mirrorAccountQuota. Not sensitive (quota numbers/status only, no email,
+  // no auth token): ordinary file permissions, same as catalog.json/
+  // policies.json/models-catalog.json above.
+  QUOTA_PATH = join(CONFIG_DIR, 'quota.json')
 } catch (error) {
   CONFIG_DIR_RESOLUTION_ERROR = error
 }
@@ -422,6 +434,19 @@ async function modelsSave (raw) {
   return { ok: true }
 }
 
+/** Writes the account quota mirror JSON, pretty-printed, with the
+ *  platform's ordinary permissions -- not secret (quota numbers/status
+ *  only), same as catalogSave/policiesSave/modelsSave. The shape itself is
+ *  main.mjs's own contract (mirrorAccountQuota's accountQuotaEntry); this
+ *  script writes whatever object it is handed, unvalidated -- same trust
+ *  boundary modelsSave gives its own caller for the row-level shape. */
+async function quotaSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  if (!parsed.ok) return parsed
+  await writeAtomic(`${JSON.stringify(parsed.value, null, 2)}\n`, QUOTA_PATH, null)
+  return { ok: true }
+}
+
 /**
  * Reads Orca's OWN `settings.uiLanguage` (JEVADV-10,
  * odd/tasks/release-0.5.1.md) from the path given as `path` -- always
@@ -480,6 +505,8 @@ async function main () {
       result = await denyTierConfigRead()
     } else if (mode === 'models-save') {
       result = await modelsSave((await readStdin()).trim())
+    } else if (mode === 'quota-save') {
+      result = await quotaSave((await readStdin()).trim())
     } else if (mode === 'orca-ui-language-read') {
       result = await orcaUiLanguageRead(process.argv[3])
     } else {
