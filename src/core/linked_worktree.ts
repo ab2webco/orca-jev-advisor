@@ -3,8 +3,8 @@
 // matcher -- JEVADV-3 (odd/tasks/release-0.5.1.md T3).
 //
 // Why this exists: Orca creates a worktree NEXT TO its main checkout, not
-// inside it (`~/Projects/client-site-d-feature` beside
-// `~/Projects/client-site-d`). destination_match.ts's longest-prefix match
+// inside it (`~/Projects/client-site-a-frontend-abc-985` beside
+// `~/Projects/client-site-a-frontend`). destination_match.ts's longest-prefix match
 // is a plain path comparison, so a linked worktree's own cwd never matches
 // its repository's own destination -- the client-site policies and
 // consequence-ceiling override that destination carries never apply to the

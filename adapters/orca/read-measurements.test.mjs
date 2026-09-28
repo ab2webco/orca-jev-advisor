@@ -662,11 +662,11 @@ function decisionRowIn (id, orcaContext) {
 test('modSkills.byProject names each project the way the gate names it, never by its raw Orca id', () => {
   const home = makeHome()
   writeModSkillsLog(home, [
-    decisionRowIn('a', { worktree: '/Users/dev/Projects/orca-supervisor', proyecto: 'github:example/orca-supervisor', rama: 'main' }),
-    decisionRowIn('b', { worktree: '/Users/dev/worktrees/feature-x', proyecto: 'github:example/orca-supervisor', rama: 'feature-x' }),
-    decisionRowIn('c', { worktree: '/Users/dev/Projects/scratch-notes', proyecto: 'repo:5f0c9a3e-1b2d-4c8e-9a7f-3e6d2b1c0a94', rama: 'main' }),
-    decisionRowIn('d', { worktree: '/Users/dev/Projects/workdir', proyecto: 'workdir', rama: null }),
-    decisionRowIn('e', { worktree: '/Users/dev/Projects/helpdesk', proyecto: 'gitlab:example/helpdesk.git', rama: 'main' })
+    decisionRowIn('a', { worktree: '/home/dev/Projects/orca-supervisor', proyecto: 'github:example/orca-supervisor', rama: 'main' }),
+    decisionRowIn('b', { worktree: '/home/dev/worktrees/feature-x', proyecto: 'github:example/orca-supervisor', rama: 'feature-x' }),
+    decisionRowIn('c', { worktree: '/home/dev/Projects/scratch-notes', proyecto: 'repo:5f0c9a3e-1b2d-4c8e-9a7f-3e6d2b1c0a94', rama: 'main' }),
+    decisionRowIn('d', { worktree: '/home/dev/Projects/workdir', proyecto: 'workdir', rama: null }),
+    decisionRowIn('e', { worktree: '/home/dev/Projects/helpdesk', proyecto: 'gitlab:example/helpdesk.git', rama: 'main' })
   ])
   const result = run(home)
   assert.deepEqual(
@@ -684,7 +684,7 @@ test('modSkills.byProject: a `repo:<id>` row with no worktree to name it counts 
   const home = makeHome()
   writeModSkillsLog(home, [
     decisionRowIn('a', { worktree: null, proyecto: 'repo:5f0c9a3e-1b2d-4c8e-9a7f-3e6d2b1c0a94', rama: null }),
-    decisionRowIn('b', { worktree: '/Users/dev/Projects/app', proyecto: null, rama: null })
+    decisionRowIn('b', { worktree: '/home/dev/Projects/app', proyecto: null, rama: null })
   ])
   const result = run(home)
   assert.deepEqual(

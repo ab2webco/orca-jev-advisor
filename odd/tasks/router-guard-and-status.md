@@ -7,7 +7,7 @@ Jev's stage with a model that stage would not pick.
 
 ## Problem
 Evidence from `~/.cache/orca-supervisor/model-router-decisions-2026-09-27T20.jsonl`
-(account acct0001, 2026-09-27):
+(account bbbbbbbb, 2026-09-27):
 - At 20:31:38 Jev judged the prompt `simple` (confidence 0.53) and the stage
   decision was `held-by-guard: previous-failure`. The previous turn's "failures"
   were exploratory probes that exited non-zero (`ls …/tsc` of a missing file,
@@ -97,16 +97,16 @@ thresholds or break-even.
 - RDD: disabled/unmanaged per the owner's decision (no Gentle AI reviews).
 
 ## Delivery
-- Branch `dev/jev-061-router-guards`, stacked on `jev-061-origin` at
+- Branch `devuser/jev-061-router-guards`, stacked on `jev-061-origin` at
   c21f199 (0.6.1, 2 commits, not pushed, owned by another session that is
   awaiting input). Worktree
   `/home/dev/Projects/orca-supervisor-router-guards`. `node_modules`
   is a symlink and is never staged. No upstream.
 - Forecast is about 250 authored lines, under budget. It lands with 0.6.1.
 - Integration: before anything goes to `main`, the parent merges 0.6.1 +
-  this branch + `dev/board-tabs-names` on a throwaway branch from
+  this branch + `devuser/board-tabs-names` on a throwaway branch from
   `origin/main` and runs the full checks. It also dry-runs a merge against
-  `dev/gate-approval-learning-b3a` to list conflicts.
+  `devuser/gate-approval-learning-b3a` to list conflicts.
 - Push, PR and merge are the owner's decisions.
 
 ## Progress

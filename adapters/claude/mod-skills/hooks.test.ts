@@ -91,10 +91,10 @@ function fakeOn(host: FakeHost): (...args: unknown[]) => void {
   };
 }
 
-const HOME = "/Users/dev";
+const HOME = "/home/dev";
 const CONFIG_DIR = `${HOME}/.config/orca-supervisor`;
 const CACHE_DIR = `${HOME}/.cache/orca-supervisor`;
-const CWD = "/Users/dev/Projects/sandbox";
+const CWD = "/home/dev/Projects/sandbox";
 const SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements.jsonl`;
 const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
 
@@ -814,7 +814,7 @@ test("turn.step: account id is parsed from CLAUDE_CONFIG_DIR when it matches the
   const baseEngine = engine as { env: { get: (name: string) => Promise<string | undefined> } };
   baseEngine.env.get = async (name: string) =>
     name === "CLAUDE_CONFIG_DIR"
-      ? "/Users/dev/Library/Application Support/orca/claude-accounts/acct0003-1234/auth"
+      ? "/home/dev/Library/Application Support/orca/claude-accounts/cccccccc-1234/auth"
       : name === "HOME"
         ? HOME
         : undefined;
@@ -827,7 +827,7 @@ test("turn.step: account id is parsed from CLAUDE_CONFIG_DIR when it matches the
 
   await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
 
-  assert.equal(lastTurnUsageLine(host).account, "acct0003-1234");
+  assert.equal(lastTurnUsageLine(host).account, "cccccccc-1234");
 });
 
 test("turn.step: an append only ever touches the current hour's file, never an older hour's", async () => {
@@ -1814,7 +1814,7 @@ test("0.6.2 E3 (hook): the account's per-tier effort setting is what the router 
 // pointer ("simple") and point A would start a complex job on Haiku.
 // ---------------------------------------------------------------------------
 
-const POINTER = "Read /Users/dev/jobs/tmp/brief-062-effort.md completely and do what it says.";
+const POINTER = "Read /home/dev/jobs/tmp/brief-062-effort.md completely and do what it says.";
 
 test("0.6.2 E6 (hook, point A): a pointer prompt keeps the session's own model and effort, and logs the guard", async () => {
   const host = makeFakeHost();

@@ -40,8 +40,8 @@ test("finds the profile whose settings are in force", () => {
 
 test("builds the profile data path per platform", () => {
   assert.equal(
-    profileDataPath("darwin", "/Users/dev/Library/Application Support/orca", "local-default"),
-    "/Users/dev/Library/Application Support/orca/profiles/local-default/orca-data.json",
+    profileDataPath("darwin", "/home/dev/Library/Application Support/orca", "local-default"),
+    "/home/dev/Library/Application Support/orca/profiles/local-default/orca-data.json",
   );
   assert.equal(
     profileDataPath("win32", "C:\\Users\\dev\\AppData\\Roaming\\orca", "local-default"),

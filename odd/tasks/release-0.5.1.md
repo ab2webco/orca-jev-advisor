@@ -32,8 +32,8 @@ machine running 0.5.0 on 2026-09-25, not a hypothesis.
 - **Client work in sibling worktrees is not judged as client work.**
   Destination matching is a longest-prefix match on `worktreePath`
   (`src/core/destination_match.ts`). Orca worktrees live next to the main
-  checkout, not inside it (`~/Projects/client-site-d-feature` next to
-  `~/Projects/client-site-d`), so they never match their `client-site`
+  checkout, not inside it (`~/Projects/client-site-a-frontend-abc-985` next to
+  `~/Projects/client-site-a-frontend`), so they never match their `client-site`
   destination. `client_always_asks` and the destination's context do not
   apply to real client work. This is the direction that matters: the gate
   is loosest where it should be tightest.
@@ -87,7 +87,7 @@ reachability (E1) and per-direction confidence (E2).
   never the command.
 - Artifacts in English. No `any`, no `console.log`/`debugger`, no mocks in
   production code. Tests and docs travel with each fix.
-- Branch `dev/release-0.5.1` from `main` at `19e9873` (v0.5.0).
+- Branch `devuser/release-0.5.1` from `main` at `19e9873` (v0.5.0).
 
 ## TDD
 
@@ -184,7 +184,7 @@ evolution" holds JEVADV-12..23.
   least an advice 0. Evidence so far: 66 real asks and denies classified
   (41 normal, 17 harmful, 8 unsure; 5 of 12 denies were text false
   positives); a miss check found no harmful command allowed by a judgment on
-  0.5.1, and one on 0.5.0 (a client PR merge on client-site-d); the
+  0.5.1, and one on 0.5.0 (a client PR merge on client-site-a-frontend); the
   advice experiment (30 real sessions) shows the model acts on a gate
   message, never routes around it, and an advice costs one turn.
   JEVADV-47 (human-facing message copy) is on hold until this decides the
@@ -204,8 +204,8 @@ evolution" holds JEVADV-12..23.
   `process` policy.
 - Every stop recorded after 0.5.1 carries a `stopReason`. Policy stops
   carry the `policyId`.
-- A command run in `~/Projects/client-site-d-feature` resolves to the
-  `client-site-d` destination.
+- A command run in `~/Projects/client-site-a-frontend-abc-985` resolves to the
+  `client-site-a-frontend` destination.
 - With `active:true` and a Jev pick of none, the model still receives the
   full skill listing.
 - `npm test` passes with `playwright` moved out of `node_modules`.
@@ -237,17 +237,17 @@ touched.
 
 | Path | Branch | Purpose | Remove when |
 |---|---|---|---|
-| `../orca-supervisor-next` | `dev/release-0.5.1-next` | First writer lane | Removed 2026-09-25 after merge |
-| `../orca-supervisor-lane-a` | `dev/release-0.5.1-lane-a` | Writer lane A (JEVADV-37/38/39) | Removed after merge |
-| `../orca-supervisor-lane-b` | `dev/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Removed 2026-09-26 after merge |
-| `../orca-supervisor-lane-c` | `dev/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-next` | `devuser/release-0.5.1-next` | First writer lane | Removed 2026-09-25 after merge |
+| `../orca-supervisor-lane-a` | `devuser/release-0.5.1-lane-a` | Writer lane A (JEVADV-37/38/39) | Removed after merge |
+| `../orca-supervisor-lane-b` | `devuser/release-0.5.1-panel` | Writer lane B (JEVADV-27/10/11) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-c` | `devuser/release-0.5.1-modskills` | Writer lane C (JEVADV-4) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-review` | detached | Temporary native-review checkouts | Removed after each review |
-| `../orca-supervisor-lane-m` | `dev/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | Removed 2026-09-26 after merge |
-| `../orca-supervisor-lane-g` | `dev/release-0.5.1-push-own-branch` | Writer lane G (JEVADV-45) | Removed 2026-09-26 after merge |
-| `../orca-supervisor-lane-s` | `dev/release-0.5.1-skill-links` | Writer lane S (JEVADV-46) | Removed 2026-09-26 after merge |
-| `../orca-supervisor-lane-q` | `dev/release-0.5.1-push-shapes` | Writer lane Q (real push shapes) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-m` | `devuser/release-0.5.1-lane-m` | Writer lane M (JEVADV-43 mod-skills manifest) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-g` | `devuser/release-0.5.1-push-own-branch` | Writer lane G (JEVADV-45) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-s` | `devuser/release-0.5.1-skill-links` | Writer lane S (JEVADV-46) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-q` | `devuser/release-0.5.1-push-shapes` | Writer lane Q (real push shapes) | Removed 2026-09-26 after merge |
 | `../orca-supervisor-lane-{h,r,v,d}` | hotfix, policy safety, advise model, docs | Writer lanes | Removed 2026-09-26 after merge |
-| `../orca-supervisor-lane-p` | `dev/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | Removed 2026-09-26 after merge |
+| `../orca-supervisor-lane-p` | `devuser/release-0.5.1-panel-tabs` | Writer lane P (JEVADV-41 settings panel height) | Removed 2026-09-26 after merge |
 | `../orca-jev-advisor-dev` | detached | Dev plugin loaded in Orca | After the release, once the person switches Orca back to the marketplace plugin |
 | `~/Projects/jev-sandbox-app`, `~/Projects/jev-sandbox-remote.git` | none | JEVADV-8 scenario | Removed after the scenario report was recorded |
 

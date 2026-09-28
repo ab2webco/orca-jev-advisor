@@ -63,8 +63,8 @@ test("resolveOrcaUserDataDir on win32 survives a home directory containing a spa
 });
 
 test("resolveOrcaUserDataDir on darwin always uses ~/Library/Application Support, XDG or not", () => {
-  const result = resolveOrcaUserDataDir("darwin", { home: "/Users/dev", xdgConfigHome: "/Users/dev/.xdgconfig" });
-  assert.equal(result.path, "/Users/dev/Library/Application Support/orca");
+  const result = resolveOrcaUserDataDir("darwin", { home: "/home/dev", xdgConfigHome: "/home/dev/.xdgconfig" });
+  assert.equal(result.path, "/home/dev/Library/Application Support/orca");
 });
 
 test("resolveOrcaUserDataDir on linux honors XDG_CONFIG_HOME when set", () => {
@@ -96,9 +96,9 @@ test("accountConfigDir points at the account's auth subdirectory", () => {
 });
 
 test("homeConfigTarget always points at ~/.claude, is not Orca-managed, and stays home-relative on every platform", () => {
-  const darwin = homeConfigTarget("darwin", "/Users/dev");
+  const darwin = homeConfigTarget("darwin", "/home/dev");
   assert.equal(darwin.id, "home");
-  assert.equal(darwin.configDir, "/Users/dev/.claude");
+  assert.equal(darwin.configDir, "/home/dev/.claude");
   assert.equal(darwin.orcaManaged, false);
 
   const win = homeConfigTarget("win32", "C:\\Users\\Ana Gómez");

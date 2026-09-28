@@ -3,7 +3,7 @@
 // worktree operations.
 //
 // Real evidence, 2026-09-26: the owner's gate log showed five identical
-// `git push -u origin dev/release-0.5.1` runs, four allowed and one
+// `git push -u origin devuser/release-0.5.1` runs, four allowed and one
 // asked, all through Jev's risk stage (the consequence score landed inside
 // CONSEQUENCE_NOISE_MARGIN's noise band -- see decisions.ts). A plain,
 // non-force push of a branch nobody else shares cannot destroy anything, so
@@ -240,7 +240,7 @@ function classifyPushSegment(segmentText: string, branchResolutionCwd: string, r
 //
 // Real evidence, 2026-09-26: the owner had to confirm by hand
 //   `git worktree remove ../orca-supervisor-lane-m && git branch -d
-//   dev/release-0.5.1-lane-m && git worktree add -q -b <new>
+//   devuser/release-0.5.1-lane-m && git worktree add -q -b <new>
 //   ../lane-s 9ebb862`
 // -- Jev's own reason was "no automatic way to undo it", but none of it can
 // actually lose work: `git worktree remove` without `--force` already

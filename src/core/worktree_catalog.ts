@@ -3,7 +3,7 @@
 // without the plugin shipping somebody else's repositories.
 //
 // The previous seed was generated from the author's own machine: it named
-// real clients and pointed at `/Users/<author>/Projects/...`, which matches
+// real clients and pointed at `/home/<author>/Projects/...`, which matches
 // nothing on anyone else's disk. A catalog is inherently local, so it has to
 // be derived per install, never shipped.
 //

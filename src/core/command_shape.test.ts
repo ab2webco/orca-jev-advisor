@@ -9,8 +9,8 @@ import { commandShape, hasCommandSubstitution } from "./command_shape.ts";
 import type { ShapeContext } from "./command_shape.ts";
 
 const CTX: ShapeContext = {
-  cwd: "/Users/dev/Projects/app",
-  home: "/Users/dev",
+  cwd: "/home/dev/Projects/app",
+  home: "/home/dev",
   destinationId: "app",
   repoContext: "repository app, branch feature/x, this is a working branch, clean",
 };
@@ -119,7 +119,7 @@ test("hasCommandSubstitution is exported so gate_safe_command.ts's tier-1a fast 
 
 test("the same command in a different working directory is judged apart", () => {
   const here = shape("rm -rf ../sibling");
-  const deeper = shape("rm -rf ../sibling", { cwd: "/Users/dev/Projects/app/packages/web", treeRoot: "/Users/dev/Projects/app" });
+  const deeper = shape("rm -rf ../sibling", { cwd: "/home/dev/Projects/app/packages/web", treeRoot: "/home/dev/Projects/app" });
   assert.notEqual(here, deeper, "../sibling leaves the project from one of these and stays inside from the other");
 });
 

@@ -21,33 +21,33 @@ function destination(id: string, worktreePath: string): MatchableDestination {
 }
 
 test("matches on exact path equality", () => {
-  const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const result = matchDestination("/Users/dev/Projects/orca-oss", [oss]);
+  const oss = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const result = matchDestination("/home/dev/Projects/orca-oss", [oss]);
   assert.equal(result, oss);
 });
 
 test("matches a nested subdirectory of the destination's worktreePath", () => {
-  const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const result = matchDestination("/Users/dev/Projects/orca-oss/src/core", [oss]);
+  const oss = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const result = matchDestination("/home/dev/Projects/orca-oss/src/core", [oss]);
   assert.equal(result, oss);
 });
 
 test("does NOT match a sibling worktree whose name merely starts with the destination's name", () => {
-  const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const result = matchDestination("/Users/dev/Projects/orca-oss-385", [oss]);
+  const oss = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const result = matchDestination("/home/dev/Projects/orca-oss-385", [oss]);
   assert.equal(result, null);
 });
 
 test("does NOT match the plain destination when the catalog entry is the more specific sibling", () => {
-  const ossParked = destination("orca-oss-385", "/Users/dev/Projects/orca-oss-385");
-  const result = matchDestination("/Users/dev/Projects/orca-oss", [ossParked]);
+  const ossParked = destination("orca-oss-385", "/home/dev/Projects/orca-oss-385");
+  const result = matchDestination("/home/dev/Projects/orca-oss", [ossParked]);
   assert.equal(result, null);
 });
 
 test("prefers the longest (most specific) matching worktreePath among nested destinations", () => {
-  const outer = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const inner = destination("orca-oss-nested", "/Users/dev/Projects/orca-oss/nested-worktree");
-  const result = matchDestination("/Users/dev/Projects/orca-oss/nested-worktree/deep/file", [
+  const outer = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const inner = destination("orca-oss-nested", "/home/dev/Projects/orca-oss/nested-worktree");
+  const result = matchDestination("/home/dev/Projects/orca-oss/nested-worktree/deep/file", [
     outer,
     inner,
   ]);
@@ -55,9 +55,9 @@ test("prefers the longest (most specific) matching worktreePath among nested des
 });
 
 test("longest-prefix precedence holds regardless of catalog order", () => {
-  const outer = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const inner = destination("orca-oss-nested", "/Users/dev/Projects/orca-oss/nested-worktree");
-  const result = matchDestination("/Users/dev/Projects/orca-oss/nested-worktree", [inner, outer]);
+  const outer = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const inner = destination("orca-oss-nested", "/home/dev/Projects/orca-oss/nested-worktree");
+  const result = matchDestination("/home/dev/Projects/orca-oss/nested-worktree", [inner, outer]);
   assert.equal(result, inner);
 });
 
@@ -76,24 +76,24 @@ test("matches a Windows drive-letter path whose home directory contains a space"
 });
 
 test("tolerates a trailing slash on the destination's worktreePath", () => {
-  const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss/");
-  const result = matchDestination("/Users/dev/Projects/orca-oss/src", [oss]);
+  const oss = destination("orca-oss", "/home/dev/Projects/orca-oss/");
+  const result = matchDestination("/home/dev/Projects/orca-oss/src", [oss]);
   assert.equal(result, oss);
 });
 
 test("tolerates a trailing slash on the cwd", () => {
-  const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const result = matchDestination("/Users/dev/Projects/orca-oss/", [oss]);
+  const oss = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const result = matchDestination("/home/dev/Projects/orca-oss/", [oss]);
   assert.equal(result, oss);
 });
 
 test("returns null when there are no destinations at all", () => {
-  const result = matchDestination("/Users/dev/Projects/orca-oss", []);
+  const result = matchDestination("/home/dev/Projects/orca-oss", []);
   assert.equal(result, null);
 });
 
 test("returns null when no destination matches the cwd", () => {
-  const oss = destination("orca-oss", "/Users/dev/Projects/orca-oss");
-  const result = matchDestination("/Users/dev/Projects/other-project", [oss]);
+  const oss = destination("orca-oss", "/home/dev/Projects/orca-oss");
+  const result = matchDestination("/home/dev/Projects/other-project", [oss]);
   assert.equal(result, null);
 });

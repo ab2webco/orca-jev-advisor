@@ -10,13 +10,13 @@ Owner review of the live 0.6.0 panel (2026-09-27, two screenshots):
   (gate health, cost, where it intervenes, calibration, last gate decisions,
   live states, per project, skills mod, consumption with token usage, account
   quota and recommendations). It no longer fits on a screen.
-- Account quota rows read `Cuenta acct0002`, `Cuenta acct0003`, ... because
+- Account quota rows read `Cuenta aaaaaaaa`, `Cuenta cccccccc`, ... because
   `accountShortLabel` prints the first 8 characters of the account id, although
   `orca account list --json` returns each account's `email`.
 - "Estados en vivo" rows print `repo:769240ab-2e9b-4607-85ea-dd5781029790`,
   `github:ab2webco/orca-oss`, or `(worktree desconocido)`, because
   `liveEntryView` shows the raw `projectId`. "Por proyecto" already shows short
-  names (`orca-jev-advisor`, `service-a`), so the two sections
+  names (`orca-jev-advisor`, `client-site-a-orchestrator`), so the two sections
   disagree about what a project is called.
 
 ## Why
@@ -98,7 +98,7 @@ unless they only affect one tab; the writer checks and reports which.
 - Strategy: `ask-on-risk`. Forecast is about 450 authored changed lines
   (T1 ~200, T2 ~250), above the ~400 budget, so the chain strategy is asked
   once before any PR is opened. Proposed slices: S1 = T1, S2 = T2 + T3.
-- Branch `dev/board-tabs-names` from `origin/main` 2370e17 (0.6.0),
+- Branch `devuser/board-tabs-names` from `origin/main` 2370e17 (0.6.0),
   worktree `/home/dev/Projects/orca-supervisor-board-tabs`. Upstream
   tracking removed so nothing can be pushed to `main` by accident.
   `node_modules` is a symlink to the main checkout and is never staged.

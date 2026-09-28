@@ -5,7 +5,7 @@ import test from "node:test";
 
 import { detectDeployPublish } from "./deploy_publish.ts";
 
-test("detects a GitHub Actions deployment dispatch -- the real miss (client-d, gh workflow run deploy-azure-dev.yml)", () => {
+test("detects a GitHub Actions deployment dispatch -- the real miss (client-site-a, gh workflow run deploy-azure-dev.yml)", () => {
   const result = detectDeployPublish("gh workflow run deploy-azure-dev.yml --ref release/0.3.1");
   assert.ok(result !== null);
   assert.match(result.description, /deployment workflow on GitHub Actions/);

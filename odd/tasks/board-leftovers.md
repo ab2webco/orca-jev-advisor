@@ -74,7 +74,7 @@ Out of scope, per the coordinator:
 - RDD: disabled/unmanaged per the owner's decision.
 
 ## Delivery
-- Branch `dev/board-leftovers` from jev-062-effort 036c2dd, worktree
+- Branch `devuser/board-leftovers` from jev-062-effort 036c2dd, worktree
   `/home/dev/Projects/orca-supervisor-board-leftovers`. `node_modules`
   is a symlink and is never staged. No upstream, no push.
 - The final hash goes to the 0.6.2 coordinating session, which cherry-picks
@@ -109,11 +109,11 @@ Out of scope, per the coordinator:
   - Scenario `skills-ready` = `ready` with `measurementsSummary.modSkills`
     replaced by the real read path: the harness writes 20 synthetic decision
     rows and 9 observations, shaped like `skill_measurement.ts`'s records
-    (made-up repos under `/Users/dev/...`, synthetic prompts), to a
+    (made-up repos under `/home/dev/...`, synthetic prompts), to a
     throwaway `ORCA_SUPERVISOR_CACHE_DIR` and runs the real
     `read-measurements.mjs` over it. Four projects, one per way the mod
     records where it ran: `github:example/orca-supervisor` (two worktrees,
-    also a gate project), `github:example/project-c`, `repo:<uuid>`
+    also a gate project), `github:example/notes-app`, `repo:<uuid>`
     (`scratch-notes`), and the `cwd` fallback (`workdir`).
   - Registered with `SCENARIOS['skills-ready'] = ...` after the literal, so
     the existing scenario list is untouched. `--quick` still resolves to
@@ -128,7 +128,7 @@ Out of scope, per the coordinator:
   - Looked at by the writer: all 16 board images of `skills-ready`, the
     Activity and Skills tabs at 1440, 768, 390 and 320, light and dark. By project reads orca-supervisor 1,214
     (gate 1,204 + skills 10, one row), orca-oss 618, (unknown project) 91,
-    project-c 5, scratch-notes 3, workdir 2: no id anywhere. Skills: 14
+    notes-app 5, scratch-notes 3, workdir 2: no id anywhere. Skills: 14
     suggested, 60,190 listing characters not sent, 88.9% match rate. At 320
     and 390 long labels end in an ellipsis with the full name in `title`,
     the existing `.hl` behaviour ("Skills suggest...", "Listing chara...",

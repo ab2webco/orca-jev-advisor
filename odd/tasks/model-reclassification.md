@@ -70,8 +70,8 @@ push, because the gate refuses force pushes):
 - #28 T7 config panel Models section (+ the fix-now commit). Base #27.
 #23-#28 exceed ~400 lines (one module plus tests each); size:exception
 recommended in each PR. Stale branches with no PR (from before a rebase the
-gate refused to force-push): dev/model-catalog-01,
-dev/model-catalog-02.
+gate refused to force-push): devuser/model-catalog-01,
+devuser/model-catalog-02.
 
 ## Decisions
 - Question shape: an ordinal ScoreQuestion whose levels are the available
@@ -161,7 +161,7 @@ dev/model-catalog-02.
 - T6a: installer entries (matcher Agent on PreToolUse, PostToolUse,
   PostToolUseFailure), same writer.
 - T6b: worker mirror/seed/notice/readout sidecars (bounded writer, worktree
-  dev/models-07-worker). New files: adapters/orca/models-worker.mjs
+  devuser/models-07-worker). New files: adapters/orca/models-worker.mjs
   (+ .test.mjs, 15 tests), adapters/orca/read-model-measurements.mjs
   (+ .test.mjs, 4 tests). Edited: write-secret-mirror.mjs (new `models-save`
   mode, validated `{active, ready, models}` shape, written to

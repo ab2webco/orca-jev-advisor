@@ -257,7 +257,7 @@ const READY = {
     // statMirror()'s real shape. `{ ok: true }` alone left `exists` and
     // `path` undefined, and the panel photographed "Key file: doesn't exist
     // yet (undefined)." -- next to a secretStatus that says a key is set.
-    secretMirror: { ok: true, exists: true, mode: '600', platform: 'darwin', path: '/Users/you/.config/orca-supervisor/env' },
+    secretMirror: { ok: true, exists: true, mode: '600', platform: 'darwin', path: '/home/you/.config/orca-supervisor/env' },
     checkedAt: iso
   },
   // odd/tasks/model-reclassification.md T7. The real shipped catalog,
@@ -614,8 +614,8 @@ const CATALOG_PROPOSALS = {
   catalogProposalsStatus: {
     ok: true,
     proposals: [
-      { id: 'client-site-e', label: 'client-site-e', worktreePath: '/Users/dev/Projects/client-site-e' },
-      { id: 'client-site-f', label: 'client-site-f', worktreePath: '/Users/dev/Projects/client-site-f' },
+      { id: 'client-site-a-backend', label: 'client-site-a-backend', worktreePath: '/home/dev/Projects/client-site-a-backend' },
+      { id: 'client-site-b-be', label: 'client-site-b-be', worktreePath: '/home/dev/Projects/client-site-b-be' },
     ],
     checkedAt: iso,
   },
@@ -657,7 +657,7 @@ const CONSUMPTION_READY = {
     quota: {
       accounts: [
         { id: 'acct-primary', status: 'ok', sessionUsedPercent: 12.4, weeklyUsedPercent: 81.2, resetsAt: Date.parse('2026-10-03T23:00:00.000Z'), email: 'someone@example.com' },
-        { id: '00000000-0000-4000-8000-000000000003', status: 'ok', sessionUsedPercent: 3, weeklyUsedPercent: 22.5, resetsAt: Date.parse('2026-10-02T06:00:00.000Z'), email: 'a.much.longer.person.name@example.com' },
+        { id: 'cccccccc-0000-4000-8000-000000000003', status: 'ok', sessionUsedPercent: 3, weeklyUsedPercent: 22.5, resetsAt: Date.parse('2026-10-02T06:00:00.000Z'), email: 'a.much.longer.person.name@example.com' },
       ],
       checkedAt: iso,
     },
@@ -695,8 +695,8 @@ const ROUTER_READY = {
     // install-claude-integration.mjs's router-mode-status publishes them.
     targets: [
       { target: 'home', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
-      { target: '00000000-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC },
-      { target: '00000000-0000-4000-8000-000000000001', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
+      { target: 'cccccccc-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC },
+      { target: 'bbbbbbbb-0000-4000-8000-000000000002', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
     ],
     checkedAt: iso,
   },
@@ -735,11 +735,11 @@ const ROUTER_READY = {
  * repositories, paths and prompts.
  */
 const SKILLS_LOG_PROJECTS = [
-  { orcaContext: { worktree: '/Users/dev/Projects/orca-supervisor', proyecto: 'github:example/orca-supervisor', rama: 'main' }, decisions: 6 },
-  { orcaContext: { worktree: '/Users/dev/worktrees/board-redesign', proyecto: 'github:example/orca-supervisor', rama: 'feat/board-redesign' }, decisions: 4 },
-  { orcaContext: { worktree: '/Users/dev/Projects/project-c', proyecto: 'github:example/project-c', rama: 'main' }, decisions: 5 },
-  { orcaContext: { worktree: '/Users/dev/Projects/scratch-notes', proyecto: 'repo:5f0c9a3e-1b2d-4c8e-9a7f-3e6d2b1c0a94', rama: 'main' }, decisions: 3 },
-  { orcaContext: { worktree: '/Users/dev/tmp/workdir', proyecto: 'workdir', rama: null }, decisions: 2 },
+  { orcaContext: { worktree: '/home/dev/Projects/orca-supervisor', proyecto: 'github:example/orca-supervisor', rama: 'main' }, decisions: 6 },
+  { orcaContext: { worktree: '/home/dev/worktrees/board-redesign', proyecto: 'github:example/orca-supervisor', rama: 'feat/board-redesign' }, decisions: 4 },
+  { orcaContext: { worktree: '/home/dev/Projects/notes-app', proyecto: 'github:example/notes-app', rama: 'main' }, decisions: 5 },
+  { orcaContext: { worktree: '/home/dev/Projects/scratch-notes', proyecto: 'repo:5f0c9a3e-1b2d-4c8e-9a7f-3e6d2b1c0a94', rama: 'main' }, decisions: 3 },
+  { orcaContext: { worktree: '/home/dev/tmp/workdir', proyecto: 'workdir', rama: null }, decisions: 2 },
 ]
 const SKILLS_LOG_SKILLS = ['graft', 'dataviz', 'orca-cli', 'chained-pr']
 const SKILLS_READINESS_AT_WRITE = { ready: false, comparableShortfall: 1000, matchRateMet: null, reason: 'not-enough-samples' }
@@ -835,16 +835,16 @@ function liveBusyEntry (n, fields, ageMinutes) {
     state: 'done', receivedAt: LIVE_BUSY_LOADED_AT - ageMinutes * 60 * 1000, updatedAt: at, ...fields,
   }
 }
-const LIVE_BUSY_client-e = { project: 'github:example/project-a', projectName: 'project-a', rama: 'main' }
+const LIVE_BUSY_PROJECT_A = { project: 'github:example/project-a', projectName: 'project-a', rama: 'main' }
 const LIVE_BUSY_ENTRIES = [
   // One project and branch, twelve sessions over the last ten hours.
   ...[2, 14, 35, 60, 95, 130, 180, 240, 300, 380, 470, 590].map((age, i) =>
-    liveBusyEntry(i + 1, { ...LIVE_BUSY_client-e, state: i === 0 ? 'working' : 'done' }, age)),
+    liveBusyEntry(i + 1, { ...LIVE_BUSY_PROJECT_A, state: i === 0 ? 'working' : 'done' }, age)),
   liveBusyEntry(20, { project: 'github:example/orca-supervisor', projectName: 'orca-supervisor', rama: 'feat/board-redesign', state: 'working' }, 8),
   liveBusyEntry(21, { project: 'github:example/orca-supervisor', projectName: 'orca-supervisor', rama: 'feat/board-redesign' }, 42),
   // Working and waiting, but silent for hours: no signal.
   liveBusyEntry(22, { project: 'github:example/helpdesk', projectName: 'helpdesk', rama: 'main', state: 'working' }, 190),
-  liveBusyEntry(23, { project: 'github:example/project-c', projectName: 'project-c', rama: 'fix/sync', state: 'waiting' }, 125),
+  liveBusyEntry(23, { project: 'github:example/notes-app', projectName: 'notes-app', rama: 'fix/sync', state: 'waiting' }, 125),
   // No project at all: each stays its own row.
   liveBusyEntry(30, { worktreeId: 'global-floating-terminal', state: 'working' }, 1),
   liveBusyEntry(31, { worktreeId: 'global-floating-terminal' }, 33),
@@ -853,7 +853,7 @@ const LIVE_BUSY_ENTRIES = [
   liveBusyEntry(34, { project: 'repo:5c1d0e4f-2c18-4a14-b3c7-5a9d0e4f2c18', rama: 'main' }, 310),
   // Last seen over 24 h ago, behind "show more": one of them still says
   // working, three days on.
-  liveBusyEntry(40, { project: 'github:example/service-a', projectName: 'service-a', rama: 'main', state: 'working' }, 3 * 24 * 60),
+  liveBusyEntry(40, { project: 'github:example/client-site-a-orchestrator', projectName: 'client-site-a-orchestrator', rama: 'main', state: 'working' }, 3 * 24 * 60),
   liveBusyEntry(41, { project: 'github:example/website', projectName: 'website', rama: 'main' }, 2 * 24 * 60),
   liveBusyEntry(42, { project: 'github:example/scratch-notes', projectName: 'scratch-notes', rama: 'main' }, 30 * 60),
 ]

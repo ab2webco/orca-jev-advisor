@@ -22,7 +22,7 @@ nothing shipped half-done (2026-09-25).
 
 ## Scope and constraints
 
-- Branch `dev/release-prep-0.5.0` from `origin/main` `2e70130`,
+- Branch `devuser/release-prep-0.5.0` from `origin/main` `2e70130`,
   worktree `../orca-supervisor-release`. One PR to `main`.
 - Out of scope: the gate-approval-learning chain (#29, B1b..C2), except
   cherry-picking its already-reviewed pluginVersion fix (`e399240`).
@@ -139,7 +139,7 @@ touches 7+ non-trivial files, which fires the writer trigger.
   `env -u`) 974/974 pass after `npm install --no-audit --no-fund` (needed
   once in this fresh worktree; playwright wasn't installed yet).
 - **T2 done.** Commit: `f31e4e9`. Cherry-picked
-  `e399240` from `dev/gate-approval-learning-b1b`, already reviewed
+  `e399240` from `devuser/gate-approval-learning-b1b`, already reviewed
   and approved in B1b, `git apply --check` verified clean on this branch
   point before starting.
   RED: applied only the test hunk (`git show e399240 -- adapters/claude/

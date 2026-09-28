@@ -421,8 +421,8 @@ test('a refresh that genuinely adds nothing keeps saying exactly that', { skip: 
 const CATALOG_PROPOSAL_FIXTURE = {
   ok: true,
   proposals: [
-    { id: 'client-site-e', label: 'client-site-e', worktreePath: '/Users/dev/Projects/client-site-e' },
-    { id: 'client-site-f', label: 'client-site-f', worktreePath: '/Users/dev/Projects/client-site-f' }
+    { id: 'client-site-a-backend', label: 'client-site-a-backend', worktreePath: '/home/dev/Projects/client-site-a-backend' },
+    { id: 'client-site-b-be', label: 'client-site-b-be', worktreePath: '/home/dev/Projects/client-site-b-be' }
   ],
   checkedAt: new Date().toISOString()
 }
@@ -435,7 +435,7 @@ test('a proposed repository renders on a plain reload, with no kind pre-selected
   try {
     const rows = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#catalog-proposals input[data-catalog-proposal-id]')).map((box) => box.getAttribute('data-catalog-proposal-id')))
-    assert.deepEqual(rows.sort(), ['client-site-e', 'client-site-f'])
+    assert.deepEqual(rows.sort(), ['client-site-a-backend', 'client-site-b-be'])
     const kindValues = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#catalog-proposals select[data-catalog-proposal-kind]')).map((select) => select.value))
     assert.ok(kindValues.every((v) => v === ''), `every proposal's kind must start unchosen, got: ${JSON.stringify(kindValues)}`)
@@ -452,7 +452,7 @@ test('clicking "Add ticked" with a ticked row but no kind chosen refuses, and se
   })
   try {
     await page.click('#tab-destinations')
-    await page.click('#catalog-proposals input[data-catalog-proposal-id="client-site-e"]')
+    await page.click('#catalog-proposals input[data-catalog-proposal-id="client-site-a-backend"]')
     await page.click('#add-catalog-proposals')
     await page.waitForFunction(() => {
       const said = document.querySelector('#catalog-proposals .said')
@@ -473,12 +473,12 @@ test('ticking a proposal, picking a kind, and clicking "Add ticked" sends exactl
   })
   try {
     await page.click('#tab-destinations')
-    await page.click('#catalog-proposals input[data-catalog-proposal-id="client-site-e"]')
-    await page.selectOption('#catalog-proposals select[data-catalog-proposal-kind="client-site-e"]', 'client-site')
+    await page.click('#catalog-proposals input[data-catalog-proposal-id="client-site-a-backend"]')
+    await page.selectOption('#catalog-proposals select[data-catalog-proposal-kind="client-site-a-backend"]', 'client-site')
     await page.click('#add-catalog-proposals')
     await page.waitForFunction(() => !!window.__written.catalogProposalAcceptRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.catalogProposalAcceptRequest)
-    assert.deepEqual(request.accepted, [{ id: 'client-site-e', kind: 'client-site' }])
+    assert.deepEqual(request.accepted, [{ id: 'client-site-a-backend', kind: 'client-site' }])
   } finally {
     await browser.close()
   }
@@ -721,7 +721,7 @@ for (const colorScheme of ['light', 'dark']) {
 // send, which is how "Key file: doesn't exist yet (undefined)." got
 // photographed: `exists` and `path` both absent, so the panel took the
 // "missing" branch and interpolated a path nobody had supplied.
-const KEY_FILE_PATH = '/Users/someone/.config/orca-supervisor/env'
+const KEY_FILE_PATH = '/home/someone/.config/orca-supervisor/env'
 const SECRET_MIRROR_SHAPES = {
   present: { ok: true, exists: true, mode: '600', platform: 'darwin', path: KEY_FILE_PATH },
   presentWindows: { ok: true, exists: true, mode: '666', platform: 'win32', path: KEY_FILE_PATH },
@@ -1801,7 +1801,7 @@ test('a populated consumptionSummary renders real per-model shares, quota bars, 
   }
 })
 
-// odd/tasks/board-tabs-and-names.md T1: the owner read "Cuenta acct0002"
+// odd/tasks/board-tabs-and-names.md T1: the owner read "Cuenta aaaaaaaa"
 // on every quota row. The worker now joins each account's email from
 // `orca account list --json` (main.mjs's publishConsumptionSummary); the
 // short id label stays only as the fallback for an account with none.
@@ -1812,7 +1812,7 @@ test('a quota account is named by its email, with the raw id kept in the title',
       quota: {
         accounts: [
           { ...POPULATED_CONSUMPTION.quota.accounts[0], email: 'someone@example.com' },
-          { id: '00000000-0000-4000-8000-000000000003', status: 'ok', sessionUsedPercent: 3, weeklyUsedPercent: 20, resetsAt: null }
+          { id: 'cccccccc-0000-4000-8000-000000000003', status: 'ok', sessionUsedPercent: 3, weeklyUsedPercent: 20, resetsAt: null }
         ],
         checkedAt: new Date().toISOString()
       }
@@ -1825,9 +1825,9 @@ test('a quota account is named by its email, with the raw id kept in the title',
     assert.ok(named, `no quota heading carries the raw id in its title: ${JSON.stringify(labels)}`)
     assert.match(named.text, /^someone@example\.com\b/, 'the email must be the visible name')
     assert.doesNotMatch(named.text, /Account acct-pri/, 'the short id must not be shown when an email is known')
-    const unnamed = labels.find((label) => label.title === '00000000-0000-4000-8000-000000000003')
+    const unnamed = labels.find((label) => label.title === 'cccccccc-0000-4000-8000-000000000003')
     assert.ok(unnamed, 'the second account lost its title')
-    assert.match(unnamed.text, /^Account acct0003\b/, 'an account with no email keeps the short id label, never a blank')
+    assert.match(unnamed.text, /^Account cccccccc\b/, 'an account with no email keeps the short id label, never a blank')
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -2437,8 +2437,8 @@ for (const width of [1440, 390]) {
 const ROUTER_ACCOUNTS = {
   targets: [
     { target: 'home', mode: 'measure' },
-    { target: '00000000-0000-4000-8000-000000000001', mode: 'measure', email: 'owner@example.com' },
-    { target: '00000000-0000-4000-8000-000000000003', mode: 'measure' }
+    { target: 'bbbbbbbb-0000-4000-8000-000000000002', mode: 'measure', email: 'owner@example.com' },
+    { target: 'cccccccc-0000-4000-8000-000000000003', mode: 'measure' }
   ],
   checkedAt: '2026-09-27T10:00:00.000Z'
 }
@@ -2451,8 +2451,8 @@ test('0.6.2 E7: an account row shows its email; one with no known email shows it
     const labels = await page.evaluate(() => Array.from(document.querySelectorAll('#model-router-rows .router-target')).map((el) => ({ text: el.innerText.trim(), title: el.parentElement.getAttribute('title') })))
     assert.deepEqual(labels, [
       { text: 'This computer', title: 'home' },
-      { text: 'owner@example.com', title: '00000000-0000-4000-8000-000000000001' },
-      { text: 'Account acct0003', title: '00000000-0000-4000-8000-000000000003' }
+      { text: 'owner@example.com', title: 'bbbbbbbb-0000-4000-8000-000000000002' },
+      { text: 'Account cccccccc', title: 'cccccccc-0000-4000-8000-000000000003' }
     ])
   } finally {
     await browser.close()
@@ -2565,7 +2565,7 @@ test('skills-ready: every "By project" row is a name, and the skills mod\'s rows
     const labels = rows.map((row) => row.label)
     const raw = labels.filter((label) => /^(github|gitlab|repo):/.test(label) || label.includes('/'))
     assert.deepEqual(raw, [], `raw project ids in By project: ${JSON.stringify(labels)}`)
-    for (const name of ['orca-supervisor', 'project-c', 'scratch-notes', 'workdir']) {
+    for (const name of ['orca-supervisor', 'notes-app', 'scratch-notes', 'workdir']) {
       assert.equal(labels.filter((label) => label === name).length, 1, `expected "${name}" exactly once among ${JSON.stringify(labels)}`)
     }
     const gateCount = scenario.measurementsSummary.gate.byProject.find((p) => p.project === 'orca-supervisor').total
@@ -2891,9 +2891,9 @@ test('L6: live rows run newest first overall, never grouped by status', { skip: 
 test('L6: one row per project and branch, with its latest state, last-seen time and a session count', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const entries = []
   for (let i = 0; i < 12; i += 1) {
-    entries.push(liveEntry({ worktreeId: `wt-client-e-${i}`, projectName: 'project-a', project: 'github:example/project-a', rama: 'main', state: i === 0 ? 'working' : 'done', paneKey: `pane-client-e-${i}` }, (5 + i * 30) * MINUTE_MS))
+    entries.push(liveEntry({ worktreeId: `wt-project-a-${i}`, projectName: 'project-a', project: 'github:example/project-a', rama: 'main', state: i === 0 ? 'working' : 'done', paneKey: `pane-project-a-${i}` }, (5 + i * 30) * MINUTE_MS))
   }
-  entries.push(liveEntry({ worktreeId: 'wt-client-e-feat', projectName: 'project-a', project: 'github:example/project-a', rama: 'feat/x', state: 'done' }, 90 * MINUTE_MS))
+  entries.push(liveEntry({ worktreeId: 'wt-project-a-feat', projectName: 'project-a', project: 'github:example/project-a', rama: 'feat/x', state: 'done' }, 90 * MINUTE_MS))
   const { browser, page, errors } = await openBoardPanel({ board: { entries } })
   try {
     const { rows } = await liveList(page)
@@ -3044,14 +3044,14 @@ test('L6: live-busy shows project-a/main once with its twelve sessions, and keep
   const { browser, page, errors } = await openBoardPanel(scenario)
   try {
     let list = await liveList(page)
-    const client-e = list.rows.filter((row) => row.name === 'project-a')
-    assert.deepEqual(client-e.map((row) => [row.branch, row.state, row.count]), [['main', 'working', '×12 sessions']])
-    assert.equal(list.rows.some((row) => row.name === 'service-a'), false)
+    const projectA = list.rows.filter((row) => row.name === 'project-a')
+    assert.deepEqual(projectA.map((row) => [row.branch, row.state, row.count]), [['main', 'working', '×12 sessions']])
+    assert.equal(list.rows.some((row) => row.name === 'client-site-a-orchestrator'), false)
     assert.equal(list.toggle?.text, 'show more (3)')
     await page.click('#tab-activity')
     await page.click('#cards button[data-live-toggle]')
     list = await liveList(page)
-    assert.equal(list.rows.find((row) => row.name === 'service-a')?.state, 'no signal')
+    assert.equal(list.rows.find((row) => row.name === 'client-site-a-orchestrator')?.state, 'no signal')
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

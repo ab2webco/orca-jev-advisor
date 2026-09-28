@@ -27,13 +27,13 @@ test("an env assignment never reaches the family name", () => {
 // anymore), the regex stopped matching it at all. The fallback then took
 // THAT unstripped segment as the family's raw material: `programName`
 // found a `/` in the assignment's VALUE and returned its basename as the
-// family -- `DEV=/Users/x/Projects/orca-jev-advisor-dev` was logged as
+// family -- `DEV=/home/x/Projects/orca-jev-advisor-dev` was logged as
 // commandFamily `orca-jev-advisor-dev`, a project path standing in for a
 // program name. `export NAME=value;` never matched at all, for the same
 // reason plus the unhandled `export` keyword.
 test("a leading env assignment isolated by its own separator still never reaches the family name", () => {
   assert.equal(commandFamily("A=/x/y; node z"), "node");
-  assert.equal(commandFamily("DEV=/Users/x/Projects/orca-jev-advisor-dev; node run.mjs"), "node");
+  assert.equal(commandFamily("DEV=/home/x/Projects/orca-jev-advisor-dev; node run.mjs"), "node");
 });
 
 test("export NAME=value; is skipped like a bare assignment, leaving the family of the first real command", () => {
@@ -58,7 +58,7 @@ test("no classified family carries a fragment of the command's own text", () => 
 test("a compound command is named after its most dangerous part, not its first word", () => {
   // `cd x && rm -rf y` filed under `cd` hides the very thing the log exists
   // to surface -- and read this way, `cd` was 57% of a real log.
-  assert.equal(commandFamily("cd /Users/x/Projects/app && rm -rf dist"), "rm -rf");
+  assert.equal(commandFamily("cd /home/x/Projects/app && rm -rf dist"), "rm -rf");
   assert.equal(commandFamily("npm ci; git push --force origin main"), "git push");
   assert.equal(commandFamily("cd src && ls"), "cd");
 });

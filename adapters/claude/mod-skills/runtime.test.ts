@@ -119,8 +119,12 @@ test("an %APPDATA% present alongside HOME still reads as Windows (the isWindows 
 test('agrees with src/core/paths.ts on every platform shape', async () => {
   const { resolveConfigDir, resolveCacheDir } = await import('../../../src/core/paths.ts');
   const cases = [
-    { name: 'macOS, no XDG', platform: 'darwin' as const, home: '/Users/dev', env: {} },
-    { name: 'macOS WITH XDG set', platform: 'darwin' as const, home: '/Users/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
+    // Not `/home/...`: computeHomePaths infers "not Linux" (macOS-like) from
+    // the home path's own shape when no platform noun is available (see this
+    // module's `isLinux` comment), so these two cases must NOT start with
+    // `/home/` or the divergence this test exists to catch goes undetected.
+    { name: 'macOS, no XDG', platform: 'darwin' as const, home: '/mac/dev', env: {} },
+    { name: 'macOS WITH XDG set', platform: 'darwin' as const, home: '/mac/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
     { name: 'Linux, no XDG', platform: 'linux' as const, home: '/home/dev', env: {} },
     { name: 'Linux WITH XDG set', platform: 'linux' as const, home: '/home/dev', env: { xdgConfigHome: '/custom/cfg', xdgCacheHome: '/custom/cache' } },
   ];
@@ -151,18 +155,18 @@ test('agrees with src/core/paths.ts on every platform shape', async () => {
 // ---------------------------------------------------------------------------
 
 test("resolveUserSkillsDir prefers CLAUDE_CONFIG_DIR when it is a non-empty string", () => {
-  const result = resolveUserSkillsDir({ claudeConfigDir: "/data/claude-accounts/acct-1", home: "/Users/dev" });
+  const result = resolveUserSkillsDir({ claudeConfigDir: "/data/claude-accounts/acct-1", home: "/home/dev" });
   assert.equal(result, "/data/claude-accounts/acct-1/skills");
 });
 
 test("resolveUserSkillsDir falls back to <home>/.claude/skills when CLAUDE_CONFIG_DIR is unset", () => {
-  const result = resolveUserSkillsDir({ home: "/Users/dev" });
-  assert.equal(result, "/Users/dev/.claude/skills");
+  const result = resolveUserSkillsDir({ home: "/home/dev" });
+  assert.equal(result, "/home/dev/.claude/skills");
 });
 
 test("resolveUserSkillsDir falls back to <home>/.claude/skills when CLAUDE_CONFIG_DIR is an empty string", () => {
-  const result = resolveUserSkillsDir({ claudeConfigDir: "", home: "/Users/dev" });
-  assert.equal(result, "/Users/dev/.claude/skills");
+  const result = resolveUserSkillsDir({ claudeConfigDir: "", home: "/home/dev" });
+  assert.equal(result, "/home/dev/.claude/skills");
 });
 
 test("resolveUserSkillsDir is null when neither CLAUDE_CONFIG_DIR nor home is known", () => {

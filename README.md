@@ -480,7 +480,7 @@ is invisible to the plugin.
 
 A command run inside a *linked* git worktree — the shape Orca itself
 creates, next to the main checkout rather than inside it
-(`~/Projects/client-site-d-feature` beside `~/Projects/client-site-d`)
+(`~/Projects/client-site-a-frontend-abc-985` beside `~/Projects/client-site-a-frontend`)
 — matches its repository's destination too. When the cwd itself has no
 catalog entry, the gate reads the worktree's own `.git` file from disk to
 find its main checkout and matches that instead (`src/core/linked_worktree.ts`);

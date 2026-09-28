@@ -29,60 +29,60 @@ function destination(id: string, worktreePath: string): CatalogDestination {
 const noLinkedWorktrees = () => null;
 
 test("deriveCatalogProposals: a worktree whose exact path is already catalogued is not proposed", () => {
-  const worktrees = [worktree("client-site-d", "/Users/dev/Projects/client-site-d")];
-  const catalog = [destination("client-site-d", "/Users/dev/Projects/client-site-d")];
+  const worktrees = [worktree("client-site-a-frontend", "/home/dev/Projects/client-site-a-frontend")];
+  const catalog = [destination("client-site-a-frontend", "/home/dev/Projects/client-site-a-frontend")];
   const proposals = deriveCatalogProposals(worktrees, catalog, noLinkedWorktrees);
   assert.deepEqual(proposals, []);
 });
 
 test("deriveCatalogProposals: a worktree nested under an already-catalogued destination is not proposed", () => {
-  const worktrees = [worktree("client-site-d", "/Users/dev/Projects/client-site-d/packages/app")];
-  const catalog = [destination("client-site-d", "/Users/dev/Projects/client-site-d")];
+  const worktrees = [worktree("client-site-a-frontend", "/home/dev/Projects/client-site-a-frontend/packages/app")];
+  const catalog = [destination("client-site-a-frontend", "/home/dev/Projects/client-site-a-frontend")];
   const proposals = deriveCatalogProposals(worktrees, catalog, noLinkedWorktrees);
   assert.deepEqual(proposals, []);
 });
 
 test("deriveCatalogProposals: a linked worktree of an already-catalogued repo's main checkout is not proposed", () => {
-  const worktrees = [worktree("client-site-d", "/Users/dev/Projects/client-site-d-feature")];
-  const catalog = [destination("client-site-d", "/Users/dev/Projects/client-site-d")];
+  const worktrees = [worktree("client-site-a-frontend", "/home/dev/Projects/client-site-a-frontend-abc-985")];
+  const catalog = [destination("client-site-a-frontend", "/home/dev/Projects/client-site-a-frontend")];
   const mainCheckoutOf = (path: string) =>
-    path === "/Users/dev/Projects/client-site-d-feature" ? "/Users/dev/Projects/client-site-d" : null;
+    path === "/home/dev/Projects/client-site-a-frontend-abc-985" ? "/home/dev/Projects/client-site-a-frontend" : null;
   const proposals = deriveCatalogProposals(worktrees, catalog, mainCheckoutOf);
   assert.deepEqual(proposals, [], "a linked worktree of a repo already in the catalog must not be proposed a second time");
 });
 
 test("deriveCatalogProposals: two linked worktrees of the SAME uncatalogued main checkout collapse into one proposal, at the main checkout", () => {
   const worktrees = [
-    worktree("client-site-g", "/Users/dev/Projects/client-site-g-a"),
-    worktree("client-site-g", "/Users/dev/Projects/client-site-g-b"),
+    worktree("client-site-d-backend", "/home/dev/Projects/client-site-d-backend-a"),
+    worktree("client-site-d-backend", "/home/dev/Projects/client-site-d-backend-b"),
   ];
   const mainCheckoutOf = (path: string) =>
-    path === "/Users/dev/Projects/client-site-g-a" || path === "/Users/dev/Projects/client-site-g-b"
-      ? "/Users/dev/Projects/client-site-g"
+    path === "/home/dev/Projects/client-site-d-backend-a" || path === "/home/dev/Projects/client-site-d-backend-b"
+      ? "/home/dev/Projects/client-site-d-backend"
       : null;
   const proposals = deriveCatalogProposals(worktrees, [], mainCheckoutOf);
   assert.equal(proposals.length, 1, "two linked worktrees of the same uncatalogued repo must collapse to one proposal");
-  assert.equal(proposals[0].worktreePath, "/Users/dev/Projects/client-site-g");
+  assert.equal(proposals[0].worktreePath, "/home/dev/Projects/client-site-d-backend");
 });
 
 test("deriveCatalogProposals: a genuinely new repository (no linked-worktree resolution) is proposed as itself", () => {
-  const worktrees = [worktree("client-site-f", "/Users/dev/Projects/client-site-f")];
+  const worktrees = [worktree("client-site-b-be", "/home/dev/Projects/client-site-b-be")];
   const proposals = deriveCatalogProposals(worktrees, [], noLinkedWorktrees);
   assert.equal(proposals.length, 1);
-  assert.equal(proposals[0].worktreePath, "/Users/dev/Projects/client-site-f");
-  assert.equal(proposals[0].label, "client-site-f");
+  assert.equal(proposals[0].worktreePath, "/home/dev/Projects/client-site-b-be");
+  assert.equal(proposals[0].label, "client-site-b-be");
 });
 
 test("deriveCatalogProposals: never invents a kind -- a proposal carries no kind field at all", () => {
-  const worktrees = [worktree("client-site-f", "/Users/dev/Projects/client-site-f")];
+  const worktrees = [worktree("client-site-b-be", "/home/dev/Projects/client-site-b-be")];
   const proposals = deriveCatalogProposals(worktrees, [], noLinkedWorktrees);
   assert.equal("kind" in proposals[0], false);
 });
 
 test("deriveCatalogProposals: an id that collides with an EXISTING catalog id (unrelated repo, same slug) gets a numeric suffix", () => {
-  const worktrees = [worktree("frontend", "/Users/dev/Projects/other-org/frontend")];
+  const worktrees = [worktree("frontend", "/home/dev/Projects/other-org/frontend")];
   // A pre-existing, unrelated destination that happens to slug to the same id.
-  const catalog = [destination("frontend", "/Users/dev/Projects/original-org/frontend")];
+  const catalog = [destination("frontend", "/home/dev/Projects/original-org/frontend")];
   const proposals = deriveCatalogProposals(worktrees, catalog, noLinkedWorktrees);
   assert.equal(proposals.length, 1);
   assert.notEqual(proposals[0].id, "frontend", "must not collide with the existing catalog id");
@@ -90,13 +90,13 @@ test("deriveCatalogProposals: an id that collides with an EXISTING catalog id (u
 });
 
 test("deriveCatalogProposals: archived worktrees are never proposed", () => {
-  const worktrees = [worktree("archived-repo", "/Users/dev/Projects/archived-repo", { isArchived: true })];
+  const worktrees = [worktree("archived-repo", "/home/dev/Projects/archived-repo", { isArchived: true })];
   const proposals = deriveCatalogProposals(worktrees, [], noLinkedWorktrees);
   assert.deepEqual(proposals, []);
 });
 
 test("deriveCatalogProposals: results are sorted by id", () => {
-  const worktrees = [worktree("zeta", "/Users/dev/Projects/zeta"), worktree("alpha", "/Users/dev/Projects/alpha")];
+  const worktrees = [worktree("zeta", "/home/dev/Projects/zeta"), worktree("alpha", "/home/dev/Projects/alpha")];
   const proposals = deriveCatalogProposals(worktrees, [], noLinkedWorktrees);
   assert.deepEqual(proposals.map((p) => p.id), ["alpha", "zeta"]);
 });

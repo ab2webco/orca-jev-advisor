@@ -1,7 +1,7 @@
 // Unit tests for push_own_branch.ts -- the own-branch-push /
 // guarded-git-delete gate change. Real evidence: the owner's
 // gate log showed a plain, non-force push of the agent's own branch
-// (`git push -u origin dev/release-0.5.1`) asked once out of five
+// (`git push -u origin devuser/release-0.5.1`) asked once out of five
 // identical runs, purely from Jev's own repeat-call noise on the
 // consequence axis -- see decisions.ts's CONSEQUENCE_NOISE_MARGIN.
 //
@@ -427,7 +427,7 @@ test("injected readFile: an ordinary checkout's HEAD is read straight through", 
 // qualifiesForLocalGitAllow -- the guarded-deletes extension. Real evidence,
 // 2026-09-26: the owner had to confirm by hand
 //   `git worktree remove ../orca-supervisor-lane-m && git branch -d
-//   dev/release-0.5.1-lane-m && git worktree add -q -b <new>
+//   devuser/release-0.5.1-lane-m && git worktree add -q -b <new>
 //   ../lane-s 9ebb862`
 // -- Jev's reason was "no automatic way to undo it", but none of it can
 // actually lose work: `git worktree remove` without `--force` already
@@ -496,7 +496,7 @@ test("qualifiesForLocalGitAllow: does NOT qualify -- git worktree add --force", 
 
 test("qualifiesForLocalGitAllow: the owner's own real three-segment sequence qualifies as a guarded delete", () => {
   assertQualifies(
-    "git worktree remove ../orca-supervisor-lane-m && git branch -d dev/release-0.5.1-lane-m && git worktree add -q -b release-0.5.1-lane-s ../lane-s 9ebb862",
+    "git worktree remove ../orca-supervisor-lane-m && git branch -d devuser/release-0.5.1-lane-m && git worktree add -q -b release-0.5.1-lane-s ../lane-s 9ebb862",
     undefined,
     "guardedGitDelete",
   );

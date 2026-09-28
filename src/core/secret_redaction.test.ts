@@ -383,7 +383,7 @@ test("entropy negative: a UUID is never redacted", () => {
 });
 
 test("entropy negative: a long file path is never redacted, even with long segments", () => {
-  const command = "cat /Users/dev/Projects/some-really-long-nested-directory-name/another-long-segment/file.txt";
+  const command = "cat /home/dev/Projects/some-really-long-nested-directory-name/another-long-segment/file.txt";
   assert.equal(text(command), command);
 });
 

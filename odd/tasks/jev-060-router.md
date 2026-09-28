@@ -38,8 +38,8 @@ Status: design approved by the owner's direction on 2026-09-26. The implementer 
 
    Fable prices are unknown: price it as ≥ Opus, a parameter that is configurable and defaults to 2× Opus.
 5. **Orca accounts.** Orca sets `CLAUDE_CONFIG_DIR=<orca>/claude-accounts/<uuid>/auth`. The provider comes from that vault's `settings.json` `env`. On this machine:
-   - Accounts acct0001, acct0002 and acct0003 are Anthropic direct.
-   - Account acct0004 is a z.ai gateway: `ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3`, `…SONNET…=glm-5.2`, `…HAIKU…=glm-4.5-air`, `ANTHROPIC_MODEL=glm-5.3`.
+   - Accounts bbbbbbbb, aaaaaaaa and cccccccc are Anthropic direct.
+   - Account dddddddd is a z.ai gateway: `ANTHROPIC_DEFAULT_OPUS_MODEL=glm-5.3`, `…SONNET…=glm-5.2`, `…HAIKU…=glm-4.5-air`, `ANTHROPIC_MODEL=glm-5.3`.
 6. **Subagents.**
    - The function-hooks event `agent.spawn` (`AgentSpawnInput`) lets a hook set `model` (an alias or a full id).
    - There is no effort field, so subagent effort is out of scope.
@@ -97,7 +97,7 @@ Tier → effort (applied only where the model supports effort; Haiku has none, s
 
   Fable qualifies only when the catalog marks it available AND the quota shows a `fableWeekly` window that is not exhausted. Otherwise frontier maps to Opus 5.5.
 
-  On this machine today, only account acct0002 has a `fableWeekly` window, and its weekly quota is at 100%. So on the accounts a live test can use, frontier resolves to Opus 5.5. That is correct behaviour, not a failure: do not chase a Fable pass.
+  On this machine today, only account aaaaaaaa has a `fableWeekly` window, and its weekly quota is at 100%. So on the accounts a live test can use, frontier resolves to Opus 5.5. That is correct behaviour, not a failure: do not chase a Fable pass.
 - **Gateway** (`ANTHROPIC_BASE_URL` set to a non-Anthropic host):
   - simple → `ANTHROPIC_DEFAULT_HAIKU_MODEL`
   - standard → `…SONNET…`
@@ -242,7 +242,7 @@ No prompt text.
   - The API-reported `usage.model` must match the decision.
   - Stickiness: a follow-up simple turn after a complex one does NOT downgrade until hysteresis and break-even allow it.
   - Record `cache_read` / `cache_write` per step.
-- Opus review of the full diff against this document before merge. It runs on the client-i or z.ai account, not on acct0001.
+- Opus review of the full diff against this document before merge. It runs on the client-i or z.ai account, not on bbbbbbbb.
 
 ---
 
@@ -254,7 +254,7 @@ Step 0: this machine runs Claude Code 2.1.283; the repo's `claude-code.d.ts` cam
 
 ### Base
 
-Rebased on 2026-09-27 at the owner's request onto `dev/jev-060-consumption` (slice 1 finished; 0.6.0 ships slices 1 and 2 together from this branch). The owner named `492ae8e`; that branch's tip was `cf27f3e` (a docs commit on top of `492ae8e`), so the base is `cf27f3e`. No conflicts; `npm test` 1960 pass, 0 fail. Commits before → after the rebase: `ba51c8f`→`de4175a`, `6c952f1`→`55106fe`, `6a26c8a`→`a776f4a`, `680ceac`→`062b47a`, `f93a87e`→`3547bb0`.
+Rebased on 2026-09-27 at the owner's request onto `devuser/jev-060-consumption` (slice 1 finished; 0.6.0 ships slices 1 and 2 together from this branch). The owner named `492ae8e`; that branch's tip was `cf27f3e` (a docs commit on top of `492ae8e`), so the base is `cf27f3e`. No conflicts; `npm test` 1960 pass, 0 fail. Commits before → after the rebase: `ba51c8f`→`de4175a`, `6c952f1`→`55106fe`, `6a26c8a`→`a776f4a`, `680ceac`→`062b47a`, `f93a87e`→`3547bb0`.
 
 ### Checklist
 
@@ -276,7 +276,7 @@ Rebased on 2026-09-27 at the owner's request onto `dev/jev-060-consumption` (sli
 
 Route note: WU1 was written inline, against the delegation trigger, because the pure modules and the hook share one set of types decided while writing them; the mechanical panel/copy work (T9) is the delegated part.
 
-### WU1 live check (2026-09-27, account acct0003, Anthropic direct)
+### WU1 live check (2026-09-27, account cccccccc, Anthropic direct)
 
 `claude -p` with `--plugin-dir <installed copy built by planModSkillsCopy>`, `--settings` carrying `pluginConfigs.orca-jev-mod-skills.options.routerMode`, `--output-format stream-json`. A same-named installed plugin is not loaded: the engine logs "the name orca-jev-mod-skills is already taken by a session-only plugin (--plugin-dir), which takes precedence".
 
@@ -300,7 +300,7 @@ Route note: WU1 was written inline, against the delegation trigger, because the 
 9. Status-line copy: stages es "consultar / implementar / analizar / razonar a fondo", en "ask / implement / analyse / deep reasoning"; effort es "bajo / medio / alto / muy alto", en "low / medium / high / extra high". Measure mode: "jev · mediría: <model> ..." / "jev · would use: <model> ...".
 10. The quota.json account row is matched by exact `id === <uuid from CLAUDE_CONFIG_DIR>`.
 
-### WU2 live check (2026-09-27, account acct0003, one `claude -p` session over stream-json input, each prompt sent after the previous result, session model Sonnet 5, active)
+### WU2 live check (2026-09-27, account cccccccc, one `claude -p` session over stream-json input, each prompt sent after the previous result, session model Sonnet 5, active)
 
 | Turn | Prompt kind | Decision (point, tier, conf → reason) | API `usage.model` | cache_read / cache_write |
 |---|---|---|---|---|
@@ -320,7 +320,7 @@ The first run of this session exposed a bug: turn 2 stayed on Haiku (below the s
 13. An upgrade proposal under 0.70 with the session at or above its own model waits (reason `low-confidence`).
 14. Turn-usage records carry no session id, so break-even's `contextTokens`, `avgOutput` and steps-per-turn come from the same numbers kept per session in `$.state` after every main step (see G5).
 
-### WU3 live check (2026-09-27, account acct0003, fresh session on Opus 5.5, active)
+### WU3 live check (2026-09-27, account cccccccc, fresh session on Opus 5.5, active)
 
 The installed 0.5.3 classic `agent-model.ts` PreToolUse:Agent hook is registered on this account, but its own switch in `models-catalog.json` is `active:false, ready:false`, so it only measures and never rewrites: neither hook was disabled for the test. From this commit on it also never rewrites while `routerMode` is `active` in the account settings (T8 reconciliation: the function hook owns subagent models).
 
@@ -346,7 +346,7 @@ Observation: when the subagent finished, the engine started a new main turn (ind
 - **G4 §6.5 pressure shift: SETTLED by the owner (2026-09-27).** At weekly >= 95%, `standard` may go to `simple` only when the previous turn edited no files and ran no failing tool (no tool error, no failing test), and no guard holds. Implemented in `shiftForPressure`; economy (80-94%) no longer shifts a tier and only relaxes hysteresis to 1 turn; with no previous turn (session start, subagents) nothing shifts.
 - **G5 §6.4 `contextTokens` source.** The spec says "from the latest turn-usage record of this session", but turn-usage records have no session field (slice 1 schema). The router keeps the same numbers per session in `$.state` instead. Adding a session id to turn-usage would let the board join them; not done (schema change outside this slice).
 - **G6 destination kind and policy guard wiring.** The pure guards support `client-site` and `requires_human` / `prohibits`; the hook passes `destinationKind: null, policyHit: false` because the mod has no catalog/policy lookup for the session's destination yet (the gate reads a catalog mirror for commands, not for a session). Needs a decision on which destination a session "is" (its Orca worktree's project?).
-- **G7 live-check file hygiene.** My first live cleanup moved whole shared hourly files; one of them held another session's router lines (account acct0001, 02:05). Restored into `~/.cache/orca-supervisor` the same hour; the live scripts now only copy their own lines out.
+- **G7 live-check file hygiene.** My first live cleanup moved whole shared hourly files; one of them held another session's router lines (account bbbbbbbb, 02:05). Restored into `~/.cache/orca-supervisor` the same hour; the live scripts now only copy their own lines out.
 - **G8 classic-hook visibility of routerMode.** The classic `agent-model.ts` sees `routerMode` only in the account's user settings.json. A value set through `--settings`, a project settings file or managed settings is invisible to it; if both the router and the classic hook's own `active` switch were on in such a setup, both could rewrite one spawn (the classic hook's rewrite happens at PreToolUse, before `agent.spawn`, which then sees the rewritten `model` as explicit intent and never downgrades it).
 - **G9 §8 model identity note: no declared event fits.** Checked against the 2.1.283 declarations:
   - `turn.step` rewrites only `model` and `effort`; everything else on it is pinned, so it cannot add text to the request.
@@ -372,7 +372,7 @@ Observation: when the subagent finished, the engine started a new main turn (ind
 
 Source: the owner's brief `brief-060-fixes.md` and the independent review `060-review.md` (12 findings). All done with RED observed first where behavioural.
 
-- [x] G6 destination and policy guard: `src/core/model_router_destination.ts` (reuses `parseMirroredCatalog`, `parseMirroredPolicies`, `matchDestination`, `filterPoliciesForDestination`), wired at A, B and C in `hooks/index.ts` — `1984d2d`. Live: cwd `client-site-a` (client-site), Opus session, simple prompt 1.0 → held-by-guard `client-site`, API `usage.model` `claude-opus-5-5`, cache 10,131 / 25,703.
+- [x] G6 destination and policy guard: `src/core/model_router_destination.ts` (reuses `parseMirroredCatalog`, `parseMirroredPolicies`, `matchDestination`, `filterPoliciesForDestination`), wired at A, B and C in `hooks/index.ts` — `1984d2d`. Live: cwd `client-site-c` (client-site), Opus session, simple prompt 1.0 → held-by-guard `client-site`, API `usage.model` `claude-opus-5-5`, cache 10,131 / 25,703.
   - **Disagreement (evidence):** the brief says "any `requires_human` or `prohibits` policy in scope". All 23 policies on the owner's machine are global, 11 of them `requires_human`/`prohibits`; counted literally, every session would hold its floor and the router could never downgrade. Implemented: only policies scoped to this destination count; global ones are command rules the Bash gate already applies per command. Owner to confirm.
   - Cross-repo targets are command-text scoped in the gate; a session has no command, so only cwd → linked-worktree main checkout is matched (the gate's own fallback, resolved through `git rev-parse --git-common-dir` since the hooks module has no Node fs).
 - [x] Findings 1, 2, 3, 4, 7, 10, 11, 12 — `12c2d88`.

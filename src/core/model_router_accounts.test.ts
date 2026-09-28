@@ -29,7 +29,7 @@ const CATALOG_WITH_FABLE: readonly ModelEntry[] = SEED_CATALOG.map((row) => (row
 
 function quota(fable: { usedPercent: number | null } | null): QuotaAccount {
   return {
-    id: "acct0002",
+    id: "aaaaaaaa",
     status: "ok",
     sessionUsedPercent: 10,
     weeklyUsedPercent: 20,
@@ -78,7 +78,7 @@ test("Fable gate: frontier is Fable only when the catalog marks it available AND
   assert.equal(resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: quota({ usedPercent: 40 }) }).frontier.modelId, "claude-opus-5-5");
   // No fableWeekly window at all.
   assert.equal(resolveAccountTiers({ env: {}, catalog: CATALOG_WITH_FABLE, quota: quota(null) }).frontier.modelId, "claude-opus-5-5");
-  // Window exhausted (the acct0002 case on the owner's machine).
+  // Window exhausted (the aaaaaaaa case on the owner's machine).
   assert.equal(resolveAccountTiers({ env: {}, catalog: CATALOG_WITH_FABLE, quota: quota({ usedPercent: 100 }) }).frontier.modelId, "claude-opus-5-5");
   // Unknown usage is not "not exhausted".
   assert.equal(resolveAccountTiers({ env: {}, catalog: CATALOG_WITH_FABLE, quota: quota({ usedPercent: null }) }).frontier.modelId, "claude-opus-5-5");

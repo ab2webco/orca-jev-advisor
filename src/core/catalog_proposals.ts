@@ -3,7 +3,7 @@
 // cmdRefreshCatalog (main.mjs) silently ADDING one, always with `kind:
 // "project"` hardcoded (worktree_catalog.ts's deriveDestinations has no
 // other information to guess from). That silent default is exactly why a
-// real client repository -- e.g. `~/Projects/client-site-e` -- never gets
+// real client repository -- e.g. `~/Projects/client-site-a-backend` -- never gets
 // "client-site" treatment: nothing ever asks. This module is the pure half
 // of the fix: given the same `orca worktree ps --json` data
 // cmdRefreshCatalog already reads, and the developer's current catalog,

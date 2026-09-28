@@ -592,14 +592,14 @@ test('a command run in a linked sibling worktree is judged with the main checkou
   // resolves $TMPDIR through a /var -> /private/var symlink, and git itself
   // resolves it too when it writes an absolute gitdir: line.
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-treeroot-test-')))
-  const main = join(base, 'client-site-d')
+  const main = join(base, 'client-site-a-frontend')
   initRepo(main)
-  const sibling = join(base, 'client-site-d-feature')
+  const sibling = join(base, 'client-site-a-frontend-abc-985')
   git(['worktree', 'add', '-q', sibling, '-b', 'cin-985'], main)
 
   const home = makeHome()
   mkdirSync(dirname(catalogMirrorPath(home)), { recursive: true })
-  writeFileSync(catalogMirrorPath(home), JSON.stringify({ destinations: [{ id: 'client-site-d', worktreePath: main }] }))
+  writeFileSync(catalogMirrorPath(home), JSON.stringify({ destinations: [{ id: 'client-site-a-frontend', worktreePath: main }] }))
 
   // A command that is neither tier-1a nor a NEVER_SILENTLY match, with a
   // relative-path argument -- so treeRoot actually changes its shape:
@@ -607,8 +607,8 @@ test('a command run in a linked sibling worktree is judged with the main checkou
   // under the (correct) sibling treeRoot and OUT_OF_TREE under `main`.
   const command = 'some-unmeasured-tool ./dist'
   const repoContext = 'no remote, branch cin-985, this is a working branch, clean'
-  const correctKey = computeCacheKey(command, sibling, home, { destinationId: 'client-site-d', treeRoot: sibling, repoContext })
-  const wrongKey = computeCacheKey(command, sibling, home, { destinationId: 'client-site-d', treeRoot: main, repoContext })
+  const correctKey = computeCacheKey(command, sibling, home, { destinationId: 'client-site-a-frontend', treeRoot: sibling, repoContext })
+  const wrongKey = computeCacheKey(command, sibling, home, { destinationId: 'client-site-a-frontend', treeRoot: main, repoContext })
   assert.notEqual(correctKey, wrongKey, 'treeRoot must actually change the shape, or this test proves nothing')
 
   const cachePath = verdictCachePath(home)
@@ -624,7 +624,7 @@ test('a command run in a linked sibling worktree is judged with the main checkou
 
   const lines = readFileSync(approvalsPath(home), 'utf8').trim().split('\n')
   const record = JSON.parse(lines[lines.length - 1])
-  assert.equal(record.destinationId, 'client-site-d', 'the sibling worktree must be judged with its MAIN checkout\'s destination, not left unmatched')
+  assert.equal(record.destinationId, 'client-site-a-frontend', 'the sibling worktree must be judged with its MAIN checkout\'s destination, not left unmatched')
 })
 
 // ---------------------------------------------------------------------------
@@ -1498,7 +1498,7 @@ for (const command of ALREADY_NOT_DENIED_BEFORE_T8) {
 // ---------------------------------------------------------------------------
 // Own-branch-push local allow.
 // Real evidence: the owner's gate log showed five identical
-// `git push -u origin dev/release-0.5.1` runs (four allowed, one
+// `git push -u origin devuser/release-0.5.1` runs (four allowed, one
 // asked) all through Jev's risk stage, purely from repeat-call noise on the
 // consequence axis. A plain, non-force push of the agent's own non-shared
 // branch cannot destroy anything, so it now allows locally -- but only once
@@ -1587,9 +1587,9 @@ test('own-branch push: cd repo && git push -u origin feature/x is allowed with n
   assertAllowedByOwnBranchPush(home, 'cd repo && git push -u origin feature/x', home)
 })
 
-test("own-branch push: the owner's own real shape, git push -u origin dev/release-0.5.1, is allowed with no Jev call", () => {
+test("own-branch push: the owner's own real shape, git push -u origin devuser/release-0.5.1, is allowed with no Jev call", () => {
   const home = makeHome()
-  assertAllowedByOwnBranchPush(home, 'git push -u origin dev/release-0.5.1', home)
+  assertAllowedByOwnBranchPush(home, 'git push -u origin devuser/release-0.5.1', home)
 })
 
 // -- Still denied by the (unchanged) local deny rules -----------------------
@@ -1772,7 +1772,7 @@ test('own-branch push: a pre-existing cached "ask" for this exact shape does not
 // looking operations skip Jev and allow locally. Real evidence, 2026-09-26:
 // the owner had to confirm by hand
 //   `git worktree remove ../orca-supervisor-lane-m && git branch -d
-//   dev/release-0.5.1-lane-m && git worktree add -q -b <new>
+//   devuser/release-0.5.1-lane-m && git worktree add -q -b <new>
 //   ../lane-s 9ebb862`
 // -- Jev's own reason was "no automatic way to undo it", but none of it can
 // actually lose work: `git worktree remove` without `--force` already
@@ -1802,7 +1802,7 @@ test('guarded git delete: git worktree add (no --force/-B) is allowed with no Je
 
 test("guarded git delete: the owner's own real three-segment sequence is allowed with no Jev call", () => {
   const home = makeHome()
-  const command = 'git worktree remove ../orca-supervisor-lane-m && git branch -d dev/release-0.5.1-lane-m && git worktree add -q -b release-0.5.1-lane-s ../lane-s 9ebb862'
+  const command = 'git worktree remove ../orca-supervisor-lane-m && git branch -d devuser/release-0.5.1-lane-m && git worktree add -q -b release-0.5.1-lane-s ../lane-s 9ebb862'
   assertAllowedByOwnBranchPush(home, command, home, GUARDED_GIT_DELETE_REASON_TEXT)
 })
 

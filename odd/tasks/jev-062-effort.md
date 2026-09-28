@@ -59,7 +59,7 @@ tab at 1440 light and 390 dark read.
   (`adapters/claude/agent-model.ts:96`).
 - E6: RED at core (missing export; then guard order). Hook tests written
   after the core was GREEN, so they passed on first run. Live check on the
-  client-i vault (acct0003) with this branch's copy loaded via `--plugin-dir`
+  client-i vault (cccccccc) with this branch's copy loaded via `--plugin-dir`
   and the shared skills-dir copy disabled for that run only: Jev `simple`
   0.71, decision `held-by-guard`/`pointer-prompt`, `modelUsage` only
   `claude-opus-5-5`.

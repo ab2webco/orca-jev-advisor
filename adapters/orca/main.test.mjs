@@ -547,10 +547,10 @@ test('publishModelRouterStatus: publishes the targets the script reports', async
 test('0.6.2 E7: publishModelRouterStatus names each account target by its email, never home, never anything else from the account list', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({})
-  const runScript = async () => ({ ok: true, targets: [{ target: 'home', mode: 'active' }, { target: 'acct0001-0000', mode: 'active' }, { target: 'acct0003-0000', mode: 'active' }] })
+  const runScript = async () => ({ ok: true, targets: [{ target: 'home', mode: 'active' }, { target: 'bbbbbbbb-0000', mode: 'active' }, { target: 'cccccccc-0000', mode: 'active' }] })
   const fetchAccountQuotas = async () => ({
     accounts: [
-      { id: 'acct0001-0000', email: 'owner@example.com', auth: { token: 'secret-token' }, quota: {} },
+      { id: 'bbbbbbbb-0000', email: 'owner@example.com', auth: { token: 'secret-token' }, quota: {} },
       { id: 'home', email: 'should-not-apply@example.com' }
     ],
     failure: null
@@ -559,8 +559,8 @@ test('0.6.2 E7: publishModelRouterStatus names each account target by its email,
   const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
   assert.deepEqual(status.targets, [
     { target: 'home', mode: 'active' },
-    { target: 'acct0001-0000', mode: 'active', email: 'owner@example.com' },
-    { target: 'acct0003-0000', mode: 'active' }
+    { target: 'bbbbbbbb-0000', mode: 'active', email: 'owner@example.com' },
+    { target: 'cccccccc-0000', mode: 'active' }
   ])
   assert.equal(JSON.stringify(status).includes('secret-token'), false)
 })
@@ -568,10 +568,10 @@ test('0.6.2 E7: publishModelRouterStatus names each account target by its email,
 test('0.6.2 E7: an account list that cannot be read leaves every target unnamed', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({})
-  const runScript = async () => ({ ok: true, targets: [{ target: 'acct0001-0000', mode: 'active' }] })
+  const runScript = async () => ({ ok: true, targets: [{ target: 'bbbbbbbb-0000', mode: 'active' }] })
   await publishModelRouterStatus(orca, storageHost, { runScript, fetchAccountQuotas: async () => ({ accounts: [], failure: 'orca not found' }) })
   const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
-  assert.deepEqual(status.targets, [{ target: 'acct0001-0000', mode: 'active' }])
+  assert.deepEqual(status.targets, [{ target: 'bbbbbbbb-0000', mode: 'active' }])
 })
 
 test('0.6.2 E7: a status refresh request from the panel re-reads and republishes the router status, then clears the request', async () => {
@@ -801,7 +801,7 @@ test('cmdRefreshCatalog: proposes an uncatalogued repository without writing it 
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({ catalog: { destinations: [] } })
   const result = await cmdRefreshCatalog(orca, storageHost, {
-    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'client-site-f', path: '/Users/dev/Projects/client-site-f' }])
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'client-site-b-be', path: '/home/dev/Projects/client-site-b-be' }])
   })
   assert.equal(result.ok, true)
   assert.equal(result.proposed, 1)
@@ -810,17 +810,17 @@ test('cmdRefreshCatalog: proposes an uncatalogued repository without writing it 
   const status = await storageHost.get(CATALOG_PROPOSALS_STATUS_KEY)
   assert.equal(status.ok, true)
   assert.equal(status.proposals.length, 1)
-  assert.equal(status.proposals[0].worktreePath, '/Users/dev/Projects/client-site-f')
+  assert.equal(status.proposals[0].worktreePath, '/home/dev/Projects/client-site-b-be')
   assert.equal('kind' in status.proposals[0], false, 'a proposal must never carry a guessed kind')
 })
 
 test('cmdRefreshCatalog: a repository the catalog already covers is never proposed', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
-    catalog: { destinations: [{ id: 'client-site-d', label: 'client-site-d', kind: 'client-site', worktreePath: '/Users/dev/Projects/client-site-d', autonomy: {} }] }
+    catalog: { destinations: [{ id: 'client-site-a-frontend', label: 'client-site-a-frontend', kind: 'client-site', worktreePath: '/home/dev/Projects/client-site-a-frontend', autonomy: {} }] }
   })
   const result = await cmdRefreshCatalog(orca, storageHost, {
-    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'client-site-d', path: '/Users/dev/Projects/client-site-d' }])
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'client-site-a-frontend', path: '/home/dev/Projects/client-site-a-frontend' }])
   })
   assert.equal(result.ok, true)
   assert.equal(result.proposed, 0)
@@ -844,14 +844,14 @@ test('attendCatalogProposalAcceptRequest: adds only the accepted proposals, each
     catalog: { destinations: [] },
     catalogProposalAcceptRequest: {
       id: 'cpa-2', at: new Date().toISOString(),
-      accepted: [{ id: 'client-site-e', kind: 'client-site' }]
+      accepted: [{ id: 'client-site-a-backend', kind: 'client-site' }]
     }
   })
   await attendCatalogProposalAcceptRequest(orca, storageHost, {
     mirror: noopMirror,
     fetchOrcaWorktrees: fakeWorktreeFetch([
-      { repo: 'client-site-e', path: '/Users/dev/Projects/client-site-e' },
-      { repo: 'client-site-f', path: '/Users/dev/Projects/client-site-f' }
+      { repo: 'client-site-a-backend', path: '/home/dev/Projects/client-site-a-backend' },
+      { repo: 'client-site-b-be', path: '/home/dev/Projects/client-site-b-be' }
     ])
   })
   const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
@@ -861,10 +861,10 @@ test('attendCatalogProposalAcceptRequest: adds only the accepted proposals, each
   const catalog = await storageHost.get('catalog')
   assert.equal(catalog.destinations.length, 1)
   assert.equal(catalog.destinations[0].kind, 'client-site')
-  assert.equal(catalog.destinations[0].worktreePath, '/Users/dev/Projects/client-site-e')
+  assert.equal(catalog.destinations[0].worktreePath, '/home/dev/Projects/client-site-a-backend')
   // The accepted repo drops out of the republished proposal list; the other one stays.
   const status = await storageHost.get(CATALOG_PROPOSALS_STATUS_KEY)
-  assert.deepEqual(status.proposals.map((p) => p.worktreePath), ['/Users/dev/Projects/client-site-f'])
+  assert.deepEqual(status.proposals.map((p) => p.worktreePath), ['/home/dev/Projects/client-site-b-be'])
 })
 
 test('attendCatalogProposalAcceptRequest: an entry with an invalid or missing kind is skipped, never written with a guessed one', async () => {
@@ -873,12 +873,12 @@ test('attendCatalogProposalAcceptRequest: an entry with an invalid or missing ki
     catalog: { destinations: [] },
     catalogProposalAcceptRequest: {
       id: 'cpa-3', at: new Date().toISOString(),
-      accepted: [{ id: 'client-site-f', kind: 'not-a-real-kind' }]
+      accepted: [{ id: 'client-site-b-be', kind: 'not-a-real-kind' }]
     }
   })
   await attendCatalogProposalAcceptRequest(orca, storageHost, {
     mirror: noopMirror,
-    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'client-site-f', path: '/Users/dev/Projects/client-site-f' }])
+    fetchOrcaWorktrees: fakeWorktreeFetch([{ repo: 'client-site-b-be', path: '/home/dev/Projects/client-site-b-be' }])
   })
   const result = await storageHost.get(CATALOG_PROPOSAL_ACCEPT_RESULT_KEY)
   assert.equal(result.ok, true)
@@ -1621,7 +1621,7 @@ test('mirrorAccountQuota: writes id/status/session/weekly/fableWeekly only, drop
   const rawAccounts = [
     {
       provider: 'claude',
-      id: '00000000-0000-4000-8000-000000000002',
+      id: 'aaaaaaaa-0000-4000-8000-000000000001',
       email: 'someone@example.com',
       active: false,
       quota: {
@@ -1631,11 +1631,11 @@ test('mirrorAccountQuota: writes id/status/session/weekly/fableWeekly only, drop
         updatedAt: 1790465200475,
         error: null
       },
-      auth: { accountId: '00000000-0000-4000-8000-000000000002', state: 'authenticated' }
+      auth: { accountId: 'aaaaaaaa-0000-4000-8000-000000000001', state: 'authenticated' }
     },
     {
       provider: 'claude',
-      id: '00000000-0000-4000-8000-000000000001',
+      id: 'bbbbbbbb-0000-4000-8000-000000000002',
       email: 'other@example.com',
       quota: {
         status: 'error',
@@ -1659,7 +1659,7 @@ test('mirrorAccountQuota: writes id/status/session/weekly/fableWeekly only, drop
   assert.equal(savedPayload.accounts.length, 2, 'the codex account must never be mirrored -- Claude accounts only')
 
   const [first, second] = savedPayload.accounts
-  assert.equal(first.id, '00000000-0000-4000-8000-000000000002')
+  assert.equal(first.id, 'aaaaaaaa-0000-4000-8000-000000000001')
   assert.equal(first.status, 'ok')
   assert.equal(first.sessionUsedPercent, 2)
   assert.equal(first.weeklyUsedPercent, 55)
@@ -1814,10 +1814,10 @@ test('publishConsumptionSummary: with no quota accounts to name, the account lis
 // ---------------------------------------------------------------------------
 
 const RAW_REPOS = [
-  { id: 'r-origin', path: '/Users/dev/Projects/sandbox-web', displayName: 'Sandbox web', gitRemoteIdentity: { canonicalKey: 'github.com/example/sandbox-web', remoteName: 'origin', remoteUrl: 'git@github.com:example/sandbox-web.git' } },
-  { id: 'r-fork', path: '/Users/dev/Projects/tool-fork', displayName: 'tool-fork', gitRemoteIdentity: { canonicalKey: 'github.com/upstream-org/tool', remoteName: 'upstream', remoteUrl: 'https://github.com/upstream-org/tool.git' } },
-  { id: 'r-local', path: '/Users/dev/Projects/Servers', displayName: 'Servers', gitRemoteIdentity: null },
-  { id: 'r-plugin', path: '/Users/dev/plugins/example.inbox', displayName: 'Inbox (plugin)' },
+  { id: 'r-origin', path: '/home/dev/Projects/sandbox-web', displayName: 'Sandbox web', gitRemoteIdentity: { canonicalKey: 'github.com/example/sandbox-web', remoteName: 'origin', remoteUrl: 'git@github.com:example/sandbox-web.git' } },
+  { id: 'r-fork', path: '/home/dev/Projects/tool-fork', displayName: 'tool-fork', gitRemoteIdentity: { canonicalKey: 'github.com/upstream-org/tool', remoteName: 'upstream', remoteUrl: 'https://github.com/upstream-org/tool.git' } },
+  { id: 'r-local', path: '/home/dev/Projects/Servers', displayName: 'Servers', gitRemoteIdentity: null },
+  { id: 'r-plugin', path: '/home/dev/plugins/example.inbox', displayName: 'Inbox (plugin)' },
   { id: 'r-nopath', displayName: 'Only a name' },
   { displayName: 'no id, ignored' }
 ]

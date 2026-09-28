@@ -68,7 +68,7 @@ test("extractPushRemoteArg: null when there is no git push invocation at all", (
 
 test("extractPushRemoteArg: a direct URL/path given as the arg is returned unchanged", () => {
   assert.equal(extractPushRemoteArg("git push file:///tmp/bare.git main"), "file:///tmp/bare.git");
-  assert.equal(extractPushRemoteArg("git push /Users/dev/bare.git main"), "/Users/dev/bare.git");
+  assert.equal(extractPushRemoteArg("git push /home/dev/bare.git main"), "/home/dev/bare.git");
 });
 
 test("extractPushRemoteArg: stops at the next command, never reading into a later stage of a compound command", () => {
@@ -86,7 +86,7 @@ test("isLocalRemoteReference: file:// URLs are local", () => {
 });
 
 test("isLocalRemoteReference: absolute, relative and home-relative paths are local", () => {
-  assert.equal(isLocalRemoteReference("/Users/dev/bare.git"), true);
+  assert.equal(isLocalRemoteReference("/home/dev/bare.git"), true);
   assert.equal(isLocalRemoteReference("../bare.git"), true);
   assert.equal(isLocalRemoteReference("./bare.git"), true);
   assert.equal(isLocalRemoteReference("~/bare.git"), true);
@@ -144,20 +144,20 @@ test("parseGitConfigRemoteUrl: picks the right remote among several", () => {
     '[remote "origin"]',
     "\turl = https://github.com/org/repo.git",
     '[remote "upstream"]',
-    "\turl = /Users/dev/bare.git",
+    "\turl = /home/dev/bare.git",
     "",
   ].join("\n");
-  assert.equal(parseGitConfigRemoteUrl(configText, "upstream"), "/Users/dev/bare.git");
+  assert.equal(parseGitConfigRemoteUrl(configText, "upstream"), "/home/dev/bare.git");
 });
 
 test("parseGitConfigRemotePushUrl: prefers pushurl over url when both are present", () => {
-  const configText = '[remote "origin"]\n\turl = /Users/dev/bare.git\n\tpushurl = https://github.com/example/repo.git\n';
+  const configText = '[remote "origin"]\n\turl = /home/dev/bare.git\n\tpushurl = https://github.com/example/repo.git\n';
   assert.equal(parseGitConfigRemotePushUrl(configText, "origin"), "https://github.com/example/repo.git");
 });
 
 test("parseGitConfigRemotePushUrl: falls back to url when there is no pushurl", () => {
-  const configText = '[remote "origin"]\n\turl = /Users/dev/bare.git\n';
-  assert.equal(parseGitConfigRemotePushUrl(configText, "origin"), "/Users/dev/bare.git");
+  const configText = '[remote "origin"]\n\turl = /home/dev/bare.git\n';
+  assert.equal(parseGitConfigRemotePushUrl(configText, "origin"), "/home/dev/bare.git");
 });
 
 test("parseGitConfigRemotePushUrl: null when the section has neither", () => {

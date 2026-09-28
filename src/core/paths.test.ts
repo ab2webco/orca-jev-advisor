@@ -53,18 +53,18 @@ test("normalizePlatform falls back to linux for an unmeasured platform", () => {
 
 test("joinPath uses the right separator for each target platform", () => {
   assert.equal(joinPath("win32", "C:\\Users\\dev", "orca-supervisor"), "C:\\Users\\dev\\orca-supervisor");
-  assert.equal(joinPath("darwin", "/Users/dev", "orca-supervisor"), "/Users/dev/orca-supervisor");
+  assert.equal(joinPath("darwin", "/home/dev", "orca-supervisor"), "/home/dev/orca-supervisor");
   assert.equal(joinPath("linux", "/home/dev", "orca-supervisor"), "/home/dev/orca-supervisor");
 });
 
 test("resolveConfigDir on darwin always uses ~/.config, XDG or not", () => {
-  assert.equal(resolveConfigDir("darwin", { home: "/Users/dev" }, NOT_TEST_ENV), "/Users/dev/.config/orca-supervisor");
+  assert.equal(resolveConfigDir("darwin", { home: "/home/dev" }, NOT_TEST_ENV), "/home/dev/.config/orca-supervisor");
   // macOS deliberately never honors XDG_CONFIG_HOME -- Orca itself does not
   // on darwin (it uses ~/Library/Application Support instead), and this
   // plugin must not disagree with Orca about where things live.
   assert.equal(
-    resolveConfigDir("darwin", { home: "/Users/dev", xdgConfigHome: "/Users/dev/xdg-config" }, NOT_TEST_ENV),
-    "/Users/dev/.config/orca-supervisor",
+    resolveConfigDir("darwin", { home: "/home/dev", xdgConfigHome: "/home/dev/xdg-config" }, NOT_TEST_ENV),
+    "/home/dev/.config/orca-supervisor",
   );
 });
 
@@ -106,10 +106,10 @@ test("resolveConfigDir on win32 survives a home directory containing a space", (
 });
 
 test("resolveCacheDir on darwin always uses ~/.cache, XDG or not", () => {
-  assert.equal(resolveCacheDir("darwin", { home: "/Users/dev" }, NOT_TEST_ENV), "/Users/dev/.cache/orca-supervisor");
+  assert.equal(resolveCacheDir("darwin", { home: "/home/dev" }, NOT_TEST_ENV), "/home/dev/.cache/orca-supervisor");
   assert.equal(
-    resolveCacheDir("darwin", { home: "/Users/dev", xdgCacheHome: "/Users/dev/xdg-cache" }, NOT_TEST_ENV),
-    "/Users/dev/.cache/orca-supervisor",
+    resolveCacheDir("darwin", { home: "/home/dev", xdgCacheHome: "/home/dev/xdg-cache" }, NOT_TEST_ENV),
+    "/home/dev/.cache/orca-supervisor",
   );
 });
 
@@ -162,14 +162,14 @@ test("config and cache dirs never collide with each other on any platform", () =
 
 test("resolveConfigDir refuses to compute a real path under the node test runner when no override is set", () => {
   assert.throws(
-    () => resolveConfigDir("darwin", { home: "/Users/dev" }, NODE_TEST_ENV),
+    () => resolveConfigDir("darwin", { home: "/home/dev" }, NODE_TEST_ENV),
     (error: unknown) => {
       assert.ok(error instanceof RealConfigPathBlockedError);
       assert.equal(error.resolver, "resolveConfigDir");
-      assert.equal(error.wouldHaveReturned, "/Users/dev/.config/orca-supervisor");
+      assert.equal(error.wouldHaveReturned, "/home/dev/.config/orca-supervisor");
       assert.equal(error.overrideEnvVar, CONFIG_DIR_OVERRIDE_ENV);
       assert.match(error.message, /resolveConfigDir/);
-      assert.match(error.message, /\/Users\/dev\/\.config\/orca-supervisor/);
+      assert.match(error.message, /\/home\/dev\/\.config\/orca-supervisor/);
       assert.ok(error.message.includes(CONFIG_DIR_OVERRIDE_ENV), "message must name the override variable");
       return true;
     },
@@ -209,26 +209,26 @@ test("resolveCacheDir returns the override path under the test runner, regardles
 test("the override env var takes precedence even outside the test runner -- it is not a test-only hatch", () => {
   const configEnv = { [CONFIG_DIR_OVERRIDE_ENV]: "/opt/custom/orca-config" };
   const cacheEnv = { [CACHE_DIR_OVERRIDE_ENV]: "/opt/custom/orca-cache" };
-  assert.equal(resolveConfigDir("darwin", { home: "/Users/dev" }, configEnv), "/opt/custom/orca-config");
-  assert.equal(resolveCacheDir("darwin", { home: "/Users/dev" }, cacheEnv), "/opt/custom/orca-cache");
+  assert.equal(resolveConfigDir("darwin", { home: "/home/dev" }, configEnv), "/opt/custom/orca-config");
+  assert.equal(resolveCacheDir("darwin", { home: "/home/dev" }, cacheEnv), "/opt/custom/orca-cache");
 });
 
 test("an empty override env var is treated as unset", () => {
   const env = { ...NODE_TEST_ENV, [CONFIG_DIR_OVERRIDE_ENV]: "" };
-  assert.throws(() => resolveConfigDir("darwin", { home: "/Users/dev" }, env), RealConfigPathBlockedError);
+  assert.throws(() => resolveConfigDir("darwin", { home: "/home/dev" }, env), RealConfigPathBlockedError);
 });
 
 test("outside the test runner, resolveConfigDir/resolveCacheDir compute the normal per-platform path, unchanged", () => {
-  assert.equal(resolveConfigDir("darwin", { home: "/Users/dev" }, NOT_TEST_ENV), "/Users/dev/.config/orca-supervisor");
-  assert.equal(resolveCacheDir("darwin", { home: "/Users/dev" }, NOT_TEST_ENV), "/Users/dev/.cache/orca-supervisor");
+  assert.equal(resolveConfigDir("darwin", { home: "/home/dev" }, NOT_TEST_ENV), "/home/dev/.config/orca-supervisor");
+  assert.equal(resolveCacheDir("darwin", { home: "/home/dev" }, NOT_TEST_ENV), "/home/dev/.cache/orca-supervisor");
 });
 
 test("fires against the process's own ambient environment, with no env argument", () => {
   // This test file itself runs under `node --test`, so process.env already
   // carries NODE_TEST_CONTEXT -- proving the default parameter behaves
   // identically to the explicit NODE_TEST_ENV used above.
-  assert.throws(() => resolveConfigDir("darwin", { home: "/Users/dev" }), RealConfigPathBlockedError);
-  assert.throws(() => resolveCacheDir("darwin", { home: "/Users/dev" }), RealConfigPathBlockedError);
+  assert.throws(() => resolveConfigDir("darwin", { home: "/home/dev" }), RealConfigPathBlockedError);
+  assert.throws(() => resolveCacheDir("darwin", { home: "/home/dev" }), RealConfigPathBlockedError);
 });
 
 // ---------------------------------------------------------------------------
@@ -250,7 +250,7 @@ test("resolveConfigDirCandidates collapses to one entry when XDG and legacy agre
 });
 
 test("resolveConfigDirCandidates on darwin/win32 never adds a legacy candidate, outside the test runner", () => {
-  assert.deepEqual(resolveConfigDirCandidates("darwin", { home: "/Users/dev" }, NOT_TEST_ENV), ["/Users/dev/.config/orca-supervisor"]);
+  assert.deepEqual(resolveConfigDirCandidates("darwin", { home: "/home/dev" }, NOT_TEST_ENV), ["/home/dev/.config/orca-supervisor"]);
   assert.deepEqual(resolveConfigDirCandidates("win32", { home: "C:\\Users\\dev" }, NOT_TEST_ENV), [
     "C:\\Users\\dev\\AppData\\Roaming\\orca-supervisor",
   ]);

@@ -16,8 +16,8 @@ import { parseMirroredCatalog, parseMirroredPolicies } from "./gate_catalog_mirr
 test("a well-formed catalog mirror parses through", () => {
   const raw = {
     destinations: [
-      { id: "a", worktreePath: "/Users/x/a" },
-      { id: "b", worktreePath: "/Users/x/b", autonomy: { consequenceCeiling: 2 } },
+      { id: "a", worktreePath: "/home/x/a" },
+      { id: "b", worktreePath: "/home/x/b", autonomy: { consequenceCeiling: 2 } },
     ],
   };
   const parsed = parseMirroredCatalog(raw);
@@ -27,14 +27,14 @@ test("a well-formed catalog mirror parses through", () => {
 });
 
 test("a destination with no autonomy field at all is still valid -- it's optional", () => {
-  const raw = { destinations: [{ id: "a", worktreePath: "/Users/x/a" }] };
+  const raw = { destinations: [{ id: "a", worktreePath: "/home/x/a" }] };
   assert.notEqual(parseMirroredCatalog(raw), null);
 });
 
 test("catalog validation is all-or-nothing over destinations, matching store.ts's own getCatalog", () => {
   const raw = {
     destinations: [
-      { id: "a", worktreePath: "/Users/x/a" },
+      { id: "a", worktreePath: "/home/x/a" },
       { id: "b" /* missing worktreePath */ },
     ],
   };
@@ -42,7 +42,7 @@ test("catalog validation is all-or-nothing over destinations, matching store.ts'
 });
 
 test("a destination with a non-numeric consequenceCeiling invalidates the whole catalog", () => {
-  const raw = { destinations: [{ id: "a", worktreePath: "/Users/x/a", autonomy: { consequenceCeiling: "high" } }] };
+  const raw = { destinations: [{ id: "a", worktreePath: "/home/x/a", autonomy: { consequenceCeiling: "high" } }] };
   assert.equal(parseMirroredCatalog(raw), null);
 });
 

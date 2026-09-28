@@ -325,7 +325,7 @@ import { isPointerPrompt } from "./model_router_decide.ts";
 
 test("pointer-prompt: short read-and-act pointers, English and Spanish", () => {
   for (const text of [
-    "Read /Users/me/jobs/74914c09/tmp/brief-062-effort.md completely and do what it says.",
+    "Read /home/me/jobs/74914c09/tmp/brief-062-effort.md completely and do what it says.",
     "Read /home/dev/Library/Application\\ Support/orca/jobs/tmp/brief.md completely and do what it says.",
     "read ./docs/task.md and do what it says",
     "follow the instructions in ~/notes/plan.txt",
@@ -416,7 +416,7 @@ test("finding 4: more pointer phrasings are caught", () => {
     "Lee /x/brief.md y cúmplelo",
     "Read the brief at /x/brief.md and carry it out",
     "read BRIEF.MD and do it",
-    '"/Users/a/Application Support/b/brief.md"',
+    '"/home/a/Application Support/b/brief.md"',
     "aplica lo que dice ./plan.txt",
     // Jev cannot see the plan, so this is a pointer too (it used to be a hooks
     // test's "standard" example before the extension match ignored case).

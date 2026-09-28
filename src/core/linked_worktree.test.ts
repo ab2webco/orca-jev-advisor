@@ -191,12 +191,12 @@ test("a forged .git file (a byte-for-byte copy of a real worktree's) does not re
 
 test("matchDestinationForCwd: a linked worktree matches its main repository's destination, with the worktree's OWN root as treeRoot", () => {
   const base = makeTempRoot("jevadv3-match-linked-");
-  const main = join(base, "client-site-d");
+  const main = join(base, "client-site-a-frontend");
   initRepo(main);
-  const sibling = join(base, "client-site-d-feature");
+  const sibling = join(base, "client-site-a-frontend-abc-985");
   git(["worktree", "add", "-q", sibling, "-b", "cin-985"], main);
 
-  const clientSite = destination("client-site-d", main);
+  const clientSite = destination("client-site-a-frontend", main);
   const result = matchDestinationForCwd(sibling, [clientSite]);
   assert.equal(result?.destination, clientSite);
   // treeRoot must be the SIBLING's own root, never the main checkout: the
@@ -207,15 +207,15 @@ test("matchDestinationForCwd: a linked worktree matches its main repository's de
 
 test("matchDestinationForCwd: a nested (direct) match still wins over the linked-worktree fallback", () => {
   const base = makeTempRoot("jevadv3-match-nested-");
-  const main = join(base, "client-site-d");
+  const main = join(base, "client-site-a-frontend");
   initRepo(main);
-  const sibling = join(base, "client-site-d-feature");
+  const sibling = join(base, "client-site-a-frontend-abc-985");
   git(["worktree", "add", "-q", sibling, "-b", "cin-985"], main);
 
-  const clientSite = destination("client-site-d", main);
+  const clientSite = destination("client-site-a-frontend", main);
   // The worktree itself is ALSO separately catalogued here -- its own entry,
   // the longer/more specific prefix, must win over falling back to `main`.
-  const worktreeItself = destination("client-site-d-feature", sibling);
+  const worktreeItself = destination("client-site-a-frontend-abc-985", sibling);
   const result = matchDestinationForCwd(sibling, [clientSite, worktreeItself]);
   assert.equal(result?.destination, worktreeItself);
   assert.equal(result?.treeRoot, sibling);
@@ -223,12 +223,12 @@ test("matchDestinationForCwd: a nested (direct) match still wins over the linked
 
 test("matchDestinationForCwd: a plain sibling directory that is NOT a linked worktree does not match", () => {
   const base = makeTempRoot("jevadv3-match-sibling-");
-  const main = join(base, "client-site-d");
+  const main = join(base, "client-site-a-frontend");
   initRepo(main);
-  const plainSibling = join(base, "client-site-d-notes");
+  const plainSibling = join(base, "client-site-a-frontend-notes");
   mkdirSync(plainSibling, { recursive: true });
 
-  const clientSite = destination("client-site-d", main);
+  const clientSite = destination("client-site-a-frontend", main);
   assert.equal(matchDestinationForCwd(plainSibling, [clientSite]), null);
 });
 

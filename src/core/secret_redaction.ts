@@ -394,7 +394,7 @@ const UUID_SHAPE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}
  *
  * Deliberately "contains a path separator ANYWHERE", not prefix-based: a
  * quoted argument can arrive as a whitespace-broken FRAGMENT of a longer
- * path (`"/Users/.../Application` / `Support/.../-Users-name-.../file"`,
+ * path (`"/home/.../Application` / `Support/.../-Users-name-.../file"`,
  * split by this module's own per-token scan, itself unaware of the shell's
  * original quoting), so the fragment that actually carries the suspicious
  * segment often does not itself START with `/`. Checking for a `/`

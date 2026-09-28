@@ -213,7 +213,7 @@ const POINTER_MAX_CHARS = 400;
 /** `/…`, `./…`, `../…`, `~/…`, or any token ending in .md/.txt; an escaped space (`Application\ Support`) stays inside the token. */
 const POINTER_PATH = /(?:^|[\s(])(?:~\/|\.{1,2}\/|\/)\S+|[\w.\-/]+\.(?:md|txt)\b/i;
 const POINTER_BARE = /^(?:~\/|\.{1,2}\/|\/)?[\w.\-/]+\.(?:md|txt)$/i;
-/** A bare path inside quotes may hold spaces (`"/Users/a/Application Support/b.md"`). */
+/** A bare path inside quotes may hold spaces (`"/home/a/Application Support/b.md"`). */
 const POINTER_BARE_QUOTED = /^(["'`])(?:~\/|\.{1,2}\/|\/)?[^"'`]+\.(?:md|txt)\1$/i;
 /** Verbs that hand the work over to the document, clitic forms included (review finding 4). */
 const POINTER_FOLLOW = /\b(?:follow|execute|implement|carry (?:it )?out|sigue|seguir|siga|sigan|ejecutar|cumplir|aplicar|implementar|(?:ejecuta|cumple|sigue|aplica|implementa)(?:lo|la|los|las)?)\b/;

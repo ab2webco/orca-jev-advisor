@@ -8,7 +8,7 @@ import { test } from "node:test";
 
 import { DEFAULT_DERIVED_AUTONOMY, coveringPaths, deriveDestinations, parseWorktreeList } from "./worktree_catalog.ts";
 
-const P = "/Users/dev/Projects/";
+const P = "/home/dev/Projects/";
 
 test("a worktree nested inside another is already covered by prefix matching", () => {
   assert.deepEqual(
@@ -26,7 +26,7 @@ test("a SIBLING sharing a name prefix is NOT covered and must survive", () => {
 });
 
 test("identical paths collapse to one", () => {
-  const same = "/Users/dev/Library/Application Support/orca/plugin-workspaces/x";
+  const same = "/home/dev/Library/Application Support/orca/plugin-workspaces/x";
   assert.deepEqual(coveringPaths([same, same, same]), [same]);
 });
 
