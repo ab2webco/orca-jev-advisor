@@ -3083,7 +3083,10 @@ async function activityCardDetail (page, name) {
       .find((c) => c.querySelector('.act-name').textContent === name)
     if (!card) return null
     const figures = Array.from(card.querySelectorAll('.figure')).map((f) => ({
-      label: f.querySelector('dt').textContent, value: f.querySelector('dd').textContent, className: f.className
+      label: f.querySelector('dt').textContent,
+      value: f.querySelector('dd').textContent,
+      className: f.className,
+      color: getComputedStyle(f.querySelector('dd')).color
     }))
     return {
       age: card.querySelector('.act-age')?.textContent ?? null,
@@ -3196,7 +3199,10 @@ test('activity: a populated card shows gate outcomes and tokens/cost by model', 
     const blockedFigure = detail.figures.find((f) => f.label === 'Blocked')
     const advisedFigure = detail.figures.find((f) => f.label === 'Advised')
     assert.match(blockedFigure.className, /\bvd\b/, 'blocked must carry the destructive-colour class')
-    assert.match(advisedFigure.className, /\bv3\b/, 'advised must carry the ring-colour class')
+    // --ring is the palette's faintest neutral: on a nonzero count it reads
+    // as disabled, the opposite of "Jev had something to say here".
+    assert.doesNotMatch(advisedFigure.className, /\bv3\b/, 'a nonzero advised count must not be greyed out in the ring colour')
+    assert.equal(advisedFigure.color, detail.figures.find((f) => f.label === 'Allowed').color, 'a nonzero advised count must read at full text contrast')
     assert.match(detail.text, /Sonnet 5/)
     assert.match(detail.text, /1,000/)
     assert.match(detail.text, /\$1\.23/)
@@ -3259,6 +3265,24 @@ test('activity: the chart\'s role="img" aria-label states the real judged-comman
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
+  }
+})
+
+test('activity: a count of one reads singular in the week line and the chart label, in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({
+    project: 'single',
+    days: activityDays({ 6: { judgedCommands: 1, mainSteps: 1 } })
+  })
+  for (const [locale, judged, steps] of [['en', '1 judged command', '1 step'], ['es', '1 comando juzgado', '1 paso']]) {
+    const { browser, page, errors } = await openBoardPanel(activitySummary([project]), locale)
+    try {
+      const detail = await activityCardDetail(page, 'single')
+      assert.ok(detail.text.includes(`${judged} · ${steps}`), `${locale}: expected "${judged} · ${steps}" in ${JSON.stringify(detail.text)}`)
+      assert.ok(detail.chartAriaLabel.includes(`${judged}, ${steps}`), `${locale}: expected "${judged}, ${steps}" in ${JSON.stringify(detail.chartAriaLabel)}`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
   }
 })
 

@@ -152,8 +152,8 @@
          project's own nested card reuses .card's own border/padding/radius;
          its gate-outcome and token figures reuse .figures/.figure (odd/tasks/
          board-leftovers.md L5: different units never share one bar scale);
-         "advised"/"blocked" borrow .v3/.vd's own --viz variable to colour
-         just that figure's number -- no new hue, no background fill. */
+         "blocked" borrows .vd's own --viz variable to colour just that
+         figure's number -- no new hue, no background fill. */
       .act-projects { display: grid; gap: 10px; }
       .act-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
       .act-name { font-weight: 600; overflow-wrap: anywhere; }
@@ -163,7 +163,7 @@
       .act-chart { flex: none; overflow: visible; }
       .act-chart rect, .act-chart path { fill: var(--viz); }
       .act-chart-total { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
-      .figures .figure.vd dd, .figures .figure.v3 dd { color: var(--viz); }
+      .figures .figure.vd dd { color: var(--viz); }
       .act-model + .act-model { margin-top: 8px; }
       /* Same look as .live-toggle, under its own name so the two never
          collide (they sit in different sections of the same tab). */
@@ -529,8 +529,12 @@
           'activity.unavailable': 'No se pudo calcular la actividad esta vez. Se vuelve a intentar en el próximo refresco.',
           'activity.showMore': 'ver más ({{n}})',
           'activity.showLess': 'ver menos',
-          'activity.chartAriaLabel': 'Actividad de 7 días para {{project}}: {{judged}} comandos juzgados, {{steps}} pasos.',
-          'activity.weekBreakdown': '{{judged}} comandos juzgados · {{steps}} pasos',
+          'activity.chartAriaLabel': 'Actividad de 7 días para {{project}}: {{judged}}, {{steps}}.',
+          'activity.weekBreakdown': '{{judged}} · {{steps}}',
+          'activity.judgedOne': '{{n}} comando juzgado',
+          'activity.judgedOther': '{{n}} comandos juzgados',
+          'activity.stepsOne': '{{n}} paso',
+          'activity.stepsOther': '{{n}} pasos',
           'activity.gateAllowed': 'Permitidas',
           'activity.gateAdvised': 'Aconsejadas',
           'activity.gateAsked': 'Preguntadas',
@@ -715,8 +719,12 @@
           'activity.unavailable': 'Activity could not be calculated this time. It will try again on the next refresh.',
           'activity.showMore': 'show more ({{n}})',
           'activity.showLess': 'show less',
-          'activity.chartAriaLabel': '7-day activity for {{project}}: {{judged}} judged commands, {{steps}} steps.',
-          'activity.weekBreakdown': '{{judged}} judged commands · {{steps}} steps',
+          'activity.chartAriaLabel': '7-day activity for {{project}}: {{judged}}, {{steps}}.',
+          'activity.weekBreakdown': '{{judged}} · {{steps}}',
+          'activity.judgedOne': '{{n}} judged command',
+          'activity.judgedOther': '{{n}} judged commands',
+          'activity.stepsOne': '{{n}} step',
+          'activity.stepsOther': '{{n}} steps',
           'activity.gateAllowed': 'Allowed',
           'activity.gateAdvised': 'Advised',
           'activity.gateAsked': 'Asked',
@@ -1894,7 +1902,7 @@
         }).join('')
         var judgedTotal = days.reduce(function (s, d) { return s + (d.judgedCommands || 0) }, 0)
         var stepsTotal = days.reduce(function (s, d) { return s + (d.mainSteps || 0) + (d.subagentSteps || 0) }, 0)
-        var label = t('activity.chartAriaLabel', { project: projectLabel(project), judged: num(judgedTotal), steps: num(stepsTotal) })
+        var label = t('activity.chartAriaLabel', { project: projectLabel(project), judged: activityCount(judgedTotal, 'activity.judged'), steps: activityCount(stepsTotal, 'activity.steps') })
         return {
           svg: '<svg class="act-chart v1" viewBox="0 0 ' + width + ' 28" width="' + width + '" height="28" role="img" aria-label="' + esc(label) + '">' + bars + '</svg>',
           judgedTotal: judgedTotal,
@@ -1904,17 +1912,23 @@
 
       /** Allowed/advised/asked/blocked as labelled numbers, never a stacked
        *  bar (odd/tasks/jev-063-activity.md Decisions: four different-
-       *  meaning counts, not one whole). Blocked/advised borrow .vd/.v3's
-       *  own --viz variable for just their <dd> text colour, allowed/asked
-       *  stay the normal text colour -- no new hue, no background fill.
-       *  A zero count never takes the colour: a red/ring "0" reads as an
-       *  alarm for something that didn't happen (caught in the A7 personal
-       *  screenshot pass, both themes, 2026-09-28). */
+       *  meaning counts, not one whole). Only blocked borrows .vd's own
+       *  --viz variable for its <dd> text colour; the rest stay the normal
+       *  text colour -- no new hue, no background fill. Advised once took
+       *  .v3 (--ring), the palette's faintest neutral, and a nonzero count
+       *  in it read as disabled (release screenshot pass, 2026-09-28).
+       *  A zero count never takes the colour: a red "0" reads as an alarm
+       *  for something that didn't happen. */
+      /** "1 step" / "3 steps": `base` + One|Other, with the count formatted. */
+      function activityCount (n, base) {
+        return t(base + (n === 1 ? 'One' : 'Other'), { n: num(n) })
+      }
+
       function activityGateFigures (outcomes) {
         var o = outcomes || {}
         var rows = [
           { cls: '', label: t('activity.gateAllowed'), value: o.allowed || 0 },
-          { cls: (o.advised || 0) > 0 ? 'v3' : '', label: t('activity.gateAdvised'), value: o.advised || 0 },
+          { cls: '', label: t('activity.gateAdvised'), value: o.advised || 0 },
           { cls: '', label: t('activity.gateAsked'), value: o.asked || 0 },
           { cls: (o.blocked || 0) > 0 ? 'vd' : '', label: t('activity.gateBlocked'), value: o.blocked || 0 }
         ]
@@ -1973,7 +1987,7 @@
           '<div class="act-card-head"><span class="act-name" title="' + esc(name) + '">' + esc(name) + '</span>' + ageHtml + '</div>' +
           '<div class="act-chart-wrap">' + chart.svg +
             '<div><span class="act-chart-total">' + esc(num(chart.judgedTotal + chart.stepsTotal)) + '</span><br>' +
-            '<span class="cmp-foot">' + esc(t('activity.weekBreakdown', { judged: num(chart.judgedTotal), steps: num(chart.stepsTotal) })) + '</span></div>' +
+            '<span class="cmp-foot">' + esc(t('activity.weekBreakdown', { judged: activityCount(chart.judgedTotal, 'activity.judged'), steps: activityCount(chart.stepsTotal, 'activity.steps') })) + '</span></div>' +
           '</div>' +
           activityGateFigures(entry.gateOutcomes) +
           activityTokensBlock(entry.tokensByModel, entry.totalEstimatedCostUsd) +
