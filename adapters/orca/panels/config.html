@@ -204,6 +204,10 @@
         color: var(--foreground, var(--fb-foreground)); overflow-wrap: anywhere; }
       .router-effort td select { width: auto; min-width: 8em; }
       .router-effort .actions { margin-top: 8px; }
+      /* The context steward: mode, threshold in thousands of tokens, save. */
+      .steward-row { align-items: center; margin-bottom: 14px; }
+      .steward-row input[type="number"] { flex: 0 0 6em; width: 6em; }
+      .steward-row .steward-unit { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .checkbox-row .checkbox-text { display: flex; flex-direction: column; gap: 2px; }
       .checkbox-row .checkbox-label { font-size: 12px; font-weight: 500;
                                        color: var(--foreground, var(--fb-foreground)); }
@@ -470,6 +474,7 @@
       <section id="model-router-section">
         <h2 data-i18n="modelRouter.heading"></h2>
         <p class="hint" data-i18n="modelRouter.explanation"></p>
+        <p class="hint" data-i18n="modelRouter.stewardHint"></p>
         <div id="model-router-rows"></div>
         <p class="hint" id="model-router-empty" style="display:none" data-i18n="modelRouter.empty"></p>
       </section>
@@ -663,6 +668,12 @@
           'modelRouter.effortLevel': 'Esfuerzo',
           'modelRouter.effortNone': 'no usa esfuerzo',
           'modelRouter.effortSave': 'Guardar esfuerzo',
+          'modelRouter.stewardHint': 'Guardián de contexto: al terminar cada turno por encima del umbral, Jev juzga si una tarea acaba de cerrarse. En modo activo compacta la sesión conservando el plan y el trabajo pendiente, y ante un tema nuevo sugiere /clear. Modo medir: solo registra lo que haría. Releer el contexto es la mayor parte del costo de una sesión larga.',
+          'modelRouter.stewardLabel': 'Guardián de contexto',
+          'modelRouter.stewardThreshold': 'Umbral',
+          'modelRouter.stewardUnit': 'mil tokens',
+          'modelRouter.stewardSave': 'Guardar guardián',
+          'modelRouter.stewardRange': 'El umbral va de 10 a 2000 mil tokens. No se guardó nada.',
           'modelRouter.tier.simple': 'Consultar',
           'modelRouter.tier.standard': 'Implementar',
           'modelRouter.tier.complex': 'Analizar',
@@ -947,6 +958,12 @@
           'modelRouter.effortLevel': 'Effort',
           'modelRouter.effortNone': 'takes no effort',
           'modelRouter.effortSave': 'Save effort',
+          'modelRouter.stewardHint': 'Context steward: at the end of each turn above the threshold, Jev judges whether a task just closed. In active mode it compacts the session, keeping the plan and the pending work, and on a new topic it suggests /clear. Measure mode only logs what it would do. Re-reading the context is most of what a long session costs.',
+          'modelRouter.stewardLabel': 'Context steward',
+          'modelRouter.stewardThreshold': 'Threshold',
+          'modelRouter.stewardUnit': 'thousand tokens',
+          'modelRouter.stewardSave': 'Save steward',
+          'modelRouter.stewardRange': 'The threshold goes from 10 to 2000 thousand tokens. Nothing was saved.',
           'modelRouter.tier.simple': 'Ask',
           'modelRouter.tier.standard': 'Implement',
           'modelRouter.tier.complex': 'Analyse',
@@ -1742,7 +1759,8 @@
       function sendModelRouterConfigRequest (targetId, change) {
         var requestId = 'model-router-config-' + Date.now() + '-' + Math.random().toString(36).slice(2)
         var request = { id: requestId, at: new Date().toISOString(), target: targetId }
-        if (change.effort) request.effort = change.effort
+        if (change.steward) request.steward = change.steward
+        else if (change.effort) request.effort = change.effort
         else request.mode = change.mode
         signalPanelOpen()
         return write(MODEL_ROUTER_CONFIG_REQUEST_KEY, request).then(function (r) {
@@ -2701,7 +2719,63 @@
           row.appendChild(saidEl)
           host.appendChild(row)
           if (target.effort && target.tiers) host.appendChild(renderModelRouterEffort(target))
+          if (target.steward) host.appendChild(renderModelRouterSteward(target))
         })
+      }
+
+      /** The context steward, per target: off/measure/active and the
+       *  threshold in thousands of tokens (steward-set). Out-of-range
+       *  thresholds are refused here, before anything is sent. */
+      function renderModelRouterSteward (target) {
+        var row = elMake('div', 'checkbox-row router-row steward-row')
+        row.setAttribute('data-steward-target', target.target)
+        var text = elMake('div', 'checkbox-text router-target')
+        var label = elMake('span', 'checkbox-label')
+        label.textContent = t('modelRouter.stewardLabel')
+        text.appendChild(label)
+
+        var select = elMake('select')
+        select.setAttribute('aria-label', t('modelRouter.stewardLabel'))
+        select.addEventListener('change', function () { modelRouterEdited = true })
+        ;['off', 'measure', 'active'].forEach(function (mode) {
+          var opt = elMake('option')
+          opt.value = mode
+          opt.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
+          if (mode === target.steward.mode) opt.selected = true
+          select.appendChild(opt)
+        })
+
+        var input = elMake('input')
+        input.type = 'number'
+        input.min = '10'
+        input.max = '2000'
+        input.step = '1'
+        input.value = String(Math.round(target.steward.threshold / 1000))
+        input.setAttribute('aria-label', t('modelRouter.stewardThreshold') + ' (' + t('modelRouter.stewardUnit') + ')')
+        input.addEventListener('input', function () { modelRouterEdited = true })
+        var unit = elMake('span', 'steward-unit')
+        unit.textContent = t('modelRouter.stewardUnit')
+
+        var saveBtn = elMake('button')
+        saveBtn.type = 'button'
+        saveBtn.textContent = t('modelRouter.stewardSave')
+        var saidEl = elMake('span', 'said')
+        saveBtn.addEventListener('click', function () {
+          var thousands = Number(input.value)
+          if (!Number.isInteger(thousands) || thousands < 10 || thousands > 2000) {
+            said(saidEl, t('modelRouter.stewardRange'), true)
+            return
+          }
+          saveModelRouterChange(target.target, JSON.stringify(target.steward), function (row) { return JSON.stringify(row.steward) }, { steward: { mode: select.value, threshold: thousands * 1000 } }, saidEl)
+        })
+
+        row.appendChild(text)
+        row.appendChild(select)
+        row.appendChild(input)
+        row.appendChild(unit)
+        row.appendChild(saveBtn)
+        row.appendChild(saidEl)
+        return row
       }
 
       var MODEL_ROUTER_TIERS = ['simple', 'standard', 'complex', 'frontier']

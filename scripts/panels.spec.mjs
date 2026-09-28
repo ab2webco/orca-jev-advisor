@@ -1732,6 +1732,32 @@ const POPULATED_CONSUMPTION = {
   checkedAt: new Date().toISOString()
 }
 
+test('steward: the Consumption tab shows compactions applied and the context no longer re-read, labelled as an estimate', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 280000 } }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Context steward/)
+    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /280,000 tokens/)
+    assert.match(text, /estimate/i)
+    assert.match(text, /would have compacted: 1/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('steward: with no steward log yet the Consumption tab says so in one line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, steward: null } })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /No context steward decisions yet/)
+  } finally {
+    await browser.close()
+  }
+})
+
 /** The worker's own honest "nobody has recorded anything yet" shape -- see
  *  read-consumption.mjs's module doc: `ok: true` with a zero step count and
  *  no quota accounts, `recommendations` holding only `mcpServerCount` (0 is
@@ -2332,8 +2358,8 @@ const TIERS_ANTHROPIC = {
 const EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const MODEL_ROUTER_STATUS_EFFORT = {
   targets: [
-    { target: 'home', mode: 'measure', effort: EFFORT_DEFAULTS, tiers: TIERS_ANTHROPIC },
-    { target: '11112222-3333-4444-5555-666677778888', mode: 'active', effort: { ...EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: TIERS_ANTHROPIC }
+    { target: 'home', mode: 'measure', effort: EFFORT_DEFAULTS, tiers: TIERS_ANTHROPIC, steward: { mode: 'measure', threshold: 120000 } },
+    { target: '11112222-3333-4444-5555-666677778888', mode: 'active', effort: { ...EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: TIERS_ANTHROPIC, steward: { mode: 'active', threshold: 150000 } }
   ],
   checkedAt: new Date().toISOString()
 }
@@ -2371,6 +2397,65 @@ test('0.6.2: saving an account\'s effort table sends that target\'s whole per-ti
     assert.equal(request.target, 'home')
     assert.equal(request.mode, undefined)
     assert.deepEqual(request.effort, { ...EFFORT_DEFAULTS, complex: 'xhigh' })
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// The context steward (odd/tasks/jev-context-steward.md): per account, its
+// mode and threshold, next to the router.
+// ---------------------------------------------------------------------------
+
+test('steward: each account shows the context steward mode and threshold next to the router', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
+  try {
+    await page.click('#tab-models')
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('[data-steward-target]')).map((row) => ({
+      target: row.getAttribute('data-steward-target'),
+      mode: row.querySelector('select').value,
+      threshold: row.querySelector('input[type=number]').value,
+      text: row.innerText
+    })))
+    assert.deepEqual(rows.map((r) => [r.target, r.mode, r.threshold]), [['home', 'measure', '120'], ['11112222-3333-4444-5555-666677778888', 'active', '150']])
+    assert.match(rows[0].text, /Context steward/)
+    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    assert.match(hint, /compact/i)
+    assert.match(hint, /\/clear/)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('steward: saving sends that target\'s mode and threshold in tokens', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
+  try {
+    await page.click('#tab-models')
+    await page.selectOption('[data-steward-target="home"] select', 'active')
+    await page.fill('[data-steward-target="home"] input[type=number]', '100')
+    await page.click('[data-steward-target="home"] button')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.equal(request.target, 'home')
+    assert.equal(request.mode, undefined)
+    assert.equal(request.effort, undefined)
+    assert.deepEqual(request.steward, { mode: 'active', threshold: 100000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+test('steward: a threshold out of range is refused in place and nothing is sent', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
+  try {
+    await page.click('#tab-models')
+    await page.fill('[data-steward-target="home"] input[type=number]', '5')
+    await page.click('[data-steward-target="home"] button')
+    await page.waitForTimeout(500)
+    const written = await page.evaluate(() => window.__written.modelRouterConfigRequest ?? null)
+    assert.equal(written, null)
+    const said = await page.evaluate(() => document.querySelector('[data-steward-target="home"] .said').innerText)
+    assert.match(said, /10/)
   } finally {
     await browser.close()
   }
