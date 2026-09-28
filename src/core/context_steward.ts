@@ -383,10 +383,11 @@ export interface StewardSummary {
   readonly wouldCompact: number;
   /**
    * An ESTIMATE: the context each applied compaction took off every later
-   * step of its session (before − after), summed. Per step, not multiplied
-   * by the steps that followed: the logs carry no session id, and an
-   * account often runs several sessions at once. null when no applied
-   * compaction recorded its size afterwards.
+   * step of its session (before − after), averaged over those compactions
+   * and rounded. Never summed: the sum across sessions is not what any one
+   * step saves. Per step, not multiplied by the steps that followed: the
+   * logs carry no session id, and an account often runs several sessions
+   * at once. null when no applied compaction recorded its size afterwards.
    */
   readonly freedPerStep: number | null;
 }
@@ -396,7 +397,8 @@ export function summarizeStewardDecisions(rows: readonly unknown[], nowMs: numbe
   let decisions = 0;
   let applied = 0;
   let wouldCompact = 0;
-  let freed: number | null = null;
+  let freedTotal = 0;
+  let measured = 0;
   for (const row of rows) {
     if (!isRecord(row) || typeof row.at !== "string") continue;
     const atMs = Date.parse(row.at);
@@ -404,10 +406,13 @@ export function summarizeStewardDecisions(rows: readonly unknown[], nowMs: numbe
     decisions += 1;
     if (row.applied === true) {
       applied += 1;
-      if (typeof row.contextBefore === "number" && typeof row.contextAfter === "number" && row.contextBefore > row.contextAfter) freed = (freed ?? 0) + row.contextBefore - row.contextAfter;
+      if (typeof row.contextBefore === "number" && typeof row.contextAfter === "number" && row.contextBefore > row.contextAfter) {
+        freedTotal += row.contextBefore - row.contextAfter;
+        measured += 1;
+      }
     } else if (row.mode === "measure" && row.compact === true) {
       wouldCompact += 1;
     }
   }
-  return { decisions, applied, wouldCompact, freedPerStep: freed };
+  return { decisions, applied, wouldCompact, freedPerStep: measured === 0 ? null : Math.round(freedTotal / measured) };
 }

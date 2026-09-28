@@ -1733,13 +1733,13 @@ const POPULATED_CONSUMPTION = {
 }
 
 test('steward: the Consumption tab shows compactions applied and the context no longer re-read, labelled as an estimate', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 280000 } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000 } }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Context steward/)
     assert.match(text, /Compactions applied: 2/)
-    assert.match(text, /280,000 tokens/)
+    assert.match(text, /on average, about 140,000 tokens/)
     assert.match(text, /estimate/i)
     assert.match(text, /would have compacted: 1/i)
     assert.deepEqual(errors, [])

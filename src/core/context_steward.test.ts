@@ -249,7 +249,10 @@ test("clear hint, both locales", () => {
 
 import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions } from "./context_steward.ts";
 
-test("summary: compactions applied, the ones measure mode would have made, and the context freed per later step", () => {
+// freedPerStep is what one later step of a compacted session no longer
+// re-reads: the AVERAGE over applied compactions (120k and 160k here), never
+// their sum -- a sum across sessions is not something any one step saves.
+test("summary: compactions applied, the ones measure mode would have made, and the average context freed per later step", () => {
   const now = Date.parse("2026-09-28T12:00:00.000Z");
   const row = (at: string, extra: Record<string, unknown>): Record<string, unknown> => ({ at, account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.9, compact: true, applied: true, contextAfter: 30_000, ...extra });
   const rows: unknown[] = [
@@ -262,7 +265,7 @@ test("summary: compactions applied, the ones measure mode would have made, and t
     "not a row",
     { at: "garbage" },
   ];
-  assert.deepEqual(summarizeStewardDecisions(rows, now, 24 * 3600_000), { decisions: 5, applied: 2, wouldCompact: 1, freedPerStep: 280_000 });
+  assert.deepEqual(summarizeStewardDecisions(rows, now, 24 * 3600_000), { decisions: 5, applied: 2, wouldCompact: 1, freedPerStep: 140_000 });
 });
 
 test("summary: nothing applied reads freed as unknown, not zero", () => {

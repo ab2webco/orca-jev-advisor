@@ -716,7 +716,7 @@ const ROUTER_READY = {
       switchesEstimated: 3,
     },
     // summarizeStewardDecisions' shape; synthetic figures.
-    steward: { decisions: 7, applied: 3, wouldCompact: 2, freedPerStep: 342000 },
+    steward: { decisions: 7, applied: 3, wouldCompact: 2, freedPerStep: 114000 },
   },
 }
 
