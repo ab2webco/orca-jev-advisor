@@ -87,6 +87,7 @@ import type { RepoLocation, TargetLocation } from '../../src/core/cross_repo_con
 import { PROTECTED_BRANCH_NAMES, parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { classifyClientReach } from '../../src/core/client_reach.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
+import { parseQueueMode } from '../../src/core/queue_mode.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
@@ -175,6 +176,9 @@ const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 // same sidecar on the same save. Fails open to an empty list, and an empty
 // list changes no decision -- see readTeamOwnersMirror below.
 const TEAM_OWNERS_MIRROR_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
+// 0.6.7 T4: queue mode -- "when a person must approve: ask now | queue and
+// continue". Defaults to false (ask now). See readQueueMode below.
+const QUEUE_MODE_MIRROR_PATH = join(CONFIG_DIR, 'queue-mode.json')
 // Written by adapters/orca/write-secret-mirror.mjs's deny-tier-config-save,
 // refreshed on plugin activation and on every config-panel save, same
 // channel as the catalog/policies mirrors above. Unlike those two -- and
@@ -1135,6 +1139,14 @@ function readTeamOwnersMirror(): readonly string[] {
   }
 }
 
+function readQueueModeMirror(): boolean {
+  try {
+    return parseQueueMode(JSON.parse(readFileSync(QUEUE_MODE_MIRROR_PATH, 'utf8')))
+  } catch {
+    return false
+  }
+}
+
 /**
  * Every remote of the repository `cwd` sits in, read off `.git/config` (the
  * commondir's, for a linked worktree) with no `git` subprocess -- the same
@@ -1801,6 +1813,7 @@ async function main(): Promise<void> {
   // aside at all, so with no owners (the default) or no requires_human
   // policy this costs nothing and every decision is byte-for-byte as before.
   const teamOwners = mentionOnly ? [] : readTeamOwnersMirror()
+  const queueMode = readQueueModeMirror()
   const isRequiresHuman = (policy: Policy): boolean => migratePolicyKind(policy.kind) === 'requires_human'
   const teamInternal =
     teamOwners.length > 0 &&
@@ -1915,6 +1928,20 @@ async function main(): Promise<void> {
       return
     }
     appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null, teamInternal)
+
+    // 0.6.7 T4: queue mode for cached 'ask' decisions too
+    if (hit.decision === 'ask' && queueMode && hit.policyId !== null) {
+      const queuedReason = t('policyAskReason', { policyId: hit.policyId, segment: jevSegmentFor(command) }) + ' · queued'
+      resolveAdviceOutcome({
+        command, cwd, sessionId, toolUseId,
+        reasonsEnglish: [queuedReason],
+        effectSource: {},
+        segment: jevSegmentFor(command),
+        source: 'cache', stopReason: 'queue', latencyMs: null, teamInternal,
+      })
+      return
+    }
+
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
       // recorded -- without scores, which the cache does not keep. The cache
@@ -2056,6 +2083,25 @@ async function main(): Promise<void> {
       effectSource: { deployPublishKind: resolved.deployPublishKind },
       segment: jevSegmentFor(command),
       source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
+    })
+    return
+  }
+
+  // 0.6.7 T4: queue mode -- when a requires_human policy would block an
+  // unattended agent, queue the action and let it continue with an advice
+  // instead of blocking. Record it but do not ask.
+  if (resolved.decision === 'ask' && queueMode && resolved.policyId !== null) {
+    if (key !== null) {
+      cache[key] = { decision: 'advise', reason: 'queued for person', at: Date.now() }
+      writeCache(cache)
+    }
+    const queuedReason = t('policyAskReason', { policyId: resolved.policyId, segment: jevSegmentFor(command) }) + ' · queued'
+    resolveAdviceOutcome({
+      command, cwd, sessionId, toolUseId,
+      reasonsEnglish: [queuedReason],
+      effectSource: {},
+      segment: jevSegmentFor(command),
+      source: 'jev', stopReason: 'queue', latencyMs: jevLatencyMs, teamInternal,
     })
     return
   }

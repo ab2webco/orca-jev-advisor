@@ -2890,3 +2890,64 @@ test('0.6.7 T3: a prohibits policy is still put to Jev for a team-internal comma
   const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'only the requires_human policy is set aside, the prohibits one is still judged')
 })
+
+test('T4 queue mode: when queue and continue is ON, a requires_human ask returns an advice instead of blocking', () => {
+  const home = makeHome()
+  const cwd = home
+  const policy = { id: 'jevadv-queue-test', rule: 'Test queue mode', kind: 'requires_human', scope: 'command' }
+  writePoliciesMirror(home, [policy])
+  writeQueueModeMirror(home, true) // queue mode ON
+  const command = 'some-dangerous-command --that-needs-approval'
+  // Pre-populate cache with an 'ask' for this command
+  const key = computeCacheKey(command, cwd, home, { policies: [policy] })
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the jevadv-queue-test policy', policyId: 'jevadv-queue-test', at: Date.now() - 1000 })
+  const payload = JSON.parse(run(home, command, { cwd, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'queue mode converts ask to deny advice')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'but as an advice, not a hard stop')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /queue/i, 'the reason mentions queuing')
+})
+
+test('T4 queue mode: when queue and continue is OFF (default), a requires_human ask stays as ask', () => {
+  const home = makeHome()
+  const cwd = home
+  const policy = { id: 'jevadv-queue-default', rule: 'Test default behavior', kind: 'requires_human', scope: 'command' }
+  writePoliciesMirror(home, [policy])
+  // no queue mode file = default (ask now)
+  const command = 'some-dangerous-command --needs-review'
+  // Pre-populate cache with an 'ask' for this command
+  const key = computeCacheKey(command, cwd, home, { policies: [policy] })
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the jevadv-queue-default policy', policyId: 'jevadv-queue-default', at: Date.now() - 1000 })
+  const payload = JSON.parse(run(home, command, { cwd, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask', 'default ask behavior unchanged when queue mode is OFF')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /jevadv-queue-default/i, 'asks with the policy reason')
+})
+
+test('T4 queue mode: identical retry in the same session passes advice-retry check', () => {
+  const home = makeHome()
+  const cwd = home
+  const sessionId = 'test-session-queue'
+  const policy = { id: 'jevadv-queue-retry', rule: 'Needs human', kind: 'requires_human', scope: 'command' }
+  writePoliciesMirror(home, [policy])
+  writeQueueModeMirror(home, true) // queue mode ON
+  const command = 'git push origin dangerous'
+
+  // Pre-populate cache with an 'ask' for this command
+  const key = computeCacheKey(command, cwd, home, { policies: [policy] })
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the jevadv-queue-retry policy', policyId: 'jevadv-queue-retry', at: Date.now() - 1000 })
+
+  // First call: enqueued as advice
+  const first = JSON.parse(run(home, command, { cwd, sessionId, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(first.hookSpecificOutput.permissionDecision, 'deny', 'first call queued as advice')
+  assert.doesNotMatch(first.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'first call is advice not hard stop')
+
+  // Identical retry in same session: advice-retry pass allows it through
+  const second = JSON.parse(run(home, command, { cwd, sessionId, apiKey: 'test-key-unused-on-cache-hit' }))
+  // Second run with identical command should pass the advice-retry check and allow
+  assert.equal(second.hookSpecificOutput.permissionDecision, 'allow', 'identical retry passes advice-retry, allows command')
+})
+
+function writeQueueModeMirror (home, enabled) {
+  const path = join(home, '.config', 'orca-supervisor', 'queue-mode.json')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({ enabled }))
+}

@@ -17,6 +17,7 @@ import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guar
 import { migratePolicyKind, withNormalizedPolicyScope } from "./decisions.ts";
 import type { PolicyKind, PolicyScope } from "./decisions.ts";
 import { parseTeamOwners } from "./team_owners.ts";
+import { parseQueueMode } from "./queue_mode.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
 export interface StorageHost {
@@ -33,6 +34,7 @@ const STORAGE_KEY = {
   log: "log",
   config: "config",
   teamOwners: "teamOwners",
+  queueMode: "queueMode",
 } as const;
 
 async function readKey<T>(host: StorageHost, key: string, guard: (value: unknown) => value is T, fallback: T): Promise<T> {
@@ -244,6 +246,19 @@ export async function getTeamOwners(host: StorageHost): Promise<readonly string[
     return parseTeamOwners(await host.get(STORAGE_KEY.teamOwners));
   } catch {
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// queueMode (0.6.7 T4): when a person must approve and nobody is watching,
+// queue the action and let the agent continue. Default: false (ask now).
+// ---------------------------------------------------------------------------
+
+export async function getQueueMode(host: StorageHost): Promise<boolean> {
+  try {
+    return parseQueueMode(await host.get(STORAGE_KEY.queueMode));
+  } catch {
+    return false;
   }
 }
 

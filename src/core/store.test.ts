@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getBoard, getCatalog, getConfig, getPolicies, getTeamOwners, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { getBoard, getCatalog, getConfig, getPolicies, getTeamOwners, getQueueMode, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -355,4 +355,24 @@ test("getTeamOwners: the stored lines come back normalized, invalid ones dropped
 
 test("getTeamOwners: a stored value that is not an array reads as empty", async () => {
   assert.deepEqual(await getTeamOwners(fakeHost({ teamOwners: { owners: ["acme-team"] } })), []);
+});
+
+// 0.6.7 T4: queue mode -- see src/core/queue_mode.ts.
+test("getQueueMode: nothing stored reads as false (ask now, the default)", async () => {
+  assert.equal(await getQueueMode(fakeHost()), false);
+});
+
+test("getQueueMode: enabled true returns true", async () => {
+  const host = fakeHost({ queueMode: { enabled: true } });
+  assert.equal(await getQueueMode(host), true);
+});
+
+test("getQueueMode: enabled false returns false", async () => {
+  const host = fakeHost({ queueMode: { enabled: false } });
+  assert.equal(await getQueueMode(host), false);
+});
+
+test("getQueueMode: a malformed value reads as false", async () => {
+  assert.equal(await getQueueMode(fakeHost({ queueMode: "yes" })), false);
+  assert.equal(await getQueueMode(fakeHost({ queueMode: { enabled: "yes" } })), false);
 });
