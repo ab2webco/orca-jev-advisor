@@ -61,7 +61,11 @@ path back from the panel; next release if the queue proves itself).
   store, team-owners-save, mirror, panel static and Playwright tests all
   failing first); GREEN: `npm test` 2311/2311, `npm run test:panels`
   145/145; Policies tab looked at, 1440/768/390/320, light and dark.
-- [ ] T2 client_reach classifier
+- [x] T2 client_reach classifier -- `src/core/client_reach.ts`, pure.
+  RED seen (module missing; then a stale-facts gap: a `git remote set-url`
+  or branch switch earlier in the same command); GREEN: 34/34 in
+  client_reach.test.ts, `npm test` 2345/2345. `gh pr close`/`review`
+  and read-only graphql stay `unknown` (conservative).
 - [ ] T3 gate skips requires_human for internal-only commands
 - [ ] T4 queue mode
 - [ ] T5 board "Waiting for you"

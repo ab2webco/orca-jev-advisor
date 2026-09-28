@@ -87,8 +87,9 @@ const ALLOWED_PUSH_OPTIONS: ReadonlySet<string> = new Set(["-u", "--set-upstream
  *  `:` (no `src:dst`, no `:branch` delete), no leading `+` (no forced
  *  update), no glob, and never `refs/...` -- the task's own words are "a
  *  plain branch name or HEAD", not a full ref path. `HEAD` itself is handled
- *  by the caller, not here. */
-function isPlainBranchRefspec(ref: string): boolean {
+ *  by the caller, not here. Exported for client_reach.ts (0.6.7 T2), which
+ *  reads a push's refspec with this same rule rather than a second one. */
+export function isPlainBranchRefspec(ref: string): boolean {
   if (ref.length === 0) return false;
   if (ref.includes(":")) return false;
   if (ref.startsWith("+")) return false;
@@ -143,9 +144,10 @@ function resolveCdTargetDir(cwd: string, dirArg: string): string {
  * unlike the deny tier's own rules (which must see through all of those to
  * catch an obfuscated destructive command), a local ALLOW has no such
  * obligation: anything even slightly unusual simply does not qualify and
- * falls through to the ordinary Jev path.
+ * falls through to the ordinary Jev path. Exported for client_reach.ts
+ * (0.6.7 T2): a push it may call `internal` is exactly this shape, no wider.
  */
-function parsePushSegment(segmentText: string): readonly string[] | null {
+export function parsePushSegment(segmentText: string): readonly string[] | null {
   const tokens = tokenize(segmentText);
   if (tokens[0] !== "git" || tokens[1] !== "push") return null;
   const positionals: string[] = [];
@@ -412,6 +414,15 @@ const SAFE_REDIRECTION_TOKENS: ReadonlySet<string> = new Set(["2>&1", ">&2", "2>
  * branch to delete.
  */
 function stripQualifyingRedirections(segmentText: string): string | null {
+  const kept = tokensWithoutQualifyingRedirections(segmentText);
+  return kept === null ? null : kept.join(" ");
+}
+
+/** The shell words behind stripQualifyingRedirections, before they are
+ *  joined back into text -- exported for client_reach.ts (0.6.7 T2), which
+ *  needs the same redirection reading but keeps each quoted argument a
+ *  single word (a joined `--title "a b"` would re-split into two). */
+export function tokensWithoutQualifyingRedirections(segmentText: string): string[] | null {
   const kept: string[] = [];
   for (const token of tokenize(segmentText)) {
     if (token.includes("<") || token.includes(">")) {
@@ -420,7 +431,7 @@ function stripQualifyingRedirections(segmentText: string): string | null {
     }
     kept.push(token);
   }
-  return kept.join(" ");
+  return kept;
 }
 
 export type LocalGitAllowReasonKind = "ownBranchPush" | "guardedGitDelete";
