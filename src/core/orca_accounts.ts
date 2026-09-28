@@ -44,6 +44,7 @@ export const ORCA_USER_DATA_ENV = "ORCA_USER_DATA_PATH";
 
 /** The Electron application name whose `userData` directory we fall back to when {@link ORCA_USER_DATA_ENV} is absent. */
 const ORCA_APP_NAME = "orca";
+const ORCA_LINUX_APP_NAME = "orca-ide";
 
 export interface OrcaEnvironment {
   readonly home: string;
@@ -73,8 +74,12 @@ function conventionalUserDataDir(platform: SupportedPlatform, env: OrcaEnvironme
   if (platform === "darwin") {
     return join(env.home, "Library", "Application Support", ORCA_APP_NAME);
   }
+  // A packaged Linux Orca pins userData to <appData>/orca-ide rather than
+  // Electron's default <appData>/orca (its own
+  // configurePackagedLinuxUserDataPath, which also moves the legacy
+  // accounts over), so the default name would find no accounts at all.
   const base = env.xdgConfigHome !== undefined && env.xdgConfigHome.length > 0 ? env.xdgConfigHome : join(env.home, ".config");
-  return join(base, ORCA_APP_NAME);
+  return join(base, ORCA_LINUX_APP_NAME);
 }
 
 export type UserDataSource = "environment" | "convention";

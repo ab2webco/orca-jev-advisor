@@ -84,9 +84,9 @@ export type ProcessRun = (argv: readonly string[]) => Promise<RunResult>;
  * a missing binary, a non-Orca-managed directory, a timeout or malformed
  * output all fall through to the `cwd` source, which is always available.
  */
-export async function resolveOrcaContext(run: ProcessRun, cwd: string): Promise<OrcaContext> {
+export async function resolveOrcaContext(run: ProcessRun, cwd: string, cli = "orca"): Promise<OrcaContext> {
   try {
-    const result = await run(["orca", "worktree", "current", "--json"]);
+    const result = await run([cli, "worktree", "current", "--json"]);
     const worktree = parseOrcaWorktreeCurrent(result.stdout);
     if (worktree !== null) {
       return {
