@@ -21,6 +21,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { MAX_JEV_CHOICES } from "./jev.ts";
 import type { Answer, ChoiceAnswer, NoulAnswer } from "./jev.ts";
 import {
   DEFAULT_FITS_THRESHOLD,
@@ -33,6 +34,8 @@ import {
   interpretFit,
   interpretWide,
   listingCharsFor,
+  mergeWide,
+  wideBatches,
   shortlistOf,
 } from "./tool_decisions.ts";
 import type { FitResult, OrcaContextState, ToolCandidate, ToolCandidateDetail, WideResult } from "./tool_decisions.ts";
@@ -266,4 +269,61 @@ test("decideTool: the normal path -- stage 2's winner, with its fit value in the
   const decision = decideTool(wide, fit, true);
   assert.equal(decision.name, "Bash");
   assert.match(decision.reason, /stage 2, fits 0\.85/);
+});
+
+// JEVADV-76: Jev rejects a choice over more than 255 options with a 400
+// ("Too many choices. Must have at most 255 choices."), measured live on
+// 2026-09-28. Sessions carry 266-448 tools once MCP servers are attached, so
+// one `which` over the whole roster failed every time and mod-tools never
+// acted. Stage 1 now asks in balanced batches and merges the rankings.
+const roster = (count: number): ToolCandidate[] => Array.from({ length: count }, (_, i) => ({ name: `tool_${i}`, description: `Tool ${i}.` }));
+
+test("the Jev choice limit is 255 options", () => {
+  assert.equal(MAX_JEV_CHOICES, 255);
+});
+
+test("wideBatches keeps every tool, in order, in balanced batches of at most 255", () => {
+  for (const count of [1, 255, 256, 448, 900]) {
+    const batches = wideBatches(roster(count));
+    assert.ok(batches.every((batch) => batch.length > 0 && batch.length <= MAX_JEV_CHOICES), `${count}`);
+    assert.deepEqual(batches.flat().map((c) => c.name), roster(count).map((c) => c.name), `${count}`);
+    const sizes = batches.map((batch) => batch.length);
+    assert.ok(Math.max(...sizes) - Math.min(...sizes) <= 1, `${count}: ${sizes.join(",")}`);
+  }
+  assert.equal(wideBatches(roster(255)).length, 1);
+  assert.equal(wideBatches(roster(256)).length, 2);
+  assert.deepEqual(wideBatches([]), []);
+});
+
+test("every stage-1 question built from a batch stays within the Jev choice limit", () => {
+  for (const batch of wideBatches(roster(448))) {
+    const which = buildWideQuestions(batch).which;
+    assert.ok(which.type === "choice" && Object.keys(which.criteria).length <= MAX_JEV_CHOICES);
+  }
+});
+
+test("only the first batch asks the gate: it is about the request, not about the tools in the batch", () => {
+  assert.ok("needsOneTool" in buildWideQuestions([READ]));
+  assert.ok(!("needsOneTool" in buildWideQuestions([READ], { withGate: false })));
+});
+
+test("mergeWide interleaves the batches by rank, so a weak batch's winner cannot bury a strong batch's runner-up", () => {
+  const first: WideResult = { ranked: [{ name: "a1", probability: 0.4 }, { name: "a2", probability: 0.35 }], gate: 0.8, needsOneTool: true };
+  const second: WideResult = { ranked: [{ name: "b1", probability: 0.9 }, { name: "b2", probability: 0.05 }], gate: null, needsOneTool: true };
+  const merged = mergeWide([first, second]);
+  assert.deepEqual(merged?.ranked.map((r) => r.name), ["b1", "a1", "a2", "b2"]);
+  assert.equal(merged?.gate, 0.8, "the gate comes from the first batch, the only one that asks it");
+});
+
+test("mergeWide keeps the batches that answered and is null only when none did", () => {
+  const answered: WideResult = { ranked: [{ name: "b1", probability: 0.9 }], gate: null, needsOneTool: true };
+  assert.equal(mergeWide([null, null]), null);
+  const merged = mergeWide([null, answered]);
+  assert.deepEqual(merged?.ranked.map((r) => r.name), ["b1"]);
+  assert.equal(merged?.gate, null);
+  assert.equal(merged?.needsOneTool, true, "no gate answer fails open toward a second look, as interpretWide does");
+});
+
+test("decideTool names the Jev status when stage 1 failed with one", () => {
+  assert.match(decideTool(null, null, false, DEFAULT_FITS_THRESHOLD, 400).reason, /stage 1 \(400\)/);
 });

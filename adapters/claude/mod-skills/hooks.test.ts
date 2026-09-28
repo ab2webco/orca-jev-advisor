@@ -2021,3 +2021,35 @@ test("nit 10 (hook): after the person switches model, the router part says it is
   await stepThrough(handlers, engine, turnStepEvent({ index: 1, model: "claude-sonnet-5", effort: "medium" }));
   assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5 · kept: your choice");
 });
+
+// JEVADV-76: Jev rejects a choice over more than 255 options with a 400, and
+// sessions carry 266-448 tools once MCP servers are attached. One `which`
+// over the whole roster failed on every prompt; stage 1 now asks in batches.
+test("a tool roster over 255 asks stage 1 in batches that each stay within Jev's choice limit", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  host.toolList = Array.from({ length: 300 }, (_, i) => ({ name: `mcp__srv__tool_${i}`, description: `Tool ${i}`, mcp: true }));
+  const { handlers, engine } = loadHooks(host);
+
+  // Gate closed in the first batch, so stage 2 never runs.
+  host.fetchQueue.push(jevResponse({
+    which: { type: "choice", choice: "mcp__srv__tool_3", probabilities: { mcp__srv__tool_3: 0.6 }, confidence: 0.6 },
+    needsOneTool: { type: "noul", noul: 0.1 },
+  }));
+  host.fetchQueue.push(jevResponse({
+    which: { type: "choice", choice: "mcp__srv__tool_200", probabilities: { mcp__srv__tool_200: 0.7 }, confidence: 0.7 },
+  }));
+
+  await submitPrompt(handlers, engine, "run the build");
+
+  const toolCalls = host.fetchCalls.filter((call) => (call.body ?? "").includes("mcp__srv__tool_"));
+  assert.equal(toolCalls.length, 2, "300 tools need two stage-1 batches");
+  for (const call of toolCalls) {
+    const body = JSON.parse(call.body ?? "{}") as { questions: { which: { criteria: Record<string, string> } } };
+    assert.ok(Object.keys(body.questions.which.criteria).length <= 255, "each batch stays within Jev's choice limit");
+  }
+  const record = lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH) as { decision: { reason: string }; wide: { ranked: { name: string }[] } | null };
+  assert.match(record.decision.reason, /no single tool needed/);
+  assert.deepEqual(record.wide?.ranked.map((r) => r.name), ["mcp__srv__tool_200", "mcp__srv__tool_3"]);
+});

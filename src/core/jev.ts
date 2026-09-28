@@ -50,6 +50,9 @@ export interface NoulQuestion {
 
 export type Question = ChoiceQuestion | ScoreQuestion | NoulQuestion;
 
+/** The most options Jev accepts in one choice question; more is a 400 ("Too many choices"), measured live on 2026-09-28. */
+export const MAX_JEV_CHOICES = 255;
+
 export interface JevRequest {
   state: JsonValue;
   model: "jev-latest";

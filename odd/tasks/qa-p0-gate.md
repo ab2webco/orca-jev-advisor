@@ -24,7 +24,7 @@ Out of scope: the remaining high, medium and low findings (JEVADV-62..74).
 - [x] T2 C2 phantom heredoc (RED: QA repros failed in unit and hook tests; GREEN: 11/11 unit, 2271/2271 suite). Also added a C1 hook test: awk system() no longer passes tier 1a silently. Found: the local deny rules still read the quoted awk program as data (A3, JEVADV-63)
 - [ ] T3 A1 redaction in model, skill and tool decisions
 - [ ] T4 A9 esc() quotes
-- [ ] T5 mod-tools 255-choice limit
+- [x] T5 mod-tools 255-choice limit (RED: unit exports missing, hook test saw 1 call for 300 tools; GREEN: 29/29 unit, 2279/2279 suite). Skills not batched: rosters are ~64, far from the limit; revisit if one grows past 255.
 
 ## Acceptance criteria
 - Every QA repro for C1 and C2 is a regression test that failed before the fix.

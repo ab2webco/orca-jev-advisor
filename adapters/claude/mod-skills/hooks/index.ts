@@ -77,7 +77,7 @@
  * cache explicitly instead of closing over it.
  */
 import type { AgentSpawnInput, AgentSpawnResult, EngineInterface, Frozen, Next, On, PluginOptions, Register, SessionCompactResult, StreamHookBody, StreamNext, TurnStepChunk, TurnStepInput, TurnStepResult } from 'claude-code'
-import { callJev } from '../../../../src/core/jev.ts'
+import { JevRequestError, callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
 import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import { modSkillsProjectName } from '../../../../src/core/project_name.ts'
@@ -112,7 +112,9 @@ import {
   interpretFit as interpretToolFit,
   interpretWide as interpretToolWide,
   listingCharsFor as toolListingCharsFor,
+  mergeWide as mergeToolWide,
   shortlistOf as toolShortlistOf,
+  wideBatches as toolWideBatches,
 } from '../../../../src/core/tool_decisions.ts'
 import type { FitResult as ToolFitResult, ToolCandidate, ToolCandidateDetail, WideResult as ToolWideResult } from '../../../../src/core/tool_decisions.ts'
 import { buildDecisionRecord as buildToolDecisionRecord, buildObservationRecord as buildToolObservationRecord, serializeRecord as serializeToolRecord } from '../../../../src/core/tool_measurement.ts'
@@ -1732,13 +1734,21 @@ export function register(on: On, options: PluginOptions): void {
         }))
 
         const wideStartedAt = await $.clock.now()
-        let wide: ToolWideResult | null = null
-        try {
-          const response = await callJev(apiKey, buildToolWideState(prompt, candidates, orcaState), buildToolWideQuestions(candidates), { budgetMs: toolBudgetMs, fetchImpl, sleepImpl })
-          wide = interpretToolWide(response.answers, toolGateThreshold)
-        } catch {
-          wide = null
-        }
+        // Jev takes at most 255 options per choice (JEVADV-76), so a large
+        // roster is asked in batches, side by side within the same budget.
+        let wideStatus: number | null = null
+        const batchResults = await Promise.all(
+          toolWideBatches(candidates).map(async (batch, index): Promise<ToolWideResult | null> => {
+            try {
+              const response = await callJev(apiKey, buildToolWideState(prompt, batch, orcaState), buildToolWideQuestions(batch, { withGate: index === 0 }), { budgetMs: toolBudgetMs, fetchImpl, sleepImpl })
+              return interpretToolWide(response.answers, toolGateThreshold)
+            } catch (error) {
+              if (error instanceof JevRequestError && error.status !== null) wideStatus ??= error.status
+              return null
+            }
+          }),
+        )
+        const wide = mergeToolWide(batchResults)
         const wideLatencyMs = (await $.clock.now()) - wideStartedAt
 
         let fit: ToolFitResult | null = null
@@ -1766,7 +1776,7 @@ export function register(on: On, options: PluginOptions): void {
           }
         }
 
-        const decision = decideTool(wide, fit, fitAttempted, toolFitsThreshold)
+        const decision = decideTool(wide, fit, fitAttempted, toolFitsThreshold, wideStatus)
 
         const measurementId = crypto.randomUUID()
         const at = new Date(await $.clock.now()).toISOString()
