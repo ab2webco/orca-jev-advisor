@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { ORCA_CLI_ARGUMENTS, ORCA_CLI_TIMEOUT_MS, orcaCliOptions } from "./orca_cli.ts";
+import { ORCA_CLI_ARGUMENTS, ORCA_CLI_TIMEOUT_MS, orcaCliCommand, orcaCliOptions } from "./orca_cli.ts";
 
 const mainSource = readFileSync(new URL("../../adapters/orca/main.mjs", import.meta.url), "utf8");
 
@@ -75,4 +75,29 @@ test("every CLI call site passes a cwd this plugin controls", () => {
   for (const args of calls) {
     assert.equal(args, "PLATFORM, PLUGIN_ROOT", `a CLI call passes '${args}' instead of the plugin root`);
   }
+});
+
+// On Linux the Orca CLI is `orca-ide`; a bare `orca` there is usually the
+// GNOME screen reader (running it starts speech) or nothing at all. Orca
+// itself exports ORCA_CLI_COMMAND to the sessions it manages under WSL.
+test("the CLI is orca-ide on Linux and orca elsewhere", () => {
+  assert.equal(orcaCliCommand("linux", {}), "orca-ide");
+  assert.equal(orcaCliCommand("darwin", {}), "orca");
+  assert.equal(orcaCliCommand("win32", {}), "orca");
+});
+
+test("ORCA_CLI_COMMAND, when Orca sets it, wins on every platform", () => {
+  for (const platform of ["linux", "darwin", "win32"] as const) {
+    assert.equal(orcaCliCommand(platform, { orcaCliCommand: " orca-dev " }), "orca-dev");
+  }
+});
+
+test("an empty ORCA_CLI_COMMAND is ignored, never run as an empty command", () => {
+  assert.equal(orcaCliCommand("linux", { orcaCliCommand: "   " }), "orca-ide");
+  assert.equal(orcaCliCommand("darwin", { orcaCliCommand: "" }), "orca");
+});
+
+test("main.mjs resolves its CLI through orcaCliCommand, never a literal name", () => {
+  assert.doesNotMatch(mainSource, /const ORCA_CLI_BIN = ['"]orca['"]/);
+  assert.match(mainSource, /const ORCA_CLI_BIN = orcaCliCommand\(PLATFORM, \{ orcaCliCommand: process\.env\.ORCA_CLI_COMMAND \}\)/);
 });

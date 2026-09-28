@@ -59,6 +59,20 @@ export const ORCA_CLI_ARGUMENTS = {
   repoList: ["repo", "list", "--json"],
 } as const;
 
+/**
+ * The CLI's name on `platform`. On Linux it is `orca-ide`: a bare `orca`
+ * there is usually the GNOME screen reader (running it starts speech) or
+ * missing, so every call failed and fell back to an empty result. Orca
+ * exports ORCA_CLI_COMMAND to the sessions it manages under WSL, and when it
+ * is set it names the right binary on any platform. Never falls back from
+ * `orca-ide` to `orca` on Linux, for the screen reader's sake.
+ */
+export function orcaCliCommand(platform: SupportedPlatform, env: { readonly orcaCliCommand?: string | undefined }): string {
+  const override = env.orcaCliCommand?.trim();
+  if (override !== undefined && override.length > 0) return override;
+  return platform === "linux" ? "orca-ide" : "orca";
+}
+
 /** How long any one CLI call may take before it is abandoned. */
 export const ORCA_CLI_TIMEOUT_MS = 5000;
 

@@ -396,6 +396,20 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   (`gh pr merge --squash feature/x`) still folds, because the gate cannot
   tell whether that flag takes a value. A PR number there is still exact.
 
+## What changed in 0.6.7
+
+- **Linux works with Orca's own CLI and data folder.** On Linux the Orca
+  CLI is `orca-ide`, and a bare `orca` there is usually the GNOME screen
+  reader. The plugin called `orca` everywhere, so on Linux the account
+  list, the board's project names, the destination list, the doctor and
+  the project a session runs in all came back empty. It now runs
+  `ORCA_CLI_COMMAND` when Orca sets it, `orca-ide` on Linux and `orca`
+  elsewhere, and never falls back to `orca` on Linux.
+- **Orca's accounts are found on Linux.** A packaged Linux Orca keeps its
+  data in `~/.config/orca-ide` (or `$XDG_CONFIG_HOME/orca-ide`), not
+  `~/.config/orca`, so an install run without Orca's own
+  `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
+
 ## What changed in 0.6.6
 
 - **Tool suggestions work again.** Jev accepts at most 255 options in one

@@ -67,19 +67,21 @@ test("resolveOrcaUserDataDir on darwin always uses ~/Library/Application Support
   assert.equal(result.path, "/home/dev/Library/Application Support/orca");
 });
 
+// A packaged Linux Orca pins its userData to <appData>/orca-ide (its own
+// configurePackagedLinuxUserDataPath), not the Electron default <appData>/orca.
 test("resolveOrcaUserDataDir on linux honors XDG_CONFIG_HOME when set", () => {
   const result = resolveOrcaUserDataDir("linux", { home: "/home/dev", xdgConfigHome: "/home/dev/.xdgconfig" });
-  assert.equal(result.path, "/home/dev/.xdgconfig/orca");
+  assert.equal(result.path, "/home/dev/.xdgconfig/orca-ide");
 });
 
 test("resolveOrcaUserDataDir on linux falls back to ~/.config when XDG_CONFIG_HOME is unset", () => {
   const result = resolveOrcaUserDataDir("linux", { home: "/home/dev" });
-  assert.equal(result.path, "/home/dev/.config/orca");
+  assert.equal(result.path, "/home/dev/.config/orca-ide");
 });
 
 test("resolveOrcaUserDataDir on linux falls back to ~/.config when XDG_CONFIG_HOME is set but empty", () => {
   const result = resolveOrcaUserDataDir("linux", { home: "/home/dev", xdgConfigHome: "" });
-  assert.equal(result.path, "/home/dev/.config/orca");
+  assert.equal(result.path, "/home/dev/.config/orca-ide");
 });
 
 test("claudeAccountsDir joins with the right separator per platform", () => {

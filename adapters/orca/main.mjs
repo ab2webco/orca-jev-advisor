@@ -48,7 +48,7 @@ import {
   migratePolicyKind
 } from '../../src/core/decisions.ts'
 import { auditPoliciesWithoutKind } from '../../src/core/policy_kind_audit.ts'
-import { ORCA_CLI_ARGUMENTS, orcaCliOptions } from '../../src/core/orca_cli.ts'
+import { ORCA_CLI_ARGUMENTS, orcaCliCommand, orcaCliOptions } from '../../src/core/orca_cli.ts'
 import { deriveCatalogProposals } from '../../src/core/catalog_proposals.ts'
 import { resolveLinkedWorktreeMainCheckout } from '../../src/core/linked_worktree.ts'
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeedPolicies } from '../../src/core/policy_seed.ts'
@@ -798,7 +798,7 @@ const PLUGIN_ROOT = join(__dirname, '..', '..')
 
 /** The CLI this plugin shells out to. Named so every invocation is findable,
  *  and so the three call sites cannot drift apart again. */
-const ORCA_CLI_BIN = 'orca'
+const ORCA_CLI_BIN = orcaCliCommand(PLATFORM, { orcaCliCommand: process.env.ORCA_CLI_COMMAND })
 const CLAUDE_INTEGRATION_SCRIPT = join(__dirname, 'install-claude-integration.mjs')
 const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 

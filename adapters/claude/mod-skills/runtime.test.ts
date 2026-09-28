@@ -29,7 +29,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { computeHomePaths, resolveUserSkillsDir } from "./hooks/runtime.ts";
+import { computeHomePaths, orcaCliCommandFor, resolveUserSkillsDir } from "./hooks/runtime.ts";
 import { measurementDecisionsToday, resolveModSkillsReadiness, resolveModSkillsSamplingConfig, resolveModSkillsSwitches, toolMeasurementDecisionsToday } from "./hooks/index.ts";
 
 test("returns null when neither HOME nor USERPROFILE is set", () => {
@@ -469,3 +469,18 @@ test("resolveModSkillsReadiness: a read that throws reads as null, never propaga
   const result = await resolveModSkillsReadiness(engine as Parameters<typeof resolveModSkillsReadiness>[0]);
   assert.equal(result, null);
 });
+
+// The Orca CLI name for `orca worktree current`: this sandbox has no
+// platform noun, so a Linux home (the same signal computeHomePaths reads)
+// means `orca-ide`, where a bare `orca` is usually the GNOME screen reader.
+test("orcaCliCommandFor: orca-ide for a Linux home, orca for a macOS or Windows one", () => {
+  assert.equal(orcaCliCommandFor({ home: "/home/dev" }), "orca-ide")
+  assert.equal(orcaCliCommandFor({ home: "/root" }), "orca-ide")
+  assert.equal(orcaCliCommandFor({ home: "/Users/dev" }), "orca")
+  assert.equal(orcaCliCommandFor({ home: undefined, userProfile: "C:\\Users\\dev" }), "orca")
+})
+
+test("orcaCliCommandFor: ORCA_CLI_COMMAND, when set, wins; an empty one is ignored", () => {
+  assert.equal(orcaCliCommandFor({ home: "/Users/dev", orcaCliCommand: "orca-dev" }), "orca-dev")
+  assert.equal(orcaCliCommandFor({ home: "/home/dev", orcaCliCommand: "  " }), "orca-ide")
+})

@@ -53,6 +53,23 @@ export interface ModPathEnv {
   readonly xdgCacheHome?: string;
 }
 
+/** macOS puts users under /Users, Linux under /home -- the only platform signal this sandbox has (see computeHomePaths). */
+function isLinuxHome(home: string): boolean {
+  return home.startsWith('/home/') || home === '/root'
+}
+
+/**
+ * The Orca CLI's name for this environment: ORCA_CLI_COMMAND when Orca set
+ * it, `orca-ide` for a Linux home (a bare `orca` there is usually the GNOME
+ * screen reader), `orca` otherwise -- the same rule as src/core/orca_cli.ts's
+ * orcaCliCommand, read from the home directory's shape instead of a platform.
+ */
+export function orcaCliCommandFor(env: { readonly home?: string | undefined; readonly userProfile?: string | undefined; readonly orcaCliCommand?: string | undefined }): string {
+  const override = env.orcaCliCommand?.trim()
+  if (override !== undefined && override.length > 0) return override
+  return env.home !== undefined && isLinuxHome(env.home) ? 'orca-ide' : 'orca'
+}
+
 export function computeHomePaths(env: ModPathEnv): ModHomePaths | null {
   const home = env.home && env.home.length > 0 ? env.home : env.userProfile && env.userProfile.length > 0 ? env.userProfile : null
   if (!home) return null
@@ -78,7 +95,7 @@ export function computeHomePaths(env: ModPathEnv): ModHomePaths | null {
   // convention rather than a guarantee, and it errs toward macOS -- an
   // unrecognised layout ignores XDG, which is the behaviour that matches
   // paths.ts everywhere except Linux.
-  const isLinux = home.startsWith('/home/') || home === '/root'
+  const isLinux = isLinuxHome(home)
   const configBase = isLinux && env.xdgConfigHome && env.xdgConfigHome.length > 0 ? env.xdgConfigHome : `${home}/.config`
   const cacheBase = isLinux && env.xdgCacheHome && env.xdgCacheHome.length > 0 ? env.xdgCacheHome : `${home}/.cache`
   return { home, configDir: `${configBase}/orca-supervisor`, cacheDir: `${cacheBase}/orca-supervisor` }

@@ -131,7 +131,7 @@ import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sa
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
 import type { ModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
 import type { JevFetch, JevFetchResponse, JevSleep } from '../../../../src/core/jev.ts'
-import { computeHomePaths, parseEnvFile, resolveUserSkillsDir } from './runtime.ts'
+import { computeHomePaths, orcaCliCommandFor, parseEnvFile, resolveUserSkillsDir } from './runtime.ts'
 import type { ModHomePaths } from './runtime.ts'
 import { parseQuota } from '../../../../src/core/consumption.ts'
 import { parseModelsMirror } from '../../../../src/core/model_mirror.ts'
@@ -188,6 +188,12 @@ async function resolveHomePaths($: EngineInterface): Promise<ModHomePaths | null
     $.env.get('XDG_CACHE_HOME'),
   ])
   return computeHomePaths({ home, userProfile, appData, localAppData, xdgConfigHome, xdgCacheHome })
+}
+
+/** The Orca CLI's name here: `orca-ide` on Linux, where a bare `orca` is usually the screen reader. See runtime.ts's orcaCliCommandFor. */
+async function resolveOrcaCli($: EngineInterface): Promise<string> {
+  const [home, userProfile, orcaCliCommand] = await Promise.all([$.env.get('HOME'), $.env.get('USERPROFILE'), $.env.get('ORCA_CLI_COMMAND')])
+  return orcaCliCommandFor({ home, userProfile, orcaCliCommand })
 }
 
 /** The home directory alone, for building a `~/.claude/...` path -- Claude Code's own convention, unrelated to this plugin's `.config`/`.cache` choice. */
@@ -1560,7 +1566,7 @@ export function register(on: On, options: PluginOptions): void {
         if (inventory.length === 0) return { block: null, status: null }
 
         if (orcaContextCache === null) {
-          orcaContextCache = await resolveOrcaContext(makeProcessRun($), await $.session.cwd())
+          orcaContextCache = await resolveOrcaContext(makeProcessRun($), await $.session.cwd(), await resolveOrcaCli($))
         }
         const orcaContext = orcaContextCache
         const orcaState = { worktree: orcaContext.worktree, proyecto: orcaContext.proyecto, rama: orcaContext.rama }
@@ -1711,7 +1717,7 @@ export function register(on: On, options: PluginOptions): void {
         if (toolInventory.length === 0) return { block: null, status: null }
 
         if (orcaContextCache === null) {
-          orcaContextCache = await resolveOrcaContext(makeProcessRun($), await $.session.cwd())
+          orcaContextCache = await resolveOrcaContext(makeProcessRun($), await $.session.cwd(), await resolveOrcaCli($))
         }
         const orcaContext = orcaContextCache
         const orcaState = { worktree: orcaContext.worktree, project: orcaContext.proyecto, branch: orcaContext.rama }
