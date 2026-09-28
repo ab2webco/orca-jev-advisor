@@ -217,7 +217,7 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
       Route: delegated writer, strict TDD (RED on the flipped assertions
       first). **Sequenced after A1b commits** — both touch
       `hooks/index.ts`; do not run concurrently with it.
-- [ ] A9 Final verification pass + report. Route: inline.
+- [x] A9 Final verification pass + report. Route: inline.
 
 ## Acceptance
 `npm test`, `npm run test:panels`, `npm run shots`,
@@ -552,3 +552,14 @@ TDD: strict (repo default). Runner: `node --test --experimental-strip-types`
   (`activity-ready: no two neighbouring controls touch on the Activity
   tab, including the show-more toggle`), a functional check rather than a
   visual one; flagged honestly rather than claimed as looked-at.
+- 2026-09-28: A9 done inline. Final fresh verification pass, all from a
+  clean tree at `2be7e4a`: `npm test` 2191/2191; `npm run test:panels`
+  135/135 (Playwright genuinely running); `npm run shots` 4 images, no
+  overflow, no script errors; `npx tsc -p
+  adapters/claude/mod-skills/tsconfig.json` clean (no errors); `node
+  --test adapters/orca/mod_skills_validate.test.mjs` pass (real `claude`
+  binary). `node_modules` unlinked, working tree clean. Feature complete:
+  A1a/A1b/A2/A3/A4/A5/A6/A7/A9 done, A8 (context steward) descoped by the
+  owner, R1 (unrelated bugfix, queued live) done. 7 commits on
+  `jev-063-activity`, none pushed. Report written to the path the brief
+  specifies.
