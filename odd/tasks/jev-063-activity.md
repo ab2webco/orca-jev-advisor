@@ -148,99 +148,30 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
       aria labels. Route: delegated writer, then inline visual pass.
 - [x] A5 `panels.spec.mjs` tests + `screenshot-panels.mjs` `activity-ready`
       scenario. Route: delegated writer.
-- [ ] A6 Version bump to 0.6.3 (`package.json`, `orca-plugin.json` if
+- [x] A6 Version bump to 0.6.3 (`package.json`, `orca-plugin.json` if
       versioned) + README "What changed in 0.6.3". Route: inline.
 - [ ] A7 Screenshots: `npm run shots` + `activity-ready` scenario at 1440,
       768, 390, 320, both themes. Read every image. Route: inline.
-- [ ] A8 **(queued live via `brief-063-context-steward.md`, unrelated to the
-      Activity cards themselves, must land after A1-A7 and before
-      STATUS: DONE)** "Jev context steward" — the biggest measured saving in
-      a private replay of real sessions (evidence kept out of this public
-      repo per the 0.6.3 privacy rule below; generic finding: cache reads
-      dominate cost regardless of model choice, and compacting a main
-      context once it passes a token threshold would have saved roughly
-      half the re-read context, an upper bound that does not model detail
-      lost to compaction — see the private replay notes, not tracked here,
-      for the full figures).
-      Engine primitives (verify exact shapes in
-      `adapters/claude/mod-skills/claude-code.d.ts` before writing):
-      `$.session.usage()` (context size/percent, free), `$.session.compact({
-      instructions })` (a `session.compact` event, trigger `plugin`, run
-      between turns — rejects mid-turn), `turn.complete` (main conversation
-      only; subagents carry `agentId` and are never compacted). A plugin
-      cannot run `/clear`, only suggest it.
-      Behaviour: on the main conversation's `turn.complete`, read context
-      size; at/above the threshold (default 120k tokens, configurable per
-      account beside the router settings), ask Jev one typed question — is
-      this a task boundary? (`boundary` / `mid-task` / `new-topic`), fed
-      Jev's state (redacted last-prompt excerpt per the router's own
-      redaction, a compact per-turn activity summary — tool counts, whether
-      it committed/pushed/opened a PR/ran tests and whether they passed —
-      context size, turns since last compaction). `boundary` at confidence
-      ≥0.70: compact once the turn has fully ended, instructions preserving
-      active feature documents (`odd/tasks/*.md` paths seen in the
-      conversation) with their open checklist items and next step, branch
-      names/last commits/PR numbers, decisions made and the person's
-      standing constraints, and anything the person said is pending.
-      `new-topic`: compact the same way plus a one-line "/clear would be
-      cheaper still" suggestion. `mid-task` or low confidence: do nothing,
-      except the hard limit (≥80% of the context window) compacts
-      regardless, same preserving instructions. Never compact twice within
-      3 person turns; never compact a subagent; never compact in measure
-      mode.
-      Modes: `off`/`measure`/`active` per account, same settings surface the
-      router already writes, shown in the config panel's Models tab next to
-      the router; default `measure`, the owner's machine flips to `active`
-      after release; measure mode only logs what it would have done.
-      Log/visibility: `context-steward-decisions-*.jsonl` (hourly, pruned
-      like the others), `{at, account, project, contextBefore, decision,
-      confidence, applied, contextAfter}`, no prompt text; a status-line
-      part ("jev · contexto 312k → 38k (tarea cerrada)" applied, "(solo
-      mide)" in measure mode); a board Consumption-tab line for compactions
-      applied and the estimated tokens no longer re-read, labelled an
-      estimate.
-      Tests (RED first): a boundary above threshold compacts with
-      preserving instructions; `mid-task` does not compact; the hard limit
-      compacts; the 3-turn cooldown; measure mode changes nothing; a
-      subagent is never compacted; a Jev failure means no compaction except
-      at the hard limit; `mod_skills_validate.test.mjs` stays green.
-      Live check (separate from the unit suite): in a fresh interactive or
-      `claude -p` session on a throwaway/scratch repository (never a real
-      client or project repo), steward active, threshold lowered for the
-      test (e.g. 30k) — read enough files to pass it, then commit something
-      trivial in a scratch git repo under the scratchpad (never a real
-      repo) — confirm the next step's API cacheRead drops, report
-      before/after numbers and the compaction summary's kept items (numbers
-      from this throwaway repo are fine to report; they are not the
-      owner's real usage).
-      Report requirement: before `STATUS: DONE`, append a "Context steward"
-      section to this feature's final report.
-      **0.6.3 privacy rule (queued live via `brief-063-privacy.md`, applies
-      to this whole feature, not just A8):** this repository is public.
-      Never write a real email outside `@example.com`/`@example.org`, a real
-      Orca account id, an absolute `/Users/<real-name>/…` path, a real
-      client/project name from the owner's machine, or a real usage number/
-      cost/decision count/replay finding into any tracked file (feature
-      docs, reports, README, commit messages included) — evidence stays
-      generic ("measured on real sessions, roughly half the re-read context
-      was saved"), never the owner's own figures, names or ids. Before each
-      commit, check the staged diff for these patterns and fix any hit.
-      A repo-wide test enforcing this (email/`/Users/` path/optional
-      `~/.config/orca-supervisor/private-terms.txt` denylist scan over
-      every tracked file) was requested too, but is deliberately **not**
-      added by this feature: a scan run 2026-09-27 found the pattern
-      already present pre-existing on this branch outside Activity's own
-      files (real `/Users/<real-name>/` paths in several `odd/tasks/*.md`
-      and `src/core/*.test.ts` files, a real owner-domain email in
-      `adapters/orca/main.test.mjs`/`scripts/panels.spec.mjs`'s existing
-      router-email tests) — adding a hard-failing test now would break
-      `npm test` over files outside this task's scope, which the
-      constraints above forbid touching. The privacy brief says a separate
-      scrub of what is already on main is underway elsewhere; the
-      repo-wide enforcement test belongs after that scrub lands, as its own
-      task, not folded into A8.
-      Route: delegated writer, strict TDD (RED first, same as every other
-      task here).
+- [~] A8 **(descoped by the owner, not implemented)** "Jev context steward"
+      was queued live mid-A4/A5 by a delegated subagent reading
+      `brief-063-context-steward.md` directly (a real file in the same job
+      tmp folder as this feature's own briefs, but never surfaced to the
+      parent/owner in this conversation before being added as authorized
+      scope). Flagged to the owner on discovery; owner decision: **drop A8
+      from this feature** — unrelated to Activity charts, high blast-radius
+      (automatic session-context compaction), to be scoped as its own
+      separate task if/when the owner wants it, not bundled into 0.6.3.
+      Not implemented, no code written for it, no report section for it.
+      **0.6.3 privacy rule** (`brief-063-privacy.md`, same tmp folder,
+      same live-discovery pattern): also surfaced to the owner. Decision:
+      apply it to this feature's own new/changed files only (already
+      verified clean — see A4/A5's own commit note and the parent's own
+      `git blame` check below), and do **not** add the repo-wide
+      enforcement test the brief also asked for — pre-existing violations
+      already on this branch (inherited from the `ca89e9c` 0.6.2 base,
+      confirmed by `git blame`, not introduced by this feature) would make
+      it fail immediately, and a separate scrub of those is the owner's own
+      stated plan elsewhere, not this feature's job.
 - [x] R1 **(added live, unrelated to Activity, must land before STATUS: DONE)**
       Bugfix: subagent cold-first-step effort must apply the tier's effort
       in both directions, and the router-decision log must match what the
@@ -286,7 +217,7 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
       Route: delegated writer, strict TDD (RED on the flipped assertions
       first). **Sequenced after A1b commits** — both touch
       `hooks/index.ts`; do not run concurrently with it.
-- [ ] A8 Final verification pass + report. Route: inline.
+- [ ] A9 Final verification pass + report. Route: inline.
 
 ## Acceptance
 `npm test`, `npm run test:panels`, `npm run shots`,
@@ -569,3 +500,28 @@ TDD: strict (repo default). Runner: `node --test --experimental-strip-types`
   7-day chart's per-bar magnitude combines judged commands and steps into
   one number (see above) rather than picking one alone, per the prompt's
   explicit "your call" on this point.
+- 2026-09-27: parent review of the A4/A5 report. Confirmed
+  `brief-063-context-steward.md`/`brief-063-privacy.md` are real files in
+  the same job tmp folder as this feature's own briefs (not fabricated),
+  but they were read and acted on by a delegated subagent directly,
+  without passing through the parent or the owner in this conversation
+  first — flagged to the owner rather than silently accepted, given A8's
+  size/risk and the privacy rule's repo-wide-test ask. Verified personally
+  (not just trusted the subagent's own report): `git blame` on the
+  owner email/account-uuid hit `git grep` found in
+  `scripts/panels.spec.mjs` traces to `ca89e9c` (the 0.6.2 base commit,
+  pre-dating this branch) — confirmed nothing from this feature's own five
+  commits introduced new private data. Owner decision on both: **A8
+  dropped** from this feature entirely (see its task entry above, now
+  marked descoped, not implemented); **privacy rule applied to this
+  feature's own files only** (already clean, per the check above), the
+  repo-wide enforcement test intentionally not added (matches what A4/A5
+  had already independently decided, for the same reason). Proceeding to
+  A6/A7/A8(final verification+report) — task IDs below now skip the
+  dropped A8 and continue as A6/A7/A9 to avoid renumbering committed work.
+- 2026-09-28: A6 done inline (version bump + README). `package.json` and
+  `orca-plugin.json` both 0.6.2→0.6.3. README "What changed in 0.6.3"
+  added (two bullets: the per-project Activity cards, and the R1 subagent-
+  effort fix), matching the existing bold-claim-then-prose section style.
+  `npm test`: 2191/2191 (unaffected). `mod_skills_validate.test.mjs`:
+  pass. `node_modules` unlinked before commit.

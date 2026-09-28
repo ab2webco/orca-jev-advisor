@@ -309,6 +309,33 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   subagent, and an effort lowered on the session's own model comes back
   to its own.
 
+## What changed in 0.6.3
+
+- **The Activity tab shows what happened per project, not a lifetime
+  tally.** The flat "By project (whole log)" bar list is gone. In its
+  place, one card per project (the top 6 by recent activity, with a
+  "show more" toggle for the rest): a 7-day activity chart, gate outcomes
+  (allowed, advised, asked, blocked) as labelled numbers, tokens and
+  estimated cost by model, and — only when the router made a decision for
+  that project — its switches and estimated saving. Every number comes
+  from a log this plugin actually writes; nothing is invented, and cost
+  is always worded as a list-price estimate, never a bill. The turn-usage
+  and router-decision logs now carry the project name, the same identity
+  the skills mod already resolves, so an older record without one reads
+  honestly as "(unknown project)" rather than being dropped.
+- **A subagent the router upgrades now actually runs at the upgraded
+  effort.** A subagent raised to a higher tier for complex work (say,
+  Opus at high effort) was logged with that effort but its first API step
+  still ran at whatever effort it inherited, because the rule guarding
+  against an unwanted raise only ever lowered effort, never raised it.
+  Fixed: on a subagent's cold first step, the tier's effort now applies
+  in both directions; a guard still only ever protects a higher inherited
+  effort from being lowered, never blocks a raise. A person's own `max`
+  or numeric budget is still never touched, and an explicit parent model
+  still means no change. The decision log now records the effort the
+  step actually sends, not the raw target computed at spawn, so the two
+  can no longer disagree.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.
