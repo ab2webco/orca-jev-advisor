@@ -2724,3 +2724,169 @@ test('a print-only awk that only mentions a discard still passes silently', () =
   const discard = ['git', 'reset', '--hard'].join(' ')
   assert.equal(decisionFor(makeHome(), `awk '/${discard}/' notes.md`), 'none')
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.7 T3: a command that stays inside the team is never put to a
+// requires_human policy. With the team owners set (team-owners.json, the
+// panel's "Repositories your team owns") and every segment of the command
+// `internal` (src/core/client_reach.ts), the requires_human policies are set
+// aside for that command -- prohibits/permits still go, local deny rules run
+// first as always, and the risk judgment is unchanged. With the owners empty
+// nothing changes at all.
+//
+// Observed the same way the JEVADV-48 tests above observe a policy set: the
+// cache key folds in the policies judged, so a verdict pre-populated under
+// the key WITHOUT the requires_human policy is only served when the gate
+// really set it aside, and one under the key WITH it only when it did not.
+// Both are always written, so a wrong turn is served the wrong verdict
+// instead of reaching the network.
+// ---------------------------------------------------------------------------
+
+const CLIENT_ASKS = { id: 'client_always_asks', rule: "Anything that touches a client's product gets confirmed with a human.", kind: 'requires_human', scope: 'command' }
+const TEAM_REMOTE = 'git@github.com:acme-team/app.git'
+const CLIENT_REMOTE = 'https://github.com/acme-client/app.git'
+const ASKED_REASON = 'asked under the requires_human policy'
+const SET_ASIDE_REASON = 'judged without the requires_human policy'
+
+function writeTeamOwnersMirror (home, owners) {
+  const path = join(home, '.config', 'orca-supervisor', 'team-owners.json')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(owners))
+}
+
+/** A real repository on a work branch with the given remotes, outside `home` (GIT_CEILING_DIRECTORIES stops at home). */
+function teamRepo (remotes = { origin: TEAM_REMOTE }, branch = 'feature/x') {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-client-reach-')))
+  tempDirs.push(base)
+  const repo = join(base, 'app')
+  initRepo(repo)
+  git(['checkout', '-q', '-b', branch], repo)
+  for (const [name, url] of Object.entries(remotes)) git(['remote', 'add', name, url], repo)
+  return repo
+}
+
+/** A home with CLIENT_ASKS mirrored, the given owners (or none), and both candidate verdicts cached for `command` run from `repo`. */
+function homeForClientReach (command, repo, owners) {
+  const home = makeHome()
+  writePoliciesMirror(home, [CLIENT_ASKS])
+  if (owners !== null) writeTeamOwnersMirror(home, owners)
+  const repoContext = `repository app, branch ${branchNameOf(repo)}, this is a working branch, clean`
+  const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [CLIENT_ASKS] })
+  const withoutPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [] })
+  assert.notEqual(withPolicy, withoutPolicy, 'the two keys must differ, or this proves nothing')
+  const cachePath = verdictCachePath(home)
+  mkdirSync(dirname(cachePath), { recursive: true })
+  writeFileSync(cachePath, JSON.stringify({
+    [withPolicy]: { decision: 'ask', reason: ASKED_REASON, policyId: CLIENT_ASKS.id, policyRule: CLIENT_ASKS.rule, at: Date.now() - 1000 },
+    [withoutPolicy]: { decision: 'allow', reason: SET_ASIDE_REASON, at: Date.now() - 1000 },
+  }))
+  return home
+}
+
+function runClientReach (command, repo, owners) {
+  const home = homeForClientReach(command, repo, owners)
+  const stdout = run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' })
+  return { home, stdout, payload: stdout === '' ? null : JSON.parse(stdout), records: gateLogRecords(home) }
+}
+
+test('0.6.7 T3: with a team owner set, pushing a work branch to the team repository is allowed locally, with no requires_human ask', () => {
+  const repo = teamRepo()
+  const home = makeHome()
+  writePoliciesMirror(home, [CLIENT_ASKS])
+  writeTeamOwnersMirror(home, ['acme-team'])
+  const payload = JSON.parse(run(home, 'git push -u origin feature/x', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, OWN_BRANCH_PUSH_REASON_TEXT)
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].stopReason, 'local-allow')
+  assert.equal(records[0].teamInternal, true, 'the set-aside must be measurable')
+})
+
+test('0.6.7 T3: with no team owners, the same push still falls through to the requires_human path, exactly as before', () => {
+  const repo = teamRepo()
+  const home = makeHome()
+  writePoliciesMirror(home, [CLIENT_ASKS])
+  const payload = JSON.parse(run(home, 'git push -u origin feature/x', { cwd: repo }))
+  assert.match(payload.systemMessage, /jev/i, 'the ordinary no-key notice, not the local allow')
+  assert.equal(gateLogRecords(home).length, 0)
+})
+
+test('0.6.7 T3: with a team owner set, pushing and opening a pull request in the team repository is judged without the requires_human policy', () => {
+  const repo = teamRepo()
+  const command = 'git push -u origin feature/x && gh pr create --title "feat: x" --body "Adds x."'
+  const { payload, records } = runClientReach(command, repo, ['acme-team'])
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, SET_ASIDE_REASON)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].source, 'cache')
+  assert.equal(records[0].teamInternal, true)
+})
+
+test('0.6.7 T3: with no team owners, the pull request is still put to the requires_human policy', () => {
+  const repo = teamRepo()
+  const command = 'git push -u origin feature/x && gh pr create --title "feat: x" --body "Adds x."'
+  const { payload, records } = runClientReach(command, repo, null)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(Object.hasOwn(records[0], 'teamInternal'), false)
+})
+
+test('0.6.7 T3: an empty team owners file changes nothing either', () => {
+  const repo = teamRepo()
+  const command = 'gh pr create --title "feat: x" --body "Adds x."'
+  assert.equal(runClientReach(command, repo, []).payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+/** Same command, same repository: the owners set vs. unset must produce the very same output and the very same record. */
+function assertUnchangedByTeamOwners (command, repo, expectedDecision) {
+  const withOwners = runClientReach(command, repo, ['acme-team'])
+  const withoutOwners = runClientReach(command, repo, null)
+  assert.equal(withOwners.payload?.hookSpecificOutput.permissionDecision, expectedDecision, command)
+  assert.equal(withOwners.stdout, withoutOwners.stdout, `${command}: the team owners must not change the verdict`)
+  const strip = (records) => records.map(({ id: _id, at: _at, ...rest }) => rest)
+  assert.deepEqual(strip(withOwners.records), strip(withoutOwners.records), `${command}: nor what is recorded`)
+}
+
+test('0.6.7 T3: merging a pull request still reaches the requires_human policy', () => {
+  assertUnchangedByTeamOwners(['gh pr ', 'mer', 'ge 12 --squash'].join(''), teamRepo(), 'ask')
+})
+
+test('0.6.7 T3: changing a repository setting outside the team still reaches the requires_human policy', () => {
+  assertUnchangedByTeamOwners('gh api -X PUT repos/acme-client/app/actions/permissions -f enabled=true', teamRepo(), 'ask')
+})
+
+test('0.6.7 T3: a push to a remote whose owner is not a team owner still reaches the requires_human policy', () => {
+  const repo = teamRepo({ origin: TEAM_REMOTE, client: CLIENT_REMOTE })
+  assertUnchangedByTeamOwners('git push -u client feature/x', repo, 'ask')
+})
+
+test('0.6.7 T3: a pull request in a fork, where gh would target the client upstream, still reaches the requires_human policy', () => {
+  const repo = teamRepo({ origin: TEAM_REMOTE, upstream: CLIENT_REMOTE })
+  assertUnchangedByTeamOwners('gh pr create --title "feat: x" --body "Adds x."', repo, 'ask')
+})
+
+test('0.6.7 T3: a push to main and a force push are still refused by the local rules first, exactly as before', () => {
+  const repo = teamRepo()
+  assertUnchangedByTeamOwners('git push origin main', repo, 'deny')
+  assertUnchangedByTeamOwners(['git push --', 'force origin feature/x'].join(''), repo, 'deny')
+})
+
+test('0.6.7 T3: a prohibits policy is still put to Jev for a team-internal command', () => {
+  const repo = teamRepo()
+  const command = 'gh pr create --title "feat: x" --body "Adds x."'
+  const prohibits = { id: 'no_friday_prs', rule: 'No pull requests on Fridays.', kind: 'prohibits', scope: 'command' }
+  const home = makeHome()
+  writePoliciesMirror(home, [CLIENT_ASKS, prohibits])
+  writeTeamOwnersMirror(home, ['acme-team'])
+  const repoContext = `repository app, branch ${branchNameOf(repo)}, this is a working branch, clean`
+  const key = computeCacheKey(command, repo, home, { repoContext, policies: [prohibits] })
+  // Served if the gate wrongly kept the requires_human policy -- never the network.
+  const bothKey = computeCacheKey(command, repo, home, { repoContext, policies: [CLIENT_ASKS, prohibits] })
+  mkdirSync(dirname(verdictCachePath(home)), { recursive: true })
+  writeFileSync(verdictCachePath(home), JSON.stringify({
+    [key]: { decision: 'deny', reason: 'judged against the prohibits policy only', policyId: prohibits.id, at: Date.now() - 1000 },
+    [bothKey]: { decision: 'ask', reason: ASKED_REASON, policyId: CLIENT_ASKS.id, at: Date.now() - 1000 },
+  }))
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'only the requires_human policy is set aside, the prohibits one is still judged')
+})

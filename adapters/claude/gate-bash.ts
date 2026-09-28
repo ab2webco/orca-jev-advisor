@@ -65,7 +65,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
@@ -80,11 +80,14 @@ import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/c
 import { commandShape } from '../../src/core/command_shape.ts'
 import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
-import { matchDestinationForCwd, resolveBranchForCwd, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { buildCrossRepoSentence, pickStricterDestination } from '../../src/core/cross_repo_context.ts'
 import type { RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
-import { PROTECTED_BRANCH_NAMES } from '../../src/core/push_remote.ts'
+import { PROTECTED_BRANCH_NAMES, parseGitConfigRemotes } from '../../src/core/push_remote.ts'
+import { classifyClientReach } from '../../src/core/client_reach.ts'
+import type { ReachRemote } from '../../src/core/client_reach.ts'
+import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
 import { callJev, JevRequestError } from '../../src/core/jev.ts'
@@ -168,6 +171,10 @@ const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // the validation that stands between this file and the gate's decision.
 const CATALOG_MIRROR_PATH = join(CONFIG_DIR, 'catalog.json')
 const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
+// 0.6.7 T1/T3: the panel's "Repositories your team owns", mirrored by the
+// same sidecar on the same save. Fails open to an empty list, and an empty
+// list changes no decision -- see readTeamOwnersMirror below.
+const TEAM_OWNERS_MIRROR_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
 // Written by adapters/orca/write-secret-mirror.mjs's deny-tier-config-save,
 // refreshed on plugin activation and on every config-panel save, same
 // channel as the catalog/policies mirrors above. Unlike those two -- and
@@ -958,9 +965,9 @@ function emitAdvice(segment: string, effect: string, modelText: string): void {
  * 'jev' for the risk-stage/deploy-floor/cache-hit paths, 'local-rule' for a
  * local rule's own toggled-off/interpreter-code advice.
  */
-function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null): boolean {
+function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null, teamInternal = false): boolean {
   if (!checkAdviceRetryPass(sessionId, command)) return false
-  appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null)
+  appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal)
   emit('allow', 'Jev: identical retry within the advice window; proceeding.', t('advisedRetryLine', { segment: jevSegmentFor(command) }))
   return true
 }
@@ -994,12 +1001,15 @@ function resolveAdviceOutcome(input: {
   readonly source: GateSource
   readonly stopReason: GateStopReason
   readonly latencyMs?: number | null
+  /** 0.6.7 T3: the requires_human policies were set aside for this command. */
+  readonly teamInternal?: boolean
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
-  if (tryAdviceRetryPass(command, cwd, sessionId, source, input.latencyMs ?? null)) return
+  const teamInternal = input.teamInternal ?? false
+  if (tryAdviceRetryPass(command, cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
-  appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null)
+  appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
   recordAdviceIssued(sessionId, command)
   emitAdvice(segment, advice.effectSummary, advice.modelText)
 }
@@ -1106,6 +1116,35 @@ function readCatalogMirror(): { readonly destinations: readonly MirroredDestinat
 function readPoliciesMirror(): readonly Policy[] {
   try {
     return parseMirroredPolicies(JSON.parse(readFileSync(POLICIES_MIRROR_PATH, 'utf8'))) ?? []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 0.6.7 T3: the team owners, best-effort like the two mirrors above. Failing
+ * open is safe here in the other direction too: a missing, unreadable or
+ * malformed file reads as no owners, and with no owners nothing is ever
+ * called team-internal, so every decision stays exactly what it was.
+ */
+function readTeamOwnersMirror(): readonly string[] {
+  try {
+    return parseTeamOwners(JSON.parse(readFileSync(TEAM_OWNERS_MIRROR_PATH, 'utf8')))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Every remote of the repository `cwd` sits in, read off `.git/config` (the
+ * commondir's, for a linked worktree) with no `git` subprocess -- the same
+ * resolution resolvePushRemoteIsLocal uses. An unreadable config reads as
+ * no remotes, which client_reach.ts treats as "not the team's".
+ */
+function readReachRemotes(cwd: string): readonly ReachRemote[] {
+  try {
+    const gitDir = resolveGitDirForConfig(cwd)
+    return gitDir === null ? [] : parseGitConfigRemotes(readFileSync(join(gitDir, 'config'), 'utf8'))
   } catch {
     return []
   }
@@ -1251,7 +1290,7 @@ function readSeedScopeById(): ReadonlyMap<string, PolicyScope> {
 const SEED_SCOPE_BY_ID = readSeedScopeById()
 
 /** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
-function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null): void {
+function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false): void {
   try {
     mkdirSync(dirname(GATE_LOG_PATH), { recursive: true })
     const record = buildGateDecisionRecord({
@@ -1264,6 +1303,9 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       latencyMs,
       stopReason,
       ...(policyId !== null ? { policyId } : {}),
+      // 0.6.7 T3: the requires_human policies were set aside for this
+      // command -- see main()'s own note where that is decided.
+      teamInternal,
       // BuildGateDecisionRecordInput declares this required -- true for
       // every caller that already knows its own build's version. This is
       // the one caller that resolves it from disk, so it stays honest about
@@ -1454,13 +1496,15 @@ type JevOutcome =
  * decideGateAction to let the policy stage's coverage question keep
  * deciding while the risk axes never do. `qualifies: false` (the ordinary
  * case) changes nothing here.
+ *
+ * `commandScopedPolicies` is resolved once in main() (the same
+ * destination/scope filtering this function used to repeat on its own) and
+ * handed in, because main() may set the requires_human ones aside for a
+ * team-internal command (0.6.7 T3) -- the cache key and this question must
+ * judge the very same policy set.
  */
-async function askJev(apiKey: string, command: string, context: string, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null): Promise<JevOutcome> {
+async function askJev(apiKey: string, command: string, context: string, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[]): Promise<JevOutcome> {
   try {
-    const policies = readPoliciesMirror()
-    const filteredPolicies = filterPoliciesForDestination(policies, matched?.id ?? null)
-    const commandScopedPolicies = filterPoliciesForCommandScope(filteredPolicies, SEED_SCOPE_BY_ID)
-
     const questions = {
       ...buildActionGateQuestions(),
       ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies) : {}),
@@ -1742,7 +1786,27 @@ async function main(): Promise<void> {
       : null
   const matchedDestination = catalogMatch?.destination ?? null
   const policiesMirror = readPoliciesMirror()
-  const commandScopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+  const scopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+
+  // 0.6.7 T3: a requires_human policy protects work that reaches a client,
+  // and Jev, asked from the sentence alone, also asked about work that never
+  // leaves the team (a work-branch push, a pull request in the team's own
+  // repository, a review reply). With the team owners set, the facts decide
+  // instead: when EVERY segment of the command is `internal`
+  // (src/core/client_reach.ts, read against this repository's remotes and
+  // branch), the requires_human policies are set aside for this command.
+  // Everything else is untouched -- the local deny rules above already ran,
+  // `prohibits` and `permits` policies are still judged, the risk stage
+  // still judges. The facts are only read when there is something to set
+  // aside at all, so with no owners (the default) or no requires_human
+  // policy this costs nothing and every decision is byte-for-byte as before.
+  const teamOwners = mentionOnly ? [] : readTeamOwnersMirror()
+  const isRequiresHuman = (policy: Policy): boolean => migratePolicyKind(policy.kind) === 'requires_human'
+  const teamInternal =
+    teamOwners.length > 0 &&
+    scopedPolicies.some(isRequiresHuman) &&
+    classifyClientReach(inspected, { teamOwners, remotes: readReachRemotes(cwd), currentBranch: resolveBranchForCwd(cwd) }).staysInsideTeam
+  const commandScopedPolicies = teamInternal ? scopedPolicies.filter((policy) => !isRequiresHuman(policy)) : scopedPolicies
 
   // Own-branch-push / guarded-git-delete local allow (Option D, real
   // evidence: the owner's gate log, 2026-09-26): a plain, non-force push of
@@ -1765,7 +1829,7 @@ async function main(): Promise<void> {
   //     decideGateAction and its own `localAllowQualifies` option).
   const localGitAllow: LocalGitAllowResult = mentionOnly ? { qualifies: false } : qualifiesForLocalGitAllow({ command, cwd })
   if (localGitAllow.qualifies && commandScopedPolicies.length === 0) {
-    appendGateRecord(cwd, command, 'local-rule', 'allow', null, 'local-allow', null)
+    appendGateRecord(cwd, command, 'local-rule', 'allow', null, 'local-allow', null, teamInternal)
     emit('allow', t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush'))
     return
   }
@@ -1781,7 +1845,7 @@ async function main(): Promise<void> {
   // costs neither a wasted network round trip nor even the no-key notice
   // machinery below -- true for an uncacheable command shape exactly as much
   // as a cacheable one.
-  if (tryAdviceRetryPass(command, cwd, sessionId, 'jev')) return
+  if (tryAdviceRetryPass(command, cwd, sessionId, 'jev', null, teamInternal)) return
 
   const apiKey = await resolveApiKey()
   const previouslyWarnedNoKey = readNoKeyWarned()
@@ -1847,10 +1911,10 @@ async function main(): Promise<void> {
       // empty status line.
       const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
         hit.deployPublishKind !== undefined ? { deployPublishKind: hit.deployPublishKind } : { riskReasonKeys: cachedRiskReasonKeys(hit) }
-      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk' })
+      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
       return
     }
-    appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null)
+    appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null, teamInternal)
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
       // recorded -- without scores, which the cache does not keep. The cache
@@ -1887,7 +1951,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, context, localGitAllow, matchedDestination)
+  const outcome = await askJev(apiKey as string, command, context, localGitAllow, matchedDestination, commandScopedPolicies)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
@@ -1896,7 +1960,7 @@ async function main(): Promise<void> {
     // nobody did. Without this, the log kept filling with 'cache' and
     // 'local-rule' rows and looked healthy while this half of the gate was
     // silently judging nothing. Best-effort, same as every other record.
-    appendGateRecord(cwd, command, 'none', 'allow', null, 'unreachable', null)
+    appendGateRecord(cwd, command, 'none', 'allow', null, 'unreachable', null, teamInternal)
     const previousUnreachableFailures = readUnreachableFailures()
     const unreachableNotice = decideUnreachableNotice(false, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD)
     if (unreachableNotice.nextConsecutiveFailures !== previousUnreachableFailures) writeUnreachableFailures(unreachableNotice.nextConsecutiveFailures)
@@ -1967,7 +2031,7 @@ async function main(): Promise<void> {
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
       effectSource: { riskReasonKeys: resolved.riskAdviceReasonKeys },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
     })
     return
   }
@@ -1991,7 +2055,7 @@ async function main(): Promise<void> {
       reasonsEnglish: [resolved.deployPublishAdvice],
       effectSource: { deployPublishKind: resolved.deployPublishKind },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
     })
     return
   }
@@ -2005,7 +2069,7 @@ async function main(): Promise<void> {
     }
     writeCache(cache)
   }
-  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId)
+  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId, teamInternal)
   // Only a stop becomes a question worth an answer. A pass was never asked
   // about, so recording it would bury the handful of real decisions under
   // hundreds of non-events.

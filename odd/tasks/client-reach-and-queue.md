@@ -66,7 +66,12 @@ path back from the panel; next release if the queue proves itself).
   or branch switch earlier in the same command); GREEN: 34/34 in
   client_reach.test.ts, `npm test` 2345/2345. `gh pr close`/`review`
   and read-only graphql stay `unknown` (conservative).
-- [ ] T3 gate skips requires_human for internal-only commands
+- [x] T3 gate skips requires_human for internal-only commands -- recorded
+  as `teamInternal: true` on the gate record (the deciding stage keeps its
+  own stopReason). RED seen (work-branch push, push + `gh pr create`,
+  prohibits-still-judged, record field, remote listing all failing first;
+  the merge/protected/force/outside-owner/fork regressions already passing
+  and kept identical with owners on and off); GREEN: `npm test` 2360/2360.
 - [ ] T4 queue mode
 - [ ] T5 board "Waiting for you"
 - [ ] T6 subagents in the status line and the board
