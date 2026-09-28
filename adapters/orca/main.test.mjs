@@ -38,11 +38,14 @@ const {
   attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
+  attendModelRouterStatusRefresh,
+  shareRecentAccountList,
   attendModSkillsConfigRequest,
   attendPolicySeedDismissRequest,
   attendPolicySeedImportRequest,
   attendPolicySeedNoticeRefresh,
   attendSecretRequest,
+  boardProjectName,
   CATALOG_PROPOSAL_ACCEPT_RESULT_KEY,
   CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
@@ -62,6 +65,7 @@ const {
   LOCALE_STATUS_KEY,
   migrateLegacyPolicyKinds,
   mirrorAccountQuota,
+  onAgentStatusChanged,
   MODEL_ROUTER_CONFIG_RESULT_KEY,
   MODEL_ROUTER_STATUS_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
@@ -80,6 +84,7 @@ const {
   publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
+  repoNameSources,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
   spawnSidecar,
@@ -479,6 +484,27 @@ test('attendModelRouterConfigRequest: a fresh request runs router-mode-set and p
   assert.equal(typeof status.checkedAt, 'string')
 })
 
+test('attendModelRouterConfigRequest: 0.6.2 E3 -- an effort request runs router-effort-set with the per-tier JSON, never router-mode-set', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: { id: 'mrc-e', at: new Date().toISOString(), target: 'home', effort: { simple: 'low', standard: 'medium', complex: 'xhigh', frontier: 'xhigh' } }
+  })
+  const calls = []
+  const runScript = async (mode, extraArgs) => {
+    calls.push([mode, extraArgs])
+    if (mode === 'router-effort-set') return { ok: true, target: 'home' }
+    if (mode === 'router-mode-status') return { ok: true, targets: [] }
+    throw new Error(`unexpected mode: ${mode}`)
+  }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-e')
+  assert.equal(result.ok, true)
+  assert.equal(calls[0][0], 'router-effort-set')
+  assert.equal(calls[0][1][0], 'home')
+  assert.deepEqual(JSON.parse(calls[0][1][1]), { simple: 'low', standard: 'medium', complex: 'xhigh', frontier: 'xhigh' })
+})
+
 test('attendModelRouterConfigRequest: a script failure is reported, not silently swallowed as success', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
@@ -512,10 +538,59 @@ test('publishModelRouterStatus: publishes the targets the script reports', async
     assert.equal(mode, 'router-mode-status')
     return { ok: true, targets: [{ target: 'home', mode: 'measure' }, { target: 'abc12345', mode: 'off' }] }
   }
-  await publishModelRouterStatus(orca, storageHost, { runScript })
+  await publishModelRouterStatus(orca, storageHost, { runScript, fetchAccountQuotas: async () => ({ accounts: [], failure: null }) })
   const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
   assert.deepEqual(status.targets, [{ target: 'home', mode: 'measure' }, { target: 'abc12345', mode: 'off' }])
   assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('0.6.2 E7: publishModelRouterStatus names each account target by its email, never home, never anything else from the account list', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const runScript = async () => ({ ok: true, targets: [{ target: 'home', mode: 'active' }, { target: 'acct0001-0000', mode: 'active' }, { target: 'acct0003-0000', mode: 'active' }] })
+  const fetchAccountQuotas = async () => ({
+    accounts: [
+      { id: 'acct0001-0000', email: 'owner@example.com', auth: { token: 'secret-token' }, quota: {} },
+      { id: 'home', email: 'should-not-apply@example.com' }
+    ],
+    failure: null
+  })
+  await publishModelRouterStatus(orca, storageHost, { runScript, fetchAccountQuotas })
+  const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
+  assert.deepEqual(status.targets, [
+    { target: 'home', mode: 'active' },
+    { target: 'acct0001-0000', mode: 'active', email: 'owner@example.com' },
+    { target: 'acct0003-0000', mode: 'active' }
+  ])
+  assert.equal(JSON.stringify(status).includes('secret-token'), false)
+})
+
+test('0.6.2 E7: an account list that cannot be read leaves every target unnamed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({})
+  const runScript = async () => ({ ok: true, targets: [{ target: 'acct0001-0000', mode: 'active' }] })
+  await publishModelRouterStatus(orca, storageHost, { runScript, fetchAccountQuotas: async () => ({ accounts: [], failure: 'orca not found' }) })
+  const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
+  assert.deepEqual(status.targets, [{ target: 'acct0001-0000', mode: 'active' }])
+})
+
+test('0.6.2 E7: a status refresh request from the panel re-reads and republishes the router status, then clears the request', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ modelRouterStatusRefreshRequest: { id: 'r-1', at: new Date().toISOString() } })
+  let reads = 0
+  const runScript = async (mode) => {
+    assert.equal(mode, 'router-mode-status')
+    reads += 1
+    return { ok: true, targets: [{ target: 'home', mode: 'active' }] }
+  }
+  await attendModelRouterStatusRefresh(orca, storageHost, { runScript })
+  assert.equal(reads, 1)
+  assert.equal(await storageHost.get('modelRouterStatusRefreshRequest'), null)
+  const status = await storageHost.get(MODEL_ROUTER_STATUS_KEY)
+  assert.deepEqual(status.targets, [{ target: 'home', mode: 'active' }])
+  assert.equal(status.refreshId, 'r-1')
+  await attendModelRouterStatusRefresh(orca, storageHost, { runScript })
+  assert.equal(reads, 1, 'no request, no re-read')
 })
 
 test('publishModelRouterStatus: a script failure degrades to an empty target list, never throws', async () => {
@@ -1674,6 +1749,127 @@ test('publishConsumptionSummary: a storage.set failure is caught and logged, nev
   assert.ok(orca._logs.some((line) => line.includes('orca-jev-060-test-storage-boom')))
 })
 
+// ---------------------------------------------------------------------------
+// odd/tasks/board-tabs-and-names.md T1 -- the board names an account by the
+// email `orca account list --json` reports, not by the first 8 characters of
+// its id. The email is joined onto the board payload here, in the worker,
+// and never onto quota.json: that file is plain-permission on disk and
+// mirrorAccountQuota's own test above pins "no email in the mirrored file".
+// ---------------------------------------------------------------------------
+
+function quotaSummary (accounts) {
+  return { ok: true, usage: {}, quota: { accounts, checkedAt: '2026-09-27T12:00:00.000Z' }, recommendations: {} }
+}
+
+test('publishConsumptionSummary: each quota account carries the email the account list reports for its id', async () => {
+  const storageHost = fakeStorageHost()
+  await publishConsumptionSummary(fakeOrca(), storageHost, {
+    readConsumptionSummary: async () => quotaSummary([
+      { id: 'acct-one', status: 'ok', sessionUsedPercent: 2, weeklyUsedPercent: 55, resetsAt: null },
+      { id: 'acct-two', status: 'ok', sessionUsedPercent: 1, weeklyUsedPercent: 9, resetsAt: null },
+      { id: 'acct-gone', status: 'ok', sessionUsedPercent: 0, weeklyUsedPercent: 0, resetsAt: null }
+    ]),
+    fetchAccountQuotas: fakeAccountQuotaFetch([
+      { provider: 'claude', id: 'acct-one', email: 'someone@example.com' },
+      // A custom-endpoint account: Orca puts its endpoint label where an
+      // email would be. It is still the name Orca itself shows, so it is
+      // carried as-is rather than rejected for lacking an "@".
+      { provider: 'claude', id: 'acct-two', email: 'glm.example · GLM' }
+    ])
+  })
+  const [one, two, gone] = storageHost._store[CONSUMPTION_STATUS_KEY].quota.accounts
+  assert.equal(one.email, 'someone@example.com')
+  assert.equal(two.email, 'glm.example · GLM')
+  assert.equal(gone.email, undefined, 'an account the list no longer reports gets no email, never a guessed one')
+  assert.equal(one.weeklyUsedPercent, 55, 'the quota numbers must pass through untouched')
+})
+
+test('publishConsumptionSummary: an account list that cannot be read leaves the accounts exactly as the sidecar reported them', async () => {
+  const storageHost = fakeStorageHost()
+  const accounts = [{ id: 'acct-one', status: 'ok', sessionUsedPercent: 2, weeklyUsedPercent: 55, resetsAt: null }]
+  await publishConsumptionSummary(fakeOrca(), storageHost, {
+    readConsumptionSummary: async () => quotaSummary(accounts),
+    fetchAccountQuotas: fakeAccountQuotaFetch([], 'ENOENT: orca-board-names-test-cli-missing')
+  })
+  assert.deepEqual(storageHost._store[CONSUMPTION_STATUS_KEY].quota.accounts, accounts)
+})
+
+test('publishConsumptionSummary: with no quota accounts to name, the account list is never fetched', async () => {
+  let fetches = 0
+  await publishConsumptionSummary(fakeOrca(), fakeStorageHost(), {
+    readConsumptionSummary: async () => quotaSummary([]),
+    fetchAccountQuotas: async () => { fetches += 1; return { accounts: [], failure: null } }
+  })
+  assert.equal(fetches, 0)
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-tabs-and-names.md T1 -- live rows named the way "By
+// project" names them. That section's gate rows come from gate-bash.ts's
+// projectName(): the `origin` remote's last path segment without `.git`,
+// else the working directory's own name. A repository's Orca displayName
+// differs from that for real repositories (a renamed checkout, a fork whose
+// remote identity is `upstream`), so displayName is only the last resort.
+// The ids below are made up.
+// ---------------------------------------------------------------------------
+
+const RAW_REPOS = [
+  { id: 'r-origin', path: '/Users/dev/Projects/sandbox-web', displayName: 'Sandbox web', gitRemoteIdentity: { canonicalKey: 'github.com/example/sandbox-web', remoteName: 'origin', remoteUrl: 'git@github.com:example/sandbox-web.git' } },
+  { id: 'r-fork', path: '/Users/dev/Projects/tool-fork', displayName: 'tool-fork', gitRemoteIdentity: { canonicalKey: 'github.com/upstream-org/tool', remoteName: 'upstream', remoteUrl: 'https://github.com/upstream-org/tool.git' } },
+  { id: 'r-local', path: '/Users/dev/Projects/Servers', displayName: 'Servers', gitRemoteIdentity: null },
+  { id: 'r-plugin', path: '/Users/dev/plugins/example.inbox', displayName: 'Inbox (plugin)' },
+  { id: 'r-nopath', displayName: 'Only a name' },
+  { displayName: 'no id, ignored' }
+]
+
+test('boardProjectName: the origin remote names the project, exactly as gate-bash.ts\'s projectName does', () => {
+  assert.equal(boardProjectName({ project: 'github:example/web-old-name', repoId: 'r-origin' }, repoNameSources(RAW_REPOS)), 'sandbox-web')
+})
+
+test('boardProjectName: a GitHub projectId is shortened to its last segment when no origin remote is known', () => {
+  assert.equal(boardProjectName({ project: 'github:example/orca-jev-advisor', repoId: null }, repoNameSources(RAW_REPOS)), 'orca-jev-advisor')
+  // A fork: Orca's remote identity is `upstream`, which gate-bash never reads.
+  assert.equal(boardProjectName({ project: 'github:example/tool-fork', repoId: 'r-fork' }, repoNameSources(RAW_REPOS)), 'tool-fork')
+})
+
+test('boardProjectName: a repo: projectId (no remote) uses the checkout\'s folder name, then Orca\'s displayName', () => {
+  assert.equal(boardProjectName({ project: 'repo:r-local', repoId: null }, repoNameSources(RAW_REPOS)), 'Servers')
+  assert.equal(boardProjectName({ project: 'repo:r-plugin', repoId: 'r-plugin' }, repoNameSources(RAW_REPOS)), 'example.inbox')
+  assert.equal(boardProjectName({ project: 'repo:r-nopath', repoId: null }, repoNameSources(RAW_REPOS)), 'Only a name')
+})
+
+test('boardProjectName: nothing resolvable returns null, never an invented name', () => {
+  assert.equal(boardProjectName({ project: 'repo:not-in-the-list', repoId: null }, repoNameSources(RAW_REPOS)), null)
+  assert.equal(boardProjectName({ project: null, repoId: null }, repoNameSources(RAW_REPOS)), null)
+  assert.equal(boardProjectName({ project: '', repoId: null }, repoNameSources(RAW_REPOS)), null)
+  assert.equal(boardProjectName({ project: 'github:', repoId: null }, repoNameSources(RAW_REPOS)), null)
+})
+
+test('onAgentStatusChanged: stores the resolved projectName beside the raw project, and names entries written before names existed', async () => {
+  const storageHost = fakeStorageHost({
+    board: {
+      entries: [
+        { worktreeId: 'wt-old', project: 'github:example/web-old-name', rama: 'main', paneKey: 'pane-old', state: 'done', receivedAt: 1, updatedAt: '2026-09-27T10:00:00.000Z' },
+        { worktreeId: 'global-floating-terminal', project: null, rama: null, paneKey: 'pane-float', state: 'working', receivedAt: 2, updatedAt: '2026-09-27T10:00:00.000Z' }
+      ]
+    }
+  })
+  await onAgentStatusChanged(fakeOrca(), storageHost, { worktreeId: 'wt-new', paneKey: 'pane-new', state: 'working', receivedAt: 3 }, {
+    resolveWorktreeProjects: async () => new Map([
+      ['wt-new', { project: 'repo:r-local', rama: 'main', repoId: 'r-local' }],
+      ['wt-old', { project: 'github:example/web-old-name', rama: 'main', repoId: 'r-origin' }]
+    ]),
+    resolveRepoNames: async () => repoNameSources(RAW_REPOS)
+  })
+  const entries = storageHost._store.board.entries
+  const byPane = Object.fromEntries(entries.map((entry) => [entry.paneKey, entry]))
+  assert.equal(byPane['pane-new'].project, 'repo:r-local', 'the raw project id is kept')
+  assert.equal(byPane['pane-new'].projectName, 'Servers')
+  assert.equal(byPane['pane-old'].projectName, 'sandbox-web', 'an entry written before this release is named on the next write')
+  assert.equal(byPane['pane-old'].updatedAt, '2026-09-27T10:00:00.000Z', 'naming an old entry must not touch its own timestamp')
+  assert.equal(byPane['pane-float'].projectName, null, 'a pane with no project gets no invented name')
+})
+
 // Today's bug: the real sidecar was granted --allow-fs-read on ~/.claude
 // (CLAUDE_HOME_DIR) but never on the SIBLING file ~/.claude.json --
 // verified by hand that Node's --permission sandbox denies a directory
@@ -1700,4 +1896,21 @@ test('consumptionSidecarArgv: grants read on the config dir (quota.json) and rea
   assert.ok(argv.some((arg) => arg === `--allow-fs-read=${expectedConfigDir}`))
   assert.ok(argv.some((arg) => arg === `--allow-fs-read=${expectedCacheDir}`))
   assert.ok(argv.some((arg) => arg === `--allow-fs-write=${expectedCacheDir}`))
+})
+
+test('nit 11: one account list is shared by the quota mirror, the board and the router rows within a tick', async () => {
+  let now = 0
+  let calls = 0
+  let result = { accounts: [{ id: 'a' }], failure: null }
+  const shared = shareRecentAccountList(async () => { calls += 1; return result }, 30000, () => now)
+  await Promise.all([shared(), shared(), shared()])
+  assert.equal(calls, 1)
+  now = 31000
+  await shared()
+  assert.equal(calls, 2, 'a list older than the window is fetched again')
+  result = { accounts: [], failure: 'boom' }
+  now = 70000
+  await shared()
+  await shared()
+  assert.equal(calls, 4, 'a failed list is never reused')
 })

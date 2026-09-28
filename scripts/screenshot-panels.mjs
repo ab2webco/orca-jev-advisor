@@ -25,6 +25,9 @@ import { chromium } from 'playwright'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 
 import { parseSeedPolicies, parseSeedVersion } from '../src/core/policy_seed.ts'
 import { mergePolicySeeds } from '../src/core/policy_seed_import.ts'
@@ -289,13 +292,17 @@ const READY = {
     { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main or develop, not even a one-line fix.' },
   ],
   // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
-  // project and branch, one not (project and branch null, which is what a
-  // missed `orca worktree list` lookup leaves): the second is the row that
-  // used to print a raw UUID pair as its only label. The ids are made up.
+  // project (the raw Orca projectId, plus the projectName the worker
+  // resolves from it -- the same name "By project" shows below) and branch;
+  // one on Orca's floating terminal, which belongs to no worktree; and one
+  // not resolved at all (project and branch null, which is what a missed
+  // `orca worktree list` lookup leaves): the row that used to print a raw
+  // UUID pair as its only label. The ids are made up.
   board: {
     entries: [
-      { worktreeId: 'wt-app', project: 'orca-supervisor', rama: 'feat/board-redesign', paneKey: '1e1fff06-5b2c-4c8e-9d11-7a0e3f2b9c41:a62d09bd-0f3e-4b7a-8c55-2d9e6f1a3b70', state: 'working', receivedAt: 2, updatedAt: 'now' },
-      { worktreeId: null, project: null, rama: null, paneKey: 'dc178159-8e2a-4f61-b3c7-5a9d0e4f2c18:4a14c726-3b9f-4d2e-a6c1-8f7e5d3b2a90', state: 'done', receivedAt: 1, updatedAt: 'now' },
+      { worktreeId: 'wt-app', project: 'github:example/orca-supervisor', projectName: 'orca-supervisor', rama: 'feat/board-redesign', paneKey: '1e1fff06-5b2c-4c8e-9d11-7a0e3f2b9c41:a62d09bd-0f3e-4b7a-8c55-2d9e6f1a3b70', state: 'working', receivedAt: 3, updatedAt: 'now' },
+      { worktreeId: 'global-floating-terminal', project: null, projectName: null, rama: null, paneKey: '7b2e4c10-9d3a-4f5e-8c21-6a0f1e2d3c4b:0c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e6f', state: 'working', receivedAt: 2, updatedAt: 'now' },
+      { worktreeId: null, project: null, projectName: null, rama: null, paneKey: 'dc178159-8e2a-4f61-b3c7-5a9d0e4f2c18:4a14c726-3b9f-4d2e-a6c1-8f7e5d3b2a90', state: 'done', receivedAt: 1, updatedAt: 'now' },
     ],
   },
   // The shape is read-measurements.mjs's own output, not a flat invention:
@@ -645,9 +652,12 @@ const CONSUMPTION_READY = {
         subagentShare: 0.3,
       },
     },
+    // `email` is what main.mjs's withAccountEmails joins on from `orca
+    // account list --json`; the addresses are synthetic.
     quota: {
       accounts: [
-        { id: 'acct-primary', status: 'ok', sessionUsedPercent: 12.4, weeklyUsedPercent: 81.2, resetsAt: Date.parse('2026-10-03T23:00:00.000Z') },
+        { id: 'acct-primary', status: 'ok', sessionUsedPercent: 12.4, weeklyUsedPercent: 81.2, resetsAt: Date.parse('2026-10-03T23:00:00.000Z'), email: 'someone@example.com' },
+        { id: '00000000-0000-4000-8000-000000000003', status: 'ok', sessionUsedPercent: 3, weeklyUsedPercent: 22.5, resetsAt: Date.parse('2026-10-02T06:00:00.000Z'), email: 'a.much.longer.person.name@example.com' },
       ],
       checkedAt: iso,
     },
@@ -671,12 +681,22 @@ const CONSUMPTION_READY = {
  * applied switch, and a real dollar estimate -- so both new UI pieces show
  * their populated state, not the honest-but-uninteresting empty one.
  */
+const ROUTER_EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const ROUTER_TIERS_ANTHROPIC = {
+  simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
+  standard: { modelId: 'claude-sonnet-5', label: 'Sonnet 5', supportsEffort: true },
+  complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
+  frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
+}
 const ROUTER_READY = {
   ...CONSUMPTION_READY,
   modelRouterStatus: {
+    // 0.6.2: the per-tier effort and the model each tier resolves to, as
+    // install-claude-integration.mjs's router-mode-status publishes them.
     targets: [
-      { target: 'home', mode: 'measure' },
-      { target: '00000000-0000-4000-8000-000000000003', mode: 'active' },
+      { target: 'home', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
+      { target: '00000000-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC },
+      { target: '00000000-0000-4000-8000-000000000001', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
     ],
     checkedAt: iso,
   },
@@ -697,7 +717,147 @@ const ROUTER_READY = {
   },
 }
 
+/**
+ * odd/tasks/board-leftovers.md L2 -- every other scenario's skills mod has
+ * recorded nothing, so the Skills tab had only ever been photographed empty,
+ * and the skills rows of "By project" never at all. Here the mod has run in
+ * four projects, one per way the mod records where it ran: Orca's
+ * remote-derived projectId (`github:owner/name`, twice, one of them the
+ * project the gate rows above also count), Orca's `repo:<id>` for a checkout
+ * with no remote, and the `cwd` fallback when Orca could not answer.
+ *
+ * The rows are shaped like the real mod-skills-measurements.jsonl
+ * (src/core/skill_measurement.ts's DecisionRecord/ObservationRecord, the
+ * same fields the mod writes), and they go through the real read path: the
+ * harness writes them to a throwaway cache dir and runs the real
+ * read-measurements.mjs over it, so `modSkills` below is the aggregator's
+ * own output, byProject naming included. Every value is synthetic: made-up
+ * repositories, paths and prompts.
+ */
+const SKILLS_LOG_PROJECTS = [
+  { orcaContext: { worktree: '/Users/dev/Projects/orca-supervisor', proyecto: 'github:example/orca-supervisor', rama: 'main' }, decisions: 6 },
+  { orcaContext: { worktree: '/Users/dev/worktrees/board-redesign', proyecto: 'github:example/orca-supervisor', rama: 'feat/board-redesign' }, decisions: 4 },
+  { orcaContext: { worktree: '/Users/dev/Projects/project-c', proyecto: 'github:example/project-c', rama: 'main' }, decisions: 5 },
+  { orcaContext: { worktree: '/Users/dev/Projects/scratch-notes', proyecto: 'repo:5f0c9a3e-1b2d-4c8e-9a7f-3e6d2b1c0a94', rama: 'main' }, decisions: 3 },
+  { orcaContext: { worktree: '/Users/dev/tmp/workdir', proyecto: 'workdir', rama: null }, decisions: 2 },
+]
+const SKILLS_LOG_SKILLS = ['graft', 'dataviz', 'orca-cli', 'chained-pr']
+const SKILLS_READINESS_AT_WRITE = { ready: false, comparableShortfall: 1000, matchRateMet: null, reason: 'not-enough-samples' }
+
+/** The log as the mod writes it: one decision per prompt, in measurement
+ *  mode unless it is the project's last one (active mode, which withholds the
+ *  listing when it names a skill), plus an observation of the skill the model
+ *  really loaded for most named measurement-mode decisions. */
+function skillsLogRows () {
+  const rows = []
+  let n = 0
+  for (const project of SKILLS_LOG_PROJECTS) {
+    for (let i = 0; i < project.decisions; i += 1) {
+      n += 1
+      const id = `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+      const at = new Date(Date.parse('2026-09-22T09:00:00.000Z') + n * 47 * 60 * 1000).toISOString()
+      const active = i === project.decisions - 1
+      const skill = n % 3 === 0 ? null : SKILLS_LOG_SKILLS[n % SKILLS_LOG_SKILLS.length]
+      const candidateCount = 60 + (n % 20)
+      rows.push({
+        type: 'decision', id, at, mode: active ? 'active' : 'measurement',
+        prompt: `Synthetic prompt ${n} for the screenshot harness`,
+        orcaContext: project.orcaContext,
+        candidateCount,
+        listingChars: candidateCount * 460 + n * 13,
+        listingWithheld: active && skill !== null,
+        wide: {
+          ranked: [
+            { name: skill ?? 'ship', probability: 0.41 },
+            { name: 'get-linked-context', probability: 0.12 },
+            { name: 'orchestration', probability: 0.07 },
+          ],
+          gate: 0.41,
+          needsSkill: true,
+        },
+        fit: { winner: skill ?? 'ship', fits: { [skill ?? 'ship']: skill === null ? 0.22 : 0.36, 'get-linked-context': 0.11 } },
+        decision: skill === null ? { name: null, reason: 'nothing fits, best fits 0.22 < 0.3' } : { name: skill, reason: 'stage 2, fits 0.36' },
+        latencyMs: { wide: 400 + (n % 7) * 11, fit: 230 + (n % 5) * 9 },
+        readiness: SKILLS_READINESS_AT_WRITE,
+      })
+      if (!active && skill !== null && n % 4 !== 0) {
+        // The model mostly loads the skill Jev named; now and then it loads
+        // another one, so the match rate is not 100%.
+        const loaded = n % 5 === 0 ? 'orca-cli' : skill
+        rows.push({ type: 'observation', id, at: new Date(Date.parse(at) + 90 * 1000).toISOString(), skill: loaded })
+      }
+    }
+  }
+  return rows
+}
+
+/** Runs the real read-measurements.mjs over `rows`, in a cache dir of its own. */
+function realModSkillsSummary (rows) {
+  const cache = mkdtempSync(join(tmpdir(), 'orca-skills-ready-'))
+  try {
+    writeFileSync(join(cache, 'mod-skills-measurements.jsonl'), rows.map((row) => `${JSON.stringify(row)}\n`).join(''))
+    const env = { ...process.env, ORCA_SUPERVISOR_CACHE_DIR: cache }
+    delete env.NODE_TEST_CONTEXT
+    const stdout = execFileSync(process.execPath, ['--experimental-strip-types', join(ROOT, 'adapters/orca/read-measurements.mjs')], { env, encoding: 'utf8' })
+    const summary = JSON.parse(stdout)
+    if (!summary.ok) throw new Error(`read-measurements.mjs failed for skills-ready: ${JSON.stringify(summary)}`)
+    return summary.modSkills
+  } finally {
+    rmSync(cache, { recursive: true, force: true })
+  }
+}
+
+const SKILLS_READY = {
+  ...READY,
+  measurementsSummary: { ...READY.measurementsSummary, modSkills: realModSkillsSummary(skillsLogRows()) },
+}
+
 const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'catalog-proposals': CATALOG_PROPOSALS, 'consumption-ready': CONSUMPTION_READY, 'router-ready': ROUTER_READY }
+// Added after the literal so the existing scenario list stays untouched.
+SCENARIOS['skills-ready'] = SKILLS_READY
+
+/**
+ * odd/tasks/board-leftovers.md L6 -- the owner's live panel with 63 agents:
+ * one project and branch repeated more than ten times, rows marked working
+ * three days after their last signal, and rows from days ago mixed in with
+ * this hour's. Entries are shaped like main.mjs's onAgentStatusChanged
+ * board entries; every name, id and pane is made up. Ages are real ISO
+ * times relative to when the harness loads (not the 'now' sentinel, which
+ * only this file's hostBridge resolves; panels.spec.mjs reads the scenario
+ * through its own), so a long run only ages every row by the same minutes.
+ */
+const LIVE_BUSY_LOADED_AT = Date.now()
+function liveBusyEntry (n, fields, ageMinutes) {
+  const at = new Date(LIVE_BUSY_LOADED_AT - ageMinutes * 60 * 1000).toISOString()
+  return {
+    worktreeId: `wt-busy-${n}`, project: null, projectName: null, rama: null,
+    paneKey: `${String(n).padStart(8, '0')}-5b2c-4c8e-9d11-7a0e3f2b9c41:0c9d8e7f-6a5b-4c3d-9e2f-1a0b9c8d7e6f`,
+    state: 'done', receivedAt: LIVE_BUSY_LOADED_AT - ageMinutes * 60 * 1000, updatedAt: at, ...fields,
+  }
+}
+const LIVE_BUSY_client-e = { project: 'github:example/project-a', projectName: 'project-a', rama: 'main' }
+const LIVE_BUSY_ENTRIES = [
+  // One project and branch, twelve sessions over the last ten hours.
+  ...[2, 14, 35, 60, 95, 130, 180, 240, 300, 380, 470, 590].map((age, i) =>
+    liveBusyEntry(i + 1, { ...LIVE_BUSY_client-e, state: i === 0 ? 'working' : 'done' }, age)),
+  liveBusyEntry(20, { project: 'github:example/orca-supervisor', projectName: 'orca-supervisor', rama: 'feat/board-redesign', state: 'working' }, 8),
+  liveBusyEntry(21, { project: 'github:example/orca-supervisor', projectName: 'orca-supervisor', rama: 'feat/board-redesign' }, 42),
+  // Working and waiting, but silent for hours: no signal.
+  liveBusyEntry(22, { project: 'github:example/helpdesk', projectName: 'helpdesk', rama: 'main', state: 'working' }, 190),
+  liveBusyEntry(23, { project: 'github:example/project-c', projectName: 'project-c', rama: 'fix/sync', state: 'waiting' }, 125),
+  // No project at all: each stays its own row.
+  liveBusyEntry(30, { worktreeId: 'global-floating-terminal', state: 'working' }, 1),
+  liveBusyEntry(31, { worktreeId: 'global-floating-terminal' }, 33),
+  liveBusyEntry(32, { worktreeId: null }, 21),
+  liveBusyEntry(33, { worktreeId: null }, 65),
+  liveBusyEntry(34, { project: 'repo:5c1d0e4f-2c18-4a14-b3c7-5a9d0e4f2c18', rama: 'main' }, 310),
+  // Last seen over 24 h ago, behind "show more": one of them still says
+  // working, three days on.
+  liveBusyEntry(40, { project: 'github:example/service-a', projectName: 'service-a', rama: 'main', state: 'working' }, 3 * 24 * 60),
+  liveBusyEntry(41, { project: 'github:example/website', projectName: 'website', rama: 'main' }, 2 * 24 * 60),
+  liveBusyEntry(42, { project: 'github:example/scratch-notes', projectName: 'scratch-notes', rama: 'main' }, 30 * 60),
+]
+SCENARIOS['live-busy'] = { ...READY, board: { entries: LIVE_BUSY_ENTRIES } }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */
@@ -709,6 +869,9 @@ const SCENARIO_CLICKS = { seeds: { panel: 'config.html', selector: '#import-poli
 // every one of them rather than only whichever tab happens to be active by
 // default ('general').
 const CONFIG_TAB_KEYS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+// odd/tasks/board-tabs-and-names.md T2 -- board.html has the same kind of
+// tablist now (#board-tabbar), so it is photographed tab by tab too.
+const BOARD_TAB_KEYS = ['gate', 'activity', 'consumption', 'skills']
 
 /**
  * Impersonates the host bridge. Installed before the panel's own script runs,
@@ -750,9 +913,9 @@ function hostBridge(storage) {
 async function main() {
   // --quick is what `npm run check` runs: the populated scenario only, each
   // panel once at a desktop width in light and once at a phone width in dark,
-  // and one image per panel (config's first tab). Every config tab is still
-  // opened and checked for overflow and script errors; only the photographs
-  // are cut, because nobody reviews hundreds of them per run. The full matrix
+  // and one image per panel (each panel's first tab). Every tab of both
+  // panels is still opened and checked for overflow and script errors; only
+  // the photographs are cut, because nobody reviews hundreds of them per run. The full matrix
   // stays available as `npm run shots:all` for large UI changes.
   const quick = process.argv.includes('--quick')
   const requested = process.argv.includes('--scenario')
@@ -822,32 +985,25 @@ async function main() {
               await page.waitForTimeout(SETTLE_MS)
             }
 
-            // JEVADV-41: config.html now shows one section-group at a time
-            // behind #config-tabbar; each tab is its own screen and gets its
-            // own screenshot and its own overflow check. board.html has no
-            // tabs, so tabKeys is a single `null` entry and behaves exactly
-            // as before.
-            const tabKeys = panel === 'config.html' ? CONFIG_TAB_KEYS : [null]
+            // JEVADV-41: config.html shows one section-group at a time behind
+            // #config-tabbar, and board.html behind #board-tabbar
+            // (odd/tasks/board-tabs-and-names.md T2); each tab is its own
+            // screen and gets its own screenshot and its own overflow check.
+            const tabKeys = panel === 'config.html' ? CONFIG_TAB_KEYS : BOARD_TAB_KEYS
             for (const tabKey of tabKeys) {
-              if (tabKey) {
-                await page.click(`#tab-${tabKey}`)
-                await page.waitForTimeout(300)
-              }
+              await page.click(`#tab-${tabKey}`)
+              await page.waitForTimeout(300)
 
               const overflow = await page.evaluate(() => ({
                 scrollWidth: document.documentElement.scrollWidth,
                 clientWidth: document.documentElement.clientWidth
               }))
-              const label = tabKey
-                ? `${scenario}/${panel}/${theme}/${width}/${tabKey}`
-                : `${scenario}/${panel}/${theme}/${width}`
+              const label = `${scenario}/${panel}/${theme}/${width}/${tabKey}`
               if (overflow.scrollWidth > overflow.clientWidth) {
                 overflows.push(`${label}: content is ${overflow.scrollWidth}px wide`)
               }
 
-              const name = tabKey
-                ? `${scenario}-${panel.replace('.html', '')}-${theme}-${width}-${tabKey}.png`
-                : `${scenario}-${panel.replace('.html', '')}-${theme}-${width}.png`
+              const name = `${scenario}-${panel.replace('.html', '')}-${theme}-${width}-${tabKey}.png`
               if (!quick || tabKey === tabKeys[0]) {
                 await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
                 shots += 1

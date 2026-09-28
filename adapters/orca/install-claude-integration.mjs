@@ -66,10 +66,17 @@
  *             per target discoverTargets() finds -- JEV-060 slice 2 §7/§9,
  *             the same routerMode the plugin's own userConfig picker
  *             writes, wrapped for the Orca config panel (T9).
+ *             0.6.2 E3: each row also carries `effort` (the effort each
+ *             tier asks for there) and `tiers` (the model each tier
+ *             resolves to on that target: {modelId, label, supportsEffort}).
  * router-mode-set <target> <mode>  Writes that ONE target's routerMode
  *             into its settings.json (creating the file if missing),
  *             every other key kept exactly as found. Rejects an unknown
  *             target or mode.
+ * router-effort-set <target> <json>  0.6.2 E3: writes that ONE target's
+ *             per-tier effort (`{"complex":"xhigh"}`; only what differs
+ *             from the defaults is stored), with the same guarantees.
+ *             Rejects an unknown target, tier, effort or shape.
  *
  * Always prints exactly one JSON line to stdout, nothing else. Never
  * touches anything but ~/.claude/settings.json, ~/.claude/skills/
@@ -103,7 +110,10 @@ import {
   skillsDirFor
 } from '../../src/core/orca_accounts.ts'
 import { buildModSkillsHooksManifest, buildModSkillsPluginManifest, computeModSkillsDigest, walkModSkillsClosure } from '../../src/core/mod_skills_copy.ts'
-import { ROUTER_MODES, ROUTER_USER_CONFIG, planRouterModeWrite, routerModeFromSettings } from '../../src/core/model_router_mode.ts'
+import { ROUTER_MODES, ROUTER_USER_CONFIG, parseTierEffortStrict, planRouterEffortWrite, planRouterModeWrite, routerEffortFromSettings, routerModeFromSettings } from '../../src/core/model_router_mode.ts'
+import { ROUTER_TIERS, parseVaultEnv, resolveAccountTiers } from '../../src/core/model_router_accounts.ts'
+import { parseModelsMirror } from '../../src/core/model_mirror.ts'
+import { parseQuota } from '../../src/core/consumption.ts'
 
 // `~/.claude/...` is Claude Code's own convention, not ours to redefine --
 // it stays home-relative on every platform (Claude Code's own docs give no
@@ -1229,12 +1239,27 @@ function findRouterTarget (targets, targetId) {
  */
 async function routerModeStatus () {
   const discovery = await discoverTargets()
+  const catalog = parseModelsMirror(await readJsonOrNull(join(STATE_DIR, 'models-catalog.json'))).models
+  const quota = parseQuota(await readJsonOrNull(join(STATE_DIR, 'quota.json')))
   const targets = []
   for (const target of discovery.targets) {
     const settings = await readSettings(settingsPathFor(PLATFORM, target))
-    targets.push({ target: routerTargetId(target), mode: routerModeFromSettings(settings) })
+    const id = routerTargetId(target)
+    const resolved = resolveAccountTiers({ env: parseVaultEnv(settings), catalog, quota: quota.accounts.find((row) => row.id === id) ?? null })
+    const tiers = {}
+    for (const tier of ROUTER_TIERS) tiers[tier] = { modelId: resolved[tier].modelId, label: resolved[tier].label, supportsEffort: resolved[tier].supportsEffort }
+    targets.push({ target: id, mode: routerModeFromSettings(settings), effort: routerEffortFromSettings(settings), tiers })
   }
   return { ok: true, targets }
+}
+
+/** A JSON file's parsed value, or null when it is missing or malformed: the tier table then resolves from the defaults, as the router itself would. */
+async function readJsonOrNull (path) {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'))
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -1271,6 +1296,40 @@ async function routerModeSet (targetId, modeArg) {
     if (await writeSettingsIfUnchanged(settingsPath, plan.text, raw)) return { ok: true, target: targetId, mode: modeArg }
   }
   return { ok: false, reason: 'concurrent-change', detail: `settings.json at ${settingsPath} kept changing while the router mode was being written; nothing was written` }
+}
+
+/**
+ * router-effort-set <target> <json>: 0.6.2 E3, the per-tier effort, written
+ * exactly as routerModeSet writes the mode -- plan from the raw text,
+ * replace only if unchanged since, one retry, never a lost edit.
+ */
+async function routerEffortSet (targetId, effortArg) {
+  if (typeof targetId !== 'string' || targetId.length === 0) {
+    return { ok: false, reason: 'missing-target', detail: 'usage: router-effort-set <target> <json>' }
+  }
+  let parsed = null
+  try {
+    parsed = parseTierEffortStrict(JSON.parse(String(effortArg)))
+  } catch {
+    parsed = null
+  }
+  if (parsed === null) {
+    return { ok: false, reason: 'unknown-effort', detail: `unrecognized per-tier effort: ${String(effortArg).slice(0, 120)}` }
+  }
+  const discovery = await discoverTargets()
+  const target = findRouterTarget(discovery.targets, targetId)
+  if (target === undefined) {
+    return { ok: false, reason: 'unknown-target', detail: `unrecognized target: ${String(targetId).slice(0, 60)}` }
+  }
+  const settingsPath = settingsPathFor(PLATFORM, target)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await readRawSettings(settingsPath)
+    const plan = planRouterEffortWrite(raw, parsed)
+    if (plan.kind === 'refuse') return { ok: false, reason: plan.reason, detail: `settings.json at ${settingsPath} is not a JSON object; left as it is` }
+    if (plan.kind === 'unchanged') return { ok: true, target: targetId, effort: parsed, unchanged: true }
+    if (await writeSettingsIfUnchanged(settingsPath, plan.text, raw)) return { ok: true, target: targetId, effort: parsed }
+  }
+  return { ok: false, reason: 'concurrent-change', detail: `settings.json at ${settingsPath} kept changing while the router effort was being written; nothing was written` }
 }
 
 /** settings.json's raw text, or null when there is no file yet. */
@@ -1311,6 +1370,8 @@ async function main () {
       result = await routerModeStatus()
     } else if (mode === 'router-mode-set') {
       result = await routerModeSet(process.argv[3], process.argv[4])
+    } else if (mode === 'router-effort-set') {
+      result = await routerEffortSet(process.argv[3], process.argv[4])
     } else {
       const pluginRoot = process.argv[3]
       if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {

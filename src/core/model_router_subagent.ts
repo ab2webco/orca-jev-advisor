@@ -27,7 +27,7 @@
 import { FABLE_ID, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { activeGuards, shiftForPressure } from "./model_router_decide.ts";
-import type { GuardContext, QuotaBand, RouterEffort, RouterGuard, SessionEffort, TierJudgment } from "./model_router_decide.ts";
+import type { GuardContext, QuotaBand, RouterGuard, SessionEffort, TierEffort, TierJudgment } from "./model_router_decide.ts";
 
 const ALIAS_TIER: Readonly<Record<string, RouterTier>> = { haiku: "simple", sonnet: "standard", opus: "complex", fable: "frontier" };
 
@@ -88,15 +88,17 @@ export function decideSubagent(input: SubagentDecisionInput): SubagentDecision {
   const parentRank = modelRank(input.tiers, input.parentModel);
   const isDowngrade = parentRank === null || proposedRank === null || proposedRank < parentRank;
   if (isDowngrade && guards.length > 0) return { ...stay, ...base, reason: "held-by-guard", guard: guards[0] ?? null };
-  if (target.modelId === baseModelId(input.parentModel)) return { ...stay, ...base, reason: "same", guard: null };
-  return { ...base, current, model: target.modelId, changed: true, reason: "switch", guard: null };
+  // A guard that holds is named even when nothing changes: it decides how the
+  // subagent's effort may move, and the log records it (review finding 2).
+  if (target.modelId === baseModelId(input.parentModel)) return { ...stay, ...base, reason: "same", guard: guards[0] ?? null };
+  return { ...base, current, model: target.modelId, changed: true, reason: "switch", guard: guards[0] ?? null };
 }
 
 // ---------------------------------------------------------------------------
 // JEV-061 slice 2: the subagent's own first-step effort.
 // ---------------------------------------------------------------------------
 
-const EFFORT_RANK: Readonly<Record<RouterEffort, number>> = { low: 0, medium: 1, high: 2, xhigh: 3 };
+const EFFORT_RANK: Readonly<Record<TierEffort, number>> = { low: 0, medium: 1, high: 2, xhigh: 3, max: 4 };
 
 /**
  * What a subagent's step should actually send for `effort`, given the tier
@@ -110,9 +112,11 @@ const EFFORT_RANK: Readonly<Record<RouterEffort, number>> = { low: 0, medium: 1,
  * `isPersonEffort` (model_router_decide.ts) protects elsewhere in the
  * router -- it is intent, not something inherited.
  */
-export function subagentStepEffort(target: RouterEffort | null, current: SessionEffort | undefined): SessionEffort | undefined {
+export function subagentStepEffort(target: TierEffort | null, current: SessionEffort | undefined, guarded = false): SessionEffort | undefined {
   if (current === "max" || typeof current === "number") return current;
   if (current === undefined) return target ?? undefined;
   if (target === null) return undefined;
+  // 0.6.2 F0: under a guard the effort may rise to the tier's, never fall.
+  if (guarded) return EFFORT_RANK[target] > EFFORT_RANK[current] ? target : current;
   return EFFORT_RANK[target] < EFFORT_RANK[current] ? target : current;
 }

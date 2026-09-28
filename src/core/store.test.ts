@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getCatalog, getConfig, getPolicies, setPolicies, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { getBoard, getCatalog, getConfig, getPolicies, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -308,4 +308,37 @@ test("getConfig: a config missing logMaxEntries fails validation and falls back 
   const host = fakeHost({ config: { jevBudgetMs: 9000 } });
   const config = await getConfig(host);
   assert.deepEqual(config, { logMaxEntries: 500, jevBudgetMs: 4_000 });
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-tabs-and-names.md T1 -- a board entry now carries the
+// project's readable name beside its raw id. The board is read as a whole
+// (isArrayOf), so an entry written by the previous release, with no
+// projectName at all, must still load; a wrong-typed one is malformed the
+// same way any other wrong-typed field is.
+// ---------------------------------------------------------------------------
+
+const BOARD_ENTRY: BoardEntry = {
+  worktreeId: "wt-app",
+  project: "github:example/app",
+  projectName: "app",
+  rama: "main",
+  paneKey: "pane-1",
+  state: "working",
+  receivedAt: 1,
+  updatedAt: "2026-09-27T12:00:00.000Z",
+};
+
+test("getBoard: an entry keeps its projectName, and one written before projectName existed still loads", async () => {
+  const { projectName: _dropped, ...legacy } = BOARD_ENTRY;
+  const host = fakeHost({ board: { entries: [BOARD_ENTRY, { ...legacy, paneKey: "pane-2" }] } });
+  const board = await getBoard(host);
+  assert.equal(board.entries.length, 2);
+  assert.equal(board.entries[0]?.projectName, "app");
+  assert.equal(board.entries[1]?.projectName, undefined);
+});
+
+test("getBoard: a non-string projectName is malformed like any other wrong-typed field", async () => {
+  const host = fakeHost({ board: { entries: [{ ...BOARD_ENTRY, projectName: 42 }] } });
+  assert.deepEqual(await getBoard(host), { entries: [] });
 });

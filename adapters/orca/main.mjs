@@ -34,7 +34,7 @@
 import { DENY_TOGGLE_KEYS } from '../../src/core/deny_tier_config.ts'
 import { execFile } from 'node:child_process'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { callJev, JevRequestError, JevTimeoutError } from '../../src/core/jev.ts'
@@ -291,6 +291,30 @@ async function fetchAccountQuotas (orca) {
   }
 }
 
+/** Review nit 11: the quota mirror, the board's email join and the router
+ *  rows each wanted `orca account list --json` on the same tick. One list,
+ *  fetched at most once per `windowMs` and shared (in flight too); a failed
+ *  list is never reused. `now` is injectable for tests. */
+function shareRecentAccountList (fetchList, windowMs, now = Date.now) {
+  let cached = null
+  let cachedAt = 0
+  return (orca) => {
+    if (cached !== null && now() - cachedAt < windowMs) return cached
+    cachedAt = now()
+    cached = fetchList(orca).then((result) => {
+      if (result.failure !== null) cached = null
+      return result
+    }, (error) => {
+      cached = null
+      throw error
+    })
+    return cached
+  }
+}
+
+const ACCOUNT_LIST_SHARE_MS = 30 * 1000
+const sharedAccountList = shareRecentAccountList(fetchAccountQuotas, ACCOUNT_LIST_SHARE_MS)
+
 /** One raw CLI account -> the quota-only shape this plugin mirrors: id,
  *  status, session/weekly usedPercent, the weekly reset time, and
  *  fableWeekly ONLY when the CLI actually reported one -- never a
@@ -346,7 +370,7 @@ function logQuotaMirrorFailureOnce (orca, detail) {
  *  fetchOrcaWorktrees override already uses -- never a real spawn under
  *  `node --test`. */
 async function mirrorAccountQuota (orca, options = {}) {
-  const fetchQuotas = options.fetchAccountQuotas ?? fetchAccountQuotas
+  const fetchQuotas = options.fetchAccountQuotas ?? sharedAccountList
   const saveQuota = options.saveQuota ?? ((payload) => runSecretMirrorScript('quota-save', JSON.stringify(payload)))
   try {
     const { accounts, failure } = await fetchQuotas(orca)
@@ -782,7 +806,8 @@ const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 // the exact same settings.json files as status/install/uninstall (CONFIG_DIR,
 // CLAUDE_HOME_DIR, CLAUDE_ACCOUNTS_DIR) -- no new permission grant needed.
 // `router-mode-status` is read-only, like `status`; every other mode
-// (install, uninstall, router-mode-set) needs the write grants too.
+// (install, uninstall, router-mode-set, router-effort-set) needs the write
+// grants too.
 const READ_ONLY_MODES = ['status', 'router-mode-status']
 
 /** `extraArgs` replaces the single positional `pluginRoot` every OTHER mode
@@ -1282,8 +1307,38 @@ async function publishConsumptionSummary (orca, storageHost, options = {}) {
   if (!summary.ok) {
     orca.log(`consumption summary failed: ${String(summary.reason ?? 'unknown')} -- ${String(summary.detail ?? '').slice(0, 200)}`)
   }
-  await storageHost.set(CONSUMPTION_STATUS_KEY, { ...summary, checkedAt: new Date().toISOString() })
+  const named = await withAccountEmails(summary, options.fetchAccountQuotas ?? sharedAccountList, orca)
+  await storageHost.set(CONSUMPTION_STATUS_KEY, { ...named, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`consumption summary publish failed: ${error.message}`))
+}
+
+/** odd/tasks/board-tabs-and-names.md T1: the board names a quota account by
+ *  the `email` `orca account list --json` reports for its id (for a custom
+ *  endpoint account that field holds Orca's own endpoint label, shown as-is).
+ *  Joined here, onto the storage payload only the board reads -- quota.json
+ *  itself stays email-free (accountQuotaEntry's own contract). A list that
+ *  cannot be read, or an id it no longer reports, leaves that account
+ *  exactly as the sidecar published it: the board falls back to its short id
+ *  label, never to a guessed name. mirrorAccountQuota already logs a failing
+ *  account list, so this does not log it a second time. */
+async function withAccountEmails (summary, fetchQuotas, orca) {
+  const accounts = summary.ok && isRecord(summary.quota) && Array.isArray(summary.quota.accounts) ? summary.quota.accounts : []
+  if (accounts.length === 0) return summary
+  const { accounts: listed, failure } = await fetchQuotas(orca)
+  if (failure !== null) return summary
+  const emails = new Map()
+  for (const account of listed) {
+    if (isRecord(account) && typeof account.id === 'string' && typeof account.email === 'string' && account.email.length > 0) {
+      emails.set(account.id, account.email)
+    }
+  }
+  return {
+    ...summary,
+    quota: {
+      ...summary.quota,
+      accounts: accounts.map((account) => (isRecord(account) && emails.has(account.id) ? { ...account, email: emails.get(account.id) } : account))
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1802,6 +1857,7 @@ async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
 const MODEL_ROUTER_CONFIG_REQUEST_KEY = 'modelRouterConfigRequest'
 const MODEL_ROUTER_CONFIG_RESULT_KEY = 'modelRouterConfigResult'
 const MODEL_ROUTER_STATUS_KEY = 'modelRouterStatus'
+const MODEL_ROUTER_STATUS_REFRESH_KEY = 'modelRouterStatusRefreshRequest'
 
 /** Reads every target's current router mode through the installer
  *  script's read-only `router-mode-status` mode. `options.runScript`
@@ -1820,17 +1876,48 @@ async function readModelRouterTargets (options = {}) {
  *  publishModSkillsStatus: called at activation, and again after every
  *  successful (or failed) router-mode-set. */
 async function publishModelRouterStatus (orca, storageHost, options = {}) {
-  const targets = await readModelRouterTargets(options)
-  await storageHost.set(MODEL_ROUTER_STATUS_KEY, { targets, checkedAt: new Date().toISOString() })
+  const targets = await withRouterTargetEmails(await readModelRouterTargets(options), options.fetchAccountQuotas ?? sharedAccountList, orca)
+  const status = { targets, checkedAt: new Date().toISOString() }
+  if (typeof options.refreshId === 'string') status.refreshId = options.refreshId
+  await storageHost.set(MODEL_ROUTER_STATUS_KEY, status)
     .catch((error) => orca.log(`model router status publish failed: ${error.message}`))
 }
 
+/** 0.6.2 E7: an account target is shown by the `email` `orca account list
+ *  --json` reports for its id -- the same join the board makes for its quota
+ *  rows. Only the email is copied, onto this storage payload only; `home`
+ *  is never named this way, and a list that cannot be read (or an id it no
+ *  longer reports) leaves the target unnamed: the panel shows its short id. */
+async function withRouterTargetEmails (targets, fetchQuotas, orca) {
+  if (!targets.some((target) => isRecord(target) && target.target !== 'home')) return targets
+  const { accounts, failure } = await fetchQuotas(orca)
+  if (failure !== null) return targets
+  const emails = new Map()
+  for (const account of accounts) {
+    if (isRecord(account) && typeof account.id === 'string' && typeof account.email === 'string' && account.email.length > 0) emails.set(account.id, account.email)
+  }
+  return targets.map((target) => (isRecord(target) && target.target !== 'home' && emails.has(target.target) ? { ...target, email: emails.get(target.target) } : target))
+}
+
+/** 0.6.2 E7: the panel asks for a fresh read when it opens and before a
+ *  save, since a terminal (`router-mode-set`) or Claude Code's own config
+ *  menu may have changed a mode since the last publish. The published
+ *  status carries the request's id so the panel knows it is the fresh one. */
+async function attendModelRouterStatusRefresh (orca, storageHost, options = {}) {
+  const request = await storageHost.get(MODEL_ROUTER_STATUS_REFRESH_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string') return
+  await storageHost.delete(MODEL_ROUTER_STATUS_REFRESH_KEY).catch((error) =>
+    orca.log(`model router status refresh cleanup failed: ${error.message}`))
+  await publishModelRouterStatus(orca, storageHost, { ...options, refreshId: request.id })
+}
+
 /** Attends one pending "set this target's router mode" request from the
- *  panel, if any. */
+ *  panel, if any -- or, 0.6.2 E3, its per-tier effort (`effort`, an
+ *  object the installer validates before anything is written). */
 async function attendModelRouterConfigRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(MODEL_ROUTER_CONFIG_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string' ||
-      typeof request.target !== 'string' || typeof request.mode !== 'string') return
+      typeof request.target !== 'string' || (typeof request.mode !== 'string' && !isRecord(request.effort))) return
 
   await storageHost.delete(MODEL_ROUTER_CONFIG_REQUEST_KEY).catch((error) =>
     orca.log(`model router config request cleanup failed: ${error.message}`))
@@ -1844,7 +1931,9 @@ async function attendModelRouterConfigRequest (orca, storageHost, options = {}) 
   }
 
   const runScript = options.runScript ?? runClaudeIntegrationScript
-  const result = await runScript('router-mode-set', [request.target, request.mode])
+  const result = isRecord(request.effort)
+    ? await runScript('router-effort-set', [request.target, JSON.stringify(request.effort)])
+    : await runScript('router-mode-set', [request.target, request.mode])
   if (!result.ok) {
     orca.log(`model router config script (set) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }
@@ -2070,7 +2159,7 @@ async function resolveWorktreeProjects (orca) {
         if (!wt || typeof wt.id !== 'string') continue
         const branch = typeof wt.branch === 'string' ? wt.branch.replace(/^refs\/heads\//, '') : null
         const rama = branch && branch.length > 0 ? branch : (typeof wt.displayName === 'string' ? wt.displayName : null)
-        map.set(wt.id, { project: typeof wt.projectId === 'string' ? wt.projectId : null, rama })
+        map.set(wt.id, { project: typeof wt.projectId === 'string' ? wt.projectId : null, rama, repoId: typeof wt.repoId === 'string' ? wt.repoId : null })
       }
     }
   } catch (error) {
@@ -2081,10 +2170,102 @@ async function resolveWorktreeProjects (orca) {
   return map
 }
 
-async function onAgentStatusChanged (orca, storageHost, payload) {
+// ---------------------------------------------------------------------------
+// Project names (odd/tasks/board-tabs-and-names.md T1) -- "Live status" used
+// to print the raw projectId (`github:owner/name`, `repo:<uuid>`) while "By
+// project" printed a short name, so the two sections disagreed about what a
+// project is called. "By project"'s gate rows are named by gate-bash.ts's
+// projectName(): the `origin` remote's last path segment without `.git`,
+// else the working directory's own name. The board now uses that same rule,
+// resolved here in the worker so the panel only ever shows a name.
+//
+// Orca's own repository displayName is deliberately NOT the first choice:
+// measured on a real machine (43 repositories), it differs from the origin's
+// short name for 8 of them -- a checkout renamed after cloning, and forks,
+// whose `gitRemoteIdentity` is the `upstream` remote rather than `origin`.
+// Using it would have kept the two sections disagreeing.
+// ---------------------------------------------------------------------------
+
+/** Hand-copied from adapters/claude/gate-bash.ts's projectName() (the gate
+ *  is out of this change's scope) -- `grep -nF "replace(/^.*[:/]/"` across
+ *  both files is how to check the copies still agree. `github:owner/name`
+ *  goes through it too: its last segment is the repository name. */
+function remoteShortName (remote) {
+  return remote.trim().replace(/^.*[:/]/, '').replace(/\.git$/, '')
+}
+
+/** `orca repo list --json`'s `result.repos[]` reduced to what naming needs,
+ *  keyed by repository id: the origin remote URL (only when Orca's remote
+ *  identity really is `origin`, the remote gate-bash.ts reads), the
+ *  checkout's folder name, and Orca's displayName as the last resort. */
+function repoNameSources (rawRepos) {
+  const map = new Map()
+  for (const repo of Array.isArray(rawRepos) ? rawRepos : []) {
+    if (!isRecord(repo) || typeof repo.id !== 'string') continue
+    const identity = isRecord(repo.gitRemoteIdentity) ? repo.gitRemoteIdentity : null
+    map.set(repo.id, {
+      originUrl: identity && identity.remoteName === 'origin' && typeof identity.remoteUrl === 'string' ? identity.remoteUrl : null,
+      folderName: typeof repo.path === 'string' && repo.path.length > 0 ? basename(repo.path) : null,
+      displayName: typeof repo.displayName === 'string' && repo.displayName.length > 0 ? repo.displayName : null
+    })
+  }
+  return map
+}
+
+/** The name a board entry shows for its project, or null when nothing can
+ *  name it -- the panel then says "unknown project" rather than guessing.
+ *  `repoId` is the worktree's repository (from `orca worktree list --json`)
+ *  when known; a `repo:<id>` projectId names its repository itself. */
+function boardProjectName (entry, repos) {
+  const project = typeof entry.project === 'string' ? entry.project : ''
+  const repoId = typeof entry.repoId === 'string' ? entry.repoId : (project.startsWith('repo:') ? project.slice('repo:'.length) : null)
+  const repo = repoId !== null ? repos.get(repoId) : undefined
+  const present = (value) => (typeof value === 'string' && value.length > 0 ? value : null)
+  if (repo && repo.originUrl !== null) {
+    const name = present(remoteShortName(repo.originUrl))
+    if (name !== null) return name
+  }
+  // A remote-derived projectId (`github:owner/name`) already carries the
+  // origin's name; `repo:<id>` is Orca's id for a checkout with no remote.
+  if (project.length > 0 && !project.startsWith('repo:')) return present(remoteShortName(project))
+  if (repo) return repo.folderName ?? repo.displayName
+  return null
+}
+
+// Same 30s cache and fail-open shape as resolveWorktreeProjects above: a
+// burst of status events does not spawn `orca repo list` once per event,
+// and a CLI that cannot run leaves every name null rather than guessed.
+let repoNamesCache = null
+let repoNamesCacheAt = 0
+
+async function resolveRepoNames (orca) {
+  const now = Date.now()
+  if (repoNamesCache && now - repoNamesCacheAt < WORKTREE_LIST_CACHE_MS) return repoNamesCache
+  let map = new Map()
+  try {
+    const { execFile } = await import('node:child_process')
+    const { promisify } = await import('node:util')
+    const execFileAsync = promisify(execFile)
+    const { stdout } = await execFileAsync(ORCA_CLI_BIN, ORCA_CLI_ARGUMENTS.repoList, orcaCliOptions(PLATFORM, PLUGIN_ROOT))
+    map = repoNameSources(JSON.parse(stdout)?.result?.repos)
+  } catch (error) {
+    orca.log(`orca repo list --json failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+  repoNamesCache = map
+  repoNamesCacheAt = now
+  return map
+}
+
+/** `options.resolveWorktreeProjects`/`options.resolveRepoNames` default to
+ *  the real CLI lookups; tests inject fakes, the same "options override the
+ *  default" convention mirrorAccountQuota already uses. */
+async function onAgentStatusChanged (orca, storageHost, payload, options = {}) {
   if (!isAgentStatusChangedPayload(payload)) return
 
-  const projects = await resolveWorktreeProjects(orca)
+  const [projects, repos] = await Promise.all([
+    (options.resolveWorktreeProjects ?? resolveWorktreeProjects)(orca),
+    (options.resolveRepoNames ?? resolveRepoNames)(orca)
+  ])
   const resolved = payload.worktreeId !== null ? projects.get(payload.worktreeId) : undefined
 
   const board = await getBoard(storageHost)
@@ -2099,9 +2280,16 @@ async function onAgentStatusChanged (orca, storageHost, payload) {
   }
   const key = boardEntryKey(updated)
   const index = board.entries.findIndex((entry) => boardEntryKey(entry) === key)
-  const entries = index === -1
+  const merged = index === -1
     ? [...board.entries, updated]
     : board.entries.map((entry, i) => (i === index ? updated : entry))
+  // Every entry is (re)named on every write, not only the one that changed:
+  // entries written before names existed, or before a repository was
+  // renamed, pick up the current name on the next event instead of never.
+  const entries = merged.map((entry) => {
+    const worktree = entry.worktreeId !== null ? projects.get(entry.worktreeId) : undefined
+    return { ...entry, projectName: boardProjectName({ project: entry.project, repoId: worktree?.repoId ?? null }, repos) }
+  })
   await setBoard(storageHost, { entries }).catch((error) =>
     orca.log(`setBoard failed: ${error.message}`))
 }
@@ -2378,6 +2566,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`mod-skills config request handling failed: ${error.message}`))
       .then(() => attendModelRouterConfigRequest(orca, storageHost))
       .catch((error) => orca.log(`model router config request handling failed: ${error.message}`))
+      .then(() => attendModelRouterStatusRefresh(orca, storageHost))
+      .catch((error) => orca.log(`model router status refresh failed: ${error.message}`))
       .then(() => attendDenyTierConfigRequest(orca, storageHost))
       .catch((error) => orca.log(`deny-tier config request handling failed: ${error.message}`))
       .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
@@ -2521,6 +2711,9 @@ export default function activate (orca) {
   const accountQuotaTimer = setInterval(() => {
     mirrorAccountQuota(orca)
       .catch((error) => orca.log(`account quota mirror refresh failed: ${error.message}`))
+    // 0.6.2 E7: a mode set from a terminal shows up without a panel save.
+    publishModelRouterStatus(orca, storageHost)
+      .catch((error) => orca.log(`model router status refresh failed: ${error.message}`))
   }, ACCOUNT_QUOTA_REFRESH_MS)
   if (typeof accountQuotaTimer.unref === 'function') accountQuotaTimer.unref()
 
@@ -2577,6 +2770,7 @@ export {
   attendPolicySeedImportRequest,
   attendPolicySeedNoticeRefresh,
   attendSecretRequest,
+  boardProjectName,
   CATALOG_PROPOSAL_ACCEPT_RESULT_KEY,
   CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
@@ -2596,6 +2790,7 @@ export {
   LOCALE_STATUS_KEY,
   migrateLegacyPolicyKinds,
   mirrorAccountQuota,
+  onAgentStatusChanged,
   MODEL_ROUTER_CONFIG_RESULT_KEY,
   MODEL_ROUTER_STATUS_KEY,
   MOD_SKILLS_CONFIG_RESULT_KEY,
@@ -2610,10 +2805,13 @@ export {
   publishGateDefaults,
   publishLocaleStatus,
   publishModelRouterStatus,
+  attendModelRouterStatusRefresh,
+  shareRecentAccountList,
   publishModSkillsStatus,
   publishPoliciesWithoutKindStatus,
   publishPolicySeedNoticeStatus,
   publishWorkerHeartbeat,
+  repoNameSources,
   SECRET_RESULT_KEY,
   seedPoliciesIfEmpty,
   spawnSidecar,

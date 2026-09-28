@@ -13,10 +13,10 @@
 // ---------------------------------------------------------------------------
 
 import type { QuotaAccount } from "./consumption.ts";
-import { ROUTER_TIERS, collapseTier, modelRank } from "./model_router_accounts.ts";
+import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { TIER_EFFORT, activeGuards, exactModelId, shiftForPressure } from "./model_router_decide.ts";
-import type { GuardContext, QuotaBand, RouterDecision, SessionEffort, TierJudgment, TurnActivity } from "./model_router_decide.ts";
+import { TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
+import type { GuardContext, QuotaBand, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
 
 export { shiftForPressure };
 
@@ -90,21 +90,114 @@ export function breakEven(input: BreakEvenInput): BreakEven | null {
   return { contextTokens: input.contextTokens, switchCost, stepSaving, expectedSteps: steps, worthIt: stepSaving * steps > BREAK_EVEN_MARGIN * switchCost };
 }
 
+export interface EffortBreakEvenInput {
+  readonly contextTokens: number;
+  /** Median output per main step at the current effort and at the target, on this model. */
+  readonly currentOutput: number;
+  readonly targetOutput: number;
+  readonly prices: ModelPrices;
+  readonly medianStepsPerTurn: number | null;
+}
+
+/**
+ * 0.6.2 E2: lowering the effort on the same model rewrites the whole
+ * context too (the cache is per effort), and saves only on output:
+ * (output at the current effort − output at the target) × the output price,
+ * per step, against the rewrite at the cache-write price, by the same 20%
+ * margin and expected-steps estimate a model downgrade uses.
+ */
+export function effortBreakEven(input: EffortBreakEvenInput): BreakEven {
+  const switchCost = input.contextTokens * input.prices.cacheWrite * PER_TOKEN;
+  const stepSaving = (input.currentOutput - input.targetOutput) * input.prices.output * PER_TOKEN;
+  const steps = expectedSteps(input.medianStepsPerTurn);
+  return { contextTokens: input.contextTokens, switchCost, stepSaving, expectedSteps: steps, worthIt: stepSaving * steps > BREAK_EVEN_MARGIN * switchCost };
+}
+
 // ---------------------------------------------------------------------------
 // §6.1 the previous turn's compact activity
 // ---------------------------------------------------------------------------
 
-/** The part of a `$.session.messages()` row this summary reads. */
+/** The part of a `$.session.messages()` row this summary reads. `tool_use_id` links a result to the call it answers. */
 export interface ActivityMessage {
   readonly role: "user" | "assistant";
   readonly text: string;
-  readonly toolUses: readonly { readonly tool: string; readonly input: Readonly<Record<string, unknown>>; readonly text?: string; readonly isError?: true }[];
-  readonly toolResults?: readonly { readonly isError?: boolean }[];
+  readonly toolUses: readonly { readonly tool_use_id?: string; readonly tool: string; readonly input: Readonly<Record<string, unknown>>; readonly text?: string; readonly isError?: true }[];
+  readonly toolResults?: readonly { readonly tool_use_id?: string; readonly isError?: boolean }[];
 }
 
 const EDIT_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const TEST_COMMAND = /\b(npm (run )?test|npx (jest|vitest|playwright test)|jest|vitest|pytest|go test|cargo test|node --test|bun test|deno test|phpunit|rspec)\b/;
 const TEST_FAILED = /✖|\bFAIL\b|\b[1-9]\d* (failing|failed|failures?)\b|\bfail [1-9]/;
+
+// A read-only probe failing (an `ls` of a missing file, a `which` that finds
+// nothing) is the model looking, not the work failing: its error must not
+// hold an expensive model through the previous-failure guard. Self-contained
+// on purpose -- the gate's own command reading is being rewritten elsewhere.
+// Anything not clearly a probe is not one, so its error still counts.
+const PROBE_TOOLS: ReadonlySet<string> = new Set(["Read", "Grep", "Glob", "LS"]);
+/** `cd` too (0.6.2 F10): a failed cd is looking around, not the work failing. */
+const PROBE_PROGRAMS: ReadonlySet<string> = new Set(["ls", "which", "type", "test", "[", "stat", "cat", "head", "tail", "wc", "file", "grep", "rg", "find", "pwd", "echo", "cd"]);
+const PROBE_GIT: ReadonlySet<string> = new Set(["status", "log", "show", "diff", "rev-parse", "ls-files", "check-ignore"]);
+/** `find` actions that delete, run a command or write a file. */
+const FIND_ACTION = /^-(delete|exec|execdir|ok|okdir|fprint|fprint0|fprintf|fls)$/;
+/** Runs another command inside this one, wherever it appears (quoted too). */
+const SUBSTITUTION = /\$\(|`|<\(|>\(/;
+/** Redirects that write no file: to /dev/null, or one descriptor onto another. */
+const HARMLESS_REDIRECT = /(?:\d+|&)?>>?\s*\/dev\/null\b|\d*>&\d+/g;
+
+/**
+ * The command's segments between `|`, `||`, `&&`, `&`, `;` and newlines, with
+ * every quoted or escaped character masked, so an operator inside quotes
+ * splits nothing and a quoted `>` is no redirect. `&` in `2>&1` or `&>` is
+ * part of a redirect, not a separator.
+ */
+function commandSegments(command: string): readonly string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i] as string;
+    if (quote !== null) {
+      if (char === quote) quote = null;
+      else if (quote === '"' && char === "\\") i += 1;
+      current += "q";
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      current += "q";
+    } else if (char === "\\") {
+      i += 1;
+      current += "q";
+    } else if (char === "|" || char === ";" || char === "\n" || (char === "&" && command[i - 1] !== ">" && command[i + 1] !== ">")) {
+      segments.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  segments.push(current);
+  return segments.map((segment) => segment.trim()).filter((segment) => segment.length > 0);
+}
+
+function isProbeSegment(segment: string): boolean {
+  const bare = segment.replace(HARMLESS_REDIRECT, " ").trim();
+  if (bare.includes(">")) return false;
+  const words = bare.split(/\s+/);
+  const [program, first] = words;
+  if (words.length === 2 && first === "--version") return true;
+  if (program === "command") return first === "-v";
+  if (program === "git") return first !== undefined && (PROBE_GIT.has(first) || (first === "branch" && words[2] === "--list" && words.slice(3).every((word) => !word.startsWith("-"))));
+  if (program === "find") return !words.some((word) => FIND_ACTION.test(word));
+  return program !== undefined && PROBE_PROGRAMS.has(program);
+}
+
+/** A Read/Grep/Glob/LS call, or a Bash command whose every segment starts with a read-only program. */
+function isReadOnlyProbe(use: ActivityMessage["toolUses"][number]): boolean {
+  if (PROBE_TOOLS.has(use.tool)) return true;
+  const command = use.tool === "Bash" && typeof use.input.command === "string" ? use.input.command : null;
+  if (command === null || SUBSTITUTION.test(command)) return false;
+  const segments = commandSegments(command);
+  return segments.length > 0 && segments.every(isProbeSegment);
+}
 
 function isRealPrompt(message: ActivityMessage): boolean {
   return message.role === "user" && message.text.trim().length > 0 && (message.toolResults === undefined || message.toolResults.length === 0);
@@ -113,7 +206,7 @@ function isRealPrompt(message: ActivityMessage): boolean {
 /**
  * What the assistant did between the last two real prompts: tool calls,
  * edits, tests run and failed, errors. `mentions` (edited paths and
- * commands) is read only by the local sensitive-topic guard, never sent.
+ * commands) is read only locally, for the topic flags; never sent as text.
  * null when there is no previous turn.
  */
 export function summarizePreviousTurn(messages: readonly ActivityMessage[]): TurnActivity | null {
@@ -148,8 +241,12 @@ function summarizeRange(range: readonly ActivityMessage[]): TurnActivity {
   let testsFailed = 0;
   let errors = 0;
   const mentions: string[] = [];
+  // An error result counts unless it names a read-only probe's call; one
+  // that names no call in this range still counts.
+  const probes = new Set<string>();
+  for (const message of range) for (const use of message.toolUses) if (use.tool_use_id !== undefined && isReadOnlyProbe(use)) probes.add(use.tool_use_id);
   for (const message of range) {
-    for (const result of message.toolResults ?? []) if (result.isError === true) errors += 1;
+    for (const result of message.toolResults ?? []) if (result.isError === true && (result.tool_use_id === undefined || !probes.has(result.tool_use_id))) errors += 1;
     for (const use of message.toolUses) {
       toolCalls += 1;
       const path = typeof use.input.file_path === "string" ? use.input.file_path : null;
@@ -177,7 +274,12 @@ function summarizeRange(range: readonly ActivityMessage[]): TurnActivity {
 export interface PendingLower {
   readonly tier: RouterTier;
   readonly turns: number;
+  /** Set when the lowering waiting is an effort on the same model (0.6.2 E2), not a model. */
+  readonly effort?: TierEffort;
 }
+
+/** Median output tokens per main step at each effort, for the session's current model; an effort with too few real steps is absent (0.6.2 E2). */
+export type EffortOutputs = Readonly<Partial<Record<TierEffort, number>>>;
 
 export interface SessionUsage {
   readonly contextTokens: number;
@@ -199,20 +301,51 @@ export interface StageDecisionInput {
   readonly pending: PendingLower | null;
   /** This session's usage so far; null before its first recorded step. */
   readonly usage: SessionUsage | null;
+  /** The effort each tier asks for (0.6.2 E3); TIER_EFFORT when absent. */
+  readonly tierEffort?: TierEffortMap;
+  /** Real output medians per effort on the current model; null or absent: unknown, so no effort lowering (0.6.2 E2). */
+  readonly effortOutput?: EffortOutputs | null;
 }
 
-export type StageReason = "jev-failed" | "same" | "upgrade" | "low-confidence" | "floor-restore" | "held-by-guard" | "prices-unknown" | "hysteresis" | "break-even" | "downgrade";
+export type StageReason =
+  | "jev-failed"
+  | "same"
+  | "upgrade"
+  | "low-confidence"
+  | "floor-restore"
+  | "held-by-guard"
+  | "prices-unknown"
+  | "hysteresis"
+  | "break-even"
+  | "downgrade"
+  | "effort-raise"
+  | "effort-lower"
+  | "effort-hysteresis"
+  | "effort-break-even"
+  | "effort-unknown-savings";
 
 export interface StageDecision extends Omit<RouterDecision, "reason"> {
   readonly reason: StageReason;
+  /** The effort this decision aimed for when it weighed one (an upgrade, or a same-model effort change); null otherwise. */
+  readonly effortTarget: SessionEffort | null;
   /** The lower tier waiting on hysteresis after this turn; null when none. */
   readonly pending: PendingLower | null;
   readonly breakEven: BreakEven | null;
 }
 
+/** 0.6.2 review finding 1: the session runs its own model at an effort below its own (a person's `max` or budget: any other value). */
+function effortBelowOwn(input: StageDecisionInput): boolean {
+  if (baseModelId(input.currentModel) !== baseModelId(input.configuredModel)) return false;
+  if (isPersonEffort(input.configuredEffort)) return input.currentEffort !== input.configuredEffort;
+  const own = effortRank(input.configuredEffort);
+  if (own === null) return false;
+  const current = effortRank(input.currentEffort);
+  return current === null || current < own;
+}
+
 export function decideStage(input: StageDecisionInput): StageDecision {
   const current = input.currentModel;
-  const stay = { current, model: current, effort: input.currentEffort, changed: false, breakEven: null } as const;
+  const stay = { current, model: current, effort: input.currentEffort, changed: false, breakEven: null, effortTarget: null } as const;
   // Guards first, Jev or not: a Jev failure is itself a guard (confidence
   // null counts as low), so it can never keep the session below its own
   // model (§6.2, review finding 1).
@@ -220,16 +353,25 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   const currentRank = modelRank(input.tiers, current);
   const configuredRank = modelRank(input.tiers, input.configuredModel);
   const belowFloor = guards.length > 0 && currentRank !== null && configuredRank !== null && currentRank < configuredRank;
-  const floorGuard = guards.includes("previous-failure") ? "previous-failure" : (guards[0] ?? null);
+  const floorGuard = guards[0] ?? null;
   if (input.jev === null) {
     if (belowFloor) {
       return { ...stay, tier: null, confidence: null, proposed: null, model: input.configuredModel, effort: input.configuredEffort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null };
     }
+    // A Jev failure is itself a guard: an effort lowered on the session's own
+    // model comes back to its own too (review finding 1).
+    if (guards.length > 0 && effortBelowOwn(input)) {
+      return { ...stay, tier: null, confidence: null, proposed: null, effort: input.configuredEffort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null };
+    }
     return { ...stay, tier: null, confidence: null, proposed: null, reason: "jev-failed", guard: null, pending: input.pending };
   }
-  const tier = collapseTier(input.tiers, shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity));
+  // The model comes from the collapsed tier; the effort from Jev's own
+  // (shifted) tier, so frontier work on an account without Fable still runs
+  // Opus at the frontier's effort (0.6.2 E1).
+  const judged = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
+  const tier = collapseTier(input.tiers, judged);
   const target = input.tiers[tier];
-  const targetEffort = target.supportsEffort ? TIER_EFFORT[tier] : null;
+  const targetEffort = target.supportsEffort ? (input.tierEffort ?? TIER_EFFORT)[judged] : null;
   const base = { tier, confidence: input.jev.confidence, proposed: target.modelId };
   const proposedRank = modelRank(input.tiers, target.modelId);
 
@@ -241,22 +383,40 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   if (belowFloor) {
     const toTarget = proposedRank !== null && configuredRank !== null && proposedRank > configuredRank;
     const model = toTarget ? exactModelId(target.modelId, input.configuredModel) : input.configuredModel;
-    const effort = toTarget ? targetEffort : input.configuredEffort;
-    return { ...base, current, model, effort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null, breakEven: null };
+    // The session's own effort, or the tier's when higher (0.6.2 F0).
+    const effort = toTarget ? targetEffort : guardedEffort(input.configuredEffort, tierEffortOn(input.tiers, input.configuredModel, judged, input.tierEffort));
+    return { ...base, current, model, effort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null, breakEven: null, effortTarget: null };
   }
-  if (currentRank === null || proposedRank === null || proposedRank === currentRank) {
+  if (currentRank === null || proposedRank === null) {
     return { ...stay, ...base, reason: "same", guard: null, pending: null };
   }
+  if (proposedRank <= currentRank && guards.length > 0 && effortBelowOwn(input)) {
+    // Review finding 1: under a guard, an effort lowered on the session's own
+    // model comes back to its own (or the tier's, when higher).
+    const effort = guardedEffort(input.configuredEffort, tierEffortOn(input.tiers, current, judged, input.tierEffort));
+    return { ...stay, ...base, effort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null };
+  }
+  if (proposedRank === currentRank) return decideEffort(input, base, targetEffort, guards, currentRank);
   if (proposedRank > currentRank) {
     if (input.jev.confidence < 0.7) return { ...stay, ...base, reason: "low-confidence", guard: null, pending: null };
+    // The tier's effort, even back on the session's own model (0.6.2 E1: a
+    // sticky `xhigh` is the account's default, not what this work needs);
+    // only a person's own `max` or numeric budget is kept, never lowered.
     const model = exactModelId(target.modelId, input.configuredModel);
-    const effort = model === input.configuredModel ? input.configuredEffort ?? targetEffort : targetEffort;
-    return { ...base, current, model, effort, changed: true, reason: "upgrade", guard: null, pending: null, breakEven: null };
+    const own = model === input.configuredModel;
+    // Under a guard, never below the session's own effort (0.6.2 F0).
+    const effort = own && guards.length > 0 ? guardedEffort(input.configuredEffort, targetEffort) : own && isPersonEffort(input.configuredEffort) ? input.configuredEffort : targetEffort;
+    return { ...base, current, model, effort, changed: true, reason: "upgrade", guard: null, pending: null, breakEven: null, effortTarget: effort };
   }
 
-  // Downgrade.
-  if (guards.length > 0) return { ...stay, ...base, reason: "held-by-guard", guard: guards[0] ?? null, pending: null };
-  const pending: PendingLower = { tier, turns: input.pending !== null && input.pending.tier === tier ? input.pending.turns + 1 : 1 };
+  // Downgrade. A guard holds the model; the effort may still rise to the
+  // tier's (0.6.2 F0).
+  if (guards.length > 0) {
+    const effort = guardedEffort(input.currentEffort, tierEffortOn(input.tiers, current, judged, input.tierEffort));
+    if (effort !== input.currentEffort) return { ...stay, ...base, effort, changed: true, reason: "effort-raise", guard: guards[0] ?? null, pending: null, effortTarget: effort };
+    return { ...stay, ...base, reason: "held-by-guard", guard: guards[0] ?? null, pending: null };
+  }
+  const pending: PendingLower = { tier, turns: input.pending !== null && input.pending.tier === tier && input.pending.effort === undefined ? input.pending.turns + 1 : 1 };
   const currentTier = ROUTER_TIERS[currentRank] ?? "complex";
   const prices = { current: input.tiers[currentTier].prices, proposed: target.prices };
   if (prices.current === null || prices.proposed === null) return { ...stay, ...base, reason: "prices-unknown", guard: null, pending };
@@ -270,7 +430,48 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   // included) and its own effort, so nothing is rewritten any more (N1).
   const model = exactModelId(target.modelId, input.configuredModel);
   const effort = model === input.configuredModel ? input.configuredEffort : targetEffort;
-  return { ...base, current, model, effort, changed: true, reason: "downgrade", guard: null, pending: null, breakEven: result };
+  return { ...base, current, model, effort, changed: true, reason: "downgrade", guard: null, pending: null, breakEven: result, effortTarget: null };
+}
+
+/**
+ * 0.6.2 E2: Jev's tier resolves to the model the session already runs, so
+ * only the effort can follow the work. A raise is quality: it applies at
+ * once with confidence ≥ 0.70, and no guard blocks it. A lowering rewrites
+ * the cache for an output-only saving, so it must earn it the way a model
+ * downgrade does: no guard, the same lower effort on consecutive prompts,
+ * and a break-even on the session's real output medians -- unknown ones
+ * lower nothing. A person's `max` or numeric budget is never touched.
+ */
+function decideEffort(input: StageDecisionInput, base: Pick<StageDecision, "tier" | "confidence" | "proposed">, targetEffort: TierEffort | null, guards: readonly RouterGuard[], currentRank: number): StageDecision {
+  const current = input.currentModel;
+  const stay = { ...base, current, model: current, effort: input.currentEffort, changed: false, guard: null, breakEven: null } as const;
+  const from = effortRank(input.currentEffort);
+  const to = effortRank(targetEffort);
+  // Only the person's own `max` or budget is protected; a `max` the router
+  // chose follows the normal rules (review finding 3). No effort sent is the
+  // API default, not a choice, so it can be raised (review nit 8).
+  const personOwn = isPersonEffort(input.configuredEffort) && input.currentEffort === input.configuredEffort;
+  if (targetEffort === null || to === null || personOwn || typeof input.currentEffort === "number" || from === to) {
+    return { ...stay, reason: "same", pending: null, effortTarget: null };
+  }
+  if (from === null || to > from) {
+    if ((input.jev?.confidence ?? 0) < 0.7) return { ...stay, reason: "low-confidence", pending: null, effortTarget: targetEffort };
+    return { ...stay, effort: targetEffort, changed: true, reason: "effort-raise", pending: null, effortTarget: targetEffort };
+  }
+  if (guards.length > 0) return { ...stay, reason: "held-by-guard", guard: guards[0] ?? null, pending: null, effortTarget: targetEffort };
+  const tier = base.tier ?? "complex";
+  const pending: PendingLower = { tier, effort: targetEffort, turns: input.pending?.effort === targetEffort ? input.pending.turns + 1 : 1 };
+  if (pending.turns < hysteresisTurns(input.band)) return { ...stay, reason: "effort-hysteresis", pending, effortTarget: targetEffort };
+  const prices = input.tiers[ROUTER_TIERS[currentRank] ?? "complex"].prices;
+  const currentOutput = typeof input.currentEffort === "string" ? input.effortOutput?.[input.currentEffort] : undefined;
+  const targetOutput = input.effortOutput?.[targetEffort];
+  if (prices === null || currentOutput === undefined || targetOutput === undefined) return { ...stay, reason: "effort-unknown-savings", pending, effortTarget: targetEffort };
+  const result =
+    input.usage === null
+      ? null
+      : effortBreakEven({ contextTokens: input.usage.contextTokens, currentOutput, targetOutput, prices, medianStepsPerTurn: input.usage.medianStepsPerTurn });
+  if (result === null || !result.worthIt) return { ...stay, reason: "effort-break-even", pending, breakEven: result, effortTarget: targetEffort };
+  return { ...stay, effort: targetEffort, changed: true, reason: "effort-lower", pending: null, breakEven: result, effortTarget: targetEffort };
 }
 
 // ---------------------------------------------------------------------------
@@ -332,18 +533,18 @@ export interface EngineTurnInput {
 /**
  * A turn the engine started by itself asks Jev nothing (review finding 4).
  * The local guards still cost nothing (N2): when the sticky model is below
- * the session's own and the work since the last prompt failed, or touches a
- * sensitive topic, restore the session's own model and effort. Otherwise
+ * the session's own and a hard guard holds (a pointer prompt: the only one
+ * that needs no Jev answer), restore the session's own model and effort.
+ * 0.6.2 F9/F11: a failed test, a sensitive topic or a client site no longer
+ * restores by itself; Jev weighs them at the next person prompt. Otherwise
  * null: keep the sticky choice.
  */
 export function decideEngineTurn(input: EngineTurnInput): StageDecision | null {
-  const guards = activeGuards({ destinationKind: null, policyHit: false, text: input.text, activity: input.activity, confidence: 1 }).filter(
-    (guard) => guard === "previous-failure" || guard === "sensitive-topic",
-  );
+  const guards = activeGuards({ text: input.text, activity: input.activity, confidence: 1 });
   const currentRank = modelRank(input.tiers, input.currentModel);
   const configuredRank = modelRank(input.tiers, input.configuredModel);
   if (guards.length === 0 || currentRank === null || configuredRank === null || currentRank >= configuredRank) return null;
-  const guard = guards.includes("previous-failure") ? "previous-failure" : (guards[0] ?? null);
+  const guard = guards[0] ?? null;
   return {
     tier: null,
     confidence: null,
@@ -356,5 +557,6 @@ export function decideEngineTurn(input: EngineTurnInput): StageDecision | null {
     guard,
     pending: null,
     breakEven: null,
+    effortTarget: null,
   };
 }

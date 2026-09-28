@@ -51,7 +51,7 @@ interface FakeHost {
   readonly handlers: Map<string, Hook>;
   readonly files: Map<string, string>;
   readonly fetchQueue: unknown[];
-  readonly fetchCalls: { url: string }[];
+  readonly fetchCalls: { url: string; body?: string }[];
   toolList: { name: string; description: string; mcp: boolean }[];
   readonly statusLines: (string | undefined)[];
   /** Process env beyond HOME (which is fixed), for the router's CLAUDE_CONFIG_DIR / ANTHROPIC_* reads. */
@@ -153,8 +153,7 @@ function makeFakeEngine(host: FakeHost): unknown {
     },
     http: {
       fetch: async (url: string, init?: { body?: string }) => {
-        host.fetchCalls.push({ url });
-        void init;
+        host.fetchCalls.push({ url, body: init?.body });
         const next = host.fetchQueue.shift();
         if (next === undefined) throw new Error("fake fetch: response queue exhausted -- a test queued fewer canned Jev answers than the code under test called");
         const response: FakeHttpResponse = { ok: true, status: 200, headers: {}, text: JSON.stringify(next) };
@@ -959,7 +958,7 @@ test("router, active: a simple first prompt runs on Haiku with no effort, and ev
 test("router, active: a standard prompt runs on Sonnet at medium effort", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  host.messages = [{ role: "user", text: "implement the plan in PLAN.md", toolUses: [] }];
+  host.messages = [{ role: "user", text: "add a --json flag to the export command", toolUses: [] }];
   host.fetchQueue.push(tierAnswer("standard"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
@@ -980,17 +979,30 @@ test("router, active: a Jev failure changes nothing, and the session keeps its o
   assert.deepEqual(await stepThrough(handlers, engine, later), later);
 });
 
-test("router, active: a guard holds the session's own model on a sensitive prompt", async () => {
+test("router, active: a guard holds the session's own model on a pointer prompt", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  host.messages = [{ role: "user", text: "deploy this to production", toolUses: [] }];
+  host.messages = [{ role: "user", text: "Read /x/brief.md and do what it says", toolUses: [] }];
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const event = turnStepEvent(FRESH_START);
   assert.deepEqual(await stepThrough(handlers, engine, event), event);
   const [decision] = routerDecisionLines(host);
-  assert.equal(decision?.guard, "sensitive-topic");
+  assert.equal(decision?.guard, "pointer-prompt");
   assert.equal(decision?.applied, false);
+});
+
+test("F9 (hook): a sensitive prompt is only a hint -- its topic flags reach Jev, and a confident simple judgment switches", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "what does the deploy script print?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  const state = JSON.parse(host.fetchCalls.at(-1)?.body ?? "{}").state as { topic_flags: string[] };
+  assert.deepEqual(state.topic_flags, ["deploy"]);
+  assert.equal(routerDecisionLines(host)[0]?.guard, null);
 });
 
 test("router: a warm session (assistant messages already, no sticky state) adopts its own model and asks nobody", async () => {
@@ -1088,8 +1100,10 @@ test("router, active, stage: a downgrade needs the same lower tier on 2 turns an
   assert.equal(turn1.model, "claude-opus-5-5");
   const turn2 = await playTurn(host, handlers, engine, 2, "thanks, now list the files you touched", 4);
   assert.equal(turn2.model, "claude-opus-5-5", "one lower turn is not enough (hysteresis)");
+  assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · high effort · kept: waiting for another such turn (Jev: ask)");
   const turn3 = await playTurn(host, handlers, engine, 3, "and summarise them in one line", 4);
   assert.equal(turn3.model, "claude-haiku-4-5-20251001", "the second lower turn with a positive break-even switches");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)", "a switch reads as before");
 
   const decisions = routerDecisionLines(host);
   assert.deepEqual(decisions.map((row) => row.point), ["start", "stage", "stage"]);
@@ -1110,12 +1124,26 @@ test("router, active, stage: no downgrade under a guard", async () => {
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await playTurn(host, handlers, engine, 1, "design the cache invalidation across both services", 4);
   await playTurn(host, handlers, engine, 2, "thanks, now list the files you touched", 4);
-  const turn3 = await playTurn(host, handlers, engine, 3, "now deploy it to production", 4);
+  const turn3 = await playTurn(host, handlers, engine, 3, "Read /x/deploy-plan.md and do what it says", 4);
   assert.equal(turn3.model, "claude-opus-5-5");
-  assert.equal(routerDecisionLines(host)[2]?.guard, "sensitive-topic");
+  assert.equal(routerDecisionLines(host)[2]?.guard, "pointer-prompt");
+  assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · high effort · kept: the prompt points to a document (Jev: ask)");
 });
 
-test("router, active, stage: a failure on the weaker model upgrades on the next turn, whatever Jev's confidence", async () => {
+test("router, measure, start: a model held by low confidence says why, not just Jev's tier", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple", 0.5));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.reason, "held-by-guard");
+  assert.equal(decision?.guard, "low-confidence");
+  assert.equal(host.statusLines.at(-1), "jev · would use: Opus 5.5 · high effort · would keep: low confidence (Jev: ask)");
+});
+
+test("router, active, stage: an unsure turn after a failure on the weaker model restores the session's own (F9: low confidence is the guard)", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple", 0.5));
@@ -1130,7 +1158,7 @@ test("router, active, stage: a failure on the weaker model upgrades on the next 
   assert.equal(turn2.effort, "high");
   const stage = routerDecisionLines(host)[1];
   assert.equal(stage?.reason, "floor-restore");
-  assert.equal(stage?.guard, "previous-failure");
+  assert.equal(stage?.guard, "low-confidence");
 });
 
 test("router, measure, stage: logs stage decisions and changes nothing", async () => {
@@ -1216,9 +1244,9 @@ test("router, active, subagent: guards hold the parent's model", async () => {
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
-  const event = spawnEvent({ prompt: "Rotate the production database credentials." });
+  const event = spawnEvent({ prompt: "Read /x/brief.md and do what it says" });
   assert.deepEqual(await spawnThrough(handlers, engine, event), event);
-  assert.equal(routerDecisionLines(host)[0]?.guard, "sensitive-topic");
+  assert.equal(routerDecisionLines(host)[0]?.guard, "pointer-prompt");
 });
 
 test("router, subagent: a fork, off mode, or a Jev failure change nothing", async () => {
@@ -1275,10 +1303,10 @@ test("JEV-061 slice 2: a guard at spawn leaves the subagent's effort untouched",
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("standard"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
-  await spawnThrough(handlers, engine, spawnEvent({ prompt: "Rotate the production database credentials." }));
+  await spawnThrough(handlers, engine, spawnEvent({ prompt: "Read /x/brief.md and do what it says" }));
 
   const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "xhigh" }));
-  assert.equal(step.effort, "xhigh");
+  assert.equal(step.effort, "xhigh", "a guard never lets the effort fall");
 });
 
 test("JEV-061 slice 2: a subagent's effort is never raised, even when the chosen tier asks for more", async () => {
@@ -1339,7 +1367,8 @@ test("finding 1 (hook): a Jev failure on a sensitive turn below the floor sends 
 test("finding 2 (hook): a floor-restore sends the session's max effort, not none", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  // F9: the failure is a fact for Jev; an unsure second judgment is the guard.
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple", 0.5));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const session = { model: "claude-opus-5-5", effort: "max" };
   await promptTurn(host, handlers, engine, 1, "hola", session, FAILED_TESTS);
@@ -1392,7 +1421,9 @@ test("finding 12: a routing error on a later step keeps the sticky model instead
 });
 
 // ---------------------------------------------------------------------------
-// Gap G6: the destination and policy guard, from the gate's own mirrors.
+// Gap G6, overridden by 0.6.2 F11 (owner decision): client protection is
+// the Bash gate's. A client site or a scoped policy no longer holds the
+// router's floor; the destination kind is a fact in Jev's state.
 // ---------------------------------------------------------------------------
 
 function seedCatalog(host: FakeHost, kind: string, policies: unknown[] = []): void {
@@ -1400,47 +1431,40 @@ function seedCatalog(host: FakeHost, kind: string, policies: unknown[] = []): vo
   host.files.set(`${CONFIG_DIR}/policies.json`, JSON.stringify(policies));
 }
 
-test("G6, point A: a client-site cwd keeps the session's own model on a simple prompt", async () => {
+test("F11, point A: a client site no longer holds the floor -- a simple prompt there is routed down, and Jev sees the destination", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   seedCatalog(host, "client-site");
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
-  assert.equal(seen.model, "claude-opus-5-5");
-  assert.equal(seen.effort, "xhigh");
-  assert.equal(routerDecisionLines(host)[0]?.guard, "client-site");
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  assert.equal(routerDecisionLines(host)[0]?.guard, null);
+  assert.equal(JSON.parse(host.fetchCalls.at(-1)?.body ?? "{}").state.destination_kind, "client-site");
 });
 
-test("G6, point A: a prohibits policy scoped to this destination holds the floor; a global one does not", async () => {
-  const scoped = makeFakeHost();
-  seedRouterAccount(scoped);
-  seedCatalog(scoped, "project", [{ id: "freeze", rule: "no changes this week", kind: "prohibits", destinations: ["here"] }]);
-  scoped.fetchQueue.push(tierAnswer("simple"));
-  const a = loadHooksWith(scoped, { routerMode: "active" });
-  assert.equal((await promptTurn(scoped, a.handlers, a.engine, 1, "hola", OPUS_XHIGH)).model, "claude-opus-5-5");
-  assert.equal(routerDecisionLines(scoped)[0]?.guard, "policy");
-
-  const global = makeFakeHost();
-  seedRouterAccount(global);
-  seedCatalog(global, "project", [{ id: "production", rule: "ask before production", kind: "requires_human" }]);
-  global.fetchQueue.push(tierAnswer("simple"));
-  const b = loadHooksWith(global, { routerMode: "active" });
-  assert.equal((await promptTurn(global, b.handlers, b.engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
+test("F11, point A: a scoped prohibits policy no longer holds the floor either", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedCatalog(host, "project", [{ id: "freeze", rule: "no changes this week", kind: "prohibits", destinations: ["here"] }]);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  assert.equal((await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
+  assert.equal(routerDecisionLines(host)[0]?.guard, null);
 });
 
-test("G6, point B: a subagent spawned in a client-site keeps the parent's model", async () => {
+test("F11, point B: a subagent spawned in a client site is routed like any other", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   seedCatalog(host, "client-site");
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
-  const event = spawnEvent();
-  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
-  assert.equal(routerDecisionLines(host)[0]?.guard, "client-site");
+  const seen = await spawnThrough(handlers, engine, spawnEvent());
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  assert.equal(routerDecisionLines(host)[0]?.guard, null);
 });
 
-test("G6, point C: a sticky model below the session's is restored once the cwd resolves to a client site", async () => {
+test("F11, point C: a cwd that resolves to a client site does not restore the floor by itself", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
@@ -1448,8 +1472,8 @@ test("G6, point C: a sticky model below the session's is restored once the cwd r
   assert.equal((await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH)).model, "claude-haiku-4-5-20251001");
   seedCatalog(host, "client-site");
   const second = await promptTurn(host, handlers, engine, 2, "thanks", OPUS_XHIGH);
-  assert.equal(second.model, "claude-opus-5-5");
-  assert.equal(routerDecisionLines(host)[1]?.guard, "client-site");
+  assert.equal(second.model, "claude-haiku-4-5-20251001");
+  assert.equal(routerDecisionLines(host)[1]?.guard, null);
 });
 
 test("G6: a missing catalog is unknown and keeps today's behaviour", async () => {
@@ -1505,22 +1529,23 @@ test("N1 (hook): a downgrade back to the session's own [1m] model sends the sess
   assert.deepEqual(await stepThrough(handlers, engine, later), later, "no rewrite on the session's own model");
 });
 
-test("N2: an engine-started turn after a failing test restores the session's own model, without asking Jev", async () => {
+test("N2 / F9: an engine-started turn after a failing test asks Jev nothing and keeps the sticky model; Jev sees the failure at the next person prompt", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  host.fetchQueue.push(tierAnswer("simple"));
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const first = await promptTurn(host, handlers, engine, 1, "run the tests in the background", OPUS_XHIGH, FAILED_TESTS);
   assert.equal(first.model, "claude-haiku-4-5-20251001");
   const calls = host.fetchCalls.length;
   // A subagent finished: the engine starts turn 2 by itself, no new prompt.
   const engineTurn = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, ...OPUS_XHIGH }));
-  assert.equal(engineTurn.model, "claude-opus-5-5");
-  assert.equal(engineTurn.effort, "xhigh");
+  assert.equal(engineTurn.model, "claude-haiku-4-5-20251001");
   assert.equal(host.fetchCalls.length, calls, "no Jev call on an engine-started turn");
-  const restore = routerDecisionLines(host)[1];
-  assert.equal(restore?.reason, "floor-restore");
-  assert.equal(restore?.guard, "previous-failure");
+  assert.equal(routerDecisionLines(host).length, 1, "only point A was decided");
+  const next = await promptTurn(host, handlers, engine, 3, "fix them", OPUS_XHIGH);
+  const state = JSON.parse(host.fetchCalls.at(-1)?.body ?? "{}").state as { previous_turn: { failed: boolean } };
+  assert.equal(state.previous_turn.failed, true, "the failure reaches Jev as a fact");
+  assert.equal(next.model, "claude-opus-5-5", "Jev weighed it and chose the stronger model");
 });
 
 test("N2: an engine-started turn with clean work keeps the sticky choice", async () => {
@@ -1607,7 +1632,7 @@ test("JEV-061: two task notifications after a person prompt cause no Jev call an
   assert.equal(decisions.at(-1)?.point, "stage");
 });
 
-test("JEV-061: a notification after a failing test restores the floor without asking Jev", async () => {
+test("JEV-061 / F9: a notification after a failing test asks Jev nothing and, the failure being only a fact now, keeps the sticky model", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
@@ -1622,14 +1647,11 @@ test("JEV-061: a notification after a failing test restores the floor without as
   await submitOrigin(handlers, engine, "task-notification");
   // Different text from the person's own prompt -- would read as a brand
   // new real prompt if `$.session.messages()` were the only signal.
+  const decisionsBefore = routerDecisionLines(host).length;
   const note = await promptTurn(host, handlers, engine, 2, "Task finished: the background tests are still failing.", OPUS_XHIGH);
-  assert.equal(note.model, "claude-opus-5-5", "the floor is restored");
-  assert.equal(note.effort, "xhigh");
+  assert.equal(note.model, "claude-haiku-4-5-20251001", "no hard guard holds: the sticky model stays");
   assert.equal(host.fetchCalls.length, calls, "no Jev call for the notification");
-  const restore = routerDecisionLines(host).at(-1);
-  assert.equal(restore?.reason, "floor-restore");
-  assert.equal(restore?.guard, "previous-failure");
-  assert.equal(restore?.origin, "task-notification");
+  assert.equal(routerDecisionLines(host).length, decisionsBefore, "nothing decided");
 });
 
 test("JEV-061, point A: a first prompt that is a notification keeps the session's own model -- the router decides at the first person prompt", async () => {
@@ -1682,4 +1704,220 @@ test("JEV-061: if prompt.submit never fired for a turn (state lost to a hot relo
   const turn2 = await playTurn(host, handlers, engine, 2, "now something completely different", 4);
   assert.equal(host.fetchCalls.length, 2, "both turns were judged -- no stamped origin defaults to a person's own prompt");
   void turn2;
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.2: effort by need. The owner's account runs Opus at a sticky xhigh
+// (modelSettings effortLevel); every main step since 0.6.1 stayed there.
+// ---------------------------------------------------------------------------
+
+/** 20 main Opus steps per effort in an earlier hour's turn-usage file: the medians the lowering break-even reads. */
+function seedEffortUsage(host: FakeHost, outputs: Record<string, number>): void {
+  const lines: string[] = [];
+  for (const [effort, output] of Object.entries(outputs)) {
+    for (let i = 0; i < 20; i += 1) lines.push(JSON.stringify({ at: "2026-09-24T10:00:00.000Z", agent: "main", model: "claude-opus-5-5", effort, input: 10, output, cacheRead: 0, cacheWrite: 0, stopReason: "end_turn", account: "acct-1" }));
+  }
+  host.files.set(`${CACHE_DIR}/turn-usage-2026-09-24T10.jsonl`, `${lines.join("\n")}\n`);
+}
+
+test("0.6.2 E1 (hook): back up to the session's own Opus for complex work runs at high, not the account's sticky xhigh", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "hola", OPUS_XHIGH);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  const second = await promptTurn(host, handlers, engine, 2, "why does checkout double-charge sometimes?", OPUS_XHIGH);
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(second.effort, "high");
+  const upgrade = routerDecisionLines(host).at(-1);
+  assert.equal(upgrade?.reason, "upgrade");
+  assert.equal(upgrade?.effort, "high");
+});
+
+test("0.6.2 E2 (hook, active): frontier work on the same Opus raises the effort at once and logs it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("frontier", 0.8));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "why does checkout double-charge sometimes?", OPUS_XHIGH);
+  assert.equal(first.effort, "high");
+  const second = await promptTurn(host, handlers, engine, 2, "prove this algorithm terminates", OPUS_XHIGH);
+  assert.equal(second.model, "claude-opus-5-5");
+  assert.equal(second.effort, "xhigh");
+  const raise = routerDecisionLines(host).at(-1);
+  assert.equal(raise?.point, "stage");
+  assert.equal(raise?.reason, "effort-raise");
+  assert.equal(raise?.effort, "xhigh");
+  assert.equal(raise?.applied, true);
+  assert.equal("text" in (raise ?? {}), false);
+});
+
+test("0.6.2 E2 (hook, measure): a raise is logged but never sent", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("frontier", 0.9));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "measure" });
+  const session = { model: "claude-opus-5-5", effort: "high" };
+  await promptTurn(host, handlers, engine, 1, "why does checkout double-charge sometimes?", session);
+  const second = await promptTurn(host, handlers, engine, 2, "prove this algorithm terminates", session);
+  assert.equal(second.effort, "high");
+  const raise = routerDecisionLines(host).at(-1);
+  assert.equal(raise?.reason, "effort-raise");
+  assert.equal(raise?.applied, false);
+});
+
+test("0.6.2 E2 (hook, active): xhigh comes down to high after 2 complex prompts, when the account's real medians pay for the rewrite", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedEffortUsage(host, { xhigh: 6000, high: 2000 });
+  host.fetchQueue.push(tierAnswer("frontier"), tierAnswer("complex"), tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "prove this algorithm terminates", OPUS_XHIGH);
+  assert.equal(first.effort, "xhigh");
+  const second = await promptTurn(host, handlers, engine, 2, "why does checkout double-charge sometimes?", OPUS_XHIGH);
+  assert.equal(second.effort, "xhigh");
+  assert.equal(routerDecisionLines(host).at(-1)?.reason, "effort-hysteresis");
+  const third = await promptTurn(host, handlers, engine, 3, "the build fails only in CI, find out why", OPUS_XHIGH);
+  assert.equal(third.effort, "high");
+  const lower = routerDecisionLines(host).at(-1);
+  assert.equal(lower?.reason, "effort-lower");
+  assert.equal(lower?.effort, "high");
+  assert.equal(typeof lower?.stepSaving, "number");
+});
+
+test("0.6.2 E2 (hook): with too few real steps the saving is unknown and the effort stays", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("frontier"), tierAnswer("complex"), tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "prove this algorithm terminates", OPUS_XHIGH);
+  await promptTurn(host, handlers, engine, 2, "why does checkout double-charge sometimes?", OPUS_XHIGH);
+  const third = await promptTurn(host, handlers, engine, 3, "the build fails only in CI, find out why", OPUS_XHIGH);
+  assert.equal(third.effort, "xhigh");
+  assert.equal(routerDecisionLines(host).at(-1)?.reason, "effort-unknown-savings");
+});
+
+test("0.6.2 E3 (hook): the account's per-tier effort setting is what the router asks for", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${ACCOUNT_DIR}/settings.json`, JSON.stringify({ env: {}, pluginConfigs: { "orca-jev-mod-skills@skills-dir": { options: { routerMode: "active", routerEffort: { complex: "xhigh", simple: "bogus" } } } } }));
+  host.fetchQueue.push(tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "why does checkout double-charge sometimes?", { model: "claude-sonnet-5", effort: "medium" });
+  assert.equal(first.model, "claude-opus-5-5");
+  assert.equal(first.effort, "xhigh");
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.2 E6: a writer agent is started with a pointer prompt; Jev judges the
+// pointer ("simple") and point A would start a complex job on Haiku.
+// ---------------------------------------------------------------------------
+
+const POINTER = "Read /Users/dev/jobs/tmp/brief-062-effort.md completely and do what it says.";
+
+test("0.6.2 E6 (hook, point A): a pointer prompt keeps the session's own model and effort, and logs the guard", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, POINTER, OPUS_XHIGH);
+  assert.equal(first.model, "claude-opus-5-5");
+  assert.equal(first.effort, "xhigh");
+  const decision = routerDecisionLines(host).at(-1);
+  assert.equal(decision?.point, "start");
+  assert.equal(decision?.guard, "pointer-prompt");
+  assert.equal(decision?.applied, false);
+});
+
+test("0.6.2 E6 (hook, subagent): a pointer spawn prompt keeps the parent's model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent({ description: "Run the brief", prompt: POINTER }));
+  assert.notEqual(seen.model, "claude-haiku-4-5-20251001");
+  const decision = routerDecisionLines(host).at(-1);
+  assert.equal(decision?.point, "subagent");
+  assert.equal(decision?.guard, "pointer-prompt");
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.2 E8: the status line says, part by part, what applied and what only
+// measured, with one "jev" at the start.
+// ---------------------------------------------------------------------------
+
+test("0.6.2 E8 (hook): skill applied + tool measuring reads as such, with one jev", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+  host.fetchQueue.push(
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 }, skill_needed: { type: "noul", noul: 0.8 } }),
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 }, "fits::graft-helper": { type: "noul", noul: 0.9 } }),
+    jevResponse({ which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 }, needsOneTool: { type: "noul", noul: 0.1 } }),
+  );
+  await submitPrompt(handlers, engine, "how does the auth module work");
+  assert.equal(host.statusLines.at(-1), "jev · skill: graft-helper (applied) · tools: no change (measuring only)");
+});
+
+test("0.6.2 E8 (hook): skill measuring only reads as such", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+  const { handlers, engine } = loadHooks(host);
+  host.fetchQueue.push(
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 }, skill_needed: { type: "noul", noul: 0.8 } }),
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 }, "fits::graft-helper": { type: "noul", noul: 0.9 } }),
+  );
+  await submitPrompt(handlers, engine, "how does the auth module work");
+  assert.equal(host.statusLines.at(-1), "jev · skill: graft-helper (measuring only)");
+});
+
+test("0.6.2 E8 (hook): a warm session in active mode says why it kept the model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [
+    { role: "user", text: "hi", toolUses: [] },
+    { role: "assistant", text: "hello", toolUses: [] },
+    { role: "user", text: "now something else", toolUses: [] },
+  ];
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · kept: session already started");
+  assert.equal(host.fetchCalls.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.2 F0 / review finding 2 at point B: a guard at spawn is logged, never
+// lets the subagent's effort fall, and never blocks it rising.
+// ---------------------------------------------------------------------------
+
+test("F0 (hook, subagent): under a guard the subagent's effort rises to the tier's, never falls, and the guard is logged", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent({ description: "writer", prompt: "Read /x/brief.md and do what it says" }));
+  assert.equal(routerDecisionLines(host).at(-1)?.guard, "pointer-prompt");
+  const raised = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "medium" }));
+  assert.equal(raised.effort, "high");
+  const kept = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-opus-5-5", effort: "xhigh" }));
+  assert.equal(kept.effort, "xhigh");
+});
+
+test("nit 10 (hook): after the person switches model, the router part says it is their choice, not the old decision", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
+  host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
+  await stepThrough(handlers, engine, turnStepEvent({ index: 1, model: "claude-sonnet-5", effort: "medium" }));
+  assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5 · kept: your choice");
 });

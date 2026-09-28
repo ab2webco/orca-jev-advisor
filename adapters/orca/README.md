@@ -19,7 +19,8 @@ the worker, and the two panels.
 orca-plugin.json           manifest: panels, commands, events, capabilities
 main.mjs                    worker: activate(host) -> { commands, teardown }
 write-secret-mirror.mjs      sidecar: writes/reads the key mirror (see below)
-panels/board.html            navigation panel: live board table
+panels/board.html            navigation panel: the board, in four tabs
+                             (Gate, Activity, Consumption, Skills)
 panels/config.html           settings panel: key, catalog, policies, thresholds
 icons/advisor.svg            icon used by both panels
 ```
@@ -32,9 +33,11 @@ icons/advisor.svg            icon used by both panels
   (`src/core/log.ts`), and shows a notification with the summary.
   Returns the array of decisions.
 - **`advisor.board`** — returns the current contents of `storage`'s
-  `board`: the `{worktreeId, paneKey, state, receivedAt, updatedAt}`
-  table that `main.mjs` keeps updated by listening to
-  `agent.status.changed`.
+  `board`: the `{worktreeId, project, projectName, rama, paneKey, state,
+  receivedAt, updatedAt}` table that `main.mjs` keeps updated by listening
+  to `agent.status.changed`. `project` is Orca's raw projectId;
+  `projectName` is the name the board shows, resolved the way the
+  measurement log names a project (null when nothing can name it).
 - **`advisor.doctor`** — checks four things and returns
   `{ok, checks[]}`:
   - `api-key`: not just that there's a resolved key (`secrets` or the

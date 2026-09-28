@@ -160,7 +160,9 @@
       .kpi-n { font-size: 30px; font-weight: 700; line-height: 1.05; letter-spacing: -0.02em;
                font-variant-numeric: tabular-nums; }
       .kpi-unit { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .kpi-sub { margin: 4px 0 10px; font-size: 12px;
+      /* overflow-wrap: an account's email is one unbreakable run, and at
+         320px a long one would otherwise push the page sideways. */
+      .kpi-sub { margin: 4px 0 10px; font-size: 12px; overflow-wrap: anywhere;
                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
 
       /* Stacked proportion bar. A 0-count segment renders nothing at all
@@ -188,6 +190,16 @@
       .htrack { background: var(--secondary, var(--fb-secondary)); border-radius: 9999px; height: 8px; overflow: hidden; }
       .hfill { display: block; height: 100%; background: var(--viz); border-radius: 9999px; min-width: 2px; }
       .hv { font-variant-numeric: tabular-nums; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      /* Figures that share no unit (a count of prompts, a count of
+         characters) are shown as labelled numbers, never as bars on one
+         scale (odd/tasks/board-leftovers.md L5). A label wraps; it is never
+         cut. */
+      .figures { display: grid; gap: 8px 16px; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); margin: 0 0 6px; }
+      /* column-reverse puts the number above its label; flex-end keeps the
+         numbers of one row level when one label wraps and the other does not. */
+      .figure { display: flex; flex-direction: column-reverse; justify-content: flex-end; gap: 2px; min-width: 0; }
+      .figure dt { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); overflow-wrap: anywhere; }
+      .figure dd { margin: 0; font-size: 20px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
 
       /* Speed comparison: two bars on one shared axis, so the gap is the
          thing you see first and the milliseconds only confirm it. */
@@ -260,6 +272,16 @@
       .live-list { display: grid; gap: 6px; }
       .live-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
       .live-row .name { font-weight: 600; overflow-wrap: anywhere; }
+      /* odd/tasks/board-leftovers.md L6. How many sessions one project and
+         branch row stands for, and a working or waiting row that has been
+         silent too long: both quiet, neither reads as activity. */
+      .live-row .count { font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); white-space: nowrap; }
+      .tag.nosignal { color: var(--muted-foreground, var(--fb-muted-foreground)); border-style: dotted; font-weight: 400; }
+      .live-toggle { margin-top: 8px; background: none; border: 1px solid var(--border, var(--fb-border));
+                     border-radius: 9999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer;
+                     color: var(--foreground, var(--fb-foreground)); }
+      .live-toggle:hover { background: var(--accent, var(--fb-accent)); }
+      .live-toggle:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
 
       /* The honesty card. Same border as the rest -- it is not a warning,
          it is the part of the panel that says what these numbers do not
@@ -267,9 +289,47 @@
       .unmeasured { margin: 0; padding-left: 1.1em; display: grid; gap: 4px;
                     font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .unmeasured li { padding-left: 2px; }
+
+      /* odd/tasks/board-tabs-and-names.md T2 -- the tablist that keeps this
+         board short enough to scan: one group of sections at a time. The
+         same tab look as config.html's own #config-tabbar (JEVADV-41), so
+         the plugin's two panels read as one product.
+         One row, always (T3): wrapping made the bar two rows at 320px only
+         while the bold selected tab was the long one, so the content below
+         jumped on every switch. The bar never wraps; if its tabs ever do not
+         fit, the bar scrolls sideways on its own and the page never does. */
+      .tabbar { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 4px; padding: 0 12px; margin: 0 0 8px;
+                border-bottom: 1px solid var(--border, var(--fb-border)); }
+      .tab {
+        flex: none; white-space: nowrap;
+        border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0;
+        background: none; padding: 7px 12px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+        color: var(--muted-foreground, var(--fb-muted-foreground));
+      }
+      /* At phone widths a little less padding lets all four labels fit
+         without the bar having to scroll, in both languages. */
+      @media (max-width: 400px) { .tab { padding: 7px 9px; } }
+      .tab:hover { color: var(--foreground, var(--fb-foreground)); background: var(--accent, var(--fb-accent)); }
+      /* Same selected state as config.html's, for the same reason: a filled
+         --secondary plus a 2px underline in the foreground colour still has
+         real contrast in dark mode, where --border alone would not. */
+      .tab[aria-selected="true"] {
+        color: var(--foreground, var(--fb-foreground)); font-weight: 600;
+        background: var(--secondary, var(--fb-secondary));
+        border-color: var(--border, var(--fb-border));
+        box-shadow: inset 0 -2px 0 var(--foreground, var(--fb-foreground));
+      }
+      .tab:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: -2px; }
+      .tab-panel[hidden] { display: none; }
+      /* odd/tasks/board-leftovers.md L3: until the remembered tab is known
+         (the host answers, or 300 ms pass), no tab-panel is painted, so the
+         board never shows one tab and then jumps to another. The header and
+         the tab bar stay on screen. Set in the markup, so it holds from the
+         very first paint. */
+      .tabs-restoring .tab-panel { visibility: hidden; }
     </style>
   </head>
-  <body>
+  <body class="tabs-restoring">
     <header>
       <h1>Advisor</h1>
       <span class="meta" id="status"></span>
@@ -277,6 +337,22 @@
     </header>
     <p class="meta nota" id="note"></p>
 
+    <!--
+      odd/tasks/board-tabs-and-names.md T2. Every section lives under exactly
+      one tab-panel (scripts/panels.spec.mjs pins the grouping by id). The
+      header, its agent count and the worker note stay above the tabs: they
+      are about the whole board. The window chips do not: they filter only
+      the gate's own windows (status, cost, interventions, calibration --
+      see renderStats), so they sit inside the Gate tab.
+    -->
+    <div class="tabbar" id="board-tabbar" role="tablist" data-i18n-aria="tabs.groupLabel">
+      <button type="button" class="tab" id="tab-gate" role="tab" aria-controls="panel-gate" aria-selected="true" data-i18n="tabs.gate"></button>
+      <button type="button" class="tab" id="tab-activity" role="tab" aria-controls="panel-activity" aria-selected="false" tabindex="-1" data-i18n="tabs.activity"></button>
+      <button type="button" class="tab" id="tab-consumption" role="tab" aria-controls="panel-consumption" aria-selected="false" tabindex="-1" data-i18n="tabs.consumption"></button>
+      <button type="button" class="tab" id="tab-skills" role="tab" aria-controls="panel-skills" aria-selected="false" tabindex="-1" data-i18n="tabs.skills"></button>
+    </div>
+
+    <div class="tab-panel" id="panel-gate" role="tabpanel" aria-labelledby="tab-gate">
     <nav class="windows" id="windows" data-i18n-aria="window.label">
       <button type="button" data-window="version"></button>
       <button type="button" data-window="day" data-i18n="window.day"></button>
@@ -318,37 +394,50 @@
         <div id="stats-recent"></div>
       </section>
 
-      <section class="card wide" id="card-live">
-        <h2 data-i18n="live.heading"></h2>
-        <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
-      </section>
-
       <section class="card wide" id="card-speed">
         <h2 data-i18n="speed.heading"></h2>
         <div id="speed-empty" class="empty-line" style="display:none"></div>
         <div id="speed-body"></div>
       </section>
 
-      <section class="card" id="card-projects">
+      <section class="card wide" id="card-unmeasured">
+        <h2 data-i18n="unmeasured.heading"></h2>
+        <ul class="unmeasured" id="unmeasured-body"></ul>
+      </section>
+    </div>
+    </div>
+
+    <div class="tab-panel" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
+    <div class="cards">
+      <section class="card wide" id="card-live">
+        <h2 data-i18n="live.heading"></h2>
+        <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
+      </section>
+
+      <section class="card wide" id="card-projects">
         <h2 data-i18n="stats.byProjectHeading"></h2>
         <div id="projects-body"></div>
       </section>
+    </div>
+    </div>
 
-      <section class="card" id="card-skills">
-        <h2 data-i18n="skills.heading"></h2>
-        <div id="skills-body"></div>
-      </section>
-
+    <div class="tab-panel" id="panel-consumption" role="tabpanel" aria-labelledby="tab-consumption" hidden>
+    <div class="cards">
       <section class="card wide" id="card-consumption">
         <h2 data-i18n="consumption.heading"></h2>
         <div id="consumption-empty" class="empty-line" style="display:none"></div>
         <div id="consumption-body"></div>
       </section>
+    </div>
+    </div>
 
-      <section class="card wide" id="card-unmeasured">
-        <h2 data-i18n="unmeasured.heading"></h2>
-        <ul class="unmeasured" id="unmeasured-body"></ul>
+    <div class="tab-panel" id="panel-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
+    <div class="cards">
+      <section class="card wide" id="card-skills">
+        <h2 data-i18n="skills.heading"></h2>
+        <div id="skills-body"></div>
       </section>
+    </div>
     </div>
 
     <script>
@@ -400,6 +489,11 @@
           'age.h': 'hace {{n}} h',
           'age.d': 'hace {{n}} d',
           'board.refresh': 'Releer el tablero',
+          'tabs.groupLabel': 'Secciones del tablero',
+          'tabs.gate': 'Gate',
+          'tabs.activity': 'Actividad',
+          'tabs.consumption': 'Consumo',
+          'tabs.skills': 'Skills',
           'stats.skillsEmpty': 'El mod de skills todavía no ha registrado ninguna decisión.',
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
@@ -448,8 +542,14 @@
           'live.loading': 'Cargando…',
           'live.empty': 'Sin datos todavía. El tablero se llena a medida que llegan eventos.',
           'live.unknownWorktree': '(worktree desconocido)',
+          'live.floatingTerminal': 'Terminal flotante',
           'live.agentsCount': '{{n}} agente(s)',
           'live.updating': 'Actualizando…',
+          'live.noSignal': 'sin señal',
+          'live.sessions': '×{{n}} sesiones',
+          'live.showMore': 'ver más ({{n}})',
+          'live.showLess': 'ver menos',
+          'live.none24h': 'Nada visto en las últimas 24 h.',
           'common.workerSilent': 'El proceso del plugin todavía no se ha iniciado. Arranca la primera vez que se ejecuta un comando de Advisor: abre la paleta de comandos de Orca, ejecuta "Advisor: Check configuration" una vez y luego vuelve a abrir este panel.',
           'speed.heading': 'Cuánto tarda cada uno en decidir',
           'speed.empty': 'Todavía no hay comparaciones emparejadas. Se llenan cuando el muestreo A/B corre: cada muestra manda el mismo comando a Jev y al modelo y guarda las dos respuestas.',
@@ -561,6 +661,11 @@
           'age.h': '{{n}} h ago',
           'age.d': '{{n}} d ago',
           'board.refresh': 'Reload the board',
+          'tabs.groupLabel': 'Board sections',
+          'tabs.gate': 'Gate',
+          'tabs.activity': 'Activity',
+          'tabs.consumption': 'Consumption',
+          'tabs.skills': 'Skills',
           'stats.skillsEmpty': 'The skills mod has not recorded any decision yet.',
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
@@ -609,8 +714,14 @@
           'live.loading': 'Loading…',
           'live.empty': 'No data yet. The board fills in as events arrive.',
           'live.unknownWorktree': '(unknown worktree)',
+          'live.floatingTerminal': 'Floating terminal',
           'live.agentsCount': '{{n}} agent(s)',
           'live.updating': 'Updating…',
+          'live.noSignal': 'no signal',
+          'live.sessions': '×{{n}} sessions',
+          'live.showMore': 'show more ({{n}})',
+          'live.showLess': 'show less',
+          'live.none24h': 'Nothing seen in the last 24 h.',
           'common.workerSilent': "The plugin's background process has not started yet. It starts the first time an Advisor command runs: open Orca's command palette, run \"Advisor: Check configuration\" once, then reopen this panel.",
           'speed.heading': 'How long each one takes to decide',
           'speed.empty': 'No paired comparisons yet. They fill in when the A/B sampling runs: each sample sends the same command to Jev and to the model and keeps both answers.',
@@ -735,6 +846,105 @@
         document.querySelectorAll('[data-i18n-aria]').forEach(function (node) { node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria'))) })
       }
 
+      // ---------- tabs (odd/tasks/board-tabs-and-names.md T2) ----------------
+      // Hand-copied from config.html's own tablist (JEVADV-41, tested there
+      // too) -- `grep -n activateTab` across both files is how to check the
+      // copies still agree. One group of sections visible at a time behind a
+      // real role="tablist", so the board fits on a screen again.
+      var TABS = ['gate', 'activity', 'consumption', 'skills']
+      // The same key in both places the tab is remembered: the host's plugin
+      // storage (inside Orca) and localStorage (a plain browser). See
+      // restoreTabFromHost below the host bridge for which one wins.
+      var TAB_STORAGE_KEY = 'jevAdvisor.boardPanel.activeTab'
+      // Set once the person picks a tab; a host answer that arrives after
+      // that never overrides their choice.
+      var tabChosenByPerson = false
+
+      function tabButton (key) { return el('tab-' + key) }
+      function tabPanel (key) { return el('panel-' + key) }
+
+      /** What this browser's localStorage remembers, or null if it has
+       *  nothing usable -- never lets a bad/foreign value pick a tab that
+       *  does not exist. */
+      function readLocalTab () {
+        try {
+          var value = window.localStorage.getItem(TAB_STORAGE_KEY)
+          return TABS.indexOf(value) !== -1 ? value : null
+        } catch (e) {
+          // Private browsing, disabled storage, a full quota, or Orca's own
+          // sandboxed opaque-origin iframe -- there the host bridge below is
+          // what remembers the tab.
+          return null
+        }
+      }
+
+      /** Remembers the tab in both places. Only ever called for a person's
+       *  own choice (after this script has run), so `call` and its queue,
+       *  defined with the host bridge below, already exist. */
+      function writeStoredTab (key) {
+        try {
+          window.localStorage.setItem(TAB_STORAGE_KEY, key)
+        } catch (e) {
+          // Same as above: localStorage cannot keep it; the host still can.
+        }
+        call('storage.set', { key: TAB_STORAGE_KEY, value: key }, true)
+      }
+
+      /** Stops holding the tab-panels back (see .tabs-restoring). */
+      function revealTabs () { document.body.classList.remove('tabs-restoring') }
+
+      /** A person's own choice: shown at once and remembered. */
+      function chooseTab (key, opts) {
+        tabChosenByPerson = true
+        activateTab(key, opts)
+        revealTabs()
+        writeStoredTab(TABS.indexOf(key) !== -1 ? key : TABS[0])
+      }
+
+      /** Shows exactly one tab-panel and updates the tablist's own ARIA state
+       *  (aria-selected, roving tabindex). It does not remember anything:
+       *  restoring a tab must never write back over what the host holds.
+       *  `opts.focus` also moves keyboard focus onto the newly active tab
+       *  button -- used by arrow-key movement only. */
+      function activateTab (key, opts) {
+        opts = opts || {}
+        if (TABS.indexOf(key) === -1) key = TABS[0]
+        TABS.forEach(function (candidate) {
+          var isActive = candidate === key
+          var button = tabButton(candidate)
+          button.setAttribute('aria-selected', isActive ? 'true' : 'false')
+          button.tabIndex = isActive ? 0 : -1
+          tabPanel(candidate).hidden = !isActive
+        })
+        if (opts.focus) tabButton(key).focus()
+      }
+
+      TABS.forEach(function (key) {
+        tabButton(key).addEventListener('click', function () { chooseTab(key) })
+      })
+
+      /** Arrow-key movement between tabs, wrapping at both ends, plus
+       *  Home/End -- the roving-tabindex pattern the ARIA APG describes for
+       *  role="tablist", with automatic activation. */
+      el('board-tabbar').addEventListener('keydown', function (event) {
+        var currentKey = null
+        TABS.forEach(function (key) { if (tabButton(key) === document.activeElement) currentKey = key })
+        if (!currentKey) return
+        var index = TABS.indexOf(currentKey)
+        var nextIndex = null
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') nextIndex = (index + 1) % TABS.length
+        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') nextIndex = (index - 1 + TABS.length) % TABS.length
+        else if (event.key === 'Home') nextIndex = 0
+        else if (event.key === 'End') nextIndex = TABS.length - 1
+        if (nextIndex === null) return
+        event.preventDefault()
+        chooseTab(TABS[nextIndex], { focus: true })
+      })
+
+      // localStorage's tab, or Gate, while the host is asked (still hidden
+      // behind .tabs-restoring); restoreTabFromHost below settles it.
+      activateTab(readLocalTab() || TABS[0])
+
       // ---------- puente real con el host --------------------------------
       // El panel corre en un iframe sandboxed de origen opaco: sin peticiones
       // externas, el unico canal es postMessage con el frame padre
@@ -744,8 +954,9 @@
       //
       // El host admite un cupo de mensajes por ventana y contesta
       // `rate_limited` al resto (PANEL_MESSAGE_RATE_LIMIT en el mismo
-      // archivo). Este panel solo hace lecturas -sondeo cada 8 s mas el clic
-      // manual-, asi que la cola solo necesita distinguir "esto lo pidio la
+      // archivo). Este panel hace lecturas -sondeo cada 8 s mas el clic
+      // manual- y una sola escritura, la pestaña que la persona elige (con
+      // prioridad de persona), asi que la cola solo necesita distinguir "esto lo pidio la
       // persona" (prioridad, reintento) de "esto es sondeo de fondo" (se dej
       // caer y la vuelta siguiente lo vuelve a pedir), tal como wa-inbox
       // config.html lo resuelve para sus quince claves, simplificado a una.
@@ -844,9 +1055,32 @@
         return age >= 0 && age <= staleAfterMs
       }
 
-      // This panel only reads. The locale mirror for the gate and the skills
-      // mod is written by config.html alone; both panels doing it would race
-      // for no gain, so there is no storage.set helper here.
+      // ---------- remembered tab, from the host (board-leftovers L3) --------
+      // Inside Orca, localStorage throws, so the tab the person chose last is
+      // kept in the host's plugin storage (writeStoredTab above). On open,
+      // the host's value wins if it names a real tab; otherwise the
+      // localStorage tab (or Gate) already active above stays. The panels
+      // stay hidden until then, for 300 ms at most: a host that has not
+      // answered by then is not waited for, and its late answer is ignored,
+      // so the board never jumps to another tab while someone reads it.
+      var TAB_RESTORE_BOUND_MS = 300
+      ;(function restoreTabFromHost () {
+        var settled = false
+        function settle (key) {
+          if (settled) return
+          settled = true
+          if (key !== null && !tabChosenByPerson) activateTab(key)
+          revealTabs()
+        }
+        setTimeout(function () { settle(null) }, TAB_RESTORE_BOUND_MS)
+        read(TAB_STORAGE_KEY, true).then(function (value) {
+          settle(TABS.indexOf(value) !== -1 ? value : null)
+        }, function () { settle(null) })
+      })()
+
+      // The only thing this panel writes is the remembered tab above. The
+      // locale mirror for the gate and the skills mod is written by
+      // config.html alone; both panels doing it would race for no gain.
       // ---------- render: stats ---------------------------------------------
       function esc (text) {
         return String(text == null ? '' : text)
@@ -857,9 +1091,13 @@
       }
       /** null/undefined-safe project label -- a record whose project could
        *  not be resolved (gate-bash.ts's own projectName() returning null)
-       *  is still shown, honestly, never silently dropped. */
+       *  is still shown, honestly, never silently dropped. The skills mod's
+       *  rows spell the same case `(unknown)` (read-measurements.mjs's
+       *  aggregateModSkills), so it gets the same label, and "By project"
+       *  adds both into one row. */
       function projectLabel (project) {
-        return (project === null || project === undefined || project === '') ? t('stats.unknownProject') : String(project)
+        var unknown = project === null || project === undefined || project === '' || project === '(unknown)'
+        return unknown ? t('stats.unknownProject') : String(project)
       }
 
       // ---------- chart primitives -------------------------------------
@@ -984,13 +1222,27 @@
         if (hours < 24) return { unit: 'h', n: hours }
         return { unit: 'd', n: Math.floor(hours / 24) }
       }
+      // Orca's own FLOATING_TERMINAL_WORKTREE_ID (orca-oss
+      // src/shared/floating-workspace-selector.ts): a pane that belongs to no
+      // worktree at all, which Orca's own Activity page labels "Floating
+      // terminal". Its name is Orca's, not a guess.
+      var FLOATING_TERMINAL_WORKTREE_ID = 'global-floating-terminal'
+
+      /** The row's visible name is the project name the worker resolved
+       *  (main.mjs's boardProjectName, the same rule "By project" names a
+       *  project by) -- never the raw projectId, which moves to `title` with
+       *  the worktree and pane ids. A project the worker could not name
+       *  reads as unknown, the same words "By project" uses. */
       function liveEntryView (entry) {
         var e = entry || {}
         function present (value) { return (typeof value === 'string' && value.length > 0) ? value : null }
+        var name = present(e.projectName)
+        if (name === null && e.worktreeId === FLOATING_TERMINAL_WORKTREE_ID) name = t('live.floatingTerminal')
+        if (name === null) name = present(e.project) !== null ? t('stats.unknownProject') : t('live.unknownWorktree')
         return {
-          name: present(e.project),
+          name: name,
           branch: present(e.rama),
-          title: [present(e.worktreeId), present(e.paneKey)].filter(function (part) { return part !== null }).join(' · ')
+          title: [present(e.project), present(e.worktreeId), present(e.paneKey)].filter(function (part) { return part !== null }).join(' · ')
         }
       }
 
@@ -1237,13 +1489,23 @@
         fill('projects-body', null, hbars(rows, 'v2'), t('stats.byProjectEmpty'))
       }
 
+      /** rows: [{ label, value }] as labelled numbers, for figures that
+       *  share no unit and so must not be drawn on one bar scale. The
+       *  number is printed before its label (`column-reverse` keeps the
+       *  `<dt>` first for assistive technology). */
+      function figures (rows) {
+        return '<dl class="figures">' + rows.map(function (r) {
+          return '<div class="figure"><dt>' + esc(r.label) + '</dt><dd>' + esc(num(r.value)) + '</dd></div>'
+        }).join('') + '</dl>'
+      }
+
       function renderSkills (mod) {
         if (!((mod.totalDecisions || 0) > 0)) { fill('skills-body', null, '', t('stats.skillsEmpty')); return }
         var rows = [{ label: t('stats.skillSuggestions'), value: mod.suggestedCount || 0 }]
         if (mod.listingCharsTotal != null) {
           rows.push({ label: t('stats.listingChars'), value: mod.listingCharsTotal })
         }
-        var parts = [hbars(rows, 'v1')]
+        var parts = [figures(rows)]
         parts.push(line(t('stats.skillMatchRate') + ': ' +
           (mod.matchRate == null ? t('stats.na') : pct(mod.matchRate) + '%')))
         fill('skills-body', null, parts.join(''), '')
@@ -1332,15 +1594,20 @@
           '</div>'
       }
 
-      /** The short label a quota row shows in place of the raw account id
-       *  (JEV-060 slice 2, T9): "This computer" for `home` (kept in case a
-       *  future quota source ever reports it -- today's `orca account list
-       *  --json` never does), else "Account " plus the id's first 8
-       *  characters, same truncation `accountConfigTarget`
-       *  (src/core/orca_accounts.ts) already uses for its own `label`. The
-       *  raw id is never lost -- it moves to the element's `title`. */
-      function accountShortLabel (id) {
-        return id === 'home' ? t('consumption.accountHome') : t('consumption.accountLabel', { id: String(id).slice(0, 8) })
+      /** The label a quota row shows in place of the raw account id: the
+       *  account's `email` as `orca account list --json` reports it, joined
+       *  on by the worker (main.mjs's withAccountEmails,
+       *  odd/tasks/board-tabs-and-names.md T1) -- for a custom-endpoint
+       *  account that field is Orca's own endpoint label, shown as-is.
+       *  Without one: "This computer" for `home` (kept in case a future quota
+       *  source ever reports it -- today's CLI never does), else "Account "
+       *  plus the id's first 8 characters, same truncation
+       *  `accountConfigTarget` (src/core/orca_accounts.ts) uses for its own
+       *  `label`. The raw id is never lost -- it moves to the element's
+       *  `title`. */
+      function accountShortLabel (account) {
+        if (typeof account.email === 'string' && account.email.length > 0) return account.email
+        return account.id === 'home' ? t('consumption.accountHome') : t('consumption.accountLabel', { id: String(account.id).slice(0, 8) })
       }
 
       /** One quota account's session/weekly usage bars and its weekly reset
@@ -1350,7 +1617,7 @@
        *  the 0..1 fractions above -- passed to barRow directly, never through
        *  pct(). */
       function consumptionQuotaBlock (account) {
-        var label = accountShortLabel(account.id)
+        var label = accountShortLabel(account)
         var heading = account.status ? (label + ' · ' + account.status) : label
         var resetText = formatResetsAt(account.resetsAt)
         return '<p class="kpi-sub"><b title="' + esc(account.id) + '">' + esc(heading) + '</b></p>' +
@@ -1567,14 +1834,8 @@
 
       function show (id, visible) { el(id).style.display = visible ? '' : 'none' }
 
-      // Whether the board has anything to say beyond its empty state. The
-      // live card reads it too, so an empty log and an empty live list do
-      // not leave a card that only says "no data".
+      // Whether the board has anything to say beyond its empty state.
       var hasMeasurements = false
-      function syncLiveVisibility () {
-        var entries = (lastBoard && Array.isArray(lastBoard.entries)) ? lastBoard.entries : []
-        show('card-live', hasMeasurements || entries.length > 0)
-      }
 
       function renderStats (summary, policiesWithoutKind) {
         lastStats = summary
@@ -1596,7 +1857,11 @@
         var kindIssue = !!(lastPoliciesWithoutKind && lastPoliciesWithoutKind.count > 0)
 
         // An empty log gets one card that says why, never a column of empty
-        // sections and never a zero standing in for "nothing yet".
+        // sections and never a zero standing in for "nothing yet". With tabs
+        // (odd/tasks/board-tabs-and-names.md T2) that rule holds per tab:
+        // Gate's is card-empty, and the live, consumption and skills cards
+        // always show, each saying in its own words that nothing is there
+        // yet -- otherwise the Activity or Skills tab would open blank.
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
         show('windows', hasGate)
@@ -1604,9 +1869,7 @@
         show('card-recent', hasGate)
         show('card-projects', hasGate || hasSkills)
         show('card-speed', hasMeasurements)
-        show('card-skills', hasMeasurements)
         show('card-unmeasured', hasMeasurements)
-        syncLiveVisibility()
 
         var key = activeWindowKey(windows)
         var w = (windows && windows[key]) || {}
@@ -1631,8 +1894,8 @@
         if (hasMeasurements) {
           renderUnmeasured()
           renderSpeed(ab)
-          renderSkills(mod)
         }
+        renderSkills(mod)
         if (hasGate || hasSkills) renderProjects(gate, mod)
       }
 
@@ -1644,39 +1907,119 @@
         if (state === 'advised') return 'tag advised'
         return 'tag'
       }
+      // odd/tasks/board-leftovers.md L6 -- the owner's panel with 63 agents
+      // listed the oldest first inside each status, said "working" for rows
+      // silent for three days, and repeated one project and branch more than
+      // ten times. So: one row per project and branch (its latest state, its
+      // last-seen time and how many sessions it stands for), newest first
+      // across every status, a working or waiting row silent for over an
+      // hour shown as "no signal", and rows last seen over 24 h ago behind a
+      // "show more" toggle. View only: the worker's entries are unchanged.
+      var LIVE_STALE_AFTER_MS = 60 * 60 * 1000
+      var LIVE_RECENT_MS = 24 * 60 * 60 * 1000
+      // The states that claim someone is active right now; `done` never goes
+      // stale, it is already the end.
+      var LIVE_ACTIVE_STATES = ['working', 'waiting']
+      var liveExpanded = false
       var lastBoard = null
+
+      function presentText (value) { return (typeof value === 'string' && value.length > 0) ? value : null }
+      function entryTime (entry) {
+        var at = Date.parse(entry && entry.updatedAt)
+        return isNaN(at) ? null : at
+      }
+      /** Which row an entry belongs to: its project (the resolved name, else
+       *  the raw id) plus its branch. An entry with no project at all never
+       *  merges with another unnamed one: it keeps its own worktree, or its
+       *  own pane when it has none or is on the floating terminal (every
+       *  floating pane shares that one worktree id). */
+      function liveGroupKey (e) {
+        var project = presentText(e.projectName) || presentText(e.project)
+        if (project !== null) return 'p\u0000' + project + '\u0000' + (presentText(e.rama) || '')
+        var worktree = presentText(e.worktreeId)
+        if (worktree !== null && worktree !== FLOATING_TERMINAL_WORKTREE_ID) return 'w\u0000' + worktree
+        return 'k\u0000' + String(e.paneKey)
+      }
+      /** Newer first: by last-seen time, a missing time last, then by the
+       *  order Orca received the events in. */
+      function newerFirst (aTime, aReceived, bTime, bReceived) {
+        if (aTime !== bTime) {
+          if (aTime === null) return 1
+          if (bTime === null) return -1
+          return bTime - aTime
+        }
+        return (bReceived || 0) - (aReceived || 0)
+      }
+      function liveGroups (entries) {
+        var byKey = {}
+        var order = []
+        entries.forEach(function (entry) {
+          var e = entry || {}
+          var key = liveGroupKey(e)
+          var group = byKey[key]
+          if (!group) {
+            group = byKey[key] = { latest: e, lastSeen: entryTime(e), count: 0 }
+            order.push(group)
+          } else if (newerFirst(entryTime(e), e.receivedAt, group.lastSeen, group.latest.receivedAt) < 0) {
+            group.latest = e
+            group.lastSeen = entryTime(e)
+          }
+          group.count += 1
+        })
+        return order.sort(function (a, b) { return newerFirst(a.lastSeen, a.latest.receivedAt, b.lastSeen, b.latest.receivedAt) })
+      }
+      function liveRow (group, nowMs) {
+        var entry = group.latest
+        var view = liveEntryView(entry)
+        var silent = group.lastSeen === null || nowMs - group.lastSeen > LIVE_STALE_AFTER_MS
+        var noSignal = LIVE_ACTIVE_STATES.indexOf(entry.state) !== -1 && silent
+        return '<div class="live-row" title="' + esc(view.title) + '">' +
+          '<span class="name">' + esc(view.name) + '</span>' +
+          (view.branch ? '<span class="tag branch">' + esc(view.branch) + '</span>' : '') +
+          (noSignal
+            ? '<span class="tag state nosignal">' + esc(t('live.noSignal')) + '</span>'
+            : '<span class="' + tagClass(entry.state) + ' state">' + esc(entry.state || '?') + '</span>') +
+          (group.count > 1 ? '<span class="count">' + esc(t('live.sessions', { n: String(group.count) })) + '</span>' : '') +
+          '<span class="when">' + esc(ago(entry.updatedAt)) + '</span></div>'
+      }
       function render (board) {
         lastBoard = board
         var entries = (board && Array.isArray(board.entries)) ? board.entries.slice() : []
-        // "Quien necesita algo" antes que el conteo: no-terminado primero,
-        // y entre los no-terminados el que lleva mas tiempo esperando.
-        entries.sort(function (a, b) {
-          var aDone = a && a.state === 'done' ? 1 : 0
-          var bDone = b && b.state === 'done' ? 1 : 0
-          if (aDone !== bDone) return aDone - bDone
-          return (a && a.receivedAt || 0) - (b && b.receivedAt || 0)
-        })
 
         if (!entries.length) {
           cardsEl.innerHTML = '<p class="empty">' + esc(t('live.empty')) + '</p>'
           statusEl.textContent = ''
-          syncLiveVisibility()
           return
         }
 
+        var nowMs = Date.now()
+        var groups = liveGroups(entries)
+        var recent = groups.filter(function (g) { return g.lastSeen !== null && nowMs - g.lastSeen <= LIVE_RECENT_MS })
+        var olderCount = groups.length - recent.length
+        var shown = liveExpanded ? groups : recent
         // A pane key is a pair of UUIDs that tells a person nothing: the
         // project and branch are the chips, the ids only the tooltip.
-        cardsEl.innerHTML = '<div class="live-list">' + entries.map(function (entry) {
-          var view = liveEntryView(entry)
-          return '<div class="live-row" title="' + esc(view.title) + '">' +
-            '<span class="name">' + esc(view.name || t('live.unknownWorktree')) + '</span>' +
-            (view.branch ? '<span class="tag">' + esc(view.branch) + '</span>' : '') +
-            '<span class="' + tagClass(entry.state) + '">' + esc(entry.state || '?') + '</span>' +
-            '<span class="when">' + esc(ago(entry.updatedAt)) + '</span></div>'
-        }).join('') + '</div>'
+        var list = shown.length
+          ? '<div class="live-list" id="live-list">' + shown.map(function (g) { return liveRow(g, nowMs) }).join('') + '</div>'
+          : '<p class="empty-line" id="live-list">' + esc(t('live.none24h')) + '</p>'
+        var toggle = olderCount > 0
+          ? '<button type="button" class="live-toggle" data-live-toggle aria-controls="live-list" aria-expanded="' + (liveExpanded ? 'true' : 'false') + '">' +
+            esc(liveExpanded ? t('live.showLess') : t('live.showMore', { n: String(olderCount) })) + '</button>'
+          : ''
+        cardsEl.innerHTML = list + toggle
         statusEl.textContent = t('live.agentsCount', { n: String(entries.length) })
-        syncLiveVisibility()
       }
+
+      // One listener for the toggle, which is re-rendered with the list; the
+      // focus goes back onto the new button so the keyboard never loses it.
+      cardsEl.addEventListener('click', function (event) {
+        var button = event.target && event.target.closest ? event.target.closest('[data-live-toggle]') : null
+        if (!button) return
+        liveExpanded = !liveExpanded
+        render(lastBoard)
+        var again = cardsEl.querySelector('[data-live-toggle]')
+        if (again) again.focus()
+      })
 
       // Every number on this board (board entries, measurementsSummary) is
       // written only by the worker -- if it has never run, both stay

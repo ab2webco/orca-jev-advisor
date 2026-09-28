@@ -241,6 +241,13 @@ export interface BoardEntry {
   readonly worktreeId: string | null;
   /** Resolved from `orca worktree list --json` (best-effort; null when no match was found). */
   readonly project: string | null;
+  /**
+   * The name a person calls that project, resolved by the worker the same
+   * way the measurement log names it (main.mjs's boardProjectName); null
+   * when nothing could name it. Absent on an entry written before names
+   * existed, which is not a corrupt entry.
+   */
+  readonly projectName?: string | null;
   /** Resolved the same way -- the worktree's display branch, not the raw `refs/heads/...` ref. */
   readonly rama: string | null;
   readonly paneKey: string;
@@ -256,6 +263,7 @@ function isBoardEntry(value: unknown): value is BoardEntry {
   return (
     isStringOrNull(value.worktreeId) &&
     isStringOrNull(value.project) &&
+    (value.projectName === undefined || isStringOrNull(value.projectName)) &&
     isStringOrNull(value.rama) &&
     isString(value.paneKey) &&
     isString(value.state) &&

@@ -23,8 +23,8 @@ export type RouterSticky = {
   configuredEffort: RouterStickyEffort | null
   /** The tier behind `model`; null when the router adopted the session's own (warm session, Jev failure). */
   tier: 'simple' | 'standard' | 'complex' | 'frontier' | null
-  /** A lower tier waiting on hysteresis (§6.4): how many consecutive turns asked for it. */
-  pendingLower: { tier: 'simple' | 'standard' | 'complex' | 'frontier'; turns: number } | null
+  /** A lower tier waiting on hysteresis (§6.4): how many consecutive turns asked for it; with `effort`, a lower effort on the same model (0.6.2). */
+  pendingLower: { tier: 'simple' | 'standard' | 'complex' | 'frontier'; turns: number; effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' } | null
   /** This session's own main-loop usage, for break-even (§6.4). */
   stats: RouterSessionStats
   /**

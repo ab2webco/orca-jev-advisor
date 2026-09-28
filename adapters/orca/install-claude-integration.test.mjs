@@ -889,7 +889,9 @@ test('router-mode-status: with no Orca accounts reachable, reports only "home", 
   const home = makeHome()
   const result = runRouter(['router-mode-status'], home)
   assert.equal(result.ok, true)
-  assert.deepEqual(result.targets, [{ target: 'home', mode: 'measure' }])
+  assert.equal(result.targets.length, 1)
+  assert.equal(result.targets[0].target, 'home')
+  assert.equal(result.targets[0].mode, 'measure')
 })
 
 test('router-mode-status: reads back a mode already set in settings.json, home and an account both', () => {
@@ -1009,4 +1011,53 @@ test('finding 6: a settings.json that is not a JSON object is refused and left a
   assert.equal(result.ok, false)
   assert.equal(result.reason, 'not-an-object')
   assert.equal(readFileSync(settingsPathFor(home), 'utf8'), '[]\n')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.2 E3: the effort each tier asks for, per target, next to the mode.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TIER_EFFORT = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+
+test('router-mode-status: each target reports its per-tier effort and the model each tier resolves to there', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const userDataDir = makeUserDataWithAccount(home, accountId)
+  writeSettings(home, { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { complex: 'xhigh', simple: 'turbo' } } } } })
+  const accountSettingsPath = join(userDataDir, 'claude-accounts', accountId, 'auth', 'settings.json')
+  mkdirSync(dirname(accountSettingsPath), { recursive: true })
+  writeFileSync(accountSettingsPath, JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://gw.example', ANTHROPIC_DEFAULT_OPUS_MODEL: 'big', ANTHROPIC_DEFAULT_SONNET_MODEL: 'mid', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'small' } }))
+  const result = runRouter(['router-mode-status'], home, userDataDir)
+  const byTarget = Object.fromEntries(result.targets.map((t) => [t.target, t]))
+  assert.deepEqual(byTarget.home.effort, { ...DEFAULT_TIER_EFFORT, complex: 'xhigh' }, 'an invalid value falls back to the default')
+  assert.equal(byTarget.home.tiers.complex.modelId, 'claude-opus-5-5')
+  assert.equal(byTarget.home.tiers.complex.label, 'Opus 5.5')
+  assert.equal(byTarget.home.tiers.simple.supportsEffort, false, 'Haiku takes no effort')
+  assert.deepEqual(byTarget[accountId].effort, DEFAULT_TIER_EFFORT)
+  assert.equal(byTarget[accountId].tiers.complex.modelId, 'big', 'a gateway account resolves to its own ids')
+})
+
+test('router-effort-set: writes only what differs from the defaults, keeping the mode and every other key', () => {
+  const home = makeHome()
+  writeSettings(home, { env: { SOME_OTHER_VAR: '1' }, pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: 'active' } } } })
+  const result = runRouter(['router-effort-set', 'home', JSON.stringify({ ...DEFAULT_TIER_EFFORT, complex: 'xhigh' })], home)
+  assert.equal(result.ok, true)
+  assert.equal(result.target, 'home')
+  const settings = readSettings(home)
+  assert.equal(settings.env.SOME_OTHER_VAR, '1')
+  assert.deepEqual(settings.pluginConfigs[ROUTER_SETTINGS_KEY].options, { routerMode: 'active', routerEffort: { complex: 'xhigh' } })
+  const again = runRouter(['router-effort-set', 'home', JSON.stringify({ complex: 'xhigh' })], home)
+  assert.equal(again.unchanged, true, 'the same effort is no write')
+})
+
+test('router-effort-set: an unknown effort, tier or shape is rejected and never written', () => {
+  const home = makeHome()
+  for (const arg of [JSON.stringify({ complex: 'turbo' }), JSON.stringify({ galaxy: 'high' }), JSON.stringify(['high']), 'not json']) {
+    const result = runRouter(['router-effort-set', 'home', arg], home)
+    assert.equal(result.ok, false, arg)
+    assert.equal(result.reason, 'unknown-effort', arg)
+  }
+  assert.equal(existsSync(settingsPathFor(home)), false)
+  const noTarget = runRouter(['router-effort-set', 'account:nope', JSON.stringify({ complex: 'high' })], home)
+  assert.equal(noTarget.reason, 'unknown-target')
 })

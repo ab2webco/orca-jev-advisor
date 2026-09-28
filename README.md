@@ -156,18 +156,21 @@ refusal. That is one machine's own replay, not a guarantee about yours.
     non-Anthropic `ANTHROPIC_BASE_URL`) uses the models its own
     `ANTHROPIC_DEFAULT_*_MODEL` settings name; its prices are unknown, so
     it never downgrades on cost.
-  - **The quality floor wins.** It never goes below the session's own
-    model when the work mentions security, credentials, a release, a
-    deploy, a migration or production (in English or Spanish); when the
-    previous turn had a tool error or a failing test; or when Jev is less
-    than 70% sure. Upgrading is always allowed. A model you pick yourself
-    mid-session wins. It also never goes below it when the session's
-    folder is a client site in the destination catalog, or when a
-    `requires_human` / `prohibits` policy is scoped to that destination
-    (the same catalog and policies the command gate reads). Global
-    policies do not hold the floor on their own: the command gate already
-    applies them to every command. If the catalog is missing or cannot be
-    read, the destination counts as unknown and changes nothing.
+  - **Jev decides; a few hard guards hold the floor.** It never goes below
+    the session's own model when Jev is less than 70% sure (or fails), or
+    when the prompt only points to a document to read and act on. Two
+    things are facts Jev weighs rather than vetoes: a previous turn that
+    failed (a failing test, or an error from a call that is not a
+    read-only probe such as `ls`, `cat` or a failed `cd`) and a request
+    that touches security, credentials, a release, a deploy, a migration
+    or production (in English or Spanish). Upgrading is always allowed,
+    and no guard ever blocks raising the effort. A model you pick yourself
+    mid-session wins. A client site or a policy scoped to the session's
+    destination does not hold the model: protecting a client (no data
+    deleted, no force push, no deploy) is the command gate's job, and it
+    keeps doing it exactly as before. The destination's kind reaches Jev
+    as a fact (`destination_kind`), so a trivial prompt in a client
+    project is answered by a light model.
   - **Measure first.** The switch has three positions: `measure` (the
     default: it decides, logs and shows "would use:" on the status line,
     and changes nothing), `active`, and `off`. Set it per account in the
@@ -222,6 +225,89 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   explicit model (that is intent) and no guard held at spawn. It only ever
   lowers effort, never raises it, and it never touches a person's own `max`
   or numeric budget.
+
+## What changed in 0.6.2
+
+- **Effort follows the work, not the account's default.** An account that
+  sets Opus to `xhigh` ran every main step at `xhigh`: an upgrade back to
+  the session's own model restored the account's effort, and a turn whose
+  tier stayed on the same model never looked at effort at all. Now an
+  upgrade uses the tier's own effort (analyse work runs Opus at `high`,
+  deep reasoning at `xhigh`), and every person prompt on the same model
+  recalculates it. A higher effort applies at once when Jev is at least 70%
+  sure, and no guard blocks it. A lower one rewrites the prompt cache, so it
+  has to earn it the way a cheaper model does: the same lower effort on two
+  prompts in a row (one under quota pressure), no guard holding, and a
+  saving that beats the rewrite by 20%. The saving is measured, never
+  assumed: it is the account's own median output per step at each effort
+  on that model over the last 7 days, and with fewer than 20 steps at
+  either effort the effort stays. A person's own `max` or numeric budget is
+  never lowered. Each decision is logged with its effort and a reason
+  (`effort-raise`, `effort-lower`, `effort-hysteresis`, `effort-break-even`,
+  `effort-unknown-savings`), and the status line says why an effort was
+  kept.
+- **You choose the effort each tier asks for, per account.** The Models tab
+  shows, for each account, each tier, the model it resolves to there, and
+  its effort. Saving writes `routerEffort` next to `routerMode` in that
+  account's settings.json; only what differs from the defaults is stored.
+- **The Models tab explains itself.** The intro says what the ladder, the
+  router switch and the effort table each do; the catalog names its source
+  once instead of on every card; the classic subagent hook's checkbox is
+  labelled as the legacy switch it is (it only acts where the router is not
+  active).
+- **A prompt that only points to a document no longer picks the model.**
+  Agents are often started with a short pointer such as "Read
+  /path/brief.md and do what it says"; Jev judged the pointer, found it
+  simple, and a complex job could start on Haiku. A short prompt (under 400
+  characters) whose main content is a path to read and act on, in English
+  or Spanish, or a bare path to a `.md`/`.txt` file, is now a guard
+  (`pointer-prompt`): the session keeps its own model and effort at session
+  start, no downgrade happens on it later, and a subagent spawned with one
+  keeps its parent's model. It never blocks an upgrade. A prompt that names
+  a file but asks for work ("arregla el bug en src/a.ts") is not a pointer.
+- **The router rows name accounts by email and show the real mode.** Each
+  account row in the Models tab shows the email Orca reports for it (its
+  short id when none is known), and the mode is re-read whenever the panel
+  opens and every 10 minutes, so a mode set from a terminal shows up. A
+  Save re-reads first: if the mode or effort changed elsewhere since the
+  row was drawn, the row shows the real value and nothing is written.
+- **The status line says what applied and what only measured.** It starts
+  with one `jev` and each part says plainly what it did:
+  `jev · skill: branch-pr (measuring only) · tools: no change (measuring
+  only) · model: Opus 5.5 · kept: session already started`. A skill or tool
+  reads `(applied)` only when its advice was actually injected; the router
+  keeps `would use:` in measure mode, and a warm session says why it kept
+  the model.
+- **A failed look no longer counts as a failed turn.** The previous-failure
+  guard counted every tool error, so an `ls` of a missing file or a `which`
+  that found nothing kept a light turn on the session's expensive model.
+  Errors from read-only probes (Read, Grep, Glob, LS, and shell commands
+  made only of programs such as `ls`, `cat`, `grep`, `find`, `cd` or
+  `git status`) no longer count; any other failure, and every failing
+  test, still counts as a failed turn, which Jev now weighs.
+- **The status line says why it kept a model.** When the router keeps the
+  model it runs although Jev's tier would pick another (a guard held it,
+  Jev was unsure, one lower turn is not enough yet, or switching costs
+  more than it saves), the line says so and names the tier as Jev's:
+  `jev · model: Opus 5.5 · extra high effort · kept: low confidence
+  (Jev: ask)`, where it used to read `(stage: ask)` as if asking needed
+  Opus. Switches read as before.
+- **Jev decides; a failure or a sensitive word is a fact, not a veto.** Of
+  83 router decisions in one day, 30 were held by a guard, and the word
+  list fired on "pre-release reviewer". A failing previous turn and a
+  sensitive topic no longer hold the model on their own: they reach Jev as
+  `previous_turn.failed` and `topic_flags` (category names such as
+  `deploy` or `credentials`, never prompt words), and the tier question
+  tells Jev to weigh them. A client site or a scoped policy no longer holds
+  the model either: client protection is the command gate's, unchanged,
+  and the destination kind is a fact Jev reads. The hard guards left are
+  Jev's own low confidence or failure and a pointer prompt. A turn the
+  engine starts by itself restores the floor only on those; a failed test
+  there reaches Jev at the next prompt. No guard ever blocks
+  raising the effort: under one, the effort is the higher of the
+  session's own and the tier's, at session start, at a stage and for a
+  subagent, and an effort lowered on the session's own model comes back
+  to its own.
 
 ## What you actually see
 

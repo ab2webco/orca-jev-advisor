@@ -186,6 +186,19 @@ function hostBridge (storage) {
         // channels above -- `storage.__modelRouterConfigResult` lets a test
         // override ok/reason/detail; a plain "it worked" is the default.
         value = { ok: true, ...storage.__modelRouterConfigResult, id: window.__written.modelRouterConfigRequest.id }
+      } else if (key === 'modelRouterStatus' && window.__written.modelRouterStatusRefreshRequest) {
+        // 0.6.2 E7: the worker answers a refresh request by republishing the
+        // status with the request's id. `storage.__routerRefreshSequence`
+        // gives the nth refresh its own status (a mode changed from a
+        // terminal in between); by default the stored status comes back.
+        // `__routerRefreshDelayMs` holds the answer back (the worker is slow);
+        // `__routerRefreshWithoutId` answers like the periodic publish does,
+        // with a newer checkedAt but no refreshId.
+        const sequence = storage.__routerRefreshSequence
+        const fresh = Array.isArray(sequence) ? sequence[Math.min(window.__routerRefreshCount, sequence.length) - 1] : storage.modelRouterStatus
+        if (storage.__routerRefreshDelayMs && Date.now() - window.__routerRefreshAt < storage.__routerRefreshDelayMs) value = storage.modelRouterStatus
+        else if (storage.__routerRefreshWithoutId) value = { ...fresh, checkedAt: new Date(Date.now() + 1000).toISOString() }
+        else value = { ...fresh, refreshId: window.__written.modelRouterStatusRefreshRequest.id, checkedAt: new Date().toISOString() }
       } else if (key === 'modelsSeedResult' && window.__written.modelsSeedRequest) {
         // odd/tasks/model-reclassification.md T7: models-worker.mjs answers
         // one request/result channel for both apply and dismiss (unlike the
@@ -199,6 +212,10 @@ function hostBridge (storage) {
       }
     }
     if (msg.action === 'storage.set') window.__written[msg.params?.key] = msg.params?.value
+    if (msg.action === 'storage.set' && msg.params?.key === 'modelRouterStatusRefreshRequest') {
+      window.__routerRefreshCount = (window.__routerRefreshCount ?? 0) + 1
+      window.__routerRefreshAt = Date.now()
+    }
     window.postMessage(
       { type: 'orca-panel-action-result', requestId: msg.requestId, ok: true, value: { value } },
       '*'
@@ -218,16 +235,28 @@ async function renderBoardPanel () {
 }
 
 /** Same host-simulation shape as openPanel, against board.html instead of
- *  config.html -- hostBridge needs no board-specific branch: board.html only
- *  ever calls storage.get, never storage.set, so every read falls through to
- *  the plain `storage[key] ?? null` branch already there. */
-async function openBoardPanel (storage, locale = 'en', colorScheme = 'light') {
+ *  config.html -- hostBridge needs no board-specific branch: board.html's
+ *  reads fall through to the plain `storage[key] ?? null` branch already
+ *  there, and its one write, the active tab through storage.set, lands in
+ *  `window.__written` like any other. */
+// `options.viewport` narrows the page (the 320px overflow check below), and
+// `options.throwingStorage` replaces `window.localStorage` with a getter that
+// throws, the same simulation openPanelWithThrowingStorage uses for
+// config.html, applied before the board's own script runs.
+async function openBoardPanel (storage, locale = 'en', colorScheme = 'light', options = {}) {
   const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
+  const context = await browser.newContext({ viewport: options.viewport ?? { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
   await page.addInitScript(hostBridge, storage)
+  if (options.throwingStorage) {
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'localStorage', {
+        get () { throw new Error('storage disabled for this test') }
+      })
+    })
+  }
   await page.goto(`file://${await renderBoardPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
   return { browser, page, errors }
@@ -1772,7 +1801,94 @@ test('a populated consumptionSummary renders real per-model shares, quota bars, 
   }
 })
 
-test('the consumptionSummary empty state ("no data yet") never reads as a populated-but-zero card, and is never blank', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+// odd/tasks/board-tabs-and-names.md T1: the owner read "Cuenta acct0002"
+// on every quota row. The worker now joins each account's email from
+// `orca account list --json` (main.mjs's publishConsumptionSummary); the
+// short id label stays only as the fallback for an account with none.
+test('a quota account is named by its email, with the raw id kept in the title', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    consumptionSummary: {
+      ...POPULATED_CONSUMPTION,
+      quota: {
+        accounts: [
+          { ...POPULATED_CONSUMPTION.quota.accounts[0], email: 'someone@example.com' },
+          { id: '00000000-0000-4000-8000-000000000003', status: 'ok', sessionUsedPercent: 3, weeklyUsedPercent: 20, resetsAt: null }
+        ],
+        checkedAt: new Date().toISOString()
+      }
+    }
+  })
+  try {
+    const labels = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('#consumption-body .kpi-sub b')).map((b) => ({ text: b.textContent, title: b.title })))
+    const named = labels.find((label) => label.title === 'acct-primary')
+    assert.ok(named, `no quota heading carries the raw id in its title: ${JSON.stringify(labels)}`)
+    assert.match(named.text, /^someone@example\.com\b/, 'the email must be the visible name')
+    assert.doesNotMatch(named.text, /Account acct-pri/, 'the short id must not be shown when an email is known')
+    const unnamed = labels.find((label) => label.title === '00000000-0000-4000-8000-000000000003')
+    assert.ok(unnamed, 'the second account lost its title')
+    assert.match(unnamed.text, /^Account acct0003\b/, 'an account with no email keeps the short id label, never a blank')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// odd/tasks/board-tabs-and-names.md T1: "Live status" printed the raw
+// projectId (`github:owner/name`, `repo:<uuid>`) while "By project" printed
+// a short name. The worker now resolves `projectName` (main.mjs's
+// boardProjectName); the board shows it and keeps every raw id in `title`.
+// `global-floating-terminal` is Orca's own FLOATING_TERMINAL_WORKTREE_ID
+// (orca-oss src/shared/floating-workspace-selector.ts), which Orca's own
+// Activity page labels "Floating terminal".
+const NAMED_BOARD = {
+  entries: [
+    { worktreeId: 'wt-app', project: 'github:example/orca-jev-advisor', projectName: 'orca-jev-advisor', rama: 'feat/board-tabs', paneKey: 'pane-a', state: 'working', receivedAt: 4, updatedAt: new Date().toISOString() },
+    { worktreeId: 'global-floating-terminal', project: null, projectName: null, rama: null, paneKey: 'pane-f', state: 'working', receivedAt: 3, updatedAt: new Date().toISOString() },
+    { worktreeId: 'wt-gone', project: 'repo:5c1d0e4f-2c18-4a14-b3c7-5a9d0e4f2c18', projectName: null, rama: 'main', paneKey: 'pane-r', state: 'done', receivedAt: 2, updatedAt: new Date().toISOString() },
+    { worktreeId: null, project: null, rama: null, paneKey: 'pane-n', state: 'done', receivedAt: 1, updatedAt: new Date().toISOString() }
+  ]
+}
+
+async function liveRows (page) {
+  return page.evaluate(() => Array.from(document.querySelectorAll('#cards .live-row')).map((row) => ({
+    name: row.querySelector('.name').textContent, title: row.title, text: row.textContent
+  })))
+}
+
+test('live rows show the name the worker resolved, keep the raw ids in the title, and never invent a name', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ board: NAMED_BOARD })
+  try {
+    const rows = await liveRows(page)
+    const byPane = Object.fromEntries(rows.map((row) => [row.title.split(' · ').pop(), row]))
+    assert.equal(byPane['pane-a'].name, 'orca-jev-advisor')
+    assert.match(byPane['pane-a'].title, /github:example\/orca-jev-advisor/, 'the raw projectId must stay recoverable from the title')
+    assert.equal(byPane['pane-f'].name, 'Floating terminal')
+    assert.equal(byPane['pane-r'].name, '(unknown project)', 'a project the worker could not name reads as unknown, never as its raw id')
+    assert.match(byPane['pane-r'].title, /repo:5c1d0e4f/)
+    assert.equal(byPane['pane-n'].name, '(unknown worktree)')
+    for (const row of rows) {
+      assert.doesNotMatch(row.text, /github:|repo:/, `a raw projectId is visible text again: ${row.text}`)
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the floating terminal is named in Spanish too', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ board: NAMED_BOARD }, 'es')
+  try {
+    const names = (await liveRows(page)).map((row) => row.name)
+    assert.ok(names.includes('Terminal flotante'), `expected "Terminal flotante" among ${JSON.stringify(names)}`)
+    assert.ok(names.includes('(proyecto desconocido)'), `expected "(proyecto desconocido)" among ${JSON.stringify(names)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the consumptionSummary empty state ("no data yet") never reads as a populated-but-zero card, and is never blank',{ skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: EMPTY_CONSUMPTION })
   try {
     const text = await page.evaluate(() => document.getElementById('card-consumption').innerText.trim())
@@ -1831,6 +1947,208 @@ test('every consumption.* key in one language catalog exists in the other, and t
       if (missingAccents.length > 0) problems.push(`${key}: missing accents on ${missingAccents.join(', ')}`)
     }
     assert.deepEqual(problems, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// board.html -- tabs (odd/tasks/board-tabs-and-names.md T2). The owner: "The
+// Advisor panel needs tabs, it got too long." Every section the board has is
+// listed here by id, so a section added later without a tab, or placed under
+// two, fails the grouping test instead of quietly disappearing. The window
+// chips filter only the gate's own windows (status, cost, interventions,
+// calibration), so they live inside the Gate tab, not above the tabs.
+// ---------------------------------------------------------------------------
+
+const BOARD_TABS = ['gate', 'activity', 'consumption', 'skills']
+const BOARD_TAB_SECTIONS = {
+  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'windows'],
+  activity: ['card-live', 'card-projects'],
+  consumption: ['card-consumption'],
+  skills: ['card-skills']
+}
+
+async function boardTabState (page) {
+  return page.evaluate((keys) => ({
+    selected: keys.filter((k) => document.getElementById(`tab-${k}`)?.getAttribute('aria-selected') === 'true'),
+    visible: keys.filter((k) => document.getElementById(`panel-${k}`) && !document.getElementById(`panel-${k}`).hidden),
+    focused: document.activeElement ? document.activeElement.id : null
+  }), BOARD_TABS)
+}
+
+test('the board groups every section under exactly one tab', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    const layout = await page.evaluate(() => {
+      const tabs = Array.from(document.querySelectorAll('#board-tabbar [role=tab]')).map((tab) => ({
+        id: tab.id, controls: tab.getAttribute('aria-controls')
+      }))
+      const panels = Array.from(document.querySelectorAll('[role=tabpanel]')).map((panel) => ({
+        id: panel.id, labelledBy: panel.getAttribute('aria-labelledby')
+      }))
+      const sections = Array.from(document.querySelectorAll('section[id^="card-"], #windows')).map((node) => {
+        const owners = []
+        for (let up = node.parentElement; up; up = up.parentElement) if (up.getAttribute('role') === 'tabpanel') owners.push(up.id)
+        return { id: node.id, owners }
+      })
+      return { tabs, panels, sections, tablist: document.getElementById('board-tabbar')?.getAttribute('role') ?? null }
+    })
+    assert.equal(layout.tablist, 'tablist')
+    assert.deepEqual(layout.tabs, BOARD_TABS.map((k) => ({ id: `tab-${k}`, controls: `panel-${k}` })))
+    assert.deepEqual(layout.panels, BOARD_TABS.map((k) => ({ id: `panel-${k}`, labelledBy: `tab-${k}` })))
+    const misplaced = layout.sections.filter((section) => section.owners.length !== 1)
+    assert.deepEqual(misplaced, [], 'every section must sit under exactly one tab panel')
+    const grouping = {}
+    for (const section of layout.sections) {
+      const key = section.owners[0].replace(/^panel-/, '')
+      grouping[key] = [...(grouping[key] ?? []), section.id].sort()
+    }
+    assert.deepEqual(grouping, BOARD_TAB_SECTIONS)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the board opens on Gate, and clicking a tab shows only its own panel', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    assert.deepEqual((await boardTabState(page)).visible, ['gate'])
+    for (const key of BOARD_TABS) {
+      await page.click(`#tab-${key}`)
+      const state = await boardTabState(page)
+      assert.deepEqual(state.selected, [key], `exactly tab-${key} should be aria-selected=true`)
+      assert.deepEqual(state.visible, [key], `exactly panel-${key} should be visible`)
+      const tabIndexes = await page.evaluate(() => Array.from(document.querySelectorAll('#board-tabbar [role=tab]')).map((t) => t.tabIndex))
+      assert.deepEqual(tabIndexes, BOARD_TABS.map((k) => (k === key ? 0 : -1)), 'only the selected tab is in the tab order')
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('arrow keys move focus and selection between board tabs, wrapping at both ends, and Home/End jump', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    await page.click('#tab-gate')
+    await page.focus('#tab-gate')
+    await page.keyboard.press('ArrowRight')
+    assert.deepEqual(await boardTabState(page), { selected: ['activity'], visible: ['activity'], focused: 'tab-activity' })
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    assert.deepEqual(await boardTabState(page), { selected: ['skills'], visible: ['skills'], focused: 'tab-skills' })
+    await page.keyboard.press('ArrowRight')
+    assert.equal((await boardTabState(page)).focused, 'tab-gate')
+    await page.keyboard.press('End')
+    assert.equal((await boardTabState(page)).focused, 'tab-skills')
+    await page.keyboard.press('Home')
+    assert.deepEqual(await boardTabState(page), { selected: ['gate'], visible: ['gate'], focused: 'tab-gate' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the board reopens on the tab this viewer chose last time', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    await page.click('#tab-consumption')
+    await page.reload()
+    await page.waitForTimeout(500)
+    assert.deepEqual((await boardTabState(page)).visible, ['consumption'])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a board whose localStorage throws (Orca\'s opaque-origin iframe) still opens on Gate and still switches tabs', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready, 'en', 'light', { throwingStorage: true })
+  try {
+    assert.deepEqual((await boardTabState(page)).visible, ['gate'])
+    await page.click('#tab-activity')
+    assert.deepEqual((await boardTabState(page)).visible, ['activity'])
+    assert.deepEqual(errors, [], 'a throwing localStorage must never surface as an uncaught panel error')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the board\'s tab labels exist in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({}, 'es')
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('tabs.') === 0).sort()
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('tabs.') === 0).sort()
+    assert.deepEqual(esKeys, ['tabs.activity', 'tabs.consumption', 'tabs.gate', 'tabs.groupLabel', 'tabs.skills'])
+    assert.deepEqual(enKeys, esKeys)
+    const labels = await page.evaluate(() => ({
+      tabs: Array.from(document.querySelectorAll('#board-tabbar [role=tab]')).map((t) => t.textContent),
+      group: document.getElementById('board-tabbar').getAttribute('aria-label')
+    }))
+    assert.deepEqual(labels.tabs, ['gate', 'activity', 'consumption', 'skills'].map((k) => catalog.es[`tabs.${k}`]))
+    assert.equal(labels.group, catalog.es['tabs.groupLabel'])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const scenario of ['fresh', 'empty', 'ready']) {
+  test(`no board tab is ever blank (${scenario})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openBoardPanel(SCENARIOS[scenario])
+    try {
+      const blank = []
+      for (const key of BOARD_TABS) {
+        await page.click(`#tab-${key}`)
+        const text = await page.evaluate((k) => document.getElementById(`panel-${k}`).innerText.trim(), key)
+        if (text === '') blank.push(key)
+      }
+      assert.deepEqual(blank, [], 'a tab with nothing in it tells a person nothing, not even why')
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+// T3 finding: at 320px the bar wrapped onto a second row only while
+// Consumption was selected (its heavier weight made the row too wide), so the
+// content below jumped when switching tabs.
+for (const width of [320, 390]) {
+  test(`the board tab bar stays on one row at ${width}px, whichever tab is selected`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openBoardPanel(SCENARIOS['router-ready'], 'en', 'light', { viewport: { width, height: 900 } })
+    try {
+      const wrapped = []
+      for (const key of BOARD_TABS) {
+        await page.click(`#tab-${key}`)
+        const tops = await page.evaluate(() =>
+          Array.from(document.querySelectorAll('#board-tabbar [role=tab]')).map((t) => `${t.id}:${t.offsetTop}`))
+        if (new Set(tops.map((entry) => entry.split(':')[1])).size !== 1) wrapped.push(`${key} selected: ${tops.join(' ')}`)
+        const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
+        if (size.scroll > size.client) wrapped.push(`${key} selected: page is ${size.scroll}px in ${size.client}px`)
+      }
+      assert.deepEqual(wrapped, [])
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('no board tab scrolls sideways at 320px',{ skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['router-ready'], 'es', 'light', { viewport: { width: 320, height: 900 } })
+  try {
+    const wide = []
+    for (const key of BOARD_TABS) {
+      await page.click(`#tab-${key}`)
+      const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
+      if (size.scroll > size.client) wide.push(`${key}: ${size.scroll}px in ${size.client}px`)
+    }
+    assert.deepEqual(wide, [])
+    assert.deepEqual(errors, [])
   } finally {
     await browser.close()
   }
@@ -1981,11 +2299,760 @@ for (const width of [1440, 390]) {
   })
 }
 
-test('no two neighbouring controls touch on the board', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+test('no two neighbouring controls touch on any board tab', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page } = await openBoardPanel(SCENARIOS.ready, 'es', 'dark')
   try {
     await page.waitForTimeout(1500)
-    assert.deepEqual(await touchingControls(page), [])
+    const tabs = await page.evaluate(() => Array.from(document.querySelectorAll('#board-tabbar [role=tab]')).map((t) => t.id))
+    assert.equal(tabs.length, BOARD_TABS.length, `expected the board tabs, found ${JSON.stringify(tabs)}`)
+    const problems = []
+    for (const tab of tabs) {
+      await page.click(`#${tab}`)
+      for (const p of await touchingControls(page)) problems.push(`${tab}: ${p}`)
+    }
+    assert.deepEqual(problems, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.2 E4: the Models tab -- the effort each tier asks for, per account;
+// one source line for the catalog; an intro that says what the ladder, the
+// router switch and the table each do; the classic hook's switch labelled
+// as the legacy one.
+// ---------------------------------------------------------------------------
+
+const TIERS_ANTHROPIC = {
+  simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
+  standard: { modelId: 'claude-sonnet-5', label: 'Sonnet 5', supportsEffort: true },
+  complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
+  frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true }
+}
+const EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const MODEL_ROUTER_STATUS_EFFORT = {
+  targets: [
+    { target: 'home', mode: 'measure', effort: EFFORT_DEFAULTS, tiers: TIERS_ANTHROPIC },
+    { target: '11112222-3333-4444-5555-666677778888', mode: 'active', effort: { ...EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: TIERS_ANTHROPIC }
+  ],
+  checkedAt: new Date().toISOString()
+}
+const ANTHROPIC_MODELS_DOCS = 'https://platform.claude.com/docs/en/about-claude/models/overview'
+
+test('0.6.2: each account shows tier → the model it resolves to → its effort', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
+  try {
+    await page.click('#tab-models')
+    const table = await page.evaluate(() => Array.from(document.querySelectorAll('[data-model-router-effort-table="11112222-3333-4444-5555-666677778888"] tbody tr')).map((tr) => {
+      const select = tr.querySelector('select')
+      return { cells: Array.from(tr.cells).slice(0, 2).map((cell) => cell.innerText.trim()), effort: select ? select.value : null }
+    }))
+    assert.deepEqual(table, [
+      { cells: ['Ask', 'Haiku 4.5'], effort: null },
+      { cells: ['Implement', 'Sonnet 5'], effort: 'medium' },
+      { cells: ['Analyse', 'Opus 5.5'], effort: 'xhigh' },
+      { cells: ['Deep reasoning', 'Opus 5.5'], effort: 'xhigh' }
+    ])
+    const options = await page.evaluate(() => Array.from(document.querySelector('select[data-model-router-effort="home:complex"]').options).map((o) => o.value))
+    assert.deepEqual(options, ['low', 'medium', 'high', 'xhigh', 'max'])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.2: saving an account\'s effort table sends that target\'s whole per-tier effort', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
+  try {
+    await page.click('#tab-models')
+    await page.selectOption('select[data-model-router-effort="home:complex"]', 'xhigh')
+    await page.click('button[data-model-router-effort-save="home"]')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.equal(request.target, 'home')
+    assert.equal(request.mode, undefined)
+    assert.deepEqual(request.effort, { ...EFFORT_DEFAULTS, complex: 'xhigh' })
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.2: the catalog names its source once, not on every card', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel(SCENARIOS.ready)
+  try {
+    await page.click('#tab-models')
+    const links = await page.evaluate(() => Array.from(document.querySelectorAll('#models-section a')).map((a) => ({ text: a.innerText.trim(), href: a.href, top: a.closest('#models-source-line') !== null })))
+    assert.deepEqual(links, [{ text: 'Model data from Anthropic\'s models documentation', href: ANTHROPIC_MODELS_DOCS, top: true }])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.2: the Models intro says what the ladder, the switch and the table do, in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  for (const [locale, words] of [['en', [/ladder/, /available to the router/, /off, measure or active/, /effort each tier/i, /table/]], ['es', [/escalera/, /disponibles para el enrutador/, /apagado, medir o activo/, /esfuerzo/, /tabla/]]]) {
+    const { browser, page } = await openPanel(SCENARIOS.ready, locale)
+    try {
+      await page.click('#tab-models')
+      const intro = await page.evaluate(() => document.querySelector('#models-section .hint').innerText)
+      for (const word of words) assert.match(intro, word, `${locale}: ${intro}`)
+      assert.doesNotMatch(intro, / -- /)
+      if (locale === 'es') assert.match(intro, /[áéíóú]/, 'Spanish copy keeps its accents')
+    } finally {
+      await browser.close()
+    }
+  }
+})
+
+test('0.6.2: the classic hook\'s checkbox is labelled as the legacy switch, not a second router switch', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel(SCENARIOS.ready)
+  try {
+    await page.click('#tab-models')
+    const text = await page.evaluate(() => document.getElementById('models-section').innerText)
+    assert.doesNotMatch(text, /Let Jev rewrite the model \(active mode\)/)
+    assert.match(text, /Legacy switch/)
+    assert.match(text, /router is active/)
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const width of [1440, 390]) {
+  test(`0.6.2: no two neighbouring controls touch on the Models tab with the effort tables at ${width}px`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page } = await openPanel({ ...SCENARIOS.ready, modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT }, 'es', 'dark', { width, height: 1200 })
+    try {
+      await page.click('#tab-models')
+      assert.deepEqual(await touchingControls(page), [])
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+      assert.ok(overflow <= 0, `the page is ${overflow}px wider than the viewport`)
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.2 E7: the router rows name an account by its email, and never save
+// over a mode that changed elsewhere since the rows were drawn.
+// ---------------------------------------------------------------------------
+
+const ROUTER_ACCOUNTS = {
+  targets: [
+    { target: 'home', mode: 'measure' },
+    { target: '00000000-0000-4000-8000-000000000001', mode: 'measure', email: 'owner@example.com' },
+    { target: '00000000-0000-4000-8000-000000000003', mode: 'measure' }
+  ],
+  checkedAt: '2026-09-27T10:00:00.000Z'
+}
+const ROUTER_ACCOUNTS_ACTIVE = { ...ROUTER_ACCOUNTS, targets: ROUTER_ACCOUNTS.targets.map((target) => ({ ...target, mode: 'active' })) }
+
+test('0.6.2 E7: an account row shows its email; one with no known email shows its short id; home stays "This computer"', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS })
+  try {
+    await page.click('#tab-models')
+    const labels = await page.evaluate(() => Array.from(document.querySelectorAll('#model-router-rows .router-target')).map((el) => ({ text: el.innerText.trim(), title: el.parentElement.getAttribute('title') })))
+    assert.deepEqual(labels, [
+      { text: 'This computer', title: 'home' },
+      { text: 'owner@example.com', title: '00000000-0000-4000-8000-000000000001' },
+      { text: 'Account acct0003', title: '00000000-0000-4000-8000-000000000003' }
+    ])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.2 E7: opening the panel asks the worker for a fresh read and shows the real mode', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshSequence: [ROUTER_ACCOUNTS_ACTIVE] })
+  try {
+    await page.click('#tab-models')
+    await page.waitForFunction(() => document.querySelector('select[data-model-router-target="home"]')?.value === 'active', undefined, { timeout: 10000 })
+    const modes = await page.evaluate(() => Array.from(document.querySelectorAll('#model-router-rows select[data-model-router-target]')).map((select) => select.value))
+    assert.deepEqual(modes, ['active', 'active', 'active'])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.2 E7: a save over a mode that changed elsewhere writes nothing and shows the real mode', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshSequence: [ROUTER_ACCOUNTS, ROUTER_ACCOUNTS_ACTIVE] })
+  try {
+    await page.click('#tab-models')
+    await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
+    await page.waitForTimeout(1500)
+    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'off')
+    await page.click('#model-router-rows .checkbox-row button')
+    await page.waitForFunction(() => document.querySelector('select[data-model-router-target="home"]')?.value === 'active', undefined, { timeout: 10000 })
+    const written = await page.evaluate(() => window.__written.modelRouterConfigRequest ?? null)
+    assert.equal(written, null, 'nothing may be written over a mode the row never showed')
+    const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
+    assert.match(text, /changed outside this panel/)
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.2 pre-release review: finding 5 and nit 6 on the router rows.
+// ---------------------------------------------------------------------------
+
+test('finding 5: a second save on the same row is not refused as "changed outside this panel"', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const measure = ROUTER_ACCOUNTS
+  const active = { ...ROUTER_ACCOUNTS, targets: ROUTER_ACCOUNTS.targets.map((t) => (t.target === 'home' ? { ...t, mode: 'active' } : t)) }
+  const { browser, page } = await openPanel({ modelRouterStatus: measure, __routerRefreshSequence: [measure, measure, active, active, active] })
+  try {
+    await page.click('#tab-models')
+    await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
+    await page.waitForTimeout(1500)
+    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
+    await page.click('#model-router-rows .checkbox-row button')
+    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 15000 })
+    await page.waitForTimeout(2500)
+    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'measure')
+    await page.click('#model-router-rows .checkbox-row button')
+    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'measure', undefined, { timeout: 15000 })
+    const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
+    assert.doesNotMatch(text, /changed outside this panel/)
+  } finally {
+    await browser.close()
+  }
+})
+
+test('nit 6: the on-open refresh never discards a choice the person already made', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshSequence: [ROUTER_ACCOUNTS_ACTIVE], __routerRefreshDelayMs: 2500 })
+  try {
+    await page.click('#tab-models')
+    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'off')
+    await page.waitForTimeout(4500)
+    assert.equal(await page.evaluate(() => document.querySelector('select[data-model-router-target="home"]').value), 'off')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('nit 6: a status published without the request id but newer than the request still answers a save', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshWithoutId: true })
+  try {
+    await page.click('#tab-models')
+    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
+    await page.click('#model-router-rows .checkbox-row button')
+    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 8000 })
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-leftovers.md L2 -- `skills-ready` is the first scenario
+// whose skills mod has recorded decisions, built by running the real
+// read-measurements.mjs over a synthetic mod-skills-measurements.jsonl (see
+// screenshot-panels.mjs). "By project" adds those rows to the gate's by
+// name, so every label must be a name, and the project both logs know must
+// appear once, with both counts added.
+// ---------------------------------------------------------------------------
+
+async function boardProjectRows (page) {
+  await page.click('#tab-activity')
+  return page.evaluate(() => Array.from(document.querySelectorAll('#projects-body .hrow')).map((row) => ({
+    label: row.querySelector('.hl').textContent,
+    value: row.querySelector('.hv').textContent
+  })))
+}
+
+test('skills-ready: every "By project" row is a name, and the skills mod\'s rows join the gate\'s', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['skills-ready']
+  assert.ok(scenario, 'screenshot-panels.mjs has no skills-ready scenario')
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    const rows = await boardProjectRows(page)
+    const labels = rows.map((row) => row.label)
+    const raw = labels.filter((label) => /^(github|gitlab|repo):/.test(label) || label.includes('/'))
+    assert.deepEqual(raw, [], `raw project ids in By project: ${JSON.stringify(labels)}`)
+    for (const name of ['orca-supervisor', 'project-c', 'scratch-notes', 'workdir']) {
+      assert.equal(labels.filter((label) => label === name).length, 1, `expected "${name}" exactly once among ${JSON.stringify(labels)}`)
+    }
+    const gateCount = scenario.measurementsSummary.gate.byProject.find((p) => p.project === 'orca-supervisor').total
+    const modCount = scenario.measurementsSummary.modSkills.byProject.find((p) => p.key === 'orca-supervisor').count
+    assert.equal(rows.find((row) => row.label === 'orca-supervisor').value.replace(/\D/g, ''), String(gateCount + modCount))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('skills-ready: the Skills tab shows what the mod recorded, not its empty sentence', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['skills-ready']
+  assert.ok(scenario, 'screenshot-panels.mjs has no skills-ready scenario')
+  const mod = scenario.measurementsSummary.modSkills
+  assert.ok(mod.totalDecisions > 0 && mod.comparableCount > 0, 'the fixture must hold decisions the aggregator could compare')
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    await page.click('#tab-skills')
+    const text = await page.evaluate(() => document.getElementById('skills-body').innerText)
+    assert.doesNotMatch(text, /has not recorded any decision yet/)
+    assert.match(text, /Skills suggested/)
+    assert.match(text, /Listing characters not sent/)
+    assert.match(text, new RegExp(`${Math.round(mod.matchRate * 1000) / 10}%`))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-leftovers.md L3 -- the board's last tab, remembered where
+// it can be inside Orca. Orca's sandboxed iframe throws on `localStorage`, so
+// the tab also goes through the host storage bridge (storage.get/storage.set,
+// the channel config.html already uses). localStorage stays as the fallback a
+// plain browser uses. The board keeps its tab panels hidden until the stored
+// tab is known, or 300 ms at most, so nobody sees the wrong tab first.
+// ---------------------------------------------------------------------------
+
+const BOARD_TAB_STORAGE_KEY = 'jevAdvisor.boardPanel.activeTab'
+
+/** Installed before the board's script: from the first frame on, records
+ *  each change in which tab-panel is really on screen (not `hidden` and not
+ *  `visibility: hidden`), with its time, into `window.__shownPanels`. */
+function recordShownPanels () {
+  window.__shownPanels = []
+  const tick = () => {
+    const shown = Array.from(document.querySelectorAll('[role=tabpanel]'))
+      .filter((panel) => !panel.hidden && getComputedStyle(panel).visibility === 'visible')
+      .map((panel) => panel.id.replace(/^panel-/, ''))
+    const key = shown.length > 0 ? shown.join(',') : '(none)'
+    const last = window.__shownPanels[window.__shownPanels.length - 1]
+    if (!last || last.key !== key) window.__shownPanels.push({ key, at: performance.now() })
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}
+
+/** A host that receives the board's requests and never answers one. */
+function silentHostBridge () {
+  window.__written = {}
+  window.addEventListener('message', (event) => {
+    const msg = event.data
+    if (msg && msg.type === 'orca-panel-action' && msg.action === 'storage.set') window.__written[msg.params?.key] = msg.params?.value
+  })
+}
+
+/** openBoardPanel's shape, plus: `localTab` pre-seeds localStorage, and
+ *  `silent` swaps the answering host for one that never answers. */
+async function openBoardForTabMemory (storage, { localTab = null, silent = false, settleMs = SETTLE_MS } = {}) {
+  const browser = await chromium.launch()
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme: 'light', locale: 'en-US' })
+  const page = await context.newPage()
+  const errors = []
+  page.on('pageerror', (error) => errors.push(String(error.message)))
+  await page.addInitScript(recordShownPanels)
+  if (silent) await page.addInitScript(silentHostBridge)
+  else await page.addInitScript(hostBridge, storage)
+  if (localTab !== null) {
+    await page.addInitScript(([key, value]) => { window.localStorage.setItem(key, value) }, [BOARD_TAB_STORAGE_KEY, localTab])
+  }
+  await page.goto(`file://${await renderBoardPanel()}`)
+  await page.waitForTimeout(settleMs)
+  return { browser, page, errors }
+}
+
+function firstShown (timeline) {
+  const entry = timeline.find((e) => e.key !== '(none)')
+  return entry ? entry.key : null
+}
+
+test('L3: clicking a board tab stores it through the host storage bridge, and opening the board stores nothing', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardForTabMemory(SCENARIOS.ready)
+  try {
+    assert.equal(await page.evaluate((key) => window.__written[key], BOARD_TAB_STORAGE_KEY), undefined,
+      'restoring the tab on open must not overwrite what the host holds')
+    await page.click('#tab-consumption')
+    await page.waitForFunction((key) => window.__written[key] !== undefined, BOARD_TAB_STORAGE_KEY, { timeout: 3000 })
+    assert.equal(await page.evaluate((key) => window.__written[key], BOARD_TAB_STORAGE_KEY), 'consumption')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L3: a board whose host storage holds `activity` opens on Activity with localStorage empty, never showing Gate first', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardForTabMemory({ ...SCENARIOS.ready, [BOARD_TAB_STORAGE_KEY]: 'activity' })
+  try {
+    const state = await boardTabState(page)
+    assert.deepEqual({ selected: state.selected, visible: state.visible }, { selected: ['activity'], visible: ['activity'] })
+    const timeline = await page.evaluate(() => window.__shownPanels)
+    assert.equal(firstShown(timeline), 'activity', `the first tab on screen was not Activity: ${JSON.stringify(timeline)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L3: the host\'s stored tab wins over localStorage, with no flash of the localStorage tab', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardForTabMemory({ ...SCENARIOS.ready, [BOARD_TAB_STORAGE_KEY]: 'activity' }, { localTab: 'skills' })
+  try {
+    assert.deepEqual((await boardTabState(page)).visible, ['activity'])
+    const timeline = await page.evaluate(() => window.__shownPanels)
+    assert.equal(firstShown(timeline), 'activity', `a tab other than the stored one showed first: ${JSON.stringify(timeline)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L3: a host that never answers still gets the board on screen within the 300 ms bound, on the localStorage tab', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardForTabMemory({}, { localTab: 'skills', silent: true, settleMs: 0 })
+  try {
+    await page.waitForFunction(() => window.__shownPanels.some((e) => e.key !== '(none)'), undefined, { timeout: 2000 })
+    const timeline = await page.evaluate(() => window.__shownPanels)
+    const shown = timeline.find((e) => e.key !== '(none)')
+    assert.equal(shown.key, 'skills')
+    const waited = shown.at - timeline[0].at
+    // It waits for the host (so no wrong tab can flash), but never longer
+    // than the bound; the slack is for a slow machine, not a looser bound.
+    assert.ok(waited >= 150, `the panels showed after ${Math.round(waited)} ms, without waiting for the host at all: ${JSON.stringify(timeline)}`)
+    assert.ok(waited <= 800, `the panels took ${Math.round(waited)} ms to show with a silent host: ${JSON.stringify(timeline)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L3: a host that never answers and an empty localStorage open the board on Gate', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardForTabMemory({}, { silent: true, settleMs: 0 })
+  try {
+    await page.waitForFunction(() => window.__shownPanels.some((e) => e.key !== '(none)'), undefined, { timeout: 2000 })
+    assert.equal(firstShown(await page.evaluate(() => window.__shownPanels)), 'gate')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const locale of ['en', 'es']) {
+  test(`L3: a skills-mod "(unknown)" project reads as the unknown-project label, merged with the gate's (${locale})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const summary = SCENARIOS.ready.measurementsSummary
+    const storage = {
+      ...SCENARIOS.ready,
+      measurementsSummary: { ...summary, modSkills: { ...summary.modSkills, byProject: [{ key: '(unknown)', count: 3 }] } }
+    }
+    const { browser, page, errors } = await openBoardPanel(storage, locale)
+    try {
+      const rows = await boardProjectRows(page)
+      const label = locale === 'es' ? '(proyecto desconocido)' : '(unknown project)'
+      const gateUnknown = summary.gate.byProject.find((p) => p.project === null).total
+      assert.deepEqual(rows.filter((row) => row.label === '(unknown)'), [], `"(unknown)" printed literally: ${JSON.stringify(rows)}`)
+      const unknown = rows.filter((row) => row.label === label)
+      assert.equal(unknown.length, 1, `expected one "${label}" row in ${JSON.stringify(rows)}`)
+      assert.equal(unknown[0].value.replace(/\D/g, ''), String(gateUnknown + 3))
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('the screenshot harness imports whenever playwright does, so a broken fixture fails instead of skipping', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  // Re-importing rethrows the harness's own load error, if any, so the
+  // failure names the cause rather than "SCENARIOS is null".
+  const imported = await import('./screenshot-panels.mjs')
+  assert.ok(imported.SCENARIOS && SCENARIOS, 'screenshot-panels.mjs loaded but this file saw no SCENARIOS')
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-leftovers.md L5 -- the Skills card drew "Skills suggested"
+// (a count of prompts) and "Listing characters not sent" (characters) as
+// bars on one shared scale, so 14 was an empty sliver beside a full bar, a
+// comparison between two units that means nothing. At 390 and 320 both
+// labels were also cut ("Skills suggest...", "Listing chara..."). Each
+// figure is now a labelled number, and its label wraps instead of cutting.
+// ---------------------------------------------------------------------------
+
+async function skillsCardFigures (page) {
+  await page.click('#tab-skills')
+  return page.evaluate(() => {
+    const body = document.getElementById('skills-body')
+    const cut = Array.from(body.querySelectorAll('*')).filter((node) => {
+      const style = getComputedStyle(node)
+      return node.childElementCount === 0 && node.textContent.trim() !== '' &&
+        (node.scrollWidth > node.clientWidth + 1 || (style.textOverflow === 'ellipsis' && style.whiteSpace === 'nowrap'))
+    }).map((node) => node.textContent.trim())
+    return {
+      text: body.innerText,
+      bars: body.querySelectorAll('.htrack, .hfill, .bar, .cmp-track').length,
+      cut
+    }
+  })
+}
+
+test('L5: skills-ready\'s Skills card shows each figure as a labelled number, with no bar', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['skills-ready']
+  const mod = scenario.measurementsSummary.modSkills
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    const card = await skillsCardFigures(page)
+    assert.equal(card.bars, 0, 'two figures in different units must not share one bar scale')
+    assert.match(card.text, /Skills suggested/)
+    assert.match(card.text, new RegExp(String(mod.suggestedCount)))
+    assert.match(card.text, /Listing characters not sent/)
+    assert.match(card.text, new RegExp(mod.listingCharsTotal.toLocaleString('en-US')))
+    assert.match(card.text, /Measurement-mode match rate: 88\.9%/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const locale of ['en', 'es']) {
+  test(`L5: no Skills card label is cut at 320px (${locale})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openBoardPanel(SCENARIOS['skills-ready'], locale, 'light', { viewport: { width: 320, height: 900 } })
+    try {
+      const card = await skillsCardFigures(page)
+      assert.deepEqual(card.cut, [], `labels cut at 320px: ${JSON.stringify(card.cut)}`)
+      const labels = locale === 'es'
+        ? ['Skills sugeridas', 'Caracteres de listado no enviados', 'Acierto en modo medición']
+        : ['Skills suggested', 'Listing characters not sent', 'Measurement-mode match rate']
+      for (const label of labels) assert.ok(card.text.replace(/\s+/g, ' ').includes(label), `"${label}" is not shown whole in ${JSON.stringify(card.text)}`)
+      const size = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }))
+      assert.ok(size.scroll <= size.client, `the page is ${size.scroll}px in ${size.client}px`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('L5: a skills mod with nothing recorded still shows only its empty sentence', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    const card = await skillsCardFigures(page)
+    assert.equal(card.text.trim(), 'The skills mod has not recorded any decision yet.')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-leftovers.md L6 -- the owner's live panel, 63 agents: the
+// Live status list ran oldest first within each status, showed "working" for
+// rows three days silent, and repeated one project and branch more than ten
+// times. The board now lists one row per project and branch, newest first,
+// with that group's latest state and a session count; a working or waiting
+// row silent for over an hour reads "no signal"; and rows last seen over
+// 24 h ago sit behind a "show more" toggle. Timestamps are explicit, relative
+// to the moment each test builds its fixture.
+// ---------------------------------------------------------------------------
+
+const MINUTE_MS = 60 * 1000
+const HOUR_MS = 60 * MINUTE_MS
+
+function liveEntry (fields, ageMs) {
+  return {
+    worktreeId: null, project: null, projectName: null, rama: null, paneKey: `pane-${Math.random().toString(36).slice(2)}`,
+    state: 'done', receivedAt: Date.now() - ageMs, updatedAt: new Date(Date.now() - ageMs).toISOString(), ...fields
+  }
+}
+
+async function liveList (page) {
+  return page.evaluate(() => ({
+    rows: Array.from(document.querySelectorAll('#cards .live-row')).map((row) => ({
+      name: row.querySelector('.name').textContent,
+      branch: row.querySelector('.tag.branch')?.textContent ?? null,
+      state: row.querySelector('.tag.state')?.textContent ?? null,
+      stateClass: row.querySelector('.tag.state')?.className ?? null,
+      count: row.querySelector('.count')?.textContent ?? null,
+      when: row.querySelector('.when')?.textContent ?? null,
+      title: row.title
+    })),
+    toggle: (() => {
+      const button = document.querySelector('#cards button[data-live-toggle]')
+      return button ? { text: button.textContent, expanded: button.getAttribute('aria-expanded'), controls: button.getAttribute('aria-controls') } : null
+    })(),
+    text: document.getElementById('cards').innerText
+  }))
+}
+
+test('L6: live rows run newest first overall, never grouped by status', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const board = {
+    entries: [
+      liveEntry({ worktreeId: 'wt-a', projectName: 'alpha', project: 'github:example/alpha', rama: 'main', state: 'working' }, 50 * MINUTE_MS),
+      liveEntry({ worktreeId: 'wt-b', projectName: 'bravo', project: 'github:example/bravo', rama: 'main', state: 'done' }, 2 * MINUTE_MS),
+      liveEntry({ worktreeId: 'wt-c', projectName: 'charlie', project: 'github:example/charlie', rama: 'main', state: 'working' }, 20 * MINUTE_MS),
+      liveEntry({ worktreeId: 'wt-d', projectName: 'delta', project: 'github:example/delta', rama: 'main', state: 'done' }, 35 * MINUTE_MS)
+    ]
+  }
+  const { browser, page, errors } = await openBoardPanel({ board })
+  try {
+    const { rows } = await liveList(page)
+    assert.deepEqual(rows.map((row) => row.name), ['bravo', 'charlie', 'delta', 'alpha'])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: one row per project and branch, with its latest state, last-seen time and a session count', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const entries = []
+  for (let i = 0; i < 12; i += 1) {
+    entries.push(liveEntry({ worktreeId: `wt-client-e-${i}`, projectName: 'project-a', project: 'github:example/project-a', rama: 'main', state: i === 0 ? 'working' : 'done', paneKey: `pane-client-e-${i}` }, (5 + i * 30) * MINUTE_MS))
+  }
+  entries.push(liveEntry({ worktreeId: 'wt-client-e-feat', projectName: 'project-a', project: 'github:example/project-a', rama: 'feat/x', state: 'done' }, 90 * MINUTE_MS))
+  const { browser, page, errors } = await openBoardPanel({ board: { entries } })
+  try {
+    const { rows } = await liveList(page)
+    const main = rows.filter((row) => row.name === 'project-a' && row.branch === 'main')
+    assert.equal(main.length, 1, `expected one project-a/main row: ${JSON.stringify(rows)}`)
+    assert.equal(main[0].state, 'working', 'the group shows its latest entry\'s state')
+    assert.equal(main[0].when, '5 min ago', 'the group shows its latest entry\'s time')
+    assert.equal(main[0].count, '×12 sessions')
+    const feat = rows.filter((row) => row.name === 'project-a' && row.branch === 'feat/x')
+    assert.equal(feat.length, 1, 'another branch of the same project is its own row')
+    assert.equal(feat[0].count, null, 'a single session shows no count')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: rows with no project name never merge: each keeps its own worktree, or its own pane when it has none', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const entries = [
+    liveEntry({ worktreeId: null, paneKey: 'pane-n1' }, 3 * MINUTE_MS),
+    liveEntry({ worktreeId: null, paneKey: 'pane-n2' }, 4 * MINUTE_MS),
+    liveEntry({ worktreeId: 'global-floating-terminal', paneKey: 'pane-f1', state: 'working' }, 5 * MINUTE_MS),
+    liveEntry({ worktreeId: 'global-floating-terminal', paneKey: 'pane-f2', state: 'working' }, 6 * MINUTE_MS),
+    liveEntry({ worktreeId: 'wt-gone-1', paneKey: 'pane-g1' }, 7 * MINUTE_MS),
+    liveEntry({ worktreeId: 'wt-gone-2', paneKey: 'pane-g2' }, 8 * MINUTE_MS),
+    // Two sessions in the same unnamed worktree are the same place: one row.
+    liveEntry({ worktreeId: 'wt-gone-1', paneKey: 'pane-g1b' }, 9 * MINUTE_MS)
+  ]
+  const { browser, page, errors } = await openBoardPanel({ board: { entries } })
+  try {
+    const { rows } = await liveList(page)
+    assert.deepEqual(rows.map((row) => row.title.split(' · ').pop()), ['pane-n1', 'pane-n2', 'pane-f1', 'pane-f2', 'pane-g1', 'pane-g2'])
+    assert.deepEqual(rows.map((row) => row.count), [null, null, null, null, '×2 sessions', null])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: a working or waiting row silent for over an hour reads "no signal", muted; done stays done', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const entries = [
+    liveEntry({ worktreeId: 'wt-1', projectName: 'fresh-work', rama: 'main', state: 'working' }, 10 * MINUTE_MS),
+    liveEntry({ worktreeId: 'wt-2', projectName: 'waiting-long', rama: 'main', state: 'waiting' }, 2 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-3', projectName: 'old-done', rama: 'main', state: 'done' }, 3 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-4', projectName: 'stuck-work', rama: 'main', state: 'working' }, 5 * HOUR_MS)
+  ]
+  const { browser, page, errors } = await openBoardPanel({ board: { entries } })
+  try {
+    const { rows } = await liveList(page)
+    const byName = Object.fromEntries(rows.map((row) => [row.name, row]))
+    assert.equal(byName['fresh-work'].state, 'working')
+    assert.equal(byName['waiting-long'].state, 'no signal')
+    assert.equal(byName['stuck-work'].state, 'no signal')
+    assert.equal(byName['old-done'].state, 'done')
+    assert.match(byName['stuck-work'].stateClass, /\bnosignal\b/)
+    const styles = await page.evaluate(() => {
+      const quiet = document.querySelector('#cards .tag.state.nosignal')
+      const when = document.querySelector('#cards .when')
+      return { quiet: getComputedStyle(quiet).color, weight: getComputedStyle(quiet).fontWeight, muted: getComputedStyle(when).color }
+    })
+    assert.equal(styles.quiet, styles.muted, 'no signal is drawn in the muted colour')
+    assert.notEqual(styles.weight, '600', 'no signal must not look like working\'s bold')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: groups last seen over 24 h ago wait behind "show more (N)", which expands and collapses with aria-expanded', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const entries = [
+    liveEntry({ worktreeId: 'wt-1', projectName: 'today-1', rama: 'main' }, 1 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-2', projectName: 'today-2', rama: 'main' }, 5 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-3', projectName: 'today-3', rama: 'main' }, 23 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-4', projectName: 'old-1', rama: 'main', state: 'working' }, 30 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-5', projectName: 'old-2', rama: 'main' }, 72 * HOUR_MS)
+  ]
+  const { browser, page, errors } = await openBoardPanel({ board: { entries } })
+  try {
+    let list = await liveList(page)
+    assert.deepEqual(list.rows.map((row) => row.name), ['today-1', 'today-2', 'today-3'])
+    assert.deepEqual({ text: list.toggle?.text, expanded: list.toggle?.expanded }, { text: 'show more (2)', expanded: 'false' })
+    assert.ok(list.toggle.controls && await page.evaluate((id) => !!document.getElementById(id), list.toggle.controls), 'aria-controls must name a real element')
+    await page.click('#tab-activity')
+    await page.click('#cards button[data-live-toggle]')
+    list = await liveList(page)
+    assert.deepEqual(list.rows.map((row) => row.name), ['today-1', 'today-2', 'today-3', 'old-1', 'old-2'])
+    assert.deepEqual({ text: list.toggle?.text, expanded: list.toggle?.expanded }, { text: 'show less', expanded: 'true' })
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-live-toggle')), true, 'focus stays on the toggle after it re-renders')
+    await page.click('#cards button[data-live-toggle]')
+    list = await liveList(page)
+    assert.equal(list.rows.length, 3)
+    assert.equal(list.toggle?.expanded, 'false')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: when nothing was seen in 24 h, one line says so, with the toggle for the rest', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const entries = [
+    liveEntry({ worktreeId: 'wt-4', projectName: 'old-1', rama: 'main' }, 30 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-5', projectName: 'old-2', rama: 'main' }, 72 * HOUR_MS)
+  ]
+  const { browser, page, errors } = await openBoardPanel({ board: { entries } })
+  try {
+    const list = await liveList(page)
+    assert.equal(list.rows.length, 0)
+    assert.match(list.text, /Nothing seen in the last 24 h\./)
+    assert.equal(list.toggle?.text, 'show more (2)')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: the live-status copy is Spanish with its accents, and no " -- " in either language', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const entries = [
+    liveEntry({ worktreeId: 'wt-1', projectName: 'project-a', rama: 'main', state: 'working' }, 3 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-2', projectName: 'project-a', rama: 'main' }, 4 * HOUR_MS),
+    liveEntry({ worktreeId: 'wt-3', projectName: 'old', rama: 'main' }, 40 * HOUR_MS)
+  ]
+  const { browser, page, errors } = await openBoardPanel({ board: { entries } }, 'es')
+  try {
+    let list = await liveList(page)
+    assert.equal(list.rows[0].state, 'sin señal')
+    assert.equal(list.rows[0].count, '×2 sesiones')
+    assert.equal(list.toggle?.text, 'ver más (1)')
+    await page.click('#tab-activity')
+    await page.click('#cards button[data-live-toggle]')
+    list = await liveList(page)
+    assert.equal(list.toggle?.text, 'ver menos')
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const liveKeys = (lang) => Object.keys(catalog[lang]).filter((key) => key.indexOf('live.') === 0).sort()
+    assert.deepEqual(liveKeys('es'), liveKeys('en'))
+    for (const lang of ['es', 'en']) {
+      for (const key of liveKeys(lang)) assert.doesNotMatch(catalog[lang][key], / -- /, `${lang} ${key}`)
+    }
+    assert.match(catalog.es['live.none24h'], /últimas/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('L6: live-busy shows project-a/main once with its twelve sessions, and keeps the three-day-old "working" behind show more', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['live-busy']
+  assert.ok(scenario, 'screenshot-panels.mjs has no live-busy scenario')
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    let list = await liveList(page)
+    const client-e = list.rows.filter((row) => row.name === 'project-a')
+    assert.deepEqual(client-e.map((row) => [row.branch, row.state, row.count]), [['main', 'working', '×12 sessions']])
+    assert.equal(list.rows.some((row) => row.name === 'service-a'), false)
+    assert.equal(list.toggle?.text, 'show more (3)')
+    await page.click('#tab-activity')
+    await page.click('#cards button[data-live-toggle]')
+    list = await liveList(page)
+    assert.equal(list.rows.find((row) => row.name === 'service-a')?.state, 'no signal')
+    assert.deepEqual(errors, [])
   } finally {
     await browser.close()
   }

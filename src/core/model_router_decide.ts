@@ -16,7 +16,7 @@
 
 import { getChoiceAnswer } from "./jev.ts";
 import type { Answer, JsonValue, Question } from "./jev.ts";
-import { baseModelId, collapseTier, modelRank, ROUTER_TIERS } from "./model_router_accounts.ts";
+import { baseModelId, collapseTier, modelRank, ROUTER_TIERS, tierOfModel } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
 
@@ -25,7 +25,22 @@ export type RouterEffort = "low" | "medium" | "high" | "xhigh";
 /** An effort as the SESSION sends it: the router's four levels, or the person's own `max` or numeric budget, which the router carries through untouched and never lowers. */
 export type SessionEffort = RouterEffort | "max" | number;
 
-/** §4: the effort each tier asks for, where the model takes one. */
+/** An effort a tier may ask for: the router's four levels, or `max` when the person sets a tier to it (0.6.2 E3). */
+export type TierEffort = RouterEffort | "max";
+
+export type TierEffortMap = Readonly<Record<RouterTier, TierEffort>>;
+
+/** Weakest to strongest; a numeric budget has no place on it. */
+export const EFFORT_LEVELS: readonly TierEffort[] = ["low", "medium", "high", "xhigh", "max"];
+
+/** Where an effort sits on EFFORT_LEVELS, or null for none or a numeric budget (not comparable). */
+export function effortRank(effort: SessionEffort | null | undefined): number | null {
+  if (typeof effort !== "string") return null;
+  const rank = EFFORT_LEVELS.indexOf(effort);
+  return rank === -1 ? null : rank;
+}
+
+/** §4: the effort each tier asks for, where the model takes one. The default the person's per-tier setting overrides (0.6.2 E3). */
 export const TIER_EFFORT: Readonly<Record<RouterTier, RouterEffort>> = {
   simple: "low",
   standard: "medium",
@@ -36,14 +51,14 @@ export const TIER_EFFORT: Readonly<Record<RouterTier, RouterEffort>> = {
 export type DestinationKind = "client-site" | "service" | "project" | "support";
 export type QuotaBand = "normal" | "economy" | "strong-economy";
 
-/** A compact summary of the previous turn (§6.1): counts only, plus the short text the sensitive-topic guard reads (edited paths, commands). */
+/** A compact summary of the previous turn (§6.1): counts only, plus the short text the topic flags read (edited paths, commands). */
 export interface TurnActivity {
   readonly toolCalls: number;
   readonly filesEdited: number;
   readonly testsRun: number;
   readonly testsFailed: number;
   readonly errors: number;
-  /** Never sent to Jev: only the local sensitive-topic guard reads it. */
+  /** Never sent to Jev as text: only the topic flags (fixed category names) are derived from it. */
   readonly mentions: string;
 }
 
@@ -60,7 +75,12 @@ export interface TierStateInput {
   readonly quotaBand: QuotaBand;
 }
 
-/** The Jev state: the prompt redacted FIRST and cut second, so a cut can never leave half a secret unredacted. */
+/**
+ * The Jev state: the prompt redacted FIRST and cut second, so a cut can never
+ * leave half a secret unredacted. 0.6.2 F9: a failing previous turn and a
+ * sensitive topic are facts Jev weighs (`previous_turn.failed`,
+ * `topic_flags`: fixed category names only, never prompt words), not vetoes.
+ */
 export function buildTierState(input: TierStateInput): JsonValue {
   const prompt = redactSecretsForJev(input.promptText).text.slice(0, PROMPT_CHARS);
   const activity = input.activity;
@@ -69,7 +89,15 @@ export function buildTierState(input: TierStateInput): JsonValue {
     previous_turn:
       activity === null
         ? null
-        : { tool_calls: activity.toolCalls, files_edited: activity.filesEdited, tests_run: activity.testsRun, tests_failed: activity.testsFailed, errors: activity.errors },
+        : {
+            tool_calls: activity.toolCalls,
+            files_edited: activity.filesEdited,
+            tests_run: activity.testsRun,
+            tests_failed: activity.testsFailed,
+            errors: activity.errors,
+            failed: activity.testsFailed > 0 || activity.errors > 0,
+          },
+    topic_flags: [...topicFlags(`${input.promptText}\n${activity?.mentions ?? ""}`)],
     destination_kind: input.destinationKind ?? "unknown",
     quota_pressure: input.quotaBand,
   };
@@ -97,7 +125,7 @@ export function buildTierQuestions(): Record<string, Question> {
     tier: {
       type: "choice",
       instructions:
-        "A coding assistant is about to work on `prompt`, the person's latest request, in Spanish or English (`previous_turn` summarises what the assistant did on the turn before, when there was one). Real prompts are short: judge the work the prompt implies, not how much it says about itself. Choose the least demanding tier of model that still does this work at full quality. When in doubt between two tiers, choose the stronger one.",
+        "A coding assistant is about to work on `prompt`, the person's latest request, in Spanish or English (`previous_turn` summarises what the assistant did on the turn before, when there was one). Real prompts are short: judge the work the prompt implies, not how much it says about itself. Choose the least demanding tier of model that still does this work at full quality. When in doubt between two tiers, choose the stronger one. Weigh two facts: `previous_turn.failed` true means a test or a tool failed on the turn before, so the work may need a stronger model; `topic_flags` name sensitive areas the request touches (deploys, credentials, production, ...): they are hints, not rules.",
       criteria,
     },
   };
@@ -144,18 +172,78 @@ function foldText(text: string): string {
   return text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 }
 
+/** Each sensitive word's category: what Jev sees in `topic_flags`. */
+const TOPIC_OF: Readonly<Record<string, string>> = {
+  security: "security", secure: "security", seguridad: "security",
+  credential: "credentials", credentials: "credentials", secret: "credentials", secrets: "credentials", password: "credentials", passwords: "credentials", apikey: "credentials",
+  credencial: "credentials", credenciales: "credentials", secreto: "credentials", secretos: "credentials", contrasena: "credentials", contrasenas: "credentials",
+  release: "release", releases: "release", lanzamiento: "release",
+  deploy: "deploy", deploys: "deploy", deployed: "deploy", deploying: "deploy", deployment: "deploy", deployments: "deploy",
+  despliegue: "deploy", despliegues: "deploy", desplegar: "deploy", despliega: "deploy",
+  migration: "migration", migrations: "migration", migrate: "migration", migracion: "migration", migraciones: "migration", migrar: "migration",
+  production: "production", prod: "production", produccion: "production",
+};
+
+/** The sensitive categories `text` touches, sorted: hints for Jev (0.6.2 F9). */
+export function topicFlags(text: string): readonly string[] {
+  const folded = foldText(text);
+  const flags = new Set<string>();
+  if (/\bapi[\s_-]?keys?\b/.test(folded)) flags.add("credentials");
+  for (const word of folded.split(/[^a-z0-9]+/)) {
+    const topic = TOPIC_OF[word];
+    if (topic !== undefined) flags.add(topic);
+  }
+  return [...flags].sort();
+}
+
 export function mentionsSensitiveTopic(text: string): boolean {
   const folded = foldText(text);
   if (/\bapi[\s_-]?keys?\b/.test(folded)) return true;
   return folded.split(/[^a-z0-9]+/).some((word) => SENSITIVE_SET.has(word));
 }
 
-export type RouterGuard = "client-site" | "policy" | "sensitive-topic" | "previous-failure" | "low-confidence";
+/**
+ * 0.6.2 E6: a short prompt whose main content is a document or path to read
+ * and act on ("Read /x/brief.md and do what it says", "lee ./plan.md y haz
+ * lo que dice", a bare `brief.md` path). Jev judges the pointer, not the
+ * work it points to, so it must not pick the model. A prompt that names a
+ * file but asks for work ("arregla el bug en src/a.ts") is not one.
+ */
+const POINTER_MAX_CHARS = 400;
+/** `/…`, `./…`, `../…`, `~/…`, or any token ending in .md/.txt; an escaped space (`Application\ Support`) stays inside the token. */
+const POINTER_PATH = /(?:^|[\s(])(?:~\/|\.{1,2}\/|\/)\S+|[\w.\-/]+\.(?:md|txt)\b/i;
+const POINTER_BARE = /^(?:~\/|\.{1,2}\/|\/)?[\w.\-/]+\.(?:md|txt)$/i;
+/** A bare path inside quotes may hold spaces (`"/Users/a/Application Support/b.md"`). */
+const POINTER_BARE_QUOTED = /^(["'`])(?:~\/|\.{1,2}\/|\/)?[^"'`]+\.(?:md|txt)\1$/i;
+/** Verbs that hand the work over to the document, clitic forms included (review finding 4). */
+const POINTER_FOLLOW = /\b(?:follow|execute|implement|carry (?:it )?out|sigue|seguir|siga|sigan|ejecutar|cumplir|aplicar|implementar|(?:ejecuta|cumple|sigue|aplica|implementa)(?:lo|la|los|las)?)\b/;
+const POINTER_ACT = /\bdo (?:what|as) (?:it|the file|the document|the doc) (?:says|asks|tells)\b|\bdo what\b.*\b(?:says|asks)\b|\bdo (?:it|that)\b|\bact on it\b|\binstructions?\b|\bhaz lo que (?:dice|pide|indica)\b|\bhazlo\b|\binstrucciones\b/;
+
+export function isPointerPrompt(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0 || trimmed.length >= POINTER_MAX_CHARS) return false;
+  if (POINTER_BARE_QUOTED.test(trimmed.replace(/[.,;:!?]+$/, ""))) return true;
+  // Quotes and backticks around a path, and an escaped space inside one, are
+  // not part of the shape.
+  const plain = trimmed.replace(/\\ /g, "_").replace(/[`'"]/g, "").trim();
+  if (POINTER_BARE.test(plain.replace(/[.,;:!?]+$/, ""))) return true;
+  if (!POINTER_PATH.test(plain)) return false;
+  // With a path present, handing the work over is enough: "do what X says",
+  // "haz lo que dice X", "read X and implement it" (review finding 4).
+  const folded = foldText(plain);
+  return POINTER_FOLLOW.test(folded) || POINTER_ACT.test(folded);
+}
+
+/**
+ * The hard guards: only where Jev cannot judge, its own low confidence (or
+ * failure) and a pointer prompt. 0.6.2 F9: a failing previous turn and a
+ * sensitive topic are facts in Jev's state (buildTierState). F11: a client
+ * site and a scoped policy are no router guard either; client protection is
+ * the Bash gate's, and the destination kind stays a fact in Jev's state.
+ */
+export type RouterGuard = "low-confidence" | "pointer-prompt";
 
 export interface GuardContext {
-  readonly destinationKind: DestinationKind | null;
-  /** The destination matches a `requires_human` / `prohibits` policy. */
-  readonly policyHit: boolean;
   readonly text: string;
   readonly activity: TurnActivity | null;
   /** Jev's confidence; null (no answer) counts as low. */
@@ -164,11 +252,10 @@ export interface GuardContext {
 
 export function activeGuards(context: GuardContext): readonly RouterGuard[] {
   const guards: RouterGuard[] = [];
-  if (context.destinationKind === "client-site") guards.push("client-site");
-  if (context.policyHit) guards.push("policy");
-  if (mentionsSensitiveTopic(context.text) || (context.activity !== null && mentionsSensitiveTopic(context.activity.mentions))) guards.push("sensitive-topic");
-  if (context.activity !== null && (context.activity.errors > 0 || context.activity.testsFailed > 0)) guards.push("previous-failure");
   if (context.confidence === null || context.confidence < CONFIDENCE_FLOOR) guards.push("low-confidence");
+  // Named first: on a pointer, Jev judged the pointer, so its tier and its
+  // confidence are both symptoms of this one cause.
+  if (isPointerPrompt(context.text)) guards.unshift("pointer-prompt");
   return guards;
 }
 
@@ -222,6 +309,8 @@ export interface StartDecisionInput {
   readonly guards: GuardContext;
   /** Quota pressure (§6.5); normal when absent. */
   readonly band?: QuotaBand;
+  /** The effort each tier asks for (0.6.2 E3); TIER_EFFORT when absent. */
+  readonly tierEffort?: TierEffortMap;
 }
 
 /** The session's exact id (a `[1m]` context suffix included) when `targetId` is the same base model, else `targetId`. */
@@ -234,6 +323,25 @@ export function isPersonEffort(effort: SessionEffort | null): boolean {
   return effort === "max" || typeof effort === "number";
 }
 
+/**
+ * 0.6.2 F0: a guard may block lowering the model or the effort, never
+ * raising the effort. Under one, the effort is the higher of the session's
+ * own (`own`) and the tier's; a person's `max` or numeric budget is left
+ * untouched, and none (the API default, not a choice) takes the tier's.
+ */
+export function guardedEffort(own: SessionEffort | null, tier: TierEffort | null): SessionEffort | null {
+  if (isPersonEffort(own) || tier === null) return own;
+  const ownRank = effortRank(own);
+  const tierRank = effortRank(tier) as number;
+  return ownRank === null || tierRank > ownRank ? tier : own;
+}
+
+/** The effort Jev's (shifted, uncollapsed) tier asks for on `modelId`, or null when that model takes none or the account does not know it. */
+export function tierEffortOn(tiers: ResolvedTiers, modelId: string, judged: RouterTier, efforts: TierEffortMap | undefined): TierEffort | null {
+  const tier = tierOfModel(tiers, modelId);
+  return tier !== null && tiers[tier].supportsEffort ? (efforts ?? TIER_EFFORT)[judged] : null;
+}
+
 export function decideStart(input: StartDecisionInput): RouterDecision {
   const current = input.configuredModel;
   const unchanged = { current, model: current, effort: input.configuredEffort, changed: false } as const;
@@ -241,21 +349,26 @@ export function decideStart(input: StartDecisionInput): RouterDecision {
     return { ...unchanged, tier: null, confidence: null, proposed: null, reason: "jev-failed", guard: null };
   }
   const guards = activeGuards(input.guards);
-  const tier = collapseTier(input.tiers, shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null));
+  // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1).
+  const judged = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
+  const tier = collapseTier(input.tiers, judged);
   const target = input.tiers[tier];
   const currentRank = modelRank(input.tiers, current);
   const proposedRank = modelRank(input.tiers, target.modelId);
   const isUpgrade = currentRank !== null && proposedRank !== null && proposedRank > currentRank;
   const base = { tier, confidence: input.jev.confidence, proposed: target.modelId };
   // Under any guard only a strict upgrade passes: a downgrade, a model the
-  // floor cannot compare, and a same-rank effort change all keep the
-  // session's own model AND effort (§6.2, review finding 2).
+  // floor cannot compare, and a same-rank change all keep the session's own
+  // model (§6.2, review finding 2). Its effort may still rise to the tier's,
+  // never fall (0.6.2 F0).
   if (!isUpgrade && guards.length > 0) {
+    const effort = guardedEffort(input.configuredEffort, tierEffortOn(input.tiers, current, judged, input.tierEffort));
+    if (effort !== input.configuredEffort) return { ...unchanged, ...base, effort, changed: true, reason: "switch", guard: guards[0] ?? null };
     return { ...unchanged, ...base, reason: "held-by-guard", guard: guards[0] ?? null };
   }
   const model = exactModelId(target.modelId, current);
   const sameModel = model === current;
-  const effort = sameModel && isPersonEffort(input.configuredEffort) ? input.configuredEffort : target.supportsEffort ? TIER_EFFORT[tier] : null;
+  const effort = sameModel && isPersonEffort(input.configuredEffort) ? input.configuredEffort : target.supportsEffort ? (input.tierEffort ?? TIER_EFFORT)[judged] : null;
   const changed = model !== current || effort !== input.configuredEffort;
   return { ...base, current, model, effort, changed, reason: changed ? "switch" : "same", guard: null };
 }

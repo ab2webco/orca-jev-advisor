@@ -35,7 +35,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
@@ -403,6 +403,40 @@ async function aggregateNotRunByCommandFamily () {
     .sort((a, b) => b.notRun - a.notRun)
 }
 
+/**
+ * odd/tasks/board-leftovers.md L1 -- the name a skills-mod decision's
+ * project goes by in "By project", or null when nothing in the row can name
+ * it. The board adds these counts to the gate's by name, and the gate's rows
+ * are named when adapters/claude/gate-bash.ts writes them (its
+ * projectName(): the `origin` remote's last path segment without `.git`,
+ * else the working directory's own name). The skills mod records Orca's raw
+ * projectId instead, so this applies that same rule to what the row carries:
+ *
+ *   - `github:owner/name` (a remote-derived projectId) -> its last segment,
+ *     the same cut gate-bash.ts makes on the origin URL. main.mjs's
+ *     remoteShortName() is the other copy; `grep -nF "replace(/^.*[:/]/"`
+ *     across the three files is how to check they still agree.
+ *   - `repo:<id>` is Orca's id for a checkout with no remote, where the gate
+ *     falls back to the working directory's name -> the worktree's folder
+ *     name. With no worktree recorded, null: never the id itself.
+ *   - no projectId at all -> the worktree's folder name, the same fallback.
+ *
+ * This sidecar runs under `--permission` with read access to the cache dir
+ * only, so it cannot ask git for a remote the row did not record; for the
+ * rare fork whose Orca identity is `upstream`, the name follows the
+ * projectId, as main.mjs's boardProjectName() does without a repo list.
+ */
+function modSkillsProjectName (orcaContext) {
+  if (!isRecord(orcaContext)) return null
+  const present = (value) => (typeof value === 'string' && value.length > 0 ? value : null)
+  const lastSegment = (value) => present(value.trim().replace(/^.*[:/]/, '').replace(/\.git$/, ''))
+  const proyecto = present(orcaContext.proyecto)
+  if (proyecto !== null && !proyecto.startsWith('repo:')) return lastSegment(proyecto)
+  // gate-bash.ts's fallback is basename(cwd): the folder name as is.
+  const worktree = present(orcaContext.worktree)
+  return worktree !== null ? present(basename(worktree)) : null
+}
+
 async function aggregateModSkills () {
   const { rows, corrupt } = await readJsonl(MOD_SKILLS_LOG_PATH)
   const decisions = rows.filter((r) => r.type === 'decision')
@@ -426,9 +460,7 @@ async function aggregateModSkills () {
   let lastAt = null
 
   for (const d of decisions) {
-    const project = isRecord(d.orcaContext) && typeof d.orcaContext.proyecto === 'string' && d.orcaContext.proyecto.length > 0
-      ? d.orcaContext.proyecto
-      : '(unknown)'
+    const project = modSkillsProjectName(d.orcaContext) ?? '(unknown)'
     byProject[project] = (byProject[project] || 0) + 1
 
     if (typeof d.at === 'string' && !Number.isNaN(Date.parse(d.at))) {

@@ -98,3 +98,62 @@ test("planRouterModeWrite: refuses a file that is not a JSON object, never overw
   assert.deepEqual(planRouterModeWrite("null", "active"), { kind: "refuse", reason: "not-an-object" });
   assert.deepEqual(planRouterModeWrite("{ nope", "active"), { kind: "refuse", reason: "unparseable" });
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.2 E3: the effort each tier asks for, set per account in the same
+// router options the mode lives in.
+// ---------------------------------------------------------------------------
+
+import { parseTierEffort, planRouterEffortWrite, routerEffortFromSettings } from "./model_router_mode.ts";
+
+const DEFAULTS = { simple: "low", standard: "medium", complex: "high", frontier: "xhigh" };
+
+test("parseTierEffort: valid per-tier values override the defaults; anything else is ignored", () => {
+  assert.deepEqual(parseTierEffort(undefined), DEFAULTS);
+  assert.deepEqual(parseTierEffort({ complex: "xhigh" }), { ...DEFAULTS, complex: "xhigh" });
+  assert.deepEqual(parseTierEffort({ frontier: "max", simple: "medium" }), { ...DEFAULTS, frontier: "max", simple: "medium" });
+  assert.deepEqual(parseTierEffort({ complex: "ultra", standard: 3, frontier: null, unknown: "high" }), DEFAULTS);
+  assert.deepEqual(parseTierEffort("xhigh"), DEFAULTS);
+  assert.deepEqual(parseTierEffort(["high"]), DEFAULTS);
+});
+
+test("routerEffortFromSettings: the installed plugin's routerEffort option", () => {
+  assert.deepEqual(routerEffortFromSettings(null), DEFAULTS);
+  assert.deepEqual(routerEffortFromSettings({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active", routerEffort: { complex: "xhigh" } } } } }), { ...DEFAULTS, complex: "xhigh" });
+  assert.deepEqual(routerEffortFromSettings({ pluginConfigs: { "orca-jev-mod-skills@inline": { options: { routerEffort: { simple: "medium" } } }, [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { simple: "high" } } } } }), { ...DEFAULTS, simple: "high" });
+});
+
+test("planRouterEffortWrite: stores only what differs from the defaults, next to the mode, keeping everything else", () => {
+  const raw = `${JSON.stringify({ model: "opus", pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active" } } } }, null, 4)}\n`;
+  const plan = planRouterEffortWrite(raw, { ...DEFAULTS, complex: "xhigh" });
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  assert.ok(plan.text.endsWith("\n"));
+  assert.ok(plan.text.includes('    "model"'));
+  assert.deepEqual(JSON.parse(plan.text), { model: "opus", pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active", routerEffort: { complex: "xhigh" } } } } });
+});
+
+test("planRouterEffortWrite: back to the defaults removes the option; the same value is no write; a broken file is refused", () => {
+  const raw = JSON.stringify({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "measure", routerEffort: { complex: "xhigh" } } } } });
+  const back = planRouterEffortWrite(raw, DEFAULTS);
+  assert.equal(back.kind, "write");
+  if (back.kind === "write") assert.deepEqual(JSON.parse(back.text), { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "measure" } } } });
+  assert.equal(planRouterEffortWrite(raw, { ...DEFAULTS, complex: "xhigh" }).kind, "unchanged");
+  assert.equal(planRouterEffortWrite(JSON.stringify({}), DEFAULTS).kind, "unchanged");
+  assert.deepEqual(planRouterEffortWrite("{ not json", DEFAULTS), { kind: "refuse", reason: "unparseable" });
+  assert.deepEqual(planRouterEffortWrite("[]", DEFAULTS), { kind: "refuse", reason: "not-an-object" });
+  const created = planRouterEffortWrite(null, { ...DEFAULTS, simple: "medium" });
+  assert.equal(created.kind, "write");
+  if (created.kind === "write") assert.deepEqual(JSON.parse(created.text), { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { simple: "medium" } } } } });
+});
+
+test("nit 7: back to the defaults over a stray key writes an explicit empty routerEffort, so the defaults really apply", () => {
+  const raw = JSON.stringify({ pluginConfigs: { "orca-jev-mod-skills": { options: { routerEffort: { complex: "low" } } }, [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { complex: "xhigh" } } } } });
+  const plan = planRouterEffortWrite(raw, DEFAULTS);
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  const written = JSON.parse(plan.text);
+  assert.deepEqual(written.pluginConfigs[ROUTER_SETTINGS_KEY].options.routerEffort, {});
+  assert.deepEqual(routerEffortFromSettings(written), DEFAULTS);
+  assert.equal(planRouterEffortWrite(plan.text, DEFAULTS).kind, "unchanged");
+});
