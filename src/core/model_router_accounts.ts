@@ -126,6 +126,20 @@ function anthropicServes(id: string, catalog: readonly ModelEntry[], quota: Quot
   return row?.available !== false;
 }
 
+/**
+ * Classify a raw model id string into its list-price tier (JEVADV-63),
+ * reusing the exact ids and Fable-multiplier logic this file already keys
+ * on -- no new substring matching. Tolerant of a context-window suffix
+ * (`baseModelId`, same as `tierOfModel`). `null` for an id this file has no
+ * price for (a gateway model, or an id no Anthropic tier resolves to);
+ * callers must still count its tokens, just at zero estimated cost.
+ */
+export function pricesForModel(modelId: string, fablePriceMultiplier: number = DEFAULT_FABLE_PRICE_MULTIPLIER): ModelPrices | null {
+  const id = baseModelId(modelId);
+  if (id === FABLE_ID) return fablePrices(fablePriceMultiplier);
+  return ANTHROPIC_PRICES[id] ?? null;
+}
+
 function anthropicModel(id: string, fableMultiplier: number): ResolvedTierModel {
   return {
     modelId: id,
