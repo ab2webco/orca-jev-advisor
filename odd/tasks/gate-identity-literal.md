@@ -9,7 +9,7 @@ placeholders, so `gh pr merge 12` and `gh pr merge 13`, or
 `git push origin feature/x` and `git push origin main`, share one cached
 verdict for 30 days, and the second command never reaches Jev.
 
-Source: commit `bd986b3` on the old `fabolivark/gate-approval-learning-b2b`
+Source: commit `bd986b3` on the old `gate-approval-learning-b2b`
 branch, re-implemented on today's `src/core/command_shape.ts`. The old code
 drifted too far to cherry-pick.
 
@@ -22,7 +22,7 @@ drifted too far to cherry-pick.
   (`ea732af`), consequence confidence (`8513b39`). They are dropped: they
   plumb learning from human approvals, which the gate no longer asks for.
 - Cleanup once this lands: delete the local branches
-  `fabolivark/gate-approval-learning-b1b`, `-b2`, `-b2a`, `-b2b`, `-b3a` and
+  `gate-approval-learning-b1b`, `-b2`, `-b2a`, `-b2b`, `-b3a` and
   the remote `origin/gate-approval-learning-b1`.
 
 ## Evidence (probe on 92b973e)
@@ -43,13 +43,15 @@ Pairs that shared one shape:
       above), then GREEN. Commands that differ only in harmless ways must
       still share a shape.
       Proof: RED -- the five pairs shared a shape and a `gh api -H` header
-      value entered it as a verb; GREEN -- 26/26 in command_shape.test.ts. Commit 9734578.
+      value entered it as a verb; GREEN -- 26/26 in command_shape.test.ts. Review added: a push to a URL or scp remote keeps the sanitized repository (RED, then GREEN). Commit f9e63b7.
 - [x] T2 Bump `GATE_DECISION_RULES_VERSION`; a gate test proves an entry
       cached for one identity does not serve another.
       Proof: RED against the pre-T1 shape -- `git push origin main` keyed
       like `git push origin feature/x`, and the version was still 2; GREEN --
-      287/287 in gate-bash.test.mjs + decisions.test.ts.
-- [ ] T3 README "What changed in 0.6.5", version 0.6.5, full verification.
+      287/287 in gate-bash.test.mjs + decisions.test.ts. Commit 4e205a5.
+- [x] T3 README "What changed in 0.6.5", version 0.6.5, full verification.
+      Proof: `npm test` 2264/2264, `npm run test:panels` 141/141,
+      private-terms grep empty. Committed as the release commit.
 
 ## Acceptance criteria
 
