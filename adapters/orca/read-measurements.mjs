@@ -35,13 +35,14 @@
  */
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
+import { modSkillsProjectName } from '../../src/core/project_name.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
@@ -401,40 +402,6 @@ async function aggregateNotRunByCommandFamily () {
   return [...notRunPerFamily(pending, outcomes, Date.now()).entries()]
     .map(([commandFamily, notRun]) => ({ commandFamily, notRun }))
     .sort((a, b) => b.notRun - a.notRun)
-}
-
-/**
- * odd/tasks/board-leftovers.md L1 -- the name a skills-mod decision's
- * project goes by in "By project", or null when nothing in the row can name
- * it. The board adds these counts to the gate's by name, and the gate's rows
- * are named when adapters/claude/gate-bash.ts writes them (its
- * projectName(): the `origin` remote's last path segment without `.git`,
- * else the working directory's own name). The skills mod records Orca's raw
- * projectId instead, so this applies that same rule to what the row carries:
- *
- *   - `github:owner/name` (a remote-derived projectId) -> its last segment,
- *     the same cut gate-bash.ts makes on the origin URL. main.mjs's
- *     remoteShortName() is the other copy; `grep -nF "replace(/^.*[:/]/"`
- *     across the three files is how to check they still agree.
- *   - `repo:<id>` is Orca's id for a checkout with no remote, where the gate
- *     falls back to the working directory's name -> the worktree's folder
- *     name. With no worktree recorded, null: never the id itself.
- *   - no projectId at all -> the worktree's folder name, the same fallback.
- *
- * This sidecar runs under `--permission` with read access to the cache dir
- * only, so it cannot ask git for a remote the row did not record; for the
- * rare fork whose Orca identity is `upstream`, the name follows the
- * projectId, as main.mjs's boardProjectName() does without a repo list.
- */
-function modSkillsProjectName (orcaContext) {
-  if (!isRecord(orcaContext)) return null
-  const present = (value) => (typeof value === 'string' && value.length > 0 ? value : null)
-  const lastSegment = (value) => present(value.trim().replace(/^.*[:/]/, '').replace(/\.git$/, ''))
-  const proyecto = present(orcaContext.proyecto)
-  if (proyecto !== null && !proyecto.startsWith('repo:')) return lastSegment(proyecto)
-  // gate-bash.ts's fallback is basename(cwd): the folder name as is.
-  const worktree = present(orcaContext.worktree)
-  return worktree !== null ? present(basename(worktree)) : null
 }
 
 async function aggregateModSkills () {

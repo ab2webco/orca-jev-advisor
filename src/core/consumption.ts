@@ -33,6 +33,8 @@ export interface TurnUsageRecord {
   readonly cacheWrite: number | null;
   readonly stopReason: string;
   readonly account: string;
+  /** JEVADV-63: the project this turn ran in, resolved from the session's cached OrcaContext (see src/core/project_name.ts); null when not yet known this session, or absent on an old record (the read side defaults it to null -- never throws). */
+  readonly project: string | null;
 }
 
 /**

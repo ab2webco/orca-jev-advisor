@@ -143,6 +143,10 @@ function toTurnUsageRecord (row) {
     cacheWrite: row.cacheWrite,
     stopReason: row.stopReason,
     account: row.account,
+    // JEVADV-63: absent on every record recordTurnUsage wrote before this
+    // field existed, and on any row a hand edit mistypes -- never thrown
+    // on, always the honest "not known" null.
+    project: typeof row.project === 'string' ? row.project : null,
   }
 }
 
