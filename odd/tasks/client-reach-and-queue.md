@@ -72,7 +72,18 @@ path back from the panel; next release if the queue proves itself).
   prohibits-still-judged, record field, remote listing all failing first;
   the merge/protected/force/outside-owner/fork regressions already passing
   and kept identical with owners on and off); GREEN: `npm test` 2360/2360.
-- [ ] T4 queue mode
+- [x] T4 queue mode -- c4123fe landed the gate branch only, and unsafe: a
+  queued stop went through the advice path, so an identical retry PASSED
+  (advice-retry allow) and the policy's cached ask became an 'advise'.
+  Fixed: `src/core/human_queue.ts` (pure; `human-queue.jsonl` in the cache
+  dir, command redacted, session hashed into the key), one
+  `tryQueueForPerson` for the fresh and cached ask, the cache keeps the
+  ask, an identical retry in the same session is asked (`asked` line), no
+  session id or an unwritable queue asks now, stopReason `queue`; the
+  Policies tab select (`queueMode`, mirrored to `queue-mode.json`). RED
+  seen (human_queue module missing; 6/8 gate queue tests, static panel,
+  mirror and worker tests failing first); GREEN: `npm test` 2399/2399,
+  `npm run test:panels` 147/147; Policies tab looked at 1440/768/390/320.
 - [ ] T5 board "Waiting for you"
 - [ ] T6 subagents in the status line and the board
 - [ ] T7 explicit subagent models are judged, not pinned

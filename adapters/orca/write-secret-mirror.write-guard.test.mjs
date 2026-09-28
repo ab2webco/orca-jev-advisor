@@ -206,3 +206,18 @@ test('team-owners-save writes an empty list for a payload that is not an array o
     rmSync(tempHome, { recursive: true, force: true })
   }
 })
+
+// 0.6.7 T4: queue mode reaches the gate through this same script.
+test('queue-mode-save writes the normalized setting, and anything malformed as "ask now"', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-queue-mode-'))
+  try {
+    const env = { ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor') }
+    const path = join(tempHome, '.config', 'orca-supervisor', 'queue-mode.json')
+    assert.equal(runMirrorAgainst(tempHome, 'queue-mode-save', JSON.stringify({ enabled: true, extra: 'x' }), env).ok, true)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { enabled: true })
+    assert.equal(runMirrorAgainst(tempHome, 'queue-mode-save', '{not json', env).ok, true)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { enabled: false })
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})

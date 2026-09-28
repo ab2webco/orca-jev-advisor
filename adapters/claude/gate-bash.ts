@@ -87,7 +87,9 @@ import type { RepoLocation, TargetLocation } from '../../src/core/cross_repo_con
 import { PROTECTED_BRANCH_NAMES, parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { classifyClientReach } from '../../src/core/client_reach.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
-import { parseQueueMode } from '../../src/core/queue_mode.ts'
+import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
+import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
+import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
@@ -177,8 +179,10 @@ const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 // list changes no decision -- see readTeamOwnersMirror below.
 const TEAM_OWNERS_MIRROR_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
 // 0.6.7 T4: queue mode -- "when a person must approve: ask now | queue and
-// continue". Defaults to false (ask now). See readQueueMode below.
-const QUEUE_MODE_MIRROR_PATH = join(CONFIG_DIR, 'queue-mode.json')
+// continue". Defaults to false (ask now). See readQueueModeMirror below.
+const QUEUE_MODE_MIRROR_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
+// 0.6.7 T4/T5: the actions queued for a person -- see src/core/human_queue.ts.
+const HUMAN_QUEUE_PATH = join(CACHE_DIR, HUMAN_QUEUE_FILE)
 // Written by adapters/orca/write-secret-mirror.mjs's deny-tier-config-save,
 // refreshed on plugin activation and on every config-panel save, same
 // channel as the catalog/policies mirrors above. Unlike those two -- and
@@ -1147,6 +1151,69 @@ function readQueueModeMirror(): boolean {
   }
 }
 
+function readHumanQueue(): readonly HumanQueueEntry[] {
+  try {
+    return parseHumanQueue(readFileSync(HUMAN_QUEUE_PATH, 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+/** Whether the line reached the file. Unlike the measurement log, a caller acts on this: an item that is not on disk is not queued. */
+function appendHumanQueueEntry(entry: HumanQueueEntry): boolean {
+  try {
+    mkdirSync(dirname(HUMAN_QUEUE_PATH), { recursive: true })
+    appendFileSync(HUMAN_QUEUE_PATH, serializeHumanQueueEntry(entry), 'utf8')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 0.6.7 T4: queue mode's one decision point, for a `requires_human` ask
+ * fresh from Jev or replayed from the cache. Returns true when the command
+ * was queued (and the deny already emitted); false when the caller asks the
+ * person as usual. It asks as usual when:
+ *
+ *   - queue mode is off (the default), or the hook got no session id (there
+ *     is nothing to match a retry by, so a queued item could never be
+ *     released -- asking now is the safe answer);
+ *   - this exact command was already queued in this session: the agent is
+ *     only told to run it again by the person, who is present now. The
+ *     `asked` line takes the item off the board's waiting list;
+ *   - the queue file cannot be written: an item that is not on disk is not
+ *     waiting anywhere, so it is not queued.
+ *
+ * Never an advice: resolveAdviceOutcome would open the identical-retry pass,
+ * and a queued command must never run without a person.
+ */
+function tryQueueForPerson(input: {
+  readonly queueMode: boolean
+  readonly command: string
+  readonly cwd: string
+  readonly sessionId: string | null
+  readonly policyId: string
+  readonly source: GateSource
+  readonly latencyMs: number | null
+  readonly teamInternal: boolean
+}): boolean {
+  const { command, cwd, sessionId, policyId } = input
+  if (!input.queueMode || sessionId === null) return false
+  const key = humanQueueKey(sessionId, command)
+  const at = new Date().toISOString()
+  if (isQueuedInSession(readHumanQueue(), key)) {
+    appendHumanQueueEntry(buildAskedEntry({ key, at }))
+    return false
+  }
+  const queued = appendHumanQueueEntry(buildQueuedItem({ id: randomUUID(), at, sessionId, command, project: projectName(cwd), policyId }))
+  if (!queued) return false
+  appendGateRecord(cwd, command, input.source, 'advise', input.latencyMs, 'queue', policyId, input.teamInternal)
+  const segment = jevSegmentFor(command)
+  emit('deny', tEnglish('queuedReason', { policyId, segment }), t('queuedLine', { policyId, segment }))
+  return true
+}
+
 /**
  * Every remote of the repository `cwd` sits in, read off `.git/config` (the
  * commondir's, for a linked worktree) with no `git` subprocess -- the same
@@ -1927,20 +1994,10 @@ async function main(): Promise<void> {
       resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
       return
     }
+    // 0.6.7 T4: a cached requires_human ask is queued the same way a fresh
+    // one is -- see tryQueueForPerson.
+    if (hit.decision === 'ask' && typeof hit.policyId === 'string' && tryQueueForPerson({ queueMode, command, cwd, sessionId, policyId: hit.policyId, source: 'cache', latencyMs: null, teamInternal })) return
     appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null, teamInternal)
-
-    // 0.6.7 T4: queue mode for cached 'ask' decisions too
-    if (hit.decision === 'ask' && queueMode && hit.policyId !== null) {
-      const queuedReason = t('policyAskReason', { policyId: hit.policyId, segment: jevSegmentFor(command) }) + ' · queued'
-      resolveAdviceOutcome({
-        command, cwd, sessionId, toolUseId,
-        reasonsEnglish: [queuedReason],
-        effectSource: {},
-        segment: jevSegmentFor(command),
-        source: 'cache', stopReason: 'queue', latencyMs: null, teamInternal,
-      })
-      return
-    }
 
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
@@ -2087,25 +2144,6 @@ async function main(): Promise<void> {
     return
   }
 
-  // 0.6.7 T4: queue mode -- when a requires_human policy would block an
-  // unattended agent, queue the action and let it continue with an advice
-  // instead of blocking. Record it but do not ask.
-  if (resolved.decision === 'ask' && queueMode && resolved.policyId !== null) {
-    if (key !== null) {
-      cache[key] = { decision: 'advise', reason: 'queued for person', at: Date.now() }
-      writeCache(cache)
-    }
-    const queuedReason = t('policyAskReason', { policyId: resolved.policyId, segment: jevSegmentFor(command) }) + ' · queued'
-    resolveAdviceOutcome({
-      command, cwd, sessionId, toolUseId,
-      reasonsEnglish: [queuedReason],
-      effectSource: {},
-      segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'queue', latencyMs: jevLatencyMs, teamInternal,
-    })
-    return
-  }
-
   if (key !== null) {
     cache[key] = {
       decision: resolved.decision,
@@ -2115,6 +2153,10 @@ async function main(): Promise<void> {
     }
     writeCache(cache)
   }
+  // 0.6.7 T4: queue mode, after the verdict is cached AS the ask it is --
+  // queueing never turns a policy stop into an advice, so a later hit (in
+  // another session, or with queue mode off) still asks.
+  if (resolved.decision === 'ask' && resolved.policyId !== null && tryQueueForPerson({ queueMode, command, cwd, sessionId, policyId: resolved.policyId, source: 'jev', latencyMs: jevLatencyMs, teamInternal })) return
   appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId, teamInternal)
   // Only a stop becomes a question worth an answer. A pass was never asked
   // about, so recording it would bury the handful of real decisions under

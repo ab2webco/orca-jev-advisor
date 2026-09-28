@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { parseQueueMode } from './queue_mode.ts'
+import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from './queue_mode.ts'
 
 test('parseQueueMode: enabled true returns true', () => {
   assert.equal(parseQueueMode({ enabled: true }), true)
@@ -25,4 +25,8 @@ test('parseQueueMode: undefined returns false', () => {
 test('parseQueueMode: non-boolean enabled returns false', () => {
   assert.equal(parseQueueMode({ enabled: 'yes' }), false)
   assert.equal(parseQueueMode({ enabled: 1 }), false)
+})
+
+test('the mirror file name is one constant for the writer and the gate', () => {
+  assert.equal(QUEUE_MODE_MIRROR_FILE, 'queue-mode.json')
 })

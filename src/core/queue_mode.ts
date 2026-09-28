@@ -11,3 +11,6 @@ export function parseQueueMode (json: unknown): boolean {
 }
 
 export const QUEUE_MODE_CONFIG_KEY = 'queueMode'
+
+/** The mirror's file name inside the config dir -- one constant for the writer (write-secret-mirror.mjs) and the reader (gate-bash.ts). */
+export const QUEUE_MODE_MIRROR_FILE = 'queue-mode.json'

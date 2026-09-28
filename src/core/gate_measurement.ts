@@ -71,6 +71,11 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    Distinct from every other bucket: it is the ONLY
  *                    stopReason whose own verdict is "allow" but whose
  *                    record still explains why nobody had to ask again.
+ *   "queue"       -- 0.6.7 T4: queue mode set a `requires_human` stop aside
+ *                    for a person (human-queue.jsonl) instead of asking one
+ *                    who is not there; the verdict is "advise" (the model
+ *                    was refused this attempt and told to carry on) and
+ *                    `policyId` names the policy.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -80,7 +85,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  * no cache and no network) but gets its own, more specific stopReason so an
  * "allow" it produces is never confused with a NEVER_SILENTLY deny/ask.
  */
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -118,7 +123,7 @@ export interface GateDecisionRecord {
   readonly stopReason?: GateStopReason;
   /**
    * The policy that resolved this decision -- present only when
-   * `stopReason` is `"policy"`. The id only, never the command or the
+   * `stopReason` is `"policy"` or `"queue"`. The id only, never the command or the
    * policy's rule text: same privacy rule as every other field in this
    * file.
    */
@@ -339,7 +344,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "risk" ||
     value === "unreachable" ||
     value === "cache" ||
-    value === "advice-retry"
+    value === "advice-retry" ||
+    value === "queue"
   );
 }
 

@@ -378,6 +378,23 @@
         <textarea id="team-owners" rows="4" spellcheck="false" autocomplete="off" data-i18n-placeholder="teamOwners.placeholder"></textarea>
         <p class="hint" data-i18n="teamOwners.hint"></p>
       </section>
+
+      <!--
+        0.6.7 T4. What the gate does when a requires_human policy needs a
+        person (src/core/queue_mode.ts): ask now, or queue the action for the
+        board's "Waiting for you" list and let the agent carry on. Saved by
+        the Save button below to `queueMode` ({ enabled }); the worker
+        mirrors it to queue-mode.json.
+      -->
+      <section id="queue-mode-section">
+        <h2 data-i18n="queueMode.heading"></h2>
+        <label for="queue-mode" data-i18n="queueMode.label"></label>
+        <select id="queue-mode">
+          <option value="ask" data-i18n="queueMode.ask"></option>
+          <option value="queue" data-i18n="queueMode.queue"></option>
+        </select>
+        <p class="hint" data-i18n="queueMode.hint"></p>
+      </section>
       </div>
 
       <div class="tab-panel" id="panel-modskills" role="tabpanel" aria-labelledby="tab-modskills" hidden>
@@ -659,6 +676,11 @@
           'teamOwners.heading': 'Repositorios de tu equipo',
           'teamOwners.label': 'Dueños en GitHub o GitLab (usuarios u organizaciones), uno por línea',
           'teamOwners.placeholder': 'tu-organizacion',
+          'queueMode.heading': 'Cuando una persona debe aprobar',
+          'queueMode.label': 'Qué hace el agente si una política pide a una persona',
+          'queueMode.ask': 'Preguntar ahora',
+          'queueMode.queue': 'Dejarlo en espera y seguir',
+          'queueMode.hint': 'En espera: la acción no se ejecuta, queda en «Esperándote» en el tablero y el agente sigue con lo demás. Para soltarla, dile al agente en su sesión que la corra de nuevo: en ese momento se te pregunta. Nunca se ejecuta sin ti.',
           'teamOwners.hint': 'Subir una rama de trabajo o abrir un pull request en un repositorio de estos dueños no llega al cliente, así que no se consulta a las políticas que piden a una persona. Fusionar, subir a main, forzar un push y cualquier repositorio fuera de esta lista se siguen consultando. Vacío = todo se decide como hasta ahora.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
           'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
@@ -736,6 +758,7 @@
           'save.whichCatalog': 'El catálogo de destinos',
           'save.whichPolicies': 'Las políticas',
           'save.whichTeamOwners': 'Los repositorios del equipo',
+          'save.whichQueueMode': 'Qué hacer cuando una persona debe aprobar',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
           'save.invalidField': 'Hay un campo con un valor no válido; se cambió a su pestaña y quedó enfocado.',
           'common.timeout': 'Tiempo de espera agotado.',
@@ -954,6 +977,11 @@
           'teamOwners.heading': 'Repositories your team owns',
           'teamOwners.label': 'GitHub or GitLab owners (users or organizations), one per line',
           'teamOwners.placeholder': 'your-organization',
+          'queueMode.heading': 'When a person must approve',
+          'queueMode.label': 'What the agent does when a policy needs a person',
+          'queueMode.ask': 'Ask now',
+          'queueMode.queue': 'Queue it and carry on',
+          'queueMode.hint': 'Queued: the action does not run, it waits under “Waiting for you” on the board, and the agent carries on with the rest. To release it, tell the agent in its session to run it again: you are asked at that moment. It never runs without you.',
           'teamOwners.hint': 'Pushing a work branch or opening a pull request in a repository these owners hold never reaches a client, so policies that need a person are not asked about it. Merging, pushing to main, force pushes and any repository outside this list are still asked. Empty = everything is decided as it is today.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
@@ -1031,6 +1059,7 @@
           'save.whichCatalog': 'The destination catalog',
           'save.whichPolicies': 'The policies',
           'save.whichTeamOwners': "Your team's repositories",
+          'save.whichQueueMode': 'What to do when a person must approve',
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
           'save.invalidField': 'A field has an invalid value; switched to its tab and focused it.',
           'common.timeout': 'Timed out.',
@@ -2458,6 +2487,20 @@
           : ''
       }
 
+      // 0.6.7 T4: the queue mode select. Only a stored { enabled: true }
+      // reads as "queue"; anything else (never set, malformed) is "ask now",
+      // the same default src/core/queue_mode.ts's parseQueueMode applies.
+      var queueModeEl = el('queue-mode')
+
+      function fillQueueMode (stored) {
+        var enabled = stored !== null && typeof stored === 'object' && stored.enabled === true
+        queueModeEl.value = enabled ? 'queue' : 'ask'
+      }
+
+      function readQueueMode () {
+        return { enabled: queueModeEl.value === 'queue' }
+      }
+
       function readTeamOwners () {
         return teamOwnersEl.value.split(/\r?\n/)
           .map(function (line) { return line.trim() })
@@ -3318,7 +3361,8 @@
           { label: t('save.whichConfig'), promise: write('config', config) },
           { label: t('save.whichCatalog'), promise: write('catalog', readCatalog()) },
           { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) },
-          { label: t('save.whichTeamOwners'), promise: write('teamOwners', readTeamOwners()) }
+          { label: t('save.whichTeamOwners'), promise: write('teamOwners', readTeamOwners()) },
+          { label: t('save.whichQueueMode'), promise: write('queueMode', readQueueMode()) }
         ]
         Promise.all(namedWrites.map(function (w) { return w.promise })).then(function (results) {
           var failedLabels = []
@@ -3365,7 +3409,8 @@
             loadSecretStatus(),
             loadClaudeIntegrationStatus(),
             read(MODEL_ROUTER_STATUS_KEY, false),
-            read('teamOwners', false)
+            read('teamOwners', false),
+            read('queueMode', false)
           ])
         }).then(function (results) {
           currentConfig = results[0]
@@ -3380,6 +3425,7 @@
           renderCatalogProposals(results[7])
           renderModelRouterRows(results[10])
           fillTeamOwners(results[11])
+          fillQueueMode(results[12])
           // 0.6.2 E7: what storage holds may predate a mode set from a
           // terminal; ask the worker for a fresh read and redraw with it.
           refreshModelRouterStatus().then(function (fresh) { if (!modelRouterEdited) renderModelRouterRows(fresh) }).catch(function () {})

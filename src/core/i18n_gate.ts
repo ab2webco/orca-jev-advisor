@@ -22,6 +22,8 @@ export type GateKey =
   | "policyBlockedLine"
   | "policyAskLine"
   | "policyAskReason"
+  | "queuedReason"
+  | "queuedLine"
   | "authRejected"
   | "noApiKey"
   | "jevUnreachable"
@@ -109,6 +111,14 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // credentials is decided by a person, always, no exception for
     // urgency." Names only the policy and the command, never the rule.
     policyAskReason: "La política {{policyId}} pide que decidas si se ejecuta `{{segment}}`",
+    // 0.6.7 T4: queue mode. Model-facing, so deliberately identical in both
+    // catalogs, like policyDeny: the command was queued for a person, it did
+    // not run, and the only way forward is the person. No advice retry
+    // clause -- an identical retry is ASKED, never passed.
+    queuedReason: "Queued for a person: the team policy {{policyId}} needs a person to approve `{{segment}}`, and it was NOT run. Do not retry it now, and do not work around it — no other command, tool or script that reaches the same result. Carry on with the rest of the work, and say in your summary that this step is waiting for the person's approval. Only when the person tells you to, run the same command again: they will be asked then.",
+    // The person's line: what waits for them and under which policy. The
+    // item is on the board's "Waiting for you" list.
+    queuedLine: "jev · {{policyId}} lo dejó en espera para ti: `{{segment}}` — el agente sigue con lo demás",
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
     noApiKey: "sin llave configurada: la mitad del gate que juzga con Jev no está corriendo — solo las reglas locales siguen activas. Configúrala en el panel de ajustes del plugin en Orca.",
     jevUnreachable: "no se pudo contactar a Jev: la mitad del gate que juzga con Jev no está corriendo ahora mismo — solo las reglas locales siguen activas. Se va a intentar de nuevo con el próximo comando.",
@@ -168,6 +178,8 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     policyBlockedLine: "jev · blocked `{{segment}}`: forbidden by the policy {{policyId}}",
     policyAskLine: "jev · {{policyId}} asks you to decide: `{{segment}}`",
     policyAskReason: "The policy {{policyId}} asks you to decide whether to run `{{segment}}`",
+    queuedReason: "Queued for a person: the team policy {{policyId}} needs a person to approve `{{segment}}`, and it was NOT run. Do not retry it now, and do not work around it — no other command, tool or script that reaches the same result. Carry on with the rest of the work, and say in your summary that this step is waiting for the person's approval. Only when the person tells you to, run the same command again: they will be asked then.",
+    queuedLine: "jev · {{policyId}} queued it for you: `{{segment}}` — the agent carries on",
     authRejected: "not judging: the key was rejected ({{status}})",
     noApiKey: "no key configured: the Jev-backed half of the gate is not running — only the local rules are still active. Set one in the plugin's settings panel in Orca.",
     jevUnreachable: "couldn't reach Jev: the Jev-backed half of the gate is not running right now — only the local rules are still active. It'll try again on the next command.",

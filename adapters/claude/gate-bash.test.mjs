@@ -2891,59 +2891,124 @@ test('0.6.7 T3: a prohibits policy is still put to Jev for a team-internal comma
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'only the requires_human policy is set aside, the prohibits one is still judged')
 })
 
-test('T4 queue mode: when queue and continue is ON, a requires_human ask returns an advice instead of blocking', () => {
+// 0.6.7 T4: queue mode. In "queue and continue", the first requires_human
+// stop of a command in a session is queued for a person (human-queue.jsonl)
+// and the agent is told to carry on; an identical retry in the same session
+// is ASKED, never passed -- a queued command never runs without a person.
+const QUEUE_POLICY = { id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }
+
+function humanQueuePath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'human-queue.jsonl')
+}
+
+function humanQueueLines (home) {
+  if (!existsSync(humanQueuePath(home))) return []
+  return readFileSync(humanQueuePath(home), 'utf8').trim().split('\n').filter((l) => l.length > 0).map((l) => JSON.parse(l))
+}
+
+/** A home with the requires_human policy mirrored and its 'ask' already cached for `command`, so the run never needs the network. */
+function queueHome (command, { queueMode } = {}) {
   const home = makeHome()
-  const cwd = home
-  const policy = { id: 'jevadv-queue-test', rule: 'Test queue mode', kind: 'requires_human', scope: 'command' }
-  writePoliciesMirror(home, [policy])
-  writeQueueModeMirror(home, true) // queue mode ON
-  const command = 'some-dangerous-command --that-needs-approval'
-  // Pre-populate cache with an 'ask' for this command
-  const key = computeCacheKey(command, cwd, home, { policies: [policy] })
-  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the jevadv-queue-test policy', policyId: 'jevadv-queue-test', at: Date.now() - 1000 })
-  const payload = JSON.parse(run(home, command, { cwd, apiKey: 'test-key-unused-on-cache-hit' }))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'queue mode converts ask to deny advice')
-  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'but as an advice, not a hard stop')
-  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /queue/i, 'the reason mentions queuing')
+  writePoliciesMirror(home, [QUEUE_POLICY])
+  if (queueMode !== undefined) writeQueueModeMirror(home, queueMode)
+  const key = computeCacheKey(command, home, home, { policies: [QUEUE_POLICY] })
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the client_always_asks policy', policyId: 'client_always_asks', at: Date.now() - 1000 })
+  return { home, key }
+}
+
+const QUEUED_COMMAND = 'some-client-release-tool --publish'
+
+test('T4 queue mode ON: the first requires_human stop in a session is queued, and the agent is told to carry on', () => {
+  const { home } = queueHome(QUEUED_COMMAND, { queueMode: true })
+  const payload = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-queue-1' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'not run: the model is refused this attempt, nobody is asked')
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.doesNotMatch(reason, /REFUSED/)
+  assert.match(reason, /queued for a person/i)
+  assert.match(reason, /client_always_asks/)
+  assert.match(reason, /do not retry/i)
+  assert.match(reason, /work around/i)
+  assert.match(reason, /carry on/i)
+  assert.doesNotMatch(reason, /retry (it|the same command)[^.]*(if|when) you/i, 'never the advice retry clause: a retry is not how a queued item runs')
+  assert.match(payload.systemMessage, /client_always_asks/)
+  assert.match(payload.systemMessage, /some-client-release-tool/)
 })
 
-test('T4 queue mode: when queue and continue is OFF (default), a requires_human ask stays as ask', () => {
-  const home = makeHome()
-  const cwd = home
-  const policy = { id: 'jevadv-queue-default', rule: 'Test default behavior', kind: 'requires_human', scope: 'command' }
-  writePoliciesMirror(home, [policy])
-  // no queue mode file = default (ask now)
-  const command = 'some-dangerous-command --needs-review'
-  // Pre-populate cache with an 'ask' for this command
-  const key = computeCacheKey(command, cwd, home, { policies: [policy] })
-  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the jevadv-queue-default policy', policyId: 'jevadv-queue-default', at: Date.now() - 1000 })
-  const payload = JSON.parse(run(home, command, { cwd, apiKey: 'test-key-unused-on-cache-hit' }))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask', 'default ask behavior unchanged when queue mode is OFF')
-  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /jevadv-queue-default/i, 'asks with the policy reason')
+test('T4 queue mode ON: the queued item lands in human-queue.jsonl with policy, project and command, and the log says why', () => {
+  const { home } = queueHome(QUEUED_COMMAND, { queueMode: true })
+  run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-queue-2' })
+  const lines = humanQueueLines(home)
+  assert.equal(lines.length, 1)
+  assert.equal(lines[0].type, 'queued')
+  assert.equal(lines[0].policyId, 'client_always_asks')
+  assert.equal(lines[0].command, QUEUED_COMMAND)
+  assert.equal(typeof lines[0].project, 'string')
+  assert.equal(lines[0].sessionId, undefined, 'the session id itself is never written, only a hash of it')
+  const records = gateLogRecords(home)
+  const last = records[records.length - 1]
+  assert.equal(last.stopReason, 'queue')
+  assert.equal(last.policyId, 'client_always_asks')
+  assert.equal(last.verdict, 'advise')
 })
 
-test('T4 queue mode: identical retry in the same session passes advice-retry check', () => {
+test('T4 queue mode ON: an identical retry in the same session is ASKED, never passed', () => {
+  const { home, key } = queueHome(QUEUED_COMMAND, { queueMode: true })
+  const sessionId = 'session-queue-retry'
+  const first = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId }))
+  assert.equal(first.hookSpecificOutput.permissionDecision, 'deny')
+  const second = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId }))
+  assert.equal(second.hookSpecificOutput.permissionDecision, 'ask', 'a queued command never runs without a person')
+  assert.match(second.hookSpecificOutput.permissionDecisionReason, /client_always_asks/)
+  const lines = humanQueueLines(home)
+  assert.deepEqual(lines.map((line) => line.type), ['queued', 'asked'], 'the retry takes the item off the waiting list: the person is being asked now')
+  assert.equal(lines[1].key, lines[0].key)
+  const cache = JSON.parse(readFileSync(verdictCachePath(home), 'utf8'))
+  assert.equal(cache[key].decision, 'ask', 'the cached verdict stays an ask: queueing never turns a policy stop into an advice')
+})
+
+test('T4 queue mode ON: another session queues the same command again, on its own', () => {
+  const { home } = queueHome(QUEUED_COMMAND, { queueMode: true })
+  run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-a' })
+  const other = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-b' }))
+  assert.equal(other.hookSpecificOutput.permissionDecision, 'deny')
+  assert.deepEqual(humanQueueLines(home).map((line) => line.type), ['queued', 'queued'])
+})
+
+test('T4 queue mode ON: with no session id there is nothing to key a retry by, so it asks now', () => {
+  const { home } = queueHome(QUEUED_COMMAND, { queueMode: true })
+  const payload = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.deepEqual(humanQueueLines(home), [])
+})
+
+test('T4 queue mode ON: a credential in a queued command never reaches the queue file', () => {
+  const command = 'some-client-release-tool --token=ghp_abcdefghijklmnopqrstuvwxyz0123456789 --publish'
+  const { home } = queueHome(command, { queueMode: true })
+  run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-queue-secret' })
+  const raw = readFileSync(humanQueuePath(home), 'utf8')
+  assert.doesNotMatch(raw, /ghp_abcdefghijklmnopqrstuvwxyz0123456789/)
+  assert.match(raw, /REDACTED/)
+})
+
+test('T4 queue mode OFF (the default): a requires_human ask stays an ask and nothing is queued', () => {
+  const { home } = queueHome(QUEUED_COMMAND)
+  const payload = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-queue-off' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /client_always_asks/)
+  assert.deepEqual(humanQueueLines(home), [])
+})
+
+test('T4 queue mode ON: a prohibits hard stop is never queued', () => {
   const home = makeHome()
-  const cwd = home
-  const sessionId = 'test-session-queue'
-  const policy = { id: 'jevadv-queue-retry', rule: 'Needs human', kind: 'requires_human', scope: 'command' }
+  const policy = { id: 'never_write_to_main', rule: 'Never write on main.', kind: 'prohibits', scope: 'command' }
   writePoliciesMirror(home, [policy])
-  writeQueueModeMirror(home, true) // queue mode ON
-  const command = 'git push origin dangerous'
-
-  // Pre-populate cache with an 'ask' for this command
-  const key = computeCacheKey(command, cwd, home, { policies: [policy] })
-  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'covered by the jevadv-queue-retry policy', policyId: 'jevadv-queue-retry', at: Date.now() - 1000 })
-
-  // First call: enqueued as advice
-  const first = JSON.parse(run(home, command, { cwd, sessionId, apiKey: 'test-key-unused-on-cache-hit' }))
-  assert.equal(first.hookSpecificOutput.permissionDecision, 'deny', 'first call queued as advice')
-  assert.doesNotMatch(first.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'first call is advice not hard stop')
-
-  // Identical retry in same session: advice-retry pass allows it through
-  const second = JSON.parse(run(home, command, { cwd, sessionId, apiKey: 'test-key-unused-on-cache-hit' }))
-  // Second run with identical command should pass the advice-retry check and allow
-  assert.equal(second.hookSpecificOutput.permissionDecision, 'allow', 'identical retry passes advice-retry, allows command')
+  writeQueueModeMirror(home, true)
+  const key = computeCacheKey(QUEUED_COMMAND, home, home, { policies: [policy] })
+  writeVerdictCacheEntry(home, key, { decision: 'deny', reason: 'prohibited', policyId: 'never_write_to_main', at: Date.now() - 1000 })
+  const payload = JSON.parse(run(home, QUEUED_COMMAND, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-queue-deny' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED|never_write_to_main|prohibit/i)
+  assert.deepEqual(humanQueueLines(home), [])
 })
 
 function writeQueueModeMirror (home, enabled) {

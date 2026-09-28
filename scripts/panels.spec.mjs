@@ -721,6 +721,38 @@ test('an install that never set team owners shows an empty field and saves an em
   }
 })
 
+// 0.6.7 T4: "When a person must approve: ask now | queue and continue",
+// saved to `queueMode` ({ enabled }) by the same Save button.
+test('the queue mode select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ queueMode: { enabled: true } })
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#queue-mode'), 'queue')
+    assert.ok((await page.textContent('#queue-mode-section')).length > 40, 'the section renders its heading, choices and hint')
+    await page.selectOption('#queue-mode', 'ask')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.queueMode), { enabled: false })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an install that never set the queue mode shows "ask now" and saves it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#queue-mode'), 'ask')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.queueMode), { enabled: false })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('every teamOwners.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page } = await openPanel({})
   try {

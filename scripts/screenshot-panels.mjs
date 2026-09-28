@@ -294,6 +294,9 @@ const READY = {
   // 0.6.7 T1: the team owners field, filled, so the Policies tab photographs
   // it with real lines rather than only its placeholder. Example owners.
   teamOwners: ['acme-team', 'acme-tools'],
+  // 0.6.7 T4: queue mode on, so the Policies tab photographs the choice
+  // the board's "Waiting for you" list depends on.
+  queueMode: { enabled: true },
   // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
   // project (the raw Orca projectId, plus the projectName the worker
   // resolves from it -- the same name "By project" shows below) and branch;

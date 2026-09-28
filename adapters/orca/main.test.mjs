@@ -2003,7 +2003,7 @@ test('mirrorCatalogAndPolicies also mirrors the team owners, normalized, through
   const calls = []
   const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
   await mirrorCatalogAndPolicies(orca, storageHost, { run })
-  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save'])
+  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save', 'queue-mode-save'])
   assert.deepEqual(JSON.parse(calls[2].stdin), ['acme-team', 'acme-tools'])
 })
 
@@ -2021,4 +2021,29 @@ test('mirrorCatalogAndPolicies logs a failed team-owners mirror by reason, never
   const run = async (mode) => (mode === 'team-owners-save' ? { ok: false, reason: 'exception', detail: 'disk full' } : { ok: true })
   await mirrorCatalogAndPolicies(orca, fakeStorageHost(), { run })
   assert.ok(orca._logs.some((line) => /team owners mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
+})
+
+// 0.6.7 T4: "When a person must approve" rides the same mirror, to
+// queue-mode.json, for gate-bash.ts to read.
+test('mirrorCatalogAndPolicies mirrors the queue mode setting through queue-mode-save', async () => {
+  const calls = []
+  const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost({ queueMode: { enabled: true } }), { run })
+  const queueMode = calls.find((call) => call.mode === 'queue-mode-save')
+  assert.ok(queueMode, 'the queue mode setting must be mirrored')
+  assert.deepEqual(JSON.parse(queueMode.stdin), { enabled: true })
+})
+
+test('mirrorCatalogAndPolicies mirrors "ask now" when the queue mode was never set', async () => {
+  const calls = []
+  const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost(), { run })
+  assert.deepEqual(JSON.parse(calls.find((call) => call.mode === 'queue-mode-save').stdin), { enabled: false })
+})
+
+test('mirrorCatalogAndPolicies logs a failed queue mode mirror by reason, never throws', async () => {
+  const orca = fakeOrca()
+  const run = async (mode) => (mode === 'queue-mode-save' ? { ok: false, reason: 'exception', detail: 'disk full' } : { ok: true })
+  await mirrorCatalogAndPolicies(orca, fakeStorageHost(), { run })
+  assert.ok(orca._logs.some((line) => /queue mode mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
 })
