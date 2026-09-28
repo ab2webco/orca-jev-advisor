@@ -7,6 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ADVISOR_CATALOG } from "./i18n_advisor.ts";
+import { CONTEXT_STEWARD_CATALOG } from "./i18n_context_steward.ts";
 import { DESTINATION_CATALOG } from "./i18n_destination.ts";
 import { GATE_CATALOG } from "./i18n_gate.ts";
 import { MOD_SKILLS_CATALOG } from "./i18n_mod_skills.ts";
@@ -15,6 +16,7 @@ import { TOOLS_CATALOG } from "./i18n_tools.ts";
 
 const CATALOGS: ReadonlyArray<readonly [string, Readonly<Record<string, string>>]> = [
   ["advisor", ADVISOR_CATALOG.es],
+  ["context_steward", CONTEXT_STEWARD_CATALOG.es],
   ["destination", DESTINATION_CATALOG.es],
   ["gate", GATE_CATALOG.es],
   ["mod_skills", MOD_SKILLS_CATALOG.es],

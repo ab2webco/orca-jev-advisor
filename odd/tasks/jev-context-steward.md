@@ -1,0 +1,67 @@
+# Jev context steward
+
+## Objective
+Re-read context is most of what a long session costs. At the end of each
+main-conversation turn above a context threshold, Jev judges whether a unit
+of work just closed; if so, the plugin compacts the session with
+instructions that keep the plan and the open work, and on a topic change it
+also suggests `/clear`.
+
+## Evidence (generic)
+Measured on real sessions: cache reads are most of the spend, and Opus 5.5
+and Sonnet 5 re-read at the same price, so model switching barely touches
+them. Compacting a main context once it passes about 120k tokens would have
+saved about half of the re-read context (an upper bound: it does not model
+detail lost to compaction).
+
+## Engine surface (claude-code.d.ts)
+- `$.session.usage()`: free; `context.tokens`, `context.percent`, `context.window`.
+- `$.session.compact({ instructions })`: `session.compact`, trigger `plugin`;
+  rejects while a turn runs; resolves `{ messages, tokensBefore?, tokensAfter? }`
+  or `{ skip }`.
+- `turn.complete`: `agentId` set on a subagent's turn.
+- `$.clock.after(ms, fn)`: a timer that outlives the dispatch (reference:
+  "Work that outlives a dispatch"); the compaction runs from it, once the
+  turn has ended.
+- A plugin cannot run `/clear`: it is only suggested.
+
+## Behaviour
+1. Main `turn.complete` (reason `answer`) schedules the steward on a timer.
+2. Context ≥ threshold (default 120k, per account) or ≥ 80% of the window:
+   one Jev question, `boundary` / `mid-task` / `new-topic`, over a redacted,
+   capped state (last two person-prompt excerpts, the turn's tool counts and
+   commit/push/PR/test flags, context size, person turns since the last
+   compaction). No file contents.
+3. `boundary` ≥ 0.70: compact with preserving instructions.
+4. `new-topic` ≥ 0.70: compact and suggest `/clear`.
+5. `mid-task`, low confidence or Jev failure: nothing, except ≥ 80% of the
+   window (hard limit): compact anyway.
+6. Never twice within 3 person turns; never a subagent; never in measure mode.
+
+## Modes
+`off` / `measure` (default) / `active`, per account, in the router options
+of the account's settings.json (`stewardMode`, `stewardThreshold`), shown in
+the config panel's Models tab next to the router.
+
+## Tasks
+- [ ] S1 core: `src/core/context_steward.ts` (gate, Jev state/question,
+  decision, preserving instructions, record, status text) + tests
+- [ ] S2 hooks: `turn.complete` → timer → Jev → compact/log/status + hooks tests
+- [ ] S3 settings: `stewardMode`/`stewardThreshold` read/write (core, installer
+  `steward-set`, main bridge) + tests
+- [ ] S4 panel: Models tab steward row (mode + threshold) + panel tests + shots
+- [ ] S5 consumption: prune `context-steward-decisions-*.jsonl`; board
+  Consumption line (compactions applied, estimated tokens no longer re-read)
+- [ ] S6 live check: low threshold in a scratch session; cacheRead drops
+
+## Acceptance
+- Tests (RED first): boundary above threshold compacts with preserving
+  instructions; `mid-task` does not; hard limit compacts; 3-turn cooldown;
+  measure changes nothing; a subagent is never compacted; Jev failure means
+  no compaction except at the hard limit.
+- `npm test`, `npm run test:panels`, `npm run shots` (4 images read), hooks
+  `tsc -p adapters/claude/mod-skills/tsconfig.json`,
+  `adapters/orca/mod_skills_validate.test.mjs` green.
+- Live: the step after a steward compaction reads fewer cached tokens.
+
+## Progress
