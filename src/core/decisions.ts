@@ -579,8 +579,16 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  * replaying after this upgrade; the version prefix in gate-bash.ts's
  * cacheKey() makes it miss instead, so the command is judged fresh under the
  * new rules.
+ *
+ * Bumped to 3 for 0.6.5: src/core/command_shape.ts now keeps identity
+ * arguments literal -- which PR, issue, MR, ticket, repository or push
+ * destination a command acts on. Under 2 those folded into a class, so an
+ * 'allow' cached for `gh pr merge 12` or `git push origin feature/x` was
+ * keyed identically to `gh pr merge 13` or `git push origin main`. A v2
+ * entry must not keep answering for whichever identity happens to share its
+ * old key; the version prefix makes every one of them miss instead.
  */
-export const GATE_DECISION_RULES_VERSION = 2;
+export const GATE_DECISION_RULES_VERSION = 3;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {

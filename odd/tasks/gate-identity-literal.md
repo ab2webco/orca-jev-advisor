@@ -43,9 +43,12 @@ Pairs that shared one shape:
       above), then GREEN. Commands that differ only in harmless ways must
       still share a shape.
       Proof: RED -- the five pairs shared a shape and a `gh api -H` header
-      value entered it as a verb; GREEN -- 26/26 in command_shape.test.ts.
-- [ ] T2 Bump `GATE_DECISION_RULES_VERSION`; a gate test proves an entry
+      value entered it as a verb; GREEN -- 26/26 in command_shape.test.ts. Commit 9734578.
+- [x] T2 Bump `GATE_DECISION_RULES_VERSION`; a gate test proves an entry
       cached for one identity does not serve another.
+      Proof: RED against the pre-T1 shape -- `git push origin main` keyed
+      like `git push origin feature/x`, and the version was still 2; GREEN --
+      287/287 in gate-bash.test.mjs + decisions.test.ts.
 - [ ] T3 README "What changed in 0.6.5", version 0.6.5, full verification.
 
 ## Acceptance criteria
