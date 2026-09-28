@@ -30,7 +30,9 @@
  * than failing the script. `modelRouter` (JEV-060 slice 2, §8) is `null`
  * when no `model-router-decisions-*.jsonl` file exists at all, else
  * `summarizeRouterDecisions`'s own summary over the last 24h, read and
- * pruned the same way as turn-usage.
+ * pruned the same way as turn-usage. `steward` is the same for the context
+ * steward's `context-steward-decisions-*.jsonl` (summarizeStewardDecisions,
+ * odd/tasks/jev-context-steward.md): null until a file exists.
  */
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -53,6 +55,7 @@ import {
   toTurnUsageRecord,
   TURN_USAGE_FILE_PATTERN,
 } from './log-files.mjs'
+import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions } from '../../src/core/context_steward.ts'
 
 const PLATFORM = normalizePlatform(process.platform)
 const HOME = homedir()
@@ -143,12 +146,15 @@ async function main () {
     const decisionFiles = await listHourlyFiles(CACHE_DIR, MODEL_ROUTER_DECISIONS_FILE_PATTERN)
     const { rows, corrupt } = await readJsonlRows(files)
     const { rows: decisionRows } = await readJsonlRows(decisionFiles)
+    const stewardFiles = await listHourlyFiles(CACHE_DIR, STEWARD_DECISIONS_FILE_PATTERN)
+    const { rows: stewardRows } = await readJsonlRows(stewardFiles)
     // Pruning runs after reading, using the same listings -- a file that
     // gets deleted mid-run still contributed its rows to this cycle's
     // aggregation, exactly as if it had been read moments before turning 8
     // days old.
     await pruneOldHourlyFiles(files, now)
     await pruneOldHourlyFiles(decisionFiles, now)
+    await pruneOldHourlyFiles(stewardFiles, now)
 
     const turnUsageRecords = []
     let malformed = 0
@@ -189,7 +195,9 @@ async function main () {
       ? null
       : summarizeRouterDecisions(decisionRows, rows, now, MODEL_ROUTER_WINDOW_MS)
 
-    result = { ok: true, usage, quota, recommendations, modelRouter }
+    const steward = stewardFiles.length === 0 ? null : summarizeStewardDecisions(stewardRows, now, MODEL_ROUTER_WINDOW_MS)
+
+    result = { ok: true, usage, quota, recommendations, modelRouter, steward }
   } catch (error) {
     result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }

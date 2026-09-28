@@ -242,3 +242,34 @@ test("clear hint, both locales", () => {
   assert.equal(stewardClearHint("es"), "tarea cerrada: /clear libera todo el contexto");
   assert.equal(stewardClearHint("en"), "task closed: /clear frees the whole context");
 });
+
+// ---------------------------------------------------------------------------
+// The board's summary
+// ---------------------------------------------------------------------------
+
+import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions } from "./context_steward.ts";
+
+test("summary: compactions applied, the ones measure mode would have made, and the context freed per later step", () => {
+  const now = Date.parse("2026-09-28T12:00:00.000Z");
+  const row = (at: string, extra: Record<string, unknown>): Record<string, unknown> => ({ at, account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.9, compact: true, applied: true, contextAfter: 30_000, ...extra });
+  const rows: unknown[] = [
+    row("2026-09-28T11:00:00.000Z", {}),
+    row("2026-09-28T10:00:00.000Z", { contextBefore: 200_000, contextAfter: 40_000 }),
+    row("2026-09-28T09:00:00.000Z", { applied: false, contextAfter: null }),
+    row("2026-09-28T08:00:00.000Z", { mode: "measure", applied: false, contextAfter: null }),
+    row("2026-09-28T07:00:00.000Z", { decision: "mid-task", compact: false, applied: false, contextAfter: null }),
+    row("2026-09-26T07:00:00.000Z", {}),
+    "not a row",
+    { at: "garbage" },
+  ];
+  assert.deepEqual(summarizeStewardDecisions(rows, now, 24 * 3600_000), { decisions: 5, applied: 2, wouldCompact: 1, freedPerStep: 280_000 });
+});
+
+test("summary: nothing applied reads freed as unknown, not zero", () => {
+  assert.deepEqual(summarizeStewardDecisions([], Date.now(), 3600_000), { decisions: 0, applied: 0, wouldCompact: 0, freedPerStep: null });
+});
+
+test("file pattern: the hourly steward logs only", () => {
+  assert.equal(STEWARD_DECISIONS_FILE_PATTERN.exec("context-steward-decisions-2026-09-28T14.jsonl")?.[1], "2026-09-28T14");
+  assert.equal(STEWARD_DECISIONS_FILE_PATTERN.exec("model-router-decisions-2026-09-28T14.jsonl"), null);
+});

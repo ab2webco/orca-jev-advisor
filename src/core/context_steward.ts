@@ -11,6 +11,7 @@
 // Pure: the hooks module reads the usage, calls Jev, compacts and logs.
 // ---------------------------------------------------------------------------
 
+import { isRecord } from "../guards.ts";
 import { getChoiceAnswer } from "./jev.ts";
 import type { Answer, JsonValue, Question } from "./jev.ts";
 import { translate } from "./i18n.ts";
@@ -284,6 +285,9 @@ export function stewardInstructions(facts: StewardFacts): string {
 // Record and status line
 // ---------------------------------------------------------------------------
 
+/** The hourly steward logs, the hour captured: listed, read and pruned like the router's. */
+export const STEWARD_DECISIONS_FILE_PATTERN = /^context-steward-decisions-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/;
+
 /** `context-steward-decisions-YYYY-MM-DDTHH.jsonl` for the hour `atIso` falls in. */
 export function stewardDecisionFileName(atIso: string): string {
   return `context-steward-decisions-${atIso.slice(0, 13)}.jsonl`;
@@ -354,4 +358,46 @@ export function stewardStatusPart(locale: Locale, input: StewardStatusInput): st
 
 export function stewardClearHint(locale: Locale): string {
   return translate(CONTEXT_STEWARD_CATALOG, locale, "clearHint");
+}
+
+// ---------------------------------------------------------------------------
+// The board's summary
+// ---------------------------------------------------------------------------
+
+export interface StewardSummary {
+  /** Logged decisions in the window (each one a turn at or above the threshold). */
+  readonly decisions: number;
+  /** Compactions active mode made. */
+  readonly applied: number;
+  /** Compactions measure mode would have made. */
+  readonly wouldCompact: number;
+  /**
+   * An ESTIMATE: the context each applied compaction took off every later
+   * step of its session (before − after), summed. Per step, not multiplied
+   * by the steps that followed: the logs carry no session id, and an
+   * account often runs several sessions at once. null when no applied
+   * compaction recorded its size afterwards.
+   */
+  readonly freedPerStep: number | null;
+}
+
+/** What the steward did over the `windowMs` before `nowMs`. Rows are parsed tolerantly: anything malformed is skipped. */
+export function summarizeStewardDecisions(rows: readonly unknown[], nowMs: number, windowMs: number): StewardSummary {
+  let decisions = 0;
+  let applied = 0;
+  let wouldCompact = 0;
+  let freed: number | null = null;
+  for (const row of rows) {
+    if (!isRecord(row) || typeof row.at !== "string") continue;
+    const atMs = Date.parse(row.at);
+    if (Number.isNaN(atMs) || atMs > nowMs || atMs < nowMs - windowMs) continue;
+    decisions += 1;
+    if (row.applied === true) {
+      applied += 1;
+      if (typeof row.contextBefore === "number" && typeof row.contextAfter === "number" && row.contextBefore > row.contextAfter) freed = (freed ?? 0) + row.contextBefore - row.contextAfter;
+    } else if (row.mode === "measure" && row.compact === true) {
+      wouldCompact += 1;
+    }
+  }
+  return { decisions, applied, wouldCompact, freedPerStep: freed };
 }
