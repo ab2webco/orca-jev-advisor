@@ -76,7 +76,7 @@
  * the engine refuses; they are top-level functions now too, taking their
  * cache explicitly instead of closing over it.
  */
-import type { AgentSpawnInput, AgentSpawnResult, EngineInterface, Frozen, Next, On, PluginOptions, Register, StreamHookBody, StreamNext, TurnStepChunk, TurnStepInput, TurnStepResult } from 'claude-code'
+import type { AgentSpawnInput, AgentSpawnResult, EngineInterface, Frozen, Next, On, PluginOptions, Register, SessionCompactResult, StreamHookBody, StreamNext, TurnStepChunk, TurnStepInput, TurnStepResult } from 'claude-code'
 import { callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
 import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
@@ -151,7 +151,10 @@ import type { RouterDestination } from '../../../../src/core/model_router_destin
 import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_router_subagent.ts'
 import type { SubagentDecision } from '../../../../src/core/model_router_subagent.ts'
 import { isPersonPromptOrigin } from '../../../../src/core/model_router_origin.ts'
-import type { RouterPromptOrigin, RouterSessionStats, RouterSticky } from '../types/index.d.ts'
+import type { RouterPromptOrigin, RouterSessionStats, RouterSticky, StewardState } from '../types/index.d.ts'
+import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
+import type { StewardDecision, StewardJudgment, StewardMode } from '../../../../src/core/context_steward.ts'
+import { stewardFromSettings } from '../../../../src/core/model_router_mode.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -595,11 +598,16 @@ async function readJsonFile($: EngineInterface, path: string): Promise<unknown> 
  * settings.json carries the person's per-tier effort (0.6.2 E3), in the
  * router options the config panel writes.
  */
-async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; tierEffort: TierEffortMap }> {
+async function readVaultSettings($: EngineInterface): Promise<unknown> {
   const paths = await resolveHomePaths($)
   const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
   const vaultDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
-  const vaultSettings = vaultDir === null ? null : await readJsonFile($, `${vaultDir}/settings.json`)
+  return vaultDir === null ? null : readJsonFile($, `${vaultDir}/settings.json`)
+}
+
+async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; tierEffort: TierEffortMap }> {
+  const paths = await resolveHomePaths($)
+  const vaultSettings = await readVaultSettings($)
   const vaultEnv = vaultSettings === null ? {} : parseVaultEnv(vaultSettings)
   const [baseUrl, opusModel, sonnetModel, haikuModel, mainModel] = await Promise.all([
     $.env.get('ANTHROPIC_BASE_URL'),
@@ -1124,6 +1132,176 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
 }
 
 // ---------------------------------------------------------------------------
+// Jev context steward (odd/tasks/jev-context-steward.md). Re-read context is
+// most of what a long session costs. When a MAIN turn ends with an answer,
+// `turn.complete` schedules `stewardAfterTurn` on a timer: `$.session.compact`
+// rejects while a turn runs, and a timer outlives the hook's dispatch. The
+// timer reads the context for free; at or above the account's threshold (or
+// at the hard limit) it asks Jev once whether a task just closed, logs the
+// decision, and in active mode compacts with instructions that keep the plan
+// and the open work. Measure mode (the default) logs and shows what it would
+// have done. A subagent is never compacted. Fails open: any error leaves the
+// session as it was.
+// ---------------------------------------------------------------------------
+
+const STEWARD_BUDGET_MS = 3000
+const STEWARD_DELAY_MS = 250
+const STEWARD_RETRY_MS = 1000
+const STEWARD_ATTEMPTS = 3
+const EMPTY_STEWARD: StewardState = { personTurns: 0, lastCompactionTurn: null }
+
+/** What the steward's timer reads from `register`'s own variables, built inside the hook that schedules it. */
+interface StewardHost {
+  /** The main turn running now, or null between turns. */
+  readonly runningTurn: () => string | null
+  /** Sets the steward's part of the status line; null clears it. */
+  readonly show: (text: string | null) => void
+}
+
+/** One decision on its way to being logged, and, in active mode, applied. */
+interface StewardPlan {
+  readonly mode: 'measure' | 'active'
+  readonly account: string
+  readonly project: string
+  readonly contextBefore: number
+  readonly decision: StewardDecision
+  readonly instructions: string
+  readonly personTurns: number
+  readonly locale: Locale
+}
+
+async function readStewardState($: EngineInterface): Promise<StewardState> {
+  const read = await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'steward' })
+  return read.value ?? EMPTY_STEWARD
+}
+
+/** prompt.submit: one more person turn, for the cooldown. An empty prompt or a slash command is not one. Best-effort. */
+async function countPersonTurn($: EngineInterface, originKind: string, text: string): Promise<void> {
+  try {
+    const prompt = text.trim()
+    if (!isPersonPromptOrigin(originKind) || prompt.length === 0 || prompt.startsWith('/')) return
+    const state = await readStewardState($)
+    await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...state, personTurns: state.personTurns + 1 })
+  } catch {
+    // Without the count the cooldown reads fewer turns: it only compacts later.
+  }
+}
+
+/** Appends one decision line to the current hour's `context-steward-decisions-*.jsonl`, best-effort. */
+async function appendStewardDecision($: EngineInterface, atIso: string, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/${stewardDecisionFileName(atIso)}`, line)
+  } catch {
+    // Logging is best-effort and must never affect the session.
+  }
+}
+
+/** Jev's verdict on the turn that just ended, or null on any failure. The state carries prompt excerpts and counts, never file contents. */
+async function askStewardJudgment($: EngineInterface, options: PluginOptions, messages: readonly ActivityMessage[], contextTokens: number, turnsSinceCompaction: number | null): Promise<StewardJudgment | null> {
+  try {
+    const apiKey = await resolveApiKey($, options)
+    if (apiKey === null) return null
+    const prompts = messages.filter(isRealPrompt)
+    const state = buildStewardState({
+      lastPrompt: prompts.at(-1)?.text ?? '',
+      previousPrompt: prompts.length >= 2 ? (prompts.at(-2)?.text ?? null) : null,
+      activity: summarizeStewardActivity(messages),
+      contextTokens,
+      turnsSinceCompaction,
+    })
+    const response = await callJev(apiKey, state, buildStewardQuestions(), { budgetMs: STEWARD_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
+    return interpretSteward(response.answers)
+  } catch {
+    return null
+  }
+}
+
+function baseName(path: string): string {
+  return path.split('/').filter((part) => part.length > 0).at(-1) ?? ''
+}
+
+/** The timer `turn.complete` schedules: gate, Jev, decision; then a log (measure, or nothing to do) or a compaction (active). Never throws. */
+async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host: StewardHost): Promise<void> {
+  try {
+    const settings = stewardFromSettings(await readVaultSettings($))
+    const mode: StewardMode = settings.mode
+    if (mode === 'off') return
+    const usage = await $.session.usage()
+    const state = await readStewardState($)
+    const turnsSinceCompaction = state.lastCompactionTurn === null ? null : state.personTurns - state.lastCompactionTurn
+    const contextTokens = usage.context.tokens ?? null
+    const gate = stewardGate({ mode, isSubagent: false, contextTokens, contextPercent: usage.context.percent ?? null, threshold: settings.threshold, turnsSinceCompaction })
+    if (!gate.ask || contextTokens === null) return
+    const messages = await $.session.messages()
+    const jev = await askStewardJudgment($, options, messages, contextTokens, turnsSinceCompaction)
+    const decision = decideSteward({ jev, hardLimit: gate.hardLimit })
+    const plan: StewardPlan = {
+      mode,
+      account: await resolveAccountId($),
+      project: baseName(await $.session.root()),
+      contextBefore: contextTokens,
+      decision,
+      instructions: decision.compact ? stewardInstructions(collectStewardFacts(messages)) : '',
+      personTurns: state.personTurns,
+      locale: await resolveLocale($),
+    }
+    if (mode === 'active' && decision.compact) {
+      await attemptStewardCompaction($, plan, 1, host)
+      return
+    }
+    // Measure mode keeps the cooldown as if it had compacted, so its log
+    // reads the cadence active mode would have.
+    if (decision.compact) await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...(await readStewardState($)), lastCompactionTurn: state.personTurns })
+    await finishSteward($, plan, false, null, host)
+  } catch {
+    // The steward never affects the session on a failure.
+  }
+}
+
+/** One compaction attempt; a rejection (a turn still winding down) is retried on a later timer, at most STEWARD_ATTEMPTS times, never under a new turn. */
+async function attemptStewardCompaction($: EngineInterface, plan: StewardPlan, attempt: number, host: StewardHost): Promise<void> {
+  try {
+    if (host.runningTurn() !== null) {
+      await finishSteward($, plan, false, null, host)
+      return
+    }
+    let result: SessionCompactResult | null = null
+    try {
+      result = await $.session.compact({ instructions: plan.instructions })
+    } catch {
+      result = null
+    }
+    if (result === null) {
+      if (attempt < STEWARD_ATTEMPTS && host.runningTurn() === null) {
+        $.clock.after(STEWARD_RETRY_MS, () => attemptStewardCompaction($, plan, attempt + 1, host))
+        return
+      }
+      await finishSteward($, plan, false, null, host)
+      return
+    }
+    if (result.skip !== undefined) {
+      await finishSteward($, plan, false, null, host)
+      return
+    }
+    await finishSteward($, plan, true, result.tokensAfter ?? null, host)
+  } catch {
+    // See stewardAfterTurn.
+  }
+}
+
+/** The decision's log line, the cooldown mark when applied, the status line part and, on a topic change, the /clear suggestion. */
+async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boolean, contextAfter: number | null, host: StewardHost): Promise<void> {
+  if (applied) await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...(await readStewardState($)), lastCompactionTurn: plan.personTurns })
+  const at = new Date(await $.clock.now()).toISOString()
+  const record = stewardDecisionRecord({ at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter })
+  await appendStewardDecision($, at, `${JSON.stringify(record)}\n`)
+  host.show(stewardStatusPart(plan.locale, { mode: plan.mode, decision: plan.decision.decision, applied, before: plan.contextBefore, after: contextAfter }))
+  if (applied && plan.decision.suggestClear) $.ui.toast(stewardClearHint(plan.locale), { timeoutMs: 15000 })
+}
+
+// ---------------------------------------------------------------------------
 // Active-mode switches -- hoisted out of `register` (JEVADV-43): the engine
 // refuses `$` passed into a closure declared INSIDE register, only a
 // top-level function. These take the option value already resolved from
@@ -1247,6 +1425,11 @@ export function register(on: On, options: PluginOptions): void {
   // always shown together, so neither erases the other.
   let promptStatusText: string | null = null
   let routerStatusText: string | null = null
+  // The context steward's part, set by its timer after a turn ends.
+  let stewardStatusText: string | null = null
+  // The main turn running now (turn.start → turn.complete), so the steward
+  // never compacts under a turn that started after the one it judged.
+  let activeTurnId: string | null = null
 
   on('prompt.attachment', { type: 'skill_listing' }, async ($, e, next) => {
     // A subagent's own listing is left alone, since nothing here suggests
@@ -1280,6 +1463,7 @@ export function register(on: On, options: PluginOptions): void {
     } catch {
       // See above.
     }
+    await countPersonTurn($, e.origin.kind, e.text)
 
     const prompt = e.text.trim()
     // Reset every turn, before anything below can set it: whatever exits
@@ -1623,7 +1807,7 @@ export function register(on: On, options: PluginOptions): void {
 
     const statusParts = [skillOutcome.status, toolOutcome.status].filter((part): part is string => part !== null)
     promptStatusText = statusParts.length > 0 ? statusParts.join(' · ') : null
-    const line = composeStatusLine([promptStatusText, routerStatusText])
+    const line = composeStatusLine([promptStatusText, routerStatusText, stewardStatusText])
     if (line !== null) $.ui.status(line)
 
     const extraContext = [skillOutcome.block, toolOutcome.block].filter((block): block is string => block !== null)
@@ -1644,7 +1828,7 @@ export function register(on: On, options: PluginOptions): void {
   on('turn.step', async function* ($, e, next) {
     const showRouterStatus = (text: string): void => {
       routerStatusText = text
-      $.ui.status(composeStatusLine([promptStatusText, routerStatusText]) ?? text)
+      $.ui.status(composeStatusLine([promptStatusText, routerStatusText, stewardStatusText]) ?? text)
     }
     // JEVADV-63: read from the closure's own orcaContextCache (plain data,
     // not `$`) -- never a fresh resolveOrcaContext call per step. null when
@@ -1655,6 +1839,36 @@ export function register(on: On, options: PluginOptions): void {
   })
 
   on('agent.spawn', async ($, e, next) => routeSubagent($, e, next, routerMode, options, subagentEffortTarget, modSkillsProjectName(orcaContextCache)))
+
+  // The context steward (stewardAfterTurn): a subagent's run raises no
+  // turn.start, and its turn.complete carries an agentId, so both hooks see
+  // the main conversation alone. The steward's work runs on a timer, once
+  // this turn has ended, never inside it.
+  on('turn.start', async ($, e, next) => {
+    activeTurnId = e.turnId
+    return next(e)
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      activeTurnId = null
+      if (e.reason === 'answer') {
+        const host: StewardHost = {
+          runningTurn: () => activeTurnId,
+          show: (text) => {
+            stewardStatusText = text
+            $.ui.status(composeStatusLine([promptStatusText, routerStatusText, stewardStatusText]) ?? undefined)
+          },
+        }
+        try {
+          $.clock.after(STEWARD_DELAY_MS, () => stewardAfterTurn($, options, host))
+        } catch {
+          // No timer, no steward: the turn ends as it would have.
+        }
+      }
+    }
+    return next(e)
+  })
 
   // The tool-selection equivalent of `skill.prompt`: observes, purely for
   // measurement, which tool the model actually reached for first after a
