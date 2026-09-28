@@ -35,13 +35,15 @@
  */
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions } from '../../src/core/gate_stats.ts'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
+import { modSkillsProjectName } from '../../src/core/project_name.ts'
+import { toGateDecisionRecord } from './log-files.mjs'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
@@ -93,62 +95,9 @@ function topByCount (counts, limit) {
     .slice(0, limit)
 }
 
-/**
- * Guards a raw parsed JSONL row into the exact shape foldGateDecisions()
- * expects, since a hand-edited or half-written line on disk is `unknown`
- * to this reader regardless of what gate_measurement.ts's own writer
- * promises. A row missing or mistyping a required field is dropped
- * (counted as corrupt) rather than fed to the fold with a guessed default
- * -- a wrong guess here would silently distort every count downstream.
- */
-function toGateDecisionRecord (row) {
-  if (
-    typeof row.id !== 'string' ||
-    typeof row.at !== 'string' ||
-    (row.project !== null && typeof row.project !== 'string') ||
-    typeof row.commandFamily !== 'string' ||
-    // 'none' is a real GateSource (src/core/gate_measurement.ts): Jev was
-    // asked but never answered, so the command failed open unjudged. This
-    // check used to omit it, which meant every 'none' row -- exactly the
-    // rows the 0.4.0 fail-open fix writes -- was silently discarded as
-    // malformed. The fold never saw them, so the board's "passed unjudged"
-    // count could only ever render zero: a working feature, hidden by a
-    // guard that never learned about it. Third time a silent drop in this
-    // file has hidden something that was actually working; check the other
-    // guards in this file before trusting any of their omissions again.
-    (row.source !== 'local-rule' && row.source !== 'cache' && row.source !== 'jev' && row.source !== 'none') ||
-    // 'advise' (the advise-model release, src/core/gate_measurement.ts): the
-    // risk stage (or a local rule whose switch is off) refuses the CODING
-    // MODEL and hands it a reason, rather than asking a person -- same
-    // silent-drop mistake as 'none' above if this guard forgets it.
-    (row.verdict !== 'allow' && row.verdict !== 'ask' && row.verdict !== 'deny' && row.verdict !== 'advise') ||
-    (row.latencyMs !== null && typeof row.latencyMs !== 'number') ||
-    // Optional ON READ, not on write (see gate_measurement.ts's own doc on
-    // GateDecisionRecord.pluginVersion): absent entirely is a record from
-    // before this field existed and must be kept, never dropped and never
-    // counted as corrupt. Present but not a string is malformed, same
-    // discipline as every other field here.
-    (row.pluginVersion !== undefined && typeof row.pluginVersion !== 'string')
-  ) {
-    return null
-  }
-  return {
-    type: 'gate-decision',
-    id: row.id,
-    at: row.at,
-    project: row.project,
-    // Stamped at write time: a log that spans a family rename reads as one family.
-    commandFamily: canonicalCommandFamily(row.commandFamily),
-    source: row.source,
-    verdict: row.verdict,
-    latencyMs: row.latencyMs,
-    // Conditional spread, not `pluginVersion: row.pluginVersion`: this
-    // record must be indistinguishable from a legacy record parsed off
-    // disk where the key never existed at all, same reasoning as
-    // buildGateDecisionRecord in gate_measurement.ts.
-    ...(row.pluginVersion !== undefined ? { pluginVersion: row.pluginVersion } : {}),
-  }
-}
+// toGateDecisionRecord lives in ./log-files.mjs (JEVADV-63, A3): shared
+// with read-activity.mjs so the two readers of gate-decisions.jsonl can
+// never drift onto two different guards.
 
 async function aggregateGate () {
   const { rows, corrupt } = await readJsonl(GATE_LOG_PATH)
@@ -401,40 +350,6 @@ async function aggregateNotRunByCommandFamily () {
   return [...notRunPerFamily(pending, outcomes, Date.now()).entries()]
     .map(([commandFamily, notRun]) => ({ commandFamily, notRun }))
     .sort((a, b) => b.notRun - a.notRun)
-}
-
-/**
- * odd/tasks/board-leftovers.md L1 -- the name a skills-mod decision's
- * project goes by in "By project", or null when nothing in the row can name
- * it. The board adds these counts to the gate's by name, and the gate's rows
- * are named when adapters/claude/gate-bash.ts writes them (its
- * projectName(): the `origin` remote's last path segment without `.git`,
- * else the working directory's own name). The skills mod records Orca's raw
- * projectId instead, so this applies that same rule to what the row carries:
- *
- *   - `github:owner/name` (a remote-derived projectId) -> its last segment,
- *     the same cut gate-bash.ts makes on the origin URL. main.mjs's
- *     remoteShortName() is the other copy; `grep -nF "replace(/^.*[:/]/"`
- *     across the three files is how to check they still agree.
- *   - `repo:<id>` is Orca's id for a checkout with no remote, where the gate
- *     falls back to the working directory's name -> the worktree's folder
- *     name. With no worktree recorded, null: never the id itself.
- *   - no projectId at all -> the worktree's folder name, the same fallback.
- *
- * This sidecar runs under `--permission` with read access to the cache dir
- * only, so it cannot ask git for a remote the row did not record; for the
- * rare fork whose Orca identity is `upstream`, the name follows the
- * projectId, as main.mjs's boardProjectName() does without a repo list.
- */
-function modSkillsProjectName (orcaContext) {
-  if (!isRecord(orcaContext)) return null
-  const present = (value) => (typeof value === 'string' && value.length > 0 ? value : null)
-  const lastSegment = (value) => present(value.trim().replace(/^.*[:/]/, '').replace(/\.git$/, ''))
-  const proyecto = present(orcaContext.proyecto)
-  if (proyecto !== null && !proyecto.startsWith('repo:')) return lastSegment(proyecto)
-  // gate-bash.ts's fallback is basename(cwd): the folder name as is.
-  const worktree = present(orcaContext.worktree)
-  return worktree !== null ? present(basename(worktree)) : null
 }
 
 async function aggregateModSkills () {

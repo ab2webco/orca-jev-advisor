@@ -859,6 +859,123 @@ const LIVE_BUSY_ENTRIES = [
 ]
 SCENARIOS['live-busy'] = { ...READY, board: { entries: LIVE_BUSY_ENTRIES } }
 
+/**
+ * JEVADV-63 -- the Activity tab's per-project cards fixture
+ * (activityByProjectSummary, src/core/activity_by_project.ts's own output
+ * shape). Seven projects, in the rank order the panel must show them in
+ * without re-sorting: one with real router savings, one with a router
+ * "extra cost" (a negative estimate, relabelled only at display time --
+ * never shown as a negative saving), one with no router decisions at all
+ * (router: null, never a fake zero row), one with an unresolved project
+ * (project: null), and three more past the top-6 rank to exercise the
+ * show-more toggle. Every name and number here is synthetic -- placeholder
+ * project names only (0.6.3 privacy rule: this repo is public and carries
+ * no real client/project names or usage figures from the owner's machine).
+ */
+function activityDaysFixture (peakDayIndex, peakJudged, peakSteps) {
+  return Array.from({ length: 7 }, (_, i) => ({
+    day: new Date(Date.now() - (6 - i) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    judgedCommands: i === peakDayIndex ? peakJudged : Math.max(0, Math.round(peakJudged * 0.2)),
+    mainSteps: i === peakDayIndex ? peakSteps : Math.max(0, Math.round(peakSteps * 0.3)),
+    subagentSteps: i === peakDayIndex ? Math.round(peakSteps * 0.4) : 0,
+  }))
+}
+const ACTIVITY_READY_PROJECTS = [
+  {
+    project: 'client-site-a', lastActivityAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(6, 14, 22),
+    gateOutcomes: { allowed: 58, advised: 6, asked: 3, blocked: 1 },
+    steps: { main: 90, subagent: 34 },
+    tokensByModel: [
+      { model: 'claude-sonnet-5', input: 42000, output: 8100, cacheRead: 310000, cacheWrite: 15200, estimatedCostUsd: 1.86 },
+      { model: 'claude-opus-5-5', input: 3200, output: 900, cacheRead: 40000, cacheWrite: 2100, estimatedCostUsd: 0.71 },
+    ],
+    totalEstimatedCostUsd: 2.57,
+    router: {
+      total: 9, applied: 5, measured: 4,
+      byPoint: {
+        start: { simple: 2, standard: 0, complex: 0, frontier: 0 },
+        stage: { simple: 0, standard: 2, complex: 1, frontier: 0 },
+        subagent: { simple: 0, standard: 0, complex: 0, frontier: 0 },
+      },
+      savedEstimate: 0.94, switchesEstimated: 3,
+    },
+  },
+  {
+    // A switch happened but was net negative -- the card must relabel this
+    // as an extra cost, never a negative "saved" number.
+    project: 'service-b', lastActivityAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(4, 6, 10),
+    gateOutcomes: { allowed: 20, advised: 1, asked: 2, blocked: 0 },
+    steps: { main: 40, subagent: 6 },
+    tokensByModel: [{ model: 'claude-sonnet-5', input: 15000, output: 2600, cacheRead: 90000, cacheWrite: 5100, estimatedCostUsd: 0.52 }],
+    totalEstimatedCostUsd: 0.52,
+    router: {
+      total: 3, applied: 2, measured: 1,
+      byPoint: {
+        start: { simple: 0, standard: 1, complex: 0, frontier: 0 },
+        stage: { simple: 0, standard: 0, complex: 1, frontier: 0 },
+        subagent: { simple: 0, standard: 0, complex: 0, frontier: 0 },
+      },
+      savedEstimate: -0.11, switchesEstimated: 1,
+    },
+  },
+  {
+    // No router decisions at all for this project -- router stays null,
+    // never a zeroed-out summary.
+    project: 'project-c', lastActivityAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(1, 3, 5),
+    gateOutcomes: { allowed: 9, advised: 0, asked: 0, blocked: 0 },
+    steps: { main: 12, subagent: 0 },
+    tokensByModel: [{ model: 'claude-haiku-4-5-20251001', input: 5000, output: 900, cacheRead: 12000, cacheWrite: 800, estimatedCostUsd: 0.04 }],
+    totalEstimatedCostUsd: 0.04,
+    router: null,
+  },
+  {
+    // The gate could not resolve a project for these rows -- honestly
+    // unknown, never dropped.
+    project: null, lastActivityAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(6, 2, 3),
+    gateOutcomes: { allowed: 4, advised: 0, asked: 1, blocked: 0 },
+    steps: { main: 5, subagent: 0 },
+    tokensByModel: [],
+    totalEstimatedCostUsd: 0,
+    router: null,
+  },
+  {
+    project: 'client-site-d', lastActivityAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(0, 1, 2),
+    gateOutcomes: { allowed: 3, advised: 0, asked: 0, blocked: 0 },
+    steps: { main: 4, subagent: 0 },
+    tokensByModel: [{ model: 'claude-sonnet-5', input: 2000, output: 400, cacheRead: 6000, cacheWrite: 300, estimatedCostUsd: 0.02 }],
+    totalEstimatedCostUsd: 0.02,
+    router: null,
+  },
+  {
+    project: 'service-e', lastActivityAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(0, 1, 1),
+    gateOutcomes: { allowed: 2, advised: 0, asked: 0, blocked: 0 },
+    steps: { main: 1, subagent: 0 },
+    tokensByModel: [],
+    totalEstimatedCostUsd: 0,
+    router: null,
+  },
+  {
+    // Past the top 6 -- only reachable through the show-more toggle.
+    project: 'client-site-f', lastActivityAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+    days: activityDaysFixture(0, 1, 1),
+    gateOutcomes: { allowed: 1, advised: 0, asked: 0, blocked: 0 },
+    steps: { main: 1, subagent: 0 },
+    tokensByModel: [],
+    totalEstimatedCostUsd: 0,
+    router: null,
+  },
+]
+SCENARIOS['activity-ready'] = {
+  ...READY,
+  activityByProjectSummary: { ok: true, projects: ACTIVITY_READY_PROJECTS, corruptLines: 0, checkedAt: iso },
+}
+
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */
 const SCENARIO_CLICKS = { seeds: { panel: 'config.html', selector: '#import-policy-seeds' } }

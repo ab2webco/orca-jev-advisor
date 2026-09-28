@@ -858,6 +858,54 @@ test("turn.step: an append only ever touches the current hour's file, never an o
   assert.equal(lines.length, 1, "exactly one line should have been appended to the current hour's file");
 });
 
+test("turn.step: turn-usage record's project is null when no prompt has resolved orcaContextCache yet this session (JEVADV-63)", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+
+  const event = turnStepEvent();
+  const result = turnStepResult();
+  async function* fakeNext(): AsyncGenerator<unknown, unknown> {
+    return result;
+  }
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+
+  assert.equal(lastTurnUsageLine(host).project, null, "not yet known this session -- an honest null, not a bug");
+});
+
+test("turn.step: turn-usage record carries the resolved project once orcaContextCache is warm (JEVADV-63)", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Use graft to answer.");
+  const { handlers, engine } = loadHooks(host);
+
+  // Stage 1 only, same shape as the "active mode, Jev picks no skill" test:
+  // exactly one Jev call, and it still reaches the orcaContextCache line
+  // regardless of what it decides (the inventory is non-empty).
+  host.fetchQueue.push(jevResponse({
+    which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+    skill_needed: { type: "noul", noul: 0.05 },
+  }));
+  await submitPrompt(handlers, engine, "what does this file do");
+
+  const hook = handlers.get("turn.step");
+  assert.ok(hook, "turn.step was never registered");
+  const event = turnStepEvent();
+  const result = turnStepResult();
+  async function* fakeNext(): AsyncGenerator<unknown, unknown> {
+    return result;
+  }
+  await drainTurnStep(hook(engine, event, fakeNext) as AsyncGenerator<unknown, unknown>);
+
+  assert.equal(
+    lastTurnUsageLine(host).project,
+    "sandbox",
+    "no real orca binary in the fake host -- resolveOrcaContext falls back to cwd, whose last path segment names the project",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // JEV-060 slice 2, T6: the model router's session-start decision (point A)
 // and its stickiness, on the same turn.step hook as the usage recorder.
@@ -933,6 +981,48 @@ test("router, measure (the default): decides and logs at session start, changes 
   for (const key of ["at", "confidence", "reason", "guard", "contextTokens", "switchCost", "stepSaving", "expectedSteps"]) assert.ok(key in decision, key);
   assert.equal(JSON.stringify(decision).includes("what time"), false, "no prompt text in the decision log");
   assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5 (stage: ask)");
+});
+
+test("router decision record: carries the resolved project once orcaContextCache is warm (JEVADV-63)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Use graft to answer.");
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+    tierAnswer("simple"),
+  );
+  const { handlers, engine } = loadHooks(host);
+
+  // "composer" (not "user" -- see model_router_origin.ts's closed set),
+  // so the router's own personhood gate still lets point A decide below;
+  // this call still runs the skill closure (active mode, non-empty
+  // inventory) and so still warms orcaContextCache.
+  await submitOrigin(handlers, engine, "composer");
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+
+  const [decision] = routerDecisionLines(host);
+  assert.ok(decision, "no decision was logged");
+  assert.equal(decision.project, "sandbox");
+});
+
+test("router decision record: project is null when no prompt has resolved orcaContextCache yet this session (JEVADV-63)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+
+  const [decision] = routerDecisionLines(host);
+  assert.ok(decision, "no decision was logged");
+  assert.equal(decision.project, null);
 });
 
 test("router, active: a simple first prompt runs on Haiku with no effort, and every later step sticks to it", async () => {
@@ -1214,6 +1304,9 @@ test("router, active, subagent: no explicit model -- the tier's full id", async 
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent());
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  // 0.6.3: the point='subagent' decision line is written on the subagent's
+  // first turn.step, not at spawn (its effort must match what that step sends).
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
   const [decision] = routerDecisionLines(host);
   assert.equal(decision?.point, "subagent");
   assert.equal(decision?.applied, true);
@@ -1227,6 +1320,7 @@ test("router, measure, subagent: logs, changes nothing", async () => {
   const { handlers, engine } = loadHooks(host);
   const event = spawnEvent();
   assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.applied, false);
 });
 
@@ -1246,6 +1340,7 @@ test("router, active, subagent: guards hold the parent's model", async () => {
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const event = spawnEvent({ prompt: "Read /x/brief.md and do what it says" });
   assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.guard, "pointer-prompt");
 });
 
@@ -1309,16 +1404,18 @@ test("JEV-061 slice 2: a guard at spawn leaves the subagent's effort untouched",
   assert.equal(step.effort, "xhigh", "a guard never lets the effort fall");
 });
 
-test("JEV-061 slice 2: a subagent's effort is never raised, even when the chosen tier asks for more", async () => {
+test("JEV-061 slice 2, 0.6.3 F0: an unguarded subagent's effort is raised when the chosen tier asks for more", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnThrough(handlers, engine, spawnEvent({ parentModel: "claude-sonnet-5" }));
 
-  // complex -> high, but this step already carries only "low".
+  // complex -> high, and this step only carries "low" -- unguarded, the tier's effort wins.
   const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "low" }));
-  assert.equal(step.effort, "low");
+  assert.equal(step.effort, "high");
+  // JEVADV-63 R1: the logged point='subagent' effort matches what this step actually sent -- not the raw spawn-time target.
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high");
 });
 
 test("JEV-061 slice 2: measure mode changes nothing", async () => {
@@ -1461,6 +1558,7 @@ test("F11, point B: a subagent spawned in a client site is routed like any other
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent());
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.guard, null);
 });
 
@@ -1837,6 +1935,7 @@ test("0.6.2 E6 (hook, subagent): a pointer spawn prompt keeps the parent's model
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent({ description: "Run the brief", prompt: POINTER }));
   assert.notEqual(seen.model, "claude-haiku-4-5-20251001");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: undefined }));
   const decision = routerDecisionLines(host).at(-1);
   assert.equal(decision?.point, "subagent");
   assert.equal(decision?.guard, "pointer-prompt");
@@ -1902,9 +2001,10 @@ test("F0 (hook, subagent): under a guard the subagent's effort rises to the tier
   host.fetchQueue.push(tierAnswer("complex"), tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnThrough(handlers, engine, spawnEvent({ description: "writer", prompt: "Read /x/brief.md and do what it says" }));
-  assert.equal(routerDecisionLines(host).at(-1)?.guard, "pointer-prompt");
   const raised = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "medium" }));
   assert.equal(raised.effort, "high");
+  assert.equal(routerDecisionLines(host).at(-1)?.guard, "pointer-prompt");
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high", "the log shows what the step actually sent, not the raw target");
   const kept = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-opus-5-5", effort: "xhigh" }));
   assert.equal(kept.effort, "xhigh");
 });

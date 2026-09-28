@@ -40,6 +40,7 @@ function step(overrides: Partial<TurnUsageRecord> = {}): TurnUsageRecord {
     cacheWrite: 200,
     stopReason: "end_turn",
     account: "home",
+    project: null,
     ...overrides,
   };
 }

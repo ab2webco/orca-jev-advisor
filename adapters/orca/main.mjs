@@ -1312,6 +1312,57 @@ async function publishConsumptionSummary (orca, storageHost, options = {}) {
     .catch((error) => orca.log(`consumption summary publish failed: ${error.message}`))
 }
 
+// ---------------------------------------------------------------------------
+// Activity per project (JEVADV-63, A3) -- read-activity.mjs folds the last 7
+// days of gate-decisions.jsonl plus the hourly turn-usage/router files into
+// one per-project summary for the board's Activity tab. Read-only: it never
+// prunes (read-consumption.mjs owns that), so unlike consumptionSidecarArgv
+// it gets no write grant, and it reads nothing outside the cache dir.
+// ---------------------------------------------------------------------------
+
+const ACTIVITY_SCRIPT = join(__dirname, 'read-activity.mjs')
+const ACTIVITY_STATUS_KEY = 'activityByProjectSummary'
+// Same cadence as the consumption summary, same reasoning (see
+// CONSUMPTION_REFRESH_MS): it scans the same bounded set of hourly files.
+const ACTIVITY_REFRESH_MS = CONSUMPTION_REFRESH_MS
+
+/** The exact argv `readActivitySummary` spawns, exported so a test can pin
+ *  it (read-activity.test.mjs runs the real script under this same shape). */
+function activitySidecarArgv () {
+  return [
+    '--permission',
+    `--allow-fs-read=${PLUGIN_ROOT}`,
+    `--allow-fs-read=${CACHE_DIR}`,
+    ACTIVITY_SCRIPT
+  ]
+}
+
+function readActivitySummary () {
+  return spawnSidecar(
+    activitySidecarArgv(),
+    {
+      timeout: MEASUREMENTS_TIMEOUT_MS,
+      maxBuffer: 4 * 1024 * 1024,
+      env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
+    }
+  )
+}
+
+/** `options.readActivitySummary` overrides the real sidecar spawn, same
+ *  convention as publishConsumptionSummary, so tests never spawn a real
+ *  read-activity.mjs child. An `{ok:false}` summary is still published: an
+ *  honest failure state beats silently keeping a stale one. No account-email
+ *  join: this payload is keyed by project and carries no account ids. */
+async function publishActivitySummary (orca, storageHost, options = {}) {
+  const readSummary = options.readActivitySummary ?? readActivitySummary
+  const summary = await readSummary()
+  if (!summary.ok) {
+    orca.log(`activity summary failed: ${String(summary.reason ?? 'unknown')} -- ${String(summary.detail ?? '').slice(0, 200)}`)
+  }
+  await storageHost.set(ACTIVITY_STATUS_KEY, { ...summary, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`activity summary publish failed: ${error.message}`))
+}
+
 /** odd/tasks/board-tabs-and-names.md T1: the board names a quota account by
  *  the `email` `orca account list --json` reports for its id (for a custom
  *  endpoint account that field holds Orca's own endpoint label, shown as-is).
@@ -2728,6 +2779,16 @@ export default function activate (orca) {
   }, CONSUMPTION_REFRESH_MS)
   if (typeof consumptionTimer.unref === 'function') consumptionTimer.unref()
 
+  // Activity per project (JEVADV-63, A3) -- one call now, then on
+  // ACTIVITY_REFRESH_MS (the consumption cadence, see that constant).
+  publishActivitySummary(orca, storageHost)
+    .catch((error) => orca.log(`initial activity summary failed: ${error.message}`))
+  const activityTimer = setInterval(() => {
+    publishActivitySummary(orca, storageHost)
+      .catch((error) => orca.log(`activity summary refresh failed: ${error.message}`))
+  }, ACTIVITY_REFRESH_MS)
+  if (typeof activityTimer.unref === 'function') activityTimer.unref()
+
   // Deliberately NOT wired here: Orca reaps an idle worker (or restarts one
   // for any other reason) by calling this same teardown, and that is a
   // routine event, not the user disabling the plugin -- there is no
@@ -2746,6 +2807,7 @@ export default function activate (orca) {
     clearInterval(measurementsTimer)
     clearInterval(accountQuotaTimer)
     clearInterval(consumptionTimer)
+    clearInterval(activityTimer)
   }
 }
 
@@ -2758,6 +2820,8 @@ export default function activate (orca) {
 // ---------------------------------------------------------------------------
 
 export {
+  ACTIVITY_STATUS_KEY,
+  activitySidecarArgv,
   applyOrcaUiLanguageAtActivation,
   attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
@@ -2800,6 +2864,7 @@ export {
   POLICY_SEED_IMPORT_RESULT_KEY,
   POLICY_SEED_NOTICE_STATUS_KEY,
   POLICY_SEED_OFFERED_VERSION_KEY,
+  publishActivitySummary,
   publishDenyTierStatus,
   publishConsumptionSummary,
   publishGateDefaults,

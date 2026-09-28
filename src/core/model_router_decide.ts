@@ -410,8 +410,10 @@ export interface RouterDecisionRecord {
   readonly quotaBand: QuotaBand;
   /** JEV-061: the submitted prompt's `PromptOrigin` kind this decision answers, when known -- never its text. null for a subagent spawn (no submitted prompt) or when `prompt.submit` never stamped one for this turn. */
   readonly origin: string | null;
-  /** JEV-061 slice 2: the subagent's own target effort for its first step and after, when the router set one at spawn; null otherwise (every other point, or a subagent with no explicit model/no guard/active-mode requirement unmet). Never raised past what the step already carries -- see subagentStepEffort. */
+  /** JEV-061 slice 2: the subagent's own effort for its first step and after, when the router set a target at spawn; null otherwise (every other point, or a subagent with no explicit model/no guard/active-mode requirement unmet). 0.6.3 (JEVADV-63 R1): written from what that first step actually computed and sent -- unguarded, the tier's effort applies outright either direction; guarded, only a raise -- never the raw spawn-time target, so log and step can never diverge (see subagentStepEffort). */
   readonly effort: SessionEffort | null;
+  /** JEVADV-63: the project this decision was made in, resolved from the session's cached OrcaContext (see src/core/project_name.ts); null when not yet known this session. */
+  readonly project: string | null;
 }
 
 export interface RouterDecisionRecordInput {
@@ -426,6 +428,8 @@ export interface RouterDecisionRecordInput {
   readonly breakEven?: { readonly contextTokens: number; readonly switchCost: number; readonly stepSaving: number; readonly expectedSteps: number } | null;
   readonly origin?: string | null;
   readonly effort?: SessionEffort | null;
+  /** JEVADV-63: null when not given -- an honest "not yet known" state, not a bug. */
+  readonly project?: string | null;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -448,5 +452,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     quotaBand: input.quotaBand,
     origin: input.origin ?? null,
     effort: input.effort ?? null,
+    project: input.project ?? null,
   };
 }

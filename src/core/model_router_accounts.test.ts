@@ -10,6 +10,7 @@ import {
   isGatewayEnv,
   modelRank,
   parseVaultEnv,
+  pricesForModel,
   resolveAccountTiers,
   tierOfModel,
 } from "./model_router_accounts.ts";
@@ -152,4 +153,26 @@ test("tierOfModel / modelRank: a session's model maps back to its tier, ignoring
   assert.equal(tierOfModel(tiers, "some-other-model"), null);
   assert.ok(modelRank(tiers, "claude-opus-5-5") > modelRank(tiers, "claude-haiku-4-5-20251001"));
   assert.equal(modelRank(tiers, "some-other-model"), null);
+});
+
+test("pricesForModel (JEVADV-63): a known Anthropic id resolves to ANTHROPIC_PRICES exactly", () => {
+  assert.deepEqual(pricesForModel("claude-sonnet-5"), ANTHROPIC_PRICES["claude-sonnet-5"]);
+  assert.deepEqual(pricesForModel("claude-opus-5-5"), ANTHROPIC_PRICES["claude-opus-5-5"]);
+  assert.deepEqual(pricesForModel("claude-haiku-4-5-20251001"), ANTHROPIC_PRICES["claude-haiku-4-5-20251001"]);
+});
+
+test("pricesForModel: a context-window suffix is stripped the same way tierOfModel strips it", () => {
+  assert.deepEqual(pricesForModel("claude-opus-5-5[1m]"), ANTHROPIC_PRICES["claude-opus-5-5"]);
+});
+
+test("pricesForModel: Fable prices at the default multiplier, never below Opus", () => {
+  const prices = pricesForModel("claude-fable-5-1");
+  assert.ok(prices !== null);
+  const opus = ANTHROPIC_PRICES["claude-opus-5-5"] as { input: number; cacheWrite: number; cacheRead: number; output: number };
+  assert.equal(prices?.input, opus.input * DEFAULT_FABLE_PRICE_MULTIPLIER);
+  assert.equal(prices?.output, opus.output * DEFAULT_FABLE_PRICE_MULTIPLIER);
+});
+
+test("pricesForModel: an unrecognized model id resolves to null (tokens must still be counted at zero cost)", () => {
+  assert.equal(pricesForModel("some-gateway-model"), null);
 });

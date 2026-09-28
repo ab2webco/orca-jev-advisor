@@ -198,6 +198,20 @@ test('aggregates rows across several hourly files into one summary', () => {
   assert.deepEqual(models, ['opus', 'sonnet'])
 })
 
+test('turn-usage rows tolerate a missing or malformed project field -- an old record is never dropped for lacking it (JEVADV-63)', () => {
+  const home = makeHome()
+  const now = Date.now()
+  writeTurnUsageFile(home, now, [
+    usageRow({ model: 'sonnet' }), // no `project` at all -- an old record
+    usageRow({ model: 'sonnet', project: 'orca-supervisor' }),
+    usageRow({ model: 'sonnet', project: 12345 }), // a hand-edited, wrong-typed value
+  ])
+  const result = run(home)
+  assert.equal(result.ok, true)
+  assert.equal(result.usage.last24h.stepCount, 3, 'none of the three rows should be dropped as corrupt')
+  assert.equal(result.usage.corruptLines, 0)
+})
+
 test('a corrupt line in an hourly file is skipped, counted, and never crashes the read', () => {
   const home = makeHome()
   const now = Date.now()

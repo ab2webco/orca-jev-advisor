@@ -2543,39 +2543,14 @@ test('nit 6: a status published without the request id but newer than the reques
 // odd/tasks/board-leftovers.md L2 -- `skills-ready` is the first scenario
 // whose skills mod has recorded decisions, built by running the real
 // read-measurements.mjs over a synthetic mod-skills-measurements.jsonl (see
-// screenshot-panels.mjs). "By project" adds those rows to the gate's by
-// name, so every label must be a name, and the project both logs know must
-// appear once, with both counts added.
+// screenshot-panels.mjs).
+//
+// JEVADV-63 removed the old flat "By project (whole log)" bar list this
+// scenario used to also exercise (measurementsSummary.gate.byProject /
+// .modSkills.byProject joined into one #projects-body .hrow list) -- the
+// Activity tab's project cards below are fed by their own storage key,
+// activityByProjectSummary, not by measurementsSummary at all.
 // ---------------------------------------------------------------------------
-
-async function boardProjectRows (page) {
-  await page.click('#tab-activity')
-  return page.evaluate(() => Array.from(document.querySelectorAll('#projects-body .hrow')).map((row) => ({
-    label: row.querySelector('.hl').textContent,
-    value: row.querySelector('.hv').textContent
-  })))
-}
-
-test('skills-ready: every "By project" row is a name, and the skills mod\'s rows join the gate\'s', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
-  const scenario = SCENARIOS['skills-ready']
-  assert.ok(scenario, 'screenshot-panels.mjs has no skills-ready scenario')
-  const { browser, page, errors } = await openBoardPanel(scenario)
-  try {
-    const rows = await boardProjectRows(page)
-    const labels = rows.map((row) => row.label)
-    const raw = labels.filter((label) => /^(github|gitlab|repo):/.test(label) || label.includes('/'))
-    assert.deepEqual(raw, [], `raw project ids in By project: ${JSON.stringify(labels)}`)
-    for (const name of ['orca-supervisor', 'notes-app', 'scratch-notes', 'workdir']) {
-      assert.equal(labels.filter((label) => label === name).length, 1, `expected "${name}" exactly once among ${JSON.stringify(labels)}`)
-    }
-    const gateCount = scenario.measurementsSummary.gate.byProject.find((p) => p.project === 'orca-supervisor').total
-    const modCount = scenario.measurementsSummary.modSkills.byProject.find((p) => p.key === 'orca-supervisor').count
-    assert.equal(rows.find((row) => row.label === 'orca-supervisor').value.replace(/\D/g, ''), String(gateCount + modCount))
-    assert.deepEqual(errors, [])
-  } finally {
-    await browser.close()
-  }
-})
 
 test('skills-ready: the Skills tab shows what the mod recorded, not its empty sentence', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
   const scenario = SCENARIOS['skills-ready']
@@ -2725,28 +2700,15 @@ test('L3: a host that never answers and an empty localStorage open the board on 
   }
 })
 
-for (const locale of ['en', 'es']) {
-  test(`L3: a skills-mod "(unknown)" project reads as the unknown-project label, merged with the gate's (${locale})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
-    const summary = SCENARIOS.ready.measurementsSummary
-    const storage = {
-      ...SCENARIOS.ready,
-      measurementsSummary: { ...summary, modSkills: { ...summary.modSkills, byProject: [{ key: '(unknown)', count: 3 }] } }
-    }
-    const { browser, page, errors } = await openBoardPanel(storage, locale)
-    try {
-      const rows = await boardProjectRows(page)
-      const label = locale === 'es' ? '(proyecto desconocido)' : '(unknown project)'
-      const gateUnknown = summary.gate.byProject.find((p) => p.project === null).total
-      assert.deepEqual(rows.filter((row) => row.label === '(unknown)'), [], `"(unknown)" printed literally: ${JSON.stringify(rows)}`)
-      const unknown = rows.filter((row) => row.label === label)
-      assert.equal(unknown.length, 1, `expected one "${label}" row in ${JSON.stringify(rows)}`)
-      assert.equal(unknown[0].value.replace(/\D/g, ''), String(gateUnknown + 3))
-      assert.deepEqual(errors, [])
-    } finally {
-      await browser.close()
-    }
-  })
-}
+// JEVADV-63 removed this test's whole premise along with it: the old
+// "By project" list merged the gate's and the skills mod's byProject rows
+// (measurementsSummary.gate.byProject / .modSkills.byProject) into one flat
+// bar list, keyed by projectLabel(). The Activity tab's project cards read
+// activityByProjectSummary instead -- a different storage key, a different
+// shape, never a merge of those two logs -- so there is nothing left here
+// for an "(unknown)" skills-mod project to be merged with. The unknown-
+// project label itself is still covered directly (see "activity: project:
+// null renders as the unknown-project label" below).
 
 test('the screenshot harness imports whenever playwright does, so a broken fixture fails instead of skipping', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   // Re-importing rethrows the harness's own load error, if any, so the
@@ -3053,6 +3015,327 @@ test('L6: live-busy shows project-a/main once with its twelve sessions, and keep
     list = await liveList(page)
     assert.equal(list.rows.find((row) => row.name === 'client-site-a-orchestrator')?.state, 'no signal')
     assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-63 -- the Activity tab's per-project cards, replacing the old flat
+// "By project" bar list. `activityByProjectSummary`'s own shape
+// (src/core/activity_by_project.ts, adapters/orca/read-activity.mjs):
+// {ok, projects: ProjectActivity[] (aggregateActivityByProject's own
+// ranking -- lastActivityAt descending, ties by total interactions -- NEVER
+// re-sorted by the panel), corruptLines, checkedAt} or {ok:false, reason,
+// detail, checkedAt}. Empty state is {ok:true, projects:[], corruptLines:0,
+// checkedAt}.
+// ---------------------------------------------------------------------------
+
+/** A minimal-but-complete ProjectActivity row (src/core/activity_by_project.ts's
+ *  own shape), with sensible zero defaults so a test only names the fields
+ *  it cares about. */
+function activityDays (overrides) {
+  const days = Array.from({ length: 7 }, (_, i) => ({
+    day: `2026-09-${String(20 + i).padStart(2, '0')}`, judgedCommands: 0, mainSteps: 0, subagentSteps: 0
+  }))
+  if (overrides) for (const [i, fields] of Object.entries(overrides)) Object.assign(days[Number(i)], fields)
+  return days
+}
+function activityProject (fields = {}) {
+  return {
+    project: null,
+    lastActivityAt: new Date().toISOString(),
+    days: activityDays(),
+    gateOutcomes: { allowed: 0, advised: 0, asked: 0, blocked: 0 },
+    steps: { main: 0, subagent: 0 },
+    tokensByModel: [],
+    totalEstimatedCostUsd: 0,
+    router: null,
+    ...fields
+  }
+}
+function activitySummary (projects) {
+  return { activityByProjectSummary: { ok: true, projects, corruptLines: 0, checkedAt: new Date().toISOString() } }
+}
+
+/** Reads the current card list/toggle state without touching the tab --
+ *  re-clicking #tab-activity on every read (as activityCards below does)
+ *  would steal focus from the toggle button right after clicking it. */
+async function activityCardsState (page) {
+  return page.evaluate(() => ({
+    names: Array.from(document.querySelectorAll('#projects-body .act-card .act-name')).map((el) => el.textContent),
+    toggle: (() => {
+      const button = document.querySelector('#projects-body button[data-activity-toggle]')
+      return button ? { text: button.textContent, expanded: button.getAttribute('aria-expanded'), controls: button.getAttribute('aria-controls') } : null
+    })()
+  }))
+}
+async function activityCards (page) {
+  await page.click('#tab-activity')
+  return activityCardsState(page)
+}
+
+/** One card's structured content, found by its visible project name. */
+async function activityCardDetail (page, name) {
+  await page.click('#tab-activity')
+  return page.evaluate((name) => {
+    const card = Array.from(document.querySelectorAll('#projects-body .act-card'))
+      .find((c) => c.querySelector('.act-name').textContent === name)
+    if (!card) return null
+    const figures = Array.from(card.querySelectorAll('.figure')).map((f) => ({
+      label: f.querySelector('dt').textContent,
+      value: f.querySelector('dd').textContent,
+      className: f.className,
+      color: getComputedStyle(f.querySelector('dd')).color
+    }))
+    return {
+      age: card.querySelector('.act-age')?.textContent ?? null,
+      chartAriaLabel: card.querySelector('svg.act-chart')?.getAttribute('aria-label') ?? null,
+      figures,
+      text: card.innerText
+    }
+  }, name)
+}
+
+test('activity: cards render the top 6 projects in the array\'s own pre-ranked order, never re-sorted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const names = ['zulu', 'alpha', 'mike', 'bravo', 'yankee', 'charlie', 'delta', 'echo']
+  const projects = names.map((project) => activityProject({ project }))
+  const { browser, page, errors } = await openBoardPanel(activitySummary(projects))
+  try {
+    const { names: shown, toggle } = await activityCards(page)
+    assert.deepEqual(shown, names.slice(0, 6), 'top 6 must keep the array\'s own order, not be alphabetised or otherwise resorted')
+    assert.deepEqual({ text: toggle?.text, expanded: toggle?.expanded }, { text: 'show more (2)', expanded: 'false' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: the show-more toggle reveals the rest, aria-expanded toggles, and focus returns to the button', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const projects = Array.from({ length: 9 }, (_, i) => activityProject({ project: `p${i}` }))
+  const { browser, page, errors } = await openBoardPanel(activitySummary(projects))
+  try {
+    let state = await activityCards(page)
+    assert.equal(state.names.length, 6)
+    assert.deepEqual({ text: state.toggle?.text, expanded: state.toggle?.expanded }, { text: 'show more (3)', expanded: 'false' })
+    assert.ok(state.toggle.controls && await page.evaluate((id) => !!document.getElementById(id), state.toggle.controls), 'aria-controls must name a real element')
+
+    await page.click('#projects-body button[data-activity-toggle]')
+    state = await activityCardsState(page)
+    assert.equal(state.names.length, 9)
+    assert.deepEqual({ text: state.toggle?.text, expanded: state.toggle?.expanded }, { text: 'show less', expanded: 'true' })
+    assert.equal(await page.evaluate(() => document.activeElement?.hasAttribute('data-activity-toggle')), true, 'focus stays on the toggle after it re-renders')
+
+    await page.click('#projects-body button[data-activity-toggle]')
+    state = await activityCardsState(page)
+    assert.equal(state.names.length, 6)
+    assert.equal(state.toggle?.expanded, 'false')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: no projects renders the honest empty sentence, not a blank section', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(activitySummary([]))
+  try {
+    await page.click('#tab-activity')
+    const text = await page.evaluate(() => document.getElementById('card-projects').innerText)
+    assert.match(text, /no activity yet/i)
+    const cardCount = await page.evaluate(() => document.querySelectorAll('#projects-body .act-card').length)
+    assert.equal(cardCount, 0)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an {ok:false} activityByProjectSummary renders as a failure, never as "no activity yet"', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    activityByProjectSummary: { ok: false, reason: 'exception', detail: 'boom', checkedAt: new Date().toISOString() }
+  })
+  try {
+    await page.click('#tab-activity')
+    const text = await page.evaluate(() => document.getElementById('card-projects').innerText)
+    assert.notEqual(text.trim(), '', 'a failure must never render as a blank card')
+    assert.doesNotMatch(text, /no activity yet/i, 'an ok:false summary must not read as the honest empty state')
+    assert.match(text, /could not be calculated/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: project: null renders as the unknown-project label, never blank', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(activitySummary([activityProject({ project: null })]))
+  try {
+    const { names } = await activityCards(page)
+    assert.deepEqual(names, ['(unknown project)'])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: a populated card shows gate outcomes and tokens/cost by model', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({
+    project: 'alpha',
+    days: activityDays({ 6: { judgedCommands: 3, mainSteps: 2, subagentSteps: 1 } }),
+    gateOutcomes: { allowed: 10, advised: 2, asked: 1, blocked: 1 },
+    tokensByModel: [
+      { model: 'claude-sonnet-5', input: 1000, output: 200, cacheRead: 5000, cacheWrite: 300, estimatedCostUsd: 1.23 }
+    ],
+    totalEstimatedCostUsd: 1.23
+  })
+  const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
+  try {
+    const detail = await activityCardDetail(page, 'alpha')
+    assert.ok(detail, 'expected a card for "alpha"')
+    const byLabel = Object.fromEntries(detail.figures.map((f) => [f.label, f.value]))
+    assert.equal(byLabel.Allowed, '10')
+    assert.equal(byLabel.Advised, '2')
+    assert.equal(byLabel.Asked, '1')
+    assert.equal(byLabel.Blocked, '1')
+    const blockedFigure = detail.figures.find((f) => f.label === 'Blocked')
+    const advisedFigure = detail.figures.find((f) => f.label === 'Advised')
+    assert.match(blockedFigure.className, /\bvd\b/, 'blocked must carry the destructive-colour class')
+    // --ring is the palette's faintest neutral: on a nonzero count it reads
+    // as disabled, the opposite of "Jev had something to say here".
+    assert.doesNotMatch(advisedFigure.className, /\bv3\b/, 'a nonzero advised count must not be greyed out in the ring colour')
+    assert.equal(advisedFigure.color, detail.figures.find((f) => f.label === 'Allowed').color, 'a nonzero advised count must read at full text contrast')
+    assert.match(detail.text, /Sonnet 5/)
+    assert.match(detail.text, /1,000/)
+    assert.match(detail.text, /\$1\.23/)
+    assert.doesNotMatch(detail.text, /switch/i, 'router: null must omit the router line entirely')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: a positive router estimate reads "saved", a negative one reads "extra cost" -- never a negative number', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const saving = activityProject({
+    project: 'saver',
+    router: { total: 5, applied: 3, measured: 2, byPoint: {}, savedEstimate: 0.42, switchesEstimated: 2 }
+  })
+  const costly = activityProject({
+    project: 'spender',
+    router: { total: 3, applied: 2, measured: 1, byPoint: {}, savedEstimate: -0.15, switchesEstimated: 1 }
+  })
+  const { browser, page, errors } = await openBoardPanel(activitySummary([saving, costly]))
+  try {
+    const savingDetail = await activityCardDetail(page, 'saver')
+    assert.match(savingDetail.text, /3 model switch/)
+    assert.match(savingDetail.text, /\$0\.42 saved/)
+
+    const costlyDetail = await activityCardDetail(page, 'spender')
+    assert.match(costlyDetail.text, /2 model switch/)
+    assert.match(costlyDetail.text, /extra cost/i)
+    assert.match(costlyDetail.text, /\$0\.15/)
+    assert.doesNotMatch(costlyDetail.text, /-0\.15/, 'a negative estimate must never be printed as a negative number')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: an empty tokensByModel array omits the cost breakdown entirely, never a lone $0.00', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({ project: 'no-tokens', tokensByModel: [], totalEstimatedCostUsd: 0 })
+  const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
+  try {
+    const detail = await activityCardDetail(page, 'no-tokens')
+    assert.doesNotMatch(detail.text, /estimated cost/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: the chart\'s role="img" aria-label states the real judged-command and step counts', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({
+    project: 'aria-check',
+    days: activityDays({ 0: { judgedCommands: 4 }, 3: { mainSteps: 2, subagentSteps: 1 } })
+  })
+  const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
+  try {
+    const detail = await activityCardDetail(page, 'aria-check')
+    assert.match(detail.chartAriaLabel, /aria-check/)
+    assert.match(detail.chartAriaLabel, /4 judged commands/)
+    assert.match(detail.chartAriaLabel, /3 steps/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('activity: a count of one reads singular in the week line and the chart label, in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({
+    project: 'single',
+    days: activityDays({ 6: { judgedCommands: 1, mainSteps: 1 } })
+  })
+  for (const [locale, judged, steps] of [['en', '1 judged command', '1 step'], ['es', '1 comando juzgado', '1 paso']]) {
+    const { browser, page, errors } = await openBoardPanel(activitySummary([project]), locale)
+    try {
+      const detail = await activityCardDetail(page, 'single')
+      assert.ok(detail.text.includes(`${judged} · ${steps}`), `${locale}: expected "${judged} · ${steps}" in ${JSON.stringify(detail.text)}`)
+      assert.ok(detail.chartAriaLabel.includes(`${judged}, ${steps}`), `${locale}: expected "${judged}, ${steps}" in ${JSON.stringify(detail.chartAriaLabel)}`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  }
+})
+
+test('activity-ready: no two neighbouring controls touch on the Activity tab, including the show-more toggle', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['activity-ready']
+  assert.ok(scenario, 'screenshot-panels.mjs has no activity-ready scenario')
+  const { browser, page, errors } = await openBoardPanel(scenario, 'en', 'dark')
+  try {
+    await page.click('#tab-activity')
+    // Force the toggle open too, so its re-rendered (9-project) layout is
+    // checked as well as the collapsed one.
+    const before = await touchingControls(page)
+    await page.click('#projects-body button[data-activity-toggle]')
+    const after = await touchingControls(page)
+    assert.deepEqual(before, [])
+    assert.deepEqual(after, [])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every activity.* key in one language catalog exists in the other, and the es values are accented with no \' -- \'', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openBoardPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('activity.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('activity.') === 0)
+    assert.ok(esKeys.length > 0, 'no activity.* keys found in the es catalog')
+    const missingInEn = esKeys.filter((key) => enKeys.indexOf(key) === -1)
+    const missingInEs = enKeys.filter((key) => esKeys.indexOf(key) === -1)
+    assert.deepEqual(missingInEn, [], `es-only activity.* keys missing from en: ${missingInEn.join(', ')}`)
+    assert.deepEqual(missingInEs, [], `en-only activity.* keys missing from es: ${missingInEs.join(', ')}`)
+
+    // Same technique as the consumption.* parity test above (and
+    // src/core/i18n_catalogs.test.ts, which never reads board.html's own
+    // inline CATALOG), scoped to just the new keys.
+    const mustBeAccented = [
+      'limite', 'podria', 'podrian', 'maquina', 'automatica', 'automaticamente', 'despues', 'ningun',
+      'catalogo', 'politica', 'politicas', 'aqui', 'alli', 'leido', 'codigo', 'sesion', 'tambien',
+      'todavia', 'ademas', 'numero', 'ultimo', 'ultima', 'pagina', 'accion', 'opcion', 'configuracion',
+      'revision', 'decision', 'informacion', 'funcion', 'razon', 'deberia', 'tendria', 'habria',
+      'seria', 'estara', 'sera', 'facil', 'rapido', 'unico', 'unica', 'metodo'
+    ]
+    const problems = []
+    for (const key of esKeys) {
+      const value = catalog.es[key]
+      if (value.includes(' -- ')) problems.push(`${key}: uses ' -- '`)
+      const words = value.toLowerCase().split(/[^a-záéíóúüñ]+/u).filter((w) => w.length > 0)
+      const missingAccents = words.filter((w) => mustBeAccented.includes(w))
+      if (missingAccents.length > 0) problems.push(`${key}: missing accents on ${missingAccents.join(', ')}`)
+    }
+    assert.deepEqual(problems, [])
   } finally {
     await browser.close()
   }
