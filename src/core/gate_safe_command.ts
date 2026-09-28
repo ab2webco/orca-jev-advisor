@@ -44,7 +44,7 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
   /^(ls|pwd|cat|head|tail|wc|which|echo|date|whoami)\b/,
   // Bare `cd`: changing directory alone can't be dangerous, whatever the target.
   /^cd(\s|$)/,
-  /^(jq|rg|grep|sed -n|awk)\b/,
+  /^(jq|rg|grep)\b/,
   /^git\s+(status|diff|log|show|remote|rev-parse|blame)\b/,
   // `git branch` only in its read-only forms -- anything else (creating a
   // branch with a bare name, deleting with -d/-D, renaming with -m/-M) is
@@ -65,6 +65,37 @@ const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprin
 
 function isSafeFindSegment(segment: string): boolean {
   return /^find\b/.test(segment) && !FIND_DANGEROUS_FLAGS.test(segment)
+}
+
+/**
+ * QA 0.6.5 C1 (JEVADV-59): `sed -n` and `awk` read and print only in some
+ * forms. GNU `sed` runs a shell with the `e` command or flag and writes with
+ * `w` and `-i`; `awk` runs one with `system()`, `print | cmd`, `cmd | getline`
+ * and gawk's `@load`, or reads its program from a file with `-f`. Their
+ * leading word used to be enough for tier 1a and for the mention-only list,
+ * so `awk 'BEGIN { system("touch x") }'` never reached tier 1b or Jev.
+ *
+ * Both are now accepted only when the WHOLE segment has a shape that cannot
+ * run or write: `sed -n` with print-only scripts (`N`, `N,M`, `$`, `/re/`
+ * addresses followed by `p`, joined by `;`), and `awk` with only `-F`/`-v`
+ * options and one single-quoted program free of `system`, `|`, `getline` and
+ * `@`. Anything else is not rejected, it only falls through to tier 1b and
+ * Jev -- the cost of a false "unsafe" is one round-trip.
+ */
+const SED_ADDRESS = String.raw`(?:\d+|\$|/[^/']*/I?)`
+const SED_PRINT_SCRIPT = String.raw`${SED_ADDRESS}(?:,${SED_ADDRESS})?p(?:;${SED_ADDRESS}(?:,${SED_ADDRESS})?p)*`
+const SED_SCRIPT_ARG = String.raw`(?:'${SED_PRINT_SCRIPT}'|${SED_PRINT_SCRIPT})`
+const OPERAND = String.raw`(?:\s+[^-\s'"][^\s'"]*)`
+const SAFE_SED = new RegExp(String.raw`^sed\s+-n(?:\s+-e)?\s+${SED_SCRIPT_ARG}(?:\s+-e\s+${SED_SCRIPT_ARG})*${OPERAND}*\s*$`)
+const AWK_OPTION = String.raw`(?:\s+(?:-F\s*(?:'[^']*'|"[^"]*"|[^\s'"]+)|-v\s*[A-Za-z_][A-Za-z0-9_]*=[^\s'"]*))`
+const SAFE_AWK = new RegExp(String.raw`^awk${AWK_OPTION}*\s+'([^']*)'${OPERAND}*\s*$`)
+const AWK_RUNS_OR_LOADS = /\bsystem\b|\bgetline\b|\||@/
+
+function isReadOnlySedOrAwkSegment(segment: string): boolean {
+  const text = stripSafeRedirections(segment).trim()
+  if (SAFE_SED.test(text)) return true
+  const awk = SAFE_AWK.exec(text)
+  return awk !== null && !AWK_RUNS_OR_LOADS.test(awk[1] ?? '')
 }
 
 /**
@@ -182,6 +213,7 @@ export function isSafeSegment(segment: string): boolean {
   if (hasRedirection(segment)) return false
   if (isSafeFindSegment(segment)) return true
   if (isSafeEnvSegment(segment)) return true
+  if (isReadOnlySedOrAwkSegment(segment)) return true
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
 }
 
@@ -218,7 +250,7 @@ export function isObviouslySafeCommand(command: string): boolean {
  * a false "run" is one interruption. They are not symmetric.
  */
 const MENTION_ONLY_VERBS =
-  /^(grep|rg|ag|ack|echo|printf|cat|bat|head|tail|less|more|wc|nl|comm|diff|sort|uniq|column|jq|yq|fgrep|egrep|sed\s+-n|awk)\b/;
+  /^(grep|rg|ag|ack|echo|printf|cat|bat|head|tail|less|more|wc|nl|comm|diff|sort|uniq|column|jq|yq|fgrep|egrep)\b/;
 
 export function mentionsRatherThanRuns(command: string): boolean {
   // odd/tasks/release-0.5.1.md T8 (JEVADV-24): `echo "$(git reset --hard)"`
@@ -237,5 +269,5 @@ export function mentionsRatherThanRuns(command: string): boolean {
   // "segment" as an earlier mention verb, with the newline that should have
   // separated them still literally embedded in the text. A segment must
   // never be called a mention while it still carries one.
-  return segments.every((segment) => !/[\r\n]/.test(segment) && MENTION_ONLY_VERBS.test(segment));
+  return segments.every((segment) => !/[\r\n]/.test(segment) && (MENTION_ONLY_VERBS.test(segment) || isReadOnlySedOrAwkSegment(segment)));
 }
