@@ -31,6 +31,8 @@ process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, 'cache')
 after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }))
 
 const {
+  ACTIVITY_STATUS_KEY,
+  activitySidecarArgv,
   applyOrcaUiLanguageAtActivation,
   attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
@@ -75,6 +77,7 @@ const {
   POLICY_SEED_IMPORT_RESULT_KEY,
   POLICY_SEED_NOTICE_STATUS_KEY,
   POLICY_SEED_OFFERED_VERSION_KEY,
+  publishActivitySummary,
   publishDenyTierStatus,
   publishConsumptionSummary,
   publishGateDefaults,
@@ -1896,6 +1899,60 @@ test('consumptionSidecarArgv: grants read on the config dir (quota.json) and rea
   assert.ok(argv.some((arg) => arg === `--allow-fs-read=${expectedConfigDir}`))
   assert.ok(argv.some((arg) => arg === `--allow-fs-read=${expectedCacheDir}`))
   assert.ok(argv.some((arg) => arg === `--allow-fs-write=${expectedCacheDir}`))
+})
+
+// ---------------------------------------------------------------------------
+// JEVADV-63 A3 -- publishActivitySummary / activitySidecarArgv. Same
+// injectable-options convention as publishConsumptionSummary above, so these
+// never spawn a real read-activity.mjs child (that has its own dedicated
+// test file, read-activity.test.mjs, which also runs it under this same
+// read-only permission shape).
+// ---------------------------------------------------------------------------
+
+test('publishActivitySummary: writes the summary plus a fresh checkedAt under the activityByProjectSummary key', async () => {
+  assert.equal(ACTIVITY_STATUS_KEY, 'activityByProjectSummary')
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const fakeSummary = { ok: true, projects: [{ project: 'alpha', lastActivityAt: null, days: [], gateOutcomes: { allowed: 1, advised: 0, asked: 0, blocked: 0 }, steps: { main: 0, subagent: 0 }, tokensByModel: [], totalEstimatedCostUsd: 0, router: null }], corruptLines: 0 }
+  await publishActivitySummary(orca, storageHost, { readActivitySummary: async () => fakeSummary })
+  const stored = await storageHost.get(ACTIVITY_STATUS_KEY)
+  assert.equal(stored.ok, true)
+  assert.deepEqual(stored.projects, fakeSummary.projects)
+  assert.equal(stored.corruptLines, 0)
+  assert.equal(typeof stored.checkedAt, 'string')
+  assert.equal(orca._logs.length, 0)
+})
+
+test('publishActivitySummary: an {ok:false} summary is still published (an honest failure state), and logged', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const failure = { ok: false, reason: 'no-json', detail: 'orca-jevadv-63-test-activity-boom' }
+  await publishActivitySummary(orca, storageHost, { readActivitySummary: async () => failure })
+  const stored = await storageHost.get(ACTIVITY_STATUS_KEY)
+  assert.equal(stored.ok, false)
+  assert.equal(stored.reason, 'no-json')
+  assert.ok(orca._logs.some((line) => line.includes('orca-jevadv-63-test-activity-boom')))
+})
+
+test('publishActivitySummary: a storage.set failure is caught and logged, never thrown', async () => {
+  const orca = fakeOrca()
+  const storageHost = { set: async () => { throw new Error('orca-jevadv-63-test-storage-boom') } }
+  await assert.doesNotReject(publishActivitySummary(orca, storageHost, { readActivitySummary: async () => ({ ok: true, projects: [], corruptLines: 0 }) }))
+  assert.ok(orca._logs.some((line) => line.includes('orca-jevadv-63-test-storage-boom')))
+})
+
+test('activitySidecarArgv: read-only on the plugin root and the cache dir, no write grant, no config or ~/.claude* access', () => {
+  const argv = activitySidecarArgv()
+  const expectedCacheDir = join(PATHS_OVERRIDE_DIR, 'cache')
+  assert.equal(argv[0], '--permission')
+  assert.ok(argv[argv.length - 1].endsWith(`${sep}read-activity.mjs`))
+  const grants = argv.slice(1, -1)
+  assert.equal(grants.length, 2, `expected exactly two grants, got: ${JSON.stringify(grants)}`)
+  assert.ok(grants.every((grant) => grant.startsWith('--allow-fs-read=')))
+  assert.ok(grants.includes(`--allow-fs-read=${expectedCacheDir}`))
+  // The other grant is the plugin root -- the same one consumptionSidecarArgv gives.
+  const pluginRootGrant = grants.find((grant) => grant !== `--allow-fs-read=${expectedCacheDir}`)
+  assert.equal(pluginRootGrant, consumptionSidecarArgv()[1])
 })
 
 test('nit 11: one account list is shared by the quota mirror, the board and the router rows within a tick', async () => {

@@ -32,7 +32,7 @@
  * `summarizeRouterDecisions`'s own summary over the last 24h, read and
  * pruned the same way as turn-usage.
  */
-import { readdir, readFile, rm, stat } from 'node:fs/promises'
+import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
@@ -46,6 +46,13 @@ import {
   subagentShareTrigger,
 } from '../../src/core/consumption.ts'
 import { summarizeRouterDecisions } from '../../src/core/model_router_summary.ts'
+import {
+  listHourlyFiles,
+  MODEL_ROUTER_DECISIONS_FILE_PATTERN,
+  readJsonlRows,
+  toTurnUsageRecord,
+  TURN_USAGE_FILE_PATTERN,
+} from './log-files.mjs'
 
 const PLATFORM = normalizePlatform(process.platform)
 const HOME = homedir()
@@ -69,113 +76,8 @@ const QUOTA_PATH = join(CONFIG_DIR, 'quota.json')
 const CLAUDE_MD_PATH = join(CLAUDE_HOME_DIR, 'CLAUDE.md')
 const CLAUDE_JSON_PATH = join(HOME, '.claude.json')
 
-const TURN_USAGE_FILE_PATTERN = /^turn-usage-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/
-// JEV-060 slice 2 (§8, T9): the router's own decision log, same hourly
-// naming and same 8-day retention as turn-usage above -- listed, read and
-// pruned through the same generic helpers, just a different pattern.
-const MODEL_ROUTER_DECISIONS_FILE_PATTERN = /^model-router-decisions-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/
 const MODEL_ROUTER_WINDOW_MS = 24 * 60 * 60 * 1000
 const PRUNE_AFTER_MS = 8 * 24 * 60 * 60 * 1000
-
-function isRecord (value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-/** Same tolerant reader as read-measurements.mjs's own readJsonl -- a
- *  missing file reads as no rows, never an error; a corrupt line is
- *  skipped and counted, never thrown on. */
-async function readJsonl (path) {
-  let text
-  try {
-    text = await readFile(path, 'utf8')
-  } catch (error) {
-    if (error?.code === 'ENOENT') return { rows: [], corrupt: 0 }
-    throw error
-  }
-  const rows = []
-  let corrupt = 0
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed.length === 0) continue
-    try {
-      const parsed = JSON.parse(trimmed)
-      if (isRecord(parsed)) rows.push(parsed)
-      else corrupt += 1
-    } catch {
-      corrupt += 1
-    }
-  }
-  return { rows, corrupt }
-}
-
-/**
- * Guards a raw parsed JSONL row into the exact TurnUsageRecord shape
- * aggregateTurnUsage() expects (src/core/consumption.ts) -- same
- * discipline as read-measurements.mjs's own toGateDecisionRecord: a
- * hand-edited or half-written line on disk is `unknown` regardless of what
- * hooks/index.ts's own writer (recordTurnUsage) promises. A row missing or
- * mistyping a required field is dropped (counted as corrupt) rather than
- * fed to the fold with a guessed default.
- */
-function toTurnUsageRecord (row) {
-  if (
-    typeof row.at !== 'string' ||
-    (row.agent !== 'main' && row.agent !== 'subagent') ||
-    typeof row.model !== 'string' ||
-    (row.effort !== null && typeof row.effort !== 'string') ||
-    (row.input !== null && typeof row.input !== 'number') ||
-    (row.output !== null && typeof row.output !== 'number') ||
-    (row.cacheRead !== null && typeof row.cacheRead !== 'number') ||
-    (row.cacheWrite !== null && typeof row.cacheWrite !== 'number') ||
-    typeof row.stopReason !== 'string' ||
-    typeof row.account !== 'string'
-  ) {
-    return null
-  }
-  return {
-    at: row.at,
-    agent: row.agent,
-    model: row.model,
-    effort: row.effort,
-    input: row.input,
-    output: row.output,
-    cacheRead: row.cacheRead,
-    cacheWrite: row.cacheWrite,
-    stopReason: row.stopReason,
-    account: row.account,
-    // JEVADV-63: absent on every record recordTurnUsage wrote before this
-    // field existed, and on any row a hand edit mistypes -- never thrown
-    // on, always the honest "not known" null.
-    project: typeof row.project === 'string' ? row.project : null,
-  }
-}
-
-/**
- * Every hourly-file name in the cache dir matching `pattern` (turn-usage or
- * model-router-decisions), with its own hour bucket already parsed to
- * milliseconds -- `hourMs: null` for a name that matches the pattern but
- * whose captured date somehow fails to parse, so pruning never deletes a
- * file it could not confidently date. A missing cache dir (ENOENT --
- * nothing has ever been recorded) reads as no files. Shared by both file
- * families: same naming convention, same retention (JEV-060 slice 2, T9).
- */
-async function listHourlyFiles (pattern) {
-  let entries
-  try {
-    entries = await readdir(CACHE_DIR)
-  } catch (error) {
-    if (error?.code === 'ENOENT') return []
-    throw error
-  }
-  const files = []
-  for (const name of entries) {
-    const match = pattern.exec(name)
-    if (!match) continue
-    const hourMs = Date.parse(`${match[1]}:00:00.000Z`)
-    files.push({ name, path: join(CACHE_DIR, name), hourMs: Number.isNaN(hourMs) ? null : hourMs })
-  }
-  return files
-}
 
 /**
  * Deletes every listed file whose own hour bucket is more than 8 days
@@ -191,17 +93,6 @@ async function pruneOldHourlyFiles (files, nowMs) {
       .filter((file) => file.hourMs !== null && file.hourMs < cutoffMs)
       .map((file) => rm(file.path, { force: true }).catch(() => {}))
   )
-}
-
-async function readJsonlRows (files) {
-  const results = await Promise.all(files.map((file) => readJsonl(file.path)))
-  const rows = []
-  let corrupt = 0
-  for (const result of results) {
-    corrupt += result.corrupt
-    rows.push(...result.rows)
-  }
-  return { rows, corrupt }
 }
 
 /** quota.json, tolerantly parsed -- a missing or unparseable file degrades
@@ -248,8 +139,8 @@ async function main () {
   let result
   try {
     const now = Date.now()
-    const files = await listHourlyFiles(TURN_USAGE_FILE_PATTERN)
-    const decisionFiles = await listHourlyFiles(MODEL_ROUTER_DECISIONS_FILE_PATTERN)
+    const files = await listHourlyFiles(CACHE_DIR, TURN_USAGE_FILE_PATTERN)
+    const decisionFiles = await listHourlyFiles(CACHE_DIR, MODEL_ROUTER_DECISIONS_FILE_PATTERN)
     const { rows, corrupt } = await readJsonlRows(files)
     const { rows: decisionRows } = await readJsonlRows(decisionFiles)
     // Pruning runs after reading, using the same listings -- a file that
