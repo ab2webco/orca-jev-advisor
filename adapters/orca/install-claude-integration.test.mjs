@@ -1061,3 +1061,37 @@ test('router-effort-set: an unknown effort, tier or shape is rejected and never 
   const noTarget = runRouter(['router-effort-set', 'account:nope', JSON.stringify({ complex: 'high' })], home)
   assert.equal(noTarget.reason, 'unknown-target')
 })
+
+test('router-mode-status: each target reports its context steward mode and threshold, measure at 120k by default', () => {
+  const home = makeHome()
+  writeSettings(home, { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { stewardMode: 'active', stewardThreshold: 150000 } } } })
+  const result = runRouter(['router-mode-status'], home)
+  assert.deepEqual(result.targets[0].steward, { mode: 'active', threshold: 150000 })
+  const fresh = runRouter(['router-mode-status'], makeHome())
+  assert.deepEqual(fresh.targets[0].steward, { mode: 'measure', threshold: 120000 })
+})
+
+test('steward-set: writes the steward mode and threshold next to the router mode, keeping every other key', () => {
+  const home = makeHome()
+  writeSettings(home, { env: { SOME_OTHER_VAR: '1' }, pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: 'active' } } } })
+  const result = runRouter(['steward-set', 'home', JSON.stringify({ mode: 'active', threshold: 100000 })], home)
+  assert.equal(result.ok, true)
+  assert.equal(result.target, 'home')
+  const settings = readSettings(home)
+  assert.equal(settings.env.SOME_OTHER_VAR, '1')
+  assert.deepEqual(settings.pluginConfigs[ROUTER_SETTINGS_KEY].options, { routerMode: 'active', stewardMode: 'active', stewardThreshold: 100000 })
+  const again = runRouter(['steward-set', 'home', JSON.stringify({ mode: 'active', threshold: 100000 })], home)
+  assert.equal(again.unchanged, true, 'the same settings are no write')
+})
+
+test('steward-set: an unknown mode, a threshold out of range or a bad shape is rejected and never written', () => {
+  const home = makeHome()
+  for (const arg of [JSON.stringify({ mode: 'loud', threshold: 120000 }), JSON.stringify({ mode: 'active', threshold: 5 }), JSON.stringify({ mode: 'active' }), 'not json']) {
+    const result = runRouter(['steward-set', 'home', arg], home)
+    assert.equal(result.ok, false, arg)
+    assert.equal(result.reason, 'unknown-steward', arg)
+  }
+  assert.equal(existsSync(settingsPathFor(home)), false)
+  const noTarget = runRouter(['steward-set', 'account:nope', JSON.stringify({ mode: 'off', threshold: 120000 })], home)
+  assert.equal(noTarget.reason, 'unknown-target')
+})

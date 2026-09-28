@@ -508,6 +508,27 @@ test('attendModelRouterConfigRequest: 0.6.2 E3 -- an effort request runs router-
   assert.deepEqual(JSON.parse(calls[0][1][1]), { simple: 'low', standard: 'medium', complex: 'xhigh', frontier: 'xhigh' })
 })
 
+test('attendModelRouterConfigRequest: a steward request runs steward-set with its JSON, never router-mode-set', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: { id: 'mrc-s', at: new Date().toISOString(), target: 'home', steward: { mode: 'active', threshold: 100000 } }
+  })
+  const calls = []
+  const runScript = async (mode, extraArgs) => {
+    calls.push([mode, extraArgs])
+    if (mode === 'steward-set') return { ok: true, target: 'home' }
+    if (mode === 'router-mode-status') return { ok: true, targets: [] }
+    throw new Error(`unexpected mode: ${mode}`)
+  }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-s')
+  assert.equal(result.ok, true)
+  assert.equal(calls[0][0], 'steward-set')
+  assert.equal(calls[0][1][0], 'home')
+  assert.deepEqual(JSON.parse(calls[0][1][1]), { mode: 'active', threshold: 100000 })
+})
+
 test('attendModelRouterConfigRequest: a script failure is reported, not silently swallowed as success', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
