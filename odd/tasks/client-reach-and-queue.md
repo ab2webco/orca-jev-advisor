@@ -56,7 +56,11 @@ never learned; JEVADV-12 design, D2); approving from the board (needs a write
 path back from the panel; next release if the queue proves itself).
 
 ## Checklist
-- [ ] T1 team repositories setting
+- [x] T1 team repositories setting -- Policies tab field, `teamOwners`
+  storage key, mirrored to `team-owners.json`. RED seen (team_owners,
+  store, team-owners-save, mirror, panel static and Playwright tests all
+  failing first); GREEN: `npm test` 2311/2311, `npm run test:panels`
+  145/145; Policies tab looked at, 1440/768/390/320, light and dark.
 - [ ] T2 client_reach classifier
 - [ ] T3 gate skips requires_human for internal-only commands
 - [ ] T4 queue mode

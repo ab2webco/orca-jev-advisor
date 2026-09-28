@@ -687,6 +687,54 @@ test('every policies.* key in one language catalog exists in the other', { skip:
   }
 })
 
+// 0.6.7 T1: "Repositories your team owns" -- the owners typed one per line
+// in the Policies tab, saved to `teamOwners` by the same Save button.
+test('the team owners field shows the stored owners one per line, and Save writes each line back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ teamOwners: ['acme-team', 'acme-tools'] })
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#team-owners'), 'acme-team\nacme-tools')
+    await page.fill('#team-owners', '  acme-team \n\n@acme-tools\nacme-labs  ')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    const written = await page.evaluate(() => window.__written.teamOwners)
+    // The panel only splits and trims; the worker's parseTeamOwners
+    // normalizes (drops the @, validates) before anything reaches the gate.
+    assert.deepEqual(written, ['acme-team', '@acme-tools', 'acme-labs'])
+    assert.deepEqual(errors, [], 'the panel threw while rendering or saving the team owners')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an install that never set team owners shows an empty field and saves an empty list', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#team-owners'), '')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.teamOwners), [])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every teamOwners.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('teamOwners.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('teamOwners.') === 0)
+    assert.ok(enKeys.length > 0, 'no teamOwners.* keys at all')
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
+  } finally {
+    await browser.close()
+  }
+})
+
 for (const colorScheme of ['light', 'dark']) {
   test(`the baseline notice reads as information, not as an error (${colorScheme})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
     // "The shipped baseline changed" is news, not a failure: nothing broke and

@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getBoard, getCatalog, getConfig, getPolicies, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { getBoard, getCatalog, getConfig, getPolicies, getTeamOwners, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -341,4 +341,18 @@ test("getBoard: an entry keeps its projectName, and one written before projectNa
 test("getBoard: a non-string projectName is malformed like any other wrong-typed field", async () => {
   const host = fakeHost({ board: { entries: [{ ...BOARD_ENTRY, projectName: 42 }] } });
   assert.deepEqual(await getBoard(host), { entries: [] });
+});
+
+// 0.6.7 T1: the team repositories setting -- see src/core/team_owners.ts.
+test("getTeamOwners: nothing stored reads as an empty list, which changes no decision", async () => {
+  assert.deepEqual(await getTeamOwners(fakeHost()), []);
+});
+
+test("getTeamOwners: the stored lines come back normalized, invalid ones dropped", async () => {
+  const host = fakeHost({ teamOwners: ["Acme-Team", "", "not valid", "https://github.com/acme-tools"] });
+  assert.deepEqual(await getTeamOwners(host), ["acme-team", "acme-tools"]);
+});
+
+test("getTeamOwners: a stored value that is not an array reads as empty", async () => {
+  assert.deepEqual(await getTeamOwners(fakeHost({ teamOwners: { owners: ["acme-team"] } })), []);
 });

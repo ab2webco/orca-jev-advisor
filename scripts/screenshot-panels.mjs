@@ -291,6 +291,9 @@ const READY = {
     { id: 'own_branch', kind: 'permits', rule: 'All work goes on a feature branch. Work happens there without asking.' },
     { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main or develop, not even a one-line fix.' },
   ],
+  // 0.6.7 T1: the team owners field, filled, so the Policies tab photographs
+  // it with real lines rather than only its placeholder. Example owners.
+  teamOwners: ['acme-team', 'acme-tools'],
   // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
   // project (the raw Orca projectId, plus the projectName the worker
   // resolves from it -- the same name "By project" shows below) and branch;

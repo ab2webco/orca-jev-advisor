@@ -84,7 +84,7 @@
       label { display: block; font-size: 12px; margin: 10px 0 4px;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       label:first-of-type { margin-top: 0; }
-      input, select {
+      input, select, textarea {
         font: inherit; width: 100%; padding: 7px 9px; border-radius: var(--radius-md);
         border: 1px solid var(--input, var(--fb-input)); background: transparent;
         color: var(--foreground, var(--fb-foreground));
@@ -93,7 +93,11 @@
                color: var(--foreground, var(--fb-foreground)); }
       select option { background-color: var(--background, var(--fb-background));
                       color: var(--foreground, var(--fb-foreground)); }
-      input:focus-visible, select:focus-visible {
+      /* One owner per line: a fixed-width face keeps the lines readable as a
+         list, and only the height is the person's to change. */
+      textarea { display: block; resize: vertical; min-height: 5.5em; line-height: 1.5;
+                 font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+      input:focus-visible, select:focus-visible, textarea:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; border-color: transparent;
       }
       /* A read-only value, not an editable control -- see thresholds-section's
@@ -359,6 +363,20 @@
           <span class="said" id="policy-import-said"></span>
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
+      </section>
+
+      <!--
+        0.6.7 T1. The owners whose repositories are the team's own
+        (src/core/team_owners.ts): the gate checks a command's remote
+        against them before asking a requires_human policy, so it sits here,
+        next to the policies it narrows. Saved by the Save button below to
+        `teamOwners`; the worker mirrors it to team-owners.json.
+      -->
+      <section id="team-owners-section">
+        <h2 data-i18n="teamOwners.heading"></h2>
+        <label for="team-owners" data-i18n="teamOwners.label"></label>
+        <textarea id="team-owners" rows="4" spellcheck="false" autocomplete="off" data-i18n-placeholder="teamOwners.placeholder"></textarea>
+        <p class="hint" data-i18n="teamOwners.hint"></p>
       </section>
       </div>
 
@@ -638,6 +656,10 @@
           'policies.seedNoticeDismiss': 'Descartar',
           'policies.seedNoticeDismissing': 'Descartando…',
           'policies.seedNoticeDismissed': 'Descartado. No se cambió ninguna política.',
+          'teamOwners.heading': 'Repositorios de tu equipo',
+          'teamOwners.label': 'Dueños en GitHub o GitLab (usuarios u organizaciones), uno por línea',
+          'teamOwners.placeholder': 'tu-organizacion',
+          'teamOwners.hint': 'Subir una rama de trabajo o abrir un pull request en un repositorio de estos dueños no llega al cliente, así que no se consulta a las políticas que piden a una persona. Fusionar, subir a main, forzar un push y cualquier repositorio fuera de esta lista se siguen consultando. Vacío = todo se decide como hasta ahora.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
           'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
           'modSkills.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} prompts comparables. Faltan {{shortfall}}.',
@@ -713,6 +735,7 @@
           'save.whichConfig': 'La configuración (tamaño del log)',
           'save.whichCatalog': 'El catálogo de destinos',
           'save.whichPolicies': 'Las políticas',
+          'save.whichTeamOwners': 'Los repositorios del equipo',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
           'save.invalidField': 'Hay un campo con un valor no válido; se cambió a su pestaña y quedó enfocado.',
           'common.timeout': 'Tiempo de espera agotado.',
@@ -928,6 +951,10 @@
           'policies.seedNoticeDismiss': 'Dismiss',
           'policies.seedNoticeDismissing': 'Dismissing…',
           'policies.seedNoticeDismissed': 'Dismissed. No policy was changed.',
+          'teamOwners.heading': 'Repositories your team owns',
+          'teamOwners.label': 'GitHub or GitLab owners (users or organizations), one per line',
+          'teamOwners.placeholder': 'your-organization',
+          'teamOwners.hint': 'Pushing a work branch or opening a pull request in a repository these owners hold never reaches a client, so policies that need a person are not asked about it. Merging, pushing to main, force pushes and any repository outside this list are still asked. Empty = everything is decided as it is today.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
           'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
@@ -1003,6 +1030,7 @@
           'save.whichConfig': 'The configuration (log size)',
           'save.whichCatalog': 'The destination catalog',
           'save.whichPolicies': 'The policies',
+          'save.whichTeamOwners': "Your team's repositories",
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
           'save.invalidField': 'A field has an invalid value; switched to its tab and focused it.',
           'common.timeout': 'Timed out.',
@@ -2418,6 +2446,24 @@
         return rows.filter(function (r) { return r.id.length > 0 && r.rule.length > 0 })
       }
 
+      // 0.6.7 T1: the team owners field. The panel only splits and trims;
+      // src/core/team_owners.ts's parseTeamOwners (run by the worker and by
+      // the gate) validates and normalizes, so there is one reading of what
+      // an owner is, not two.
+      var teamOwnersEl = el('team-owners')
+
+      function fillTeamOwners (stored) {
+        teamOwnersEl.value = Array.isArray(stored)
+          ? stored.filter(function (owner) { return typeof owner === 'string' }).join('\n')
+          : ''
+      }
+
+      function readTeamOwners () {
+        return teamOwnersEl.value.split(/\r?\n/)
+          .map(function (line) { return line.trim() })
+          .filter(function (line) { return line.length > 0 })
+      }
+
       var policyImportSaidEl = el('policy-import-said')
       var policyDiffsEl = el('policy-diffs')
 
@@ -3271,7 +3317,8 @@
         var namedWrites = [
           { label: t('save.whichConfig'), promise: write('config', config) },
           { label: t('save.whichCatalog'), promise: write('catalog', readCatalog()) },
-          { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) }
+          { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) },
+          { label: t('save.whichTeamOwners'), promise: write('teamOwners', readTeamOwners()) }
         ]
         Promise.all(namedWrites.map(function (w) { return w.promise })).then(function (results) {
           var failedLabels = []
@@ -3317,7 +3364,8 @@
             read(CATALOG_PROPOSALS_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus(),
-            read(MODEL_ROUTER_STATUS_KEY, false)
+            read(MODEL_ROUTER_STATUS_KEY, false),
+            read('teamOwners', false)
           ])
         }).then(function (results) {
           currentConfig = results[0]
@@ -3331,6 +3379,7 @@
           renderPolicySeedNoticeAndDiffs(results[6])
           renderCatalogProposals(results[7])
           renderModelRouterRows(results[10])
+          fillTeamOwners(results[11])
           // 0.6.2 E7: what storage holds may predate a mode set from a
           // terminal; ask the worker for a fresh read and redraw with it.
           refreshModelRouterStatus().then(function (fresh) { if (!modelRouterEdited) renderModelRouterRows(fresh) }).catch(function () {})

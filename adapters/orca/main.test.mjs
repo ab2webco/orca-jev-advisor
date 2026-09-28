@@ -67,6 +67,7 @@ const {
   LOCALE_STATUS_KEY,
   migrateLegacyPolicyKinds,
   mirrorAccountQuota,
+  mirrorCatalogAndPolicies,
   onAgentStatusChanged,
   MODEL_ROUTER_CONFIG_RESULT_KEY,
   MODEL_ROUTER_STATUS_KEY,
@@ -1991,4 +1992,33 @@ test('nit 11: one account list is shared by the quota mirror, the board and the 
   await shared()
   await shared()
   assert.equal(calls, 4, 'a failed list is never reused')
+})
+
+// 0.6.7 T1: the team repositories setting rides the same mirror as the
+// catalog and policies -- saved by the panel to `teamOwners`, mirrored on the
+// same trigger, to team-owners.json, for gate-bash.ts to read.
+test('mirrorCatalogAndPolicies also mirrors the team owners, normalized, through team-owners-save', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ teamOwners: ['Acme-Team', 'not valid', '@acme-tools'] })
+  const calls = []
+  const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
+  await mirrorCatalogAndPolicies(orca, storageHost, { run })
+  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save'])
+  assert.deepEqual(JSON.parse(calls[2].stdin), ['acme-team', 'acme-tools'])
+})
+
+test('mirrorCatalogAndPolicies mirrors an empty team-owners list when nothing was ever saved', async () => {
+  const calls = []
+  const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost(), { run })
+  const teamOwners = calls.find((call) => call.mode === 'team-owners-save')
+  assert.ok(teamOwners, 'the empty list must still be written, or a cleared setting would leave a stale file behind')
+  assert.deepEqual(JSON.parse(teamOwners.stdin), [])
+})
+
+test('mirrorCatalogAndPolicies logs a failed team-owners mirror by reason, never throws', async () => {
+  const orca = fakeOrca()
+  const run = async (mode) => (mode === 'team-owners-save' ? { ok: false, reason: 'exception', detail: 'disk full' } : { ok: true })
+  await mirrorCatalogAndPolicies(orca, fakeStorageHost(), { run })
+  assert.ok(orca._logs.some((line) => /team owners mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
 })

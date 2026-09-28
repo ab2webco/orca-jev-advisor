@@ -169,3 +169,40 @@ test('quota-save still saves normally against an isolated (mkdtemp-style) HOME',
     rmSync(tempHome, { recursive: true, force: true })
   }
 })
+
+// 0.6.7 T1: the team repositories setting reaches the gate through this same
+// script -- team-owners.json, next to catalog.json/policies.json.
+test('refuses team-owners-save against a real-looking, non-isolated HOME under the test runner', () => {
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'fixture must not pre-exist')
+  const result = runMirrorAgainst(FAKE_REAL_HOME, 'team-owners-save', JSON.stringify(['acme-team']))
+  assert.equal(result.ok, false, `expected the paths guard to refuse team-owners-save, got: ${JSON.stringify(result)}`)
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'the guard must fire before even the directory is created')
+})
+
+test('team-owners-save writes the normalized owners, never a raw echo of the payload', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-team-owners-'))
+  try {
+    const result = runMirrorAgainst(tempHome, 'team-owners-save', JSON.stringify(['Acme-Team', '', 'not valid', '@acme-tools', 'acme-team']), {
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
+    assert.equal(result.ok, true, `expected a normal team-owners-save to succeed, got: ${JSON.stringify(result)}`)
+    const written = JSON.parse(readFileSync(join(tempHome, '.config', 'orca-supervisor', 'team-owners.json'), 'utf8'))
+    assert.deepEqual(written, ['acme-team', 'acme-tools'])
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})
+
+test('team-owners-save writes an empty list for a payload that is not an array of owners', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-team-owners-bad-'))
+  try {
+    const result = runMirrorAgainst(tempHome, 'team-owners-save', '{not json', {
+      ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor'),
+    })
+    assert.equal(result.ok, true, `expected team-owners-save to normalize, not fail, got: ${JSON.stringify(result)}`)
+    const written = JSON.parse(readFileSync(join(tempHome, '.config', 'orca-supervisor', 'team-owners.json'), 'utf8'))
+    assert.deepEqual(written, [])
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})
