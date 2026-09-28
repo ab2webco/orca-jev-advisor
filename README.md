@@ -407,7 +407,12 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   `awk` can run a command with `system()`, a pipe or `getline`, and GNU
   `sed` with its `e` command; both used to skip every check. They still
   skip Jev when they only read and print (`sed -n '1,40p' file`,
-  `awk '{print $1}' file`); anything else is judged.
+  `awk '{print $1}' file`); anything else is judged. An `awk` program or
+  `sed` script that can run a command (`system()`, a pipe, `getline`,
+  sed's `e`) is read as code by the local rules, like `python3 -c`, so a
+  destructive command inside one reaches the coding model as an advice
+  instead of being allowed. One that only edits or prints text naming a
+  command is still a mention.
 - **A `<<` inside quotes, a `<<<` here-string or a `<<` in a comment no
   longer hides the next lines.** The shell runs those lines, so the local
   rules now read them.
@@ -417,9 +422,6 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   skill and tool records written to disk.
 - **A quote in a project or branch name can no longer inject code into the
   Advisor board.**
-- **Not covered**: a real command inside a quoted `awk` program still
-  reads as data to the local rules, so Jev judges it rather than a local
-  deny.
 
 ## What you actually see
 
