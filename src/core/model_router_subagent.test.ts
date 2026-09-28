@@ -85,9 +85,9 @@ test("subagentStepEffort: a standard-tier subagent is lowered from the parent's 
   assert.equal(subagentStepEffort("medium", "high"), "medium");
 });
 
-test("subagentStepEffort: never raises -- a lower inherited effort than the tier's own is left alone", () => {
-  assert.equal(subagentStepEffort("high", "low"), "low");
-  assert.equal(subagentStepEffort("xhigh", "medium"), "medium");
+test("subagentStepEffort: unguarded, a lower inherited effort than the tier's own is raised to the tier's (0.6.3 F0)", () => {
+  assert.equal(subagentStepEffort("high", "low"), "high");
+  assert.equal(subagentStepEffort("xhigh", "medium"), "xhigh");
 });
 
 test("subagentStepEffort: exactly the tier's own effort is left as it is", () => {
@@ -130,5 +130,5 @@ test("F0 subagentStepEffort: under a guard, the higher of the inherited and the 
   assert.equal(subagentStepEffort("low", "max", true), "max");
   assert.equal(subagentStepEffort("low", 12000, true), 12000);
   assert.equal(subagentStepEffort("high", undefined, true), "high");
-  assert.equal(subagentStepEffort("medium", "xhigh", false), "medium", "no guard: lowered as before");
+  assert.equal(subagentStepEffort("medium", "xhigh", false), "medium", "unguarded: the tier's own effort applies outright");
 });

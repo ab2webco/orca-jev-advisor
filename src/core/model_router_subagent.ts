@@ -16,12 +16,15 @@
 // own effort, clamped to whatever the subagent's model supports -- a
 // standard-work subagent on Sonnet ran every step at the parent's `xhigh`,
 // clamped to `high`, never the tier's own `medium`. `subagentStepEffort`
-// below is that lowering, applied by the hooks module on every one of that
-// agent's steps (see hooks/index.ts's own `subagentEffortTarget` map): the
-// tier and eligibility (no explicit model, no guard, active mode) are
-// decided once at spawn time, same as the model above; this is only ever a
-// LOWERING of what the step already carries, never a raise, and never
-// touches a person's own `max` or numeric budget. Pure: no I/O.
+// below applies the tier's own effort to that inherited value, in both
+// directions, on every one of that agent's steps (see hooks/index.ts's own
+// `subagentEffortTarget` map): the tier and eligibility (no explicit model,
+// no guard, active mode) are decided once at spawn time, same as the model
+// above. Unguarded, the tier's effort wins outright, up or down (0.6.3:
+// F0 -- no guard ever blocks an effort raise, and an unguarded step has no
+// guard to hold anything back). Guarded, the effort only ever rises to the
+// tier's, never falls. Neither case touches a person's own `max` or numeric
+// budget. Pure: no I/O.
 // ---------------------------------------------------------------------------
 
 import { FABLE_ID, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
@@ -107,10 +110,14 @@ const EFFORT_RANK: Readonly<Record<TierEffort, number>> = { low: 0, medium: 1, h
  * (`current`: the parent's own, inherited and clamped to what the
  * subagent's model supports).
  *
- * Never raises: a `current` at or below `target` is left alone. A person's
- * own `max` or numeric budget is never touched, the same floor
- * `isPersonEffort` (model_router_decide.ts) protects elsewhere in the
- * router -- it is intent, not something inherited.
+ * Unguarded, the tier's own effort wins outright, raised or lowered from
+ * `current` (mirrors `decideStart`'s own unguarded branch in
+ * model_router_decide.ts: no comparison, the tier's decision stands).
+ * Guarded, `current` may only rise to `target`, never fall (mirrors
+ * `guardedEffort`: a guard blocks a lowering, never a raise -- 0.6.3 F0). A
+ * person's own `max` or numeric budget is never touched either way, the
+ * same floor `isPersonEffort` (model_router_decide.ts) protects elsewhere in
+ * the router -- it is intent, not something inherited.
  */
 export function subagentStepEffort(target: TierEffort | null, current: SessionEffort | undefined, guarded = false): SessionEffort | undefined {
   if (current === "max" || typeof current === "number") return current;
@@ -118,5 +125,6 @@ export function subagentStepEffort(target: TierEffort | null, current: SessionEf
   if (target === null) return undefined;
   // 0.6.2 F0: under a guard the effort may rise to the tier's, never fall.
   if (guarded) return EFFORT_RANK[target] > EFFORT_RANK[current] ? target : current;
-  return EFFORT_RANK[target] < EFFORT_RANK[current] ? target : current;
+  // Unguarded: the tier's own effort applies outright, both directions.
+  return target;
 }

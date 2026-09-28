@@ -127,10 +127,10 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
   consumption card's per-model rows.
 
 ## Tasks
-- [ ] A1a `src/core/project_name.ts`: extract `modSkillsProjectName`,
+- [x] A1a `src/core/project_name.ts`: extract `modSkillsProjectName`,
       re-export from `read-measurements.mjs` unchanged (its own tests stay
       green). Route: delegated writer. Trigger: writer (2 files).
-- [ ] A1b `hooks/index.ts` + `model_router_decide.ts`: `project` on the
+- [x] A1b `hooks/index.ts` + `model_router_decide.ts`: `project` on the
       turn-usage record and on `RouterDecisionRecord`, threaded from
       `orcaContextCache` per the Decisions section above. Unit tests first
       (RED against the current shape), then GREEN. Keep
@@ -152,7 +152,7 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
       versioned) + README "What changed in 0.6.3". Route: inline.
 - [ ] A7 Screenshots: `npm run shots` + `activity-ready` scenario at 1440,
       768, 390, 320, both themes. Read every image. Route: inline.
-- [ ] R1 **(added live, unrelated to Activity, must land before STATUS: DONE)**
+- [x] R1 **(added live, unrelated to Activity, must land before STATUS: DONE)**
       Bugfix: subagent cold-first-step effort must apply the tier's effort
       in both directions, and the router-decision log must match what the
       step actually sends. Root cause, confirmed by reading the code:
@@ -218,3 +218,86 @@ TDD: strict (repo default). Runner: `node --test --experimental-strip-types`
 - 2026-09-27: mapping pass completed (delegated, read-only). Findings
   folded into Scope/Constraints/Decisions above. Task file created before
   first write.
+- 2026-09-27: R1 added live (subagent cold-first-step effort bug, found by
+  the owner in this session, unrelated to Activity). Mapping pass
+  (delegated, read-only) completed; root cause and fix folded into R1's
+  task entry above. Sequenced after A1b since both touch `hooks/index.ts`.
+- 2026-09-27: A1a+A1b done and committed (`bf9ddb4`,
+  `feat(activity): record project on turn-usage and router-decision
+  records`). `src/core/project_name.ts` (+6 tests) extracted from
+  `read-measurements.mjs:429-438`, re-imported there unchanged (its 33
+  tests stayed green). `project: string | null` threaded onto
+  `RouterDecisionRecord`/`RouterDecisionRecordInput`
+  (`model_router_decide.ts`), `TurnUsageRecord` (`consumption.ts`), the
+  turn-usage JSONL write and all router call sites in `hooks/index.ts`
+  (resolved once per closure via `modSkillsProjectName(orcaContextCache)`,
+  never `$` itself — JEVADV-43 preserved), and `read-consumption.mjs`'s
+  `toTurnUsageRecord` parsing (tolerant default to `null`).
+  RED observed before GREEN throughout (module-not-found for the new file,
+  two new `model_router_decide.test.ts` assertions verified via a real
+  stash/reapply cycle, three new `hooks.test.ts` cases).
+  Decision-gap notes from the writer: (a) `project_name.ts` couldn't use
+  `node:path`'s `basename` — the hooks tsconfig has no Node types by
+  design — wrote a small local `basenameOf` instead, behavior-equivalent
+  for Orca's POSIX-style paths; (b) found and fixed a real test-fixture bug
+  along the way: `submitPrompt(...)`'s hardcoded `origin: {kind:"user"}`
+  isn't in `isPersonPromptOrigin`'s closed set, so it silently skipped the
+  router call in a naive combined test — switched to
+  `submitOrigin(handlers, engine, "composer")`; (c) `read-consumption.mjs`'s
+  new `project` parsing has no observable behavior change yet (surfacing
+  it per-row is A2's job) — flagged as not a true RED rather than faked one.
+  `npm test`: 2155→2167 (12 new, 0 failing). `tsc -p
+  adapters/claude/mod-skills/tsconfig.json`: clean.
+  `mod_skills_validate.test.mjs`: pass. `node_modules` unlinked before
+  commit.
+- 2026-09-27: R1 done and committed (delegated writer, strict TDD).
+  `subagentStepEffort` (`src/core/model_router_subagent.ts`): unguarded
+  branch now `return target;` (both directions, mirrors `decideStart`'s
+  unguarded branch); guarded branch unchanged (already raise-only, correct).
+  Flipped `model_router_subagent.test.ts:88-91` (unguarded low→tier's value,
+  not left low) and `hooks.test.ts`'s JEV-061 slice 2 "never raised" test
+  (now asserts `"high"`, the live bug scenario) — RED observed first via a
+  real stash/reapply cycle on `model_router_subagent.ts` (1 failing, as
+  expected), then GREEN.
+  Log-write redesign: **moved** (not a two-write correction) — the
+  `point: 'subagent'` `appendRouterDecision` call was removed from
+  `routeSubagent` (`hooks/index.ts`) entirely; `routeSubagent` now only
+  computes and hands `handleTurnStep` a `SubagentEffortTarget` per spawned
+  agentId carrying everything the log line needs (account, decision,
+  applied, quotaBand, project, effort target, guarded, effortEligible,
+  logged: false). `handleTurnStep`'s subagent branch appends the one
+  `point: 'subagent'` line, with `effort` = what `subagentStepEffort`
+  actually computed and sent (or `null` when not effort-eligible), on that
+  agent's first (`index === 0`) step only, then flips `logged: true` so a
+  later re-occurrence of index 0 (a new turn on the same agentId) can't
+  double-log. Picked over the two-write alternative because
+  `summarizeRouterDecisions` (`src/core/model_router_summary.ts`) counts
+  every parsed `point='subagent'` row toward `total`/`byPoint` regardless
+  of `applied` — a spawn-time write plus a later correction would have
+  double-counted every subagent decision in the board's own router-decision
+  stats; a single deferred write has no such risk and is the more coherent
+  change once the downstream reader was checked.
+  Six existing tests that asserted `routerDecisionLines(...)` right after
+  `spawnThrough` (with no follow-up step) had to gain one `stepThrough(...,
+  { agentId: "agent-1", index: 0, ... })` call each before their decision
+  assertions, since the line no longer exists until that step:
+  `hooks.test.ts` — "router, active, subagent: no explicit model", "router,
+  measure, subagent: logs, changes nothing", "router, active, subagent:
+  guards hold the parent's model", "F11, point B", "0.6.2 E6 (hook,
+  subagent)", "F0 (hook, subagent)" (this last one's guard/effort
+  assertions were also reordered to after the step, and a
+  logged-effort-equals-sent-effort assertion added — the guarded higher-
+  inherited case). A second logged-effort assertion for the plain unguarded
+  case was added to the flipped "0.6.3 F0" test. This was not anticipated
+  by the prompt's assumptions (it named only two tests to flip); the six
+  additional test-shape updates were required by the chosen "moved" log
+  design and are mechanical (adding a step call), not behavior changes.
+  Doc comments updated in both files and in `model_router_decide.ts`'s
+  `RouterDecisionRecord.effort` field (searched both files for "never
+  rais"/"LOWERING", none remain). README and the 0.6.1 changelog section
+  untouched, per constraints.
+  `npm test`: 2181 pass, 0 fail (includes unrelated concurrent A2 work
+  landed in this same worktree during the run). `tsc -p
+  adapters/claude/mod-skills/tsconfig.json`: clean.
+  `mod_skills_validate.test.mjs`: pass. `node_modules` unlinked before
+  commit. Commit: see git log (`fix(router): ...`).

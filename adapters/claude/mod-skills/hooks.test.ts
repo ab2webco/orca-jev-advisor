@@ -1304,6 +1304,9 @@ test("router, active, subagent: no explicit model -- the tier's full id", async 
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent());
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  // 0.6.3: the point='subagent' decision line is written on the subagent's
+  // first turn.step, not at spawn (its effort must match what that step sends).
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
   const [decision] = routerDecisionLines(host);
   assert.equal(decision?.point, "subagent");
   assert.equal(decision?.applied, true);
@@ -1317,6 +1320,7 @@ test("router, measure, subagent: logs, changes nothing", async () => {
   const { handlers, engine } = loadHooks(host);
   const event = spawnEvent();
   assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.applied, false);
 });
 
@@ -1336,6 +1340,7 @@ test("router, active, subagent: guards hold the parent's model", async () => {
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const event = spawnEvent({ prompt: "Read /x/brief.md and do what it says" });
   assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.guard, "pointer-prompt");
 });
 
@@ -1399,16 +1404,18 @@ test("JEV-061 slice 2: a guard at spawn leaves the subagent's effort untouched",
   assert.equal(step.effort, "xhigh", "a guard never lets the effort fall");
 });
 
-test("JEV-061 slice 2: a subagent's effort is never raised, even when the chosen tier asks for more", async () => {
+test("JEV-061 slice 2, 0.6.3 F0: an unguarded subagent's effort is raised when the chosen tier asks for more", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnThrough(handlers, engine, spawnEvent({ parentModel: "claude-sonnet-5" }));
 
-  // complex -> high, but this step already carries only "low".
+  // complex -> high, and this step only carries "low" -- unguarded, the tier's effort wins.
   const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "low" }));
-  assert.equal(step.effort, "low");
+  assert.equal(step.effort, "high");
+  // JEVADV-63 R1: the logged point='subagent' effort matches what this step actually sent -- not the raw spawn-time target.
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high");
 });
 
 test("JEV-061 slice 2: measure mode changes nothing", async () => {
@@ -1551,6 +1558,7 @@ test("F11, point B: a subagent spawned in a client site is routed like any other
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent());
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.guard, null);
 });
 
@@ -1927,6 +1935,7 @@ test("0.6.2 E6 (hook, subagent): a pointer spawn prompt keeps the parent's model
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent({ description: "Run the brief", prompt: POINTER }));
   assert.notEqual(seen.model, "claude-haiku-4-5-20251001");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: undefined }));
   const decision = routerDecisionLines(host).at(-1);
   assert.equal(decision?.point, "subagent");
   assert.equal(decision?.guard, "pointer-prompt");
@@ -1992,9 +2001,10 @@ test("F0 (hook, subagent): under a guard the subagent's effort rises to the tier
   host.fetchQueue.push(tierAnswer("complex"), tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnThrough(handlers, engine, spawnEvent({ description: "writer", prompt: "Read /x/brief.md and do what it says" }));
-  assert.equal(routerDecisionLines(host).at(-1)?.guard, "pointer-prompt");
   const raised = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "medium" }));
   assert.equal(raised.effort, "high");
+  assert.equal(routerDecisionLines(host).at(-1)?.guard, "pointer-prompt");
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high", "the log shows what the step actually sent, not the raw target");
   const kept = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-opus-5-5", effort: "xhigh" }));
   assert.equal(kept.effort, "xhigh");
 });
