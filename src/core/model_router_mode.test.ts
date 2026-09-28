@@ -157,3 +157,40 @@ test("nit 7: back to the defaults over a stray key writes an explicit empty rout
   assert.deepEqual(routerEffortFromSettings(written), DEFAULTS);
   assert.equal(planRouterEffortWrite(plan.text, DEFAULTS).kind, "unchanged");
 });
+
+// ---------------------------------------------------------------------------
+// Context steward settings: mode and threshold, in the same router options
+// ---------------------------------------------------------------------------
+
+import { parseStewardSettingsStrict, planStewardWrite, stewardFromSettings } from "./model_router_mode.ts";
+
+test("stewardFromSettings: measure at 120k by default; the installed plugin's options win", () => {
+  assert.deepEqual(stewardFromSettings(null), { mode: "measure", threshold: 120_000 });
+  assert.deepEqual(stewardFromSettings({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active", stewardMode: "active", stewardThreshold: 30_000 } } } }), { mode: "active", threshold: 30_000 });
+  assert.deepEqual(stewardFromSettings({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { stewardMode: "loud", stewardThreshold: 5 } } } }), { mode: "measure", threshold: 120_000 });
+});
+
+test("parseStewardSettingsStrict: both fields valid or null", () => {
+  assert.deepEqual(parseStewardSettingsStrict({ mode: "off", threshold: 150_000 }), { mode: "off", threshold: 150_000 });
+  assert.equal(parseStewardSettingsStrict({ mode: "loud", threshold: 150_000 }), null);
+  assert.equal(parseStewardSettingsStrict({ mode: "active", threshold: 5 }), null);
+  assert.equal(parseStewardSettingsStrict({ mode: "active" }), null);
+  assert.equal(parseStewardSettingsStrict("active"), null);
+});
+
+test("planStewardWrite: next to the router mode, every other key kept; the same value is no write; a broken file is refused", () => {
+  const raw = `${JSON.stringify({ theme: "dark", pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active" } } } }, null, 4)}\n`;
+  const plan = planStewardWrite(raw, { mode: "active", threshold: 30_000 });
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  const written = JSON.parse(plan.text);
+  assert.equal(written.theme, "dark");
+  assert.deepEqual(written.pluginConfigs[ROUTER_SETTINGS_KEY].options, { routerMode: "active", stewardMode: "active", stewardThreshold: 30_000 });
+  assert.ok(plan.text.startsWith('{\n    "theme"'), "keeps the file's indent");
+  assert.equal(planStewardWrite(plan.text, { mode: "active", threshold: 30_000 }).kind, "unchanged");
+  assert.deepEqual(planStewardWrite("{ not json", { mode: "off", threshold: 120_000 }), { kind: "refuse", reason: "unparseable" });
+  assert.deepEqual(planStewardWrite("[]", { mode: "off", threshold: 120_000 }), { kind: "refuse", reason: "not-an-object" });
+  const created = planStewardWrite(null, { mode: "off", threshold: 120_000 });
+  assert.equal(created.kind, "write");
+  if (created.kind === "write") assert.deepEqual(stewardFromSettings(JSON.parse(created.text)), { mode: "off", threshold: 120_000 });
+});
