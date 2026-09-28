@@ -136,10 +136,117 @@ function looksLikePath(token: string): boolean {
  * therefore kept verbatim for these, and only what follows is classified.
  */
 const SUBCOMMAND_PROGRAMS = new Set([
-  "git", "gh", "npm", "pnpm", "yarn", "bun", "npx", "docker", "kubectl", "helm",
+  "git", "gh", "glab", "jira", "npm", "pnpm", "yarn", "bun", "npx", "docker", "kubectl", "helm",
   "aws", "gcloud", "az", "terraform", "tofu", "cargo", "go", "systemctl", "brew",
   "pip", "pip3", "poetry", "flyctl", "vercel", "supabase", "orca",
 ]);
+
+/**
+ * Programs whose PR, issue, MR, ticket and repository arguments are an
+ * IDENTITY, kept literal in the shape instead of folding into a class.
+ *
+ * Folded, `gh pr merge 12` and `gh pr merge 13` were one cache entry, and
+ * the second merge replayed the first one's verdict for up to 30 days
+ * without Jev ever seeing it. Which pull request is not a detail of the
+ * question, it is the question -- the same reason in-tree and out-of-tree
+ * are kept apart above.
+ */
+const IDENTITY_PROGRAMS = new Set(["gh", "glab", "jira"]);
+
+/**
+ * Value-taking flags of the identity programs whose NEXT token is content --
+ * a body, a title, a request field, a header -- never an identity and never
+ * a verb, however it looks. Without this, `gh secret set X --body 123456`
+ * would put the secret into the shape because it looks like a PR number, and
+ * `gh api -H "Authorization: token ..."` would keep the header as a verb.
+ */
+const CONTENT_VALUE_FLAGS = new Set([
+  "--body", "-b", "--body-file", "-F", "--field", "-f", "--raw-field", "--title", "-t",
+  "--notes", "--description", "--message", "--header", "-H", "--input",
+]);
+
+/** `git push -o <option>`: a push option is free text for the server and can carry a token. */
+const PUSH_OPTION_FLAGS = new Set(["-o", "--push-option"]);
+
+const NUMERIC_IDENTITY = /^#?\d+$/;
+const TICKET_IDENTITY = /^[A-Z][A-Z0-9]+-\d+$/;
+const REPO_SLUG = /^[\w.-]+\/[\w.-]+$/;
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+const SCP_REMOTE = /^[^@\s]+@[^:\s]+:/;
+
+/** A path written as a path: absolute, relative to here, home-relative, or Windows-separated. */
+function isExplicitPath(token: string): boolean {
+  return token.startsWith("/") || token.startsWith("./") || token.startsWith("../") || token.startsWith("~") || token.includes("\\");
+}
+
+/**
+ * `scheme://host/path`, with userinfo, query and fragment dropped -- a
+ * credential in a URL's userinfo, or a token in its query string, must never
+ * enter the shape. Null when `token` is not an absolute URL.
+ */
+function sanitizeUrl(token: string): string | null {
+  if (!URL_SCHEME.test(token)) return null;
+  try {
+    const url = new URL(token);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Where an argument sits relative to the verbs before it; what identityLiteral needs to tell a target from content. */
+interface ArgumentPosition {
+  readonly program: string;
+  /** The subcommand verbs already consumed for this segment, e.g. `["pr", "merge"]` or `["push"]`. */
+  readonly verbs: readonly string[];
+  /** The token just before this one, flags included, or undefined for the first argument. */
+  readonly previous: string | undefined;
+  /** How many non-flag arguments already followed the verbs; 0 means this is the command's first target. */
+  readonly targetsSoFar: number;
+}
+
+/**
+ * The literal form of `token` when it names WHICH thing a command acts on,
+ * or null to let it fold as before.
+ *
+ * - `git push`: every positional after the verb -- remote and refspecs.
+ *   `git push origin feature/x` and `git push origin main` are different
+ *   questions. A URL remote keeps its sanitized URL and an scp-style remote
+ *   drops its user, so pushing to another repository is another question
+ *   too, never with the credential inside it; an explicit path still folds
+ *   by tree.
+ * - `gh`, `glab`, `jira`: PR/issue/MR numbers (`#12` and `12` are one),
+ *   ticket ids, sanitized URLs, the `-R`/`--repo` slug, the first target
+ *   after a two-level verb (`gh pr merge feature/x`, `gh repo delete
+ *   acme/app`) and a `gh api` endpoint without its query string.
+ *
+ * A token right after any other flag is only literal when it is a number,
+ * ticket or URL: the flag may take a value, and an arbitrary value can be a
+ * secret (`glab auth login --token ...`).
+ */
+function identityLiteral(token: string, position: ArgumentPosition): string | null {
+  const { program, verbs, previous, targetsSoFar } = position;
+  const afterFlag = previous !== undefined && previous.startsWith("-");
+
+  if (program === "git") {
+    if (verbs[0] !== "push") return null;
+    if (URL_SCHEME.test(token)) return sanitizeUrl(token);
+    if (SCP_REMOTE.test(token)) return token.replace(/^[^@]+@/, "");
+    if (isExplicitPath(token)) return null;
+    return token;
+  }
+
+  if (!IDENTITY_PROGRAMS.has(program)) return null;
+  if (NUMERIC_IDENTITY.test(token)) return token.replace(/^#/, "");
+  if (TICKET_IDENTITY.test(token)) return token;
+  const url = sanitizeUrl(token);
+  if (url !== null) return url;
+  if (previous === "-R" || previous === "--repo") return REPO_SLUG.test(token) ? token : null;
+  if (afterFlag || targetsSoFar > 0) return null;
+  if (verbs.length === 1 && verbs[0] === "api" && looksLikePath(token)) return token.replace(/[?#].*$/, "");
+  if (verbs.length === 2 && !isExplicitPath(token)) return SCP_REMOTE.test(token) ? token.replace(/^[^@]+@/, "") : token;
+  return null;
+}
 
 /**
  * Which class an argument belongs to, given where the command runs.
@@ -228,7 +335,9 @@ export interface ShapeContext {
  * different questions, and keeping every flag means a new one never silently
  * inherits an older, safer answer. Argument *values* collapse to their class,
  * which is what makes `rm -rf dist` and `rm -rf build` one entry while
- * `rm -rf ../other` opens its own.
+ * `rm -rf ../other` opens its own. The exception is an identity -- which
+ * PR, issue, ticket, repository or push destination -- kept literal by
+ * identityLiteral, so `gh pr merge 12` never answers for `gh pr merge 13`.
  */
 export function commandShape(command: string, context: ShapeContext): string | null {
   const trimmed = command.trim();
@@ -271,17 +380,41 @@ export function commandShape(command: string, context: ShapeContext): string | n
     // let the build's answer authorise the deploy. `gh pr merge`,
     // `docker compose up` and `git remote add` have the same shape.
     const MAX_VERBS = 2;
-    let verbs = 0;
+    const verbs: string[] = [];
+    let previous: string | undefined;
+    let targetsSoFar = 0;
     for (const token of rest) {
       if (token.startsWith("-")) {
-        flags.push(token.split("=")[0] as string);
+        const equalsAt = token.indexOf("=");
+        const flagName = equalsAt === -1 ? token : token.slice(0, equalsAt);
+        flags.push(flagName);
+        // `--repo=acme/app` carries its slug inside the flag token itself,
+        // so it never reaches identityLiteral's `-R acme/app` check below.
+        const inlineValue = equalsAt === -1 ? "" : token.slice(equalsAt + 1);
+        if (IDENTITY_PROGRAMS.has(programName) && (flagName === "-R" || flagName === "--repo") && REPO_SLUG.test(inlineValue)) {
+          classes.push(inlineValue);
+        }
+        previous = flagName;
         continue;
       }
-      if (verbs < MAX_VERBS && SUBCOMMAND_PROGRAMS.has(programName) && !looksLikePath(token)) {
-        verbs += 1;
+      // A content value is neither an identity nor a verb: it folds by
+      // class like any other argument, whatever it looks like.
+      const isContent =
+        previous !== undefined &&
+        ((IDENTITY_PROGRAMS.has(programName) && CONTENT_VALUE_FLAGS.has(previous)) || (programName === "git" && PUSH_OPTION_FLAGS.has(previous)));
+      const literal = isContent ? null : identityLiteral(token, { program: programName, verbs, previous, targetsSoFar });
+      previous = token;
+      if (literal !== null) {
+        classes.push(literal);
+        if (verbs.length > 0) targetsSoFar += 1;
+        continue;
+      }
+      if (!isContent && verbs.length < MAX_VERBS && SUBCOMMAND_PROGRAMS.has(programName) && !looksLikePath(token)) {
+        verbs.push(token);
         classes.push(token);
         continue;
       }
+      if (verbs.length > 0 && !isContent) targetsSoFar += 1;
       classes.push(classifyArgument(token, context.cwd, context.home, treeRoot));
     }
     shaped.push(flags.sort().join(" "));

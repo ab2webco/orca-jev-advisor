@@ -190,3 +190,80 @@ test("a Windows home-relative path resolves the same way as its POSIX equivalent
     winShape("rm -rf ../other-project", { cwd: "C:\\Users\\Ana Gómez\\Projects\\app" }),
   );
 });
+
+// ---------------------------------------------------------------------------
+// Identity arguments -- WHICH pull request, issue, ticket, repository or push
+// destination a command acts on. Folding these into a class let
+// `gh pr merge 12` answer for `gh pr merge 13`, and a push to a feature
+// branch answer for a push to main, for the whole 30-day life of a cached
+// verdict: the second command never reached Jev at all. A different target
+// is a different question, the same way in-tree and out-of-tree are.
+// ---------------------------------------------------------------------------
+
+test("a different PR, issue, MR, repository or push destination never shares an entry", () => {
+  assert.notEqual(shape("git push origin feature/x"), shape("git push origin main"));
+  assert.notEqual(shape("git push origin HEAD:main"), shape("git push origin HEAD:develop"));
+  assert.notEqual(shape("git push origin main"), shape("git push upstream main"));
+  assert.notEqual(shape("gh pr merge 12"), shape("gh pr merge 13"));
+  assert.notEqual(shape("gh pr merge 12 --repo acme/app"), shape("gh pr merge 12 --repo other/prod"));
+  assert.notEqual(shape("gh -R acme/app pr merge 12"), shape("gh -R other/prod pr merge 12"));
+  assert.notEqual(shape("gh pr merge 12 --repo=acme/app"), shape("gh pr merge 12 --repo=other/prod"));
+  assert.notEqual(shape("gh api repos/acme/app/pulls/3"), shape("gh api repos/other/prod/pulls/3"));
+  assert.notEqual(shape("glab mr merge 4"), shape("glab mr merge 9"));
+  assert.notEqual(shape("jira issue view ABC-123"), shape("jira issue view ABC-124"));
+  assert.notEqual(shape("gh pr view https://example.com/acme/app/pull/1"), shape("gh pr view https://example.com/acme/app/pull/2"));
+  // A remote named by URL or scp address is a repository too.
+  assert.notEqual(shape("git push https://example.com/acme/app.git main"), shape("git push https://example.com/other/prod.git main"));
+  assert.notEqual(shape("git push git@example.com:acme/app.git main"), shape("git push git@example.com:other/prod.git main"));
+});
+
+test("a PR or repository named by branch or slug is an identity too, not only a number", () => {
+  // `gh pr merge <branch>` selects a pull request exactly like its number
+  // does, and `gh repo delete <owner/repo>` names what it deletes.
+  assert.notEqual(shape("gh pr merge feature/x"), shape("gh pr merge feature/y"));
+  assert.notEqual(shape("gh repo delete acme/app --yes"), shape("gh repo delete other/prod --yes"));
+});
+
+test("the same identity written two equivalent ways shares one entry", () => {
+  assert.equal(shape("gh pr merge 12"), shape("gh pr merge 12"));
+  assert.equal(shape("gh pr merge #12"), shape("gh pr merge 12"));
+});
+
+test("commands that differ only in harmless ways still share one entry", () => {
+  // Keeping identities literal must not turn the cache back into a
+  // literal-text key: file arguments, free text and secrets still fold.
+  assert.equal(shape("git add src/a.ts"), shape("git add src/b.ts"));
+  assert.equal(shape("gh release upload v1 ./dist/x.zip"), shape("gh release upload v1 ./dist/y.zip"));
+  assert.equal(shape('gh pr create --title "Fix the header"'), shape('gh pr create --title "Fix the footer"'));
+  assert.equal(shape('gh pr comment 12 --body "looks good"'), shape('gh pr comment 12 --body "ship it"'));
+  assert.equal(shape("gh pr create --title 42"), shape("gh pr create --title 999"), "a --title value is text, never an identity");
+  assert.equal(shape("git -C ../x push origin y"), shape("git -C ../other push origin y"), "an out-of-tree -C path still folds to its class");
+});
+
+test("a secret never enters the shape through an identity argument", () => {
+  const leaks = (value: string | null, secret: string): boolean => value === null || value.includes(secret);
+
+  // A URL keeps scheme, host and path only: no userinfo, query or fragment.
+  const withCredentials = shape("gh pr view https://dev:hunter2-secret@example.com/acme/app/pull/1?token=query-secret#frag-secret");
+  assert.equal(leaks(withCredentials, "hunter2-secret"), false, "URL userinfo leaked into the shape");
+  assert.equal(leaks(withCredentials, "query-secret"), false, "a URL query string leaked into the shape");
+  assert.equal(leaks(withCredentials, "frag-secret"), false, "a URL fragment leaked into the shape");
+  assert.equal(withCredentials, shape("gh pr view https://example.com/acme/app/pull/1"));
+
+  // An API endpoint keeps its path; a query string can carry a token.
+  const endpoint = shape("gh api repos/acme/app/pulls/3?access_token=endpoint-secret");
+  assert.equal(leaks(endpoint, "endpoint-secret"), false, "an endpoint query string leaked into the shape");
+  assert.equal(endpoint, shape("gh api repos/acme/app/pulls/3"));
+
+  // A header, a field or a body is content, however much it looks like an id.
+  assert.equal(leaks(shape('gh api -H "Authorization: token header-secret" repos/acme/app'), "header-secret"), false, "a header value leaked into the shape");
+  assert.equal(leaks(shape("gh secret set DEPLOY_KEY --body 123456"), "123456"), false, "a --body value leaked into the shape");
+  assert.equal(leaks(shape("gh api repos/acme/app/actions/secrets -f value=field-secret"), "field-secret"), false, "a -f field leaked into the shape");
+
+  // A push to a URL remote keeps its sanitized URL, never the credential inside it.
+  const pushUrl = shape("git push https://dev:push-secret@example.com/acme/app.git?token=push-query-secret main");
+  assert.equal(leaks(pushUrl, "push-secret"), false, "a push URL's credential leaked into the shape");
+  assert.equal(leaks(pushUrl, "push-query-secret"), false, "a push URL's query string leaked into the shape");
+  assert.equal(shape("git push https://dev:push-secret@example.com/acme/app.git main"), shape("git push https://example.com/acme/app.git main"));
+  assert.equal(leaks(shape("git push -o token=option-secret origin main"), "option-secret"), false, "a push option leaked into the shape");
+});

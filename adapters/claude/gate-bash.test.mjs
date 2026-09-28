@@ -401,6 +401,52 @@ test('JEVADV-48: a policy scoped to "process" (not "command") never changes the 
 })
 
 // ---------------------------------------------------------------------------
+// 0.6.5 -- a cached verdict must never be served for a command that targets a
+// different PR, issue, MR, repository or push destination. The shape used to
+// fold those identities into a class, so an 'allow' cached for one merge was
+// replayed for another for up to 30 days without Jev ever seeing it. As in
+// the JEVADV-48 tests above, a MISS is proven without a network call: the
+// real hook HITS the key this file's mirror computes for the first command,
+// so it computes the second command's (different) key the same way too.
+// ---------------------------------------------------------------------------
+
+const IDENTITY_PAIRS = [
+  ['git push origin feature/x', 'git push origin main'],
+  ['gh pr merge 12', 'gh pr merge 13'],
+  ['gh pr merge 12 --repo acme/app', 'gh pr merge 12 --repo other/prod'],
+  ['gh api repos/acme/app/pulls/3', 'gh api repos/other/prod/pulls/3'],
+  ['glab mr merge 4', 'glab mr merge 9'],
+]
+
+test('a verdict cached for one PR, issue, MR, repository or push destination is never keyed for another', () => {
+  const home = makeHome()
+  for (const [cached, other] of IDENTITY_PAIRS) {
+    assert.notEqual(expectedCacheKey(cached, home, home), expectedCacheKey(other, home, home), `${other} would replay the verdict cached for ${cached}`)
+  }
+})
+
+test('a verdict cached for one identity is honoured for that same identity, so the key mirror above is the real one', () => {
+  for (const command of ['gh pr merge 12', 'gh api repos/acme/app/pulls/3']) {
+    const home = makeHome()
+    const cachePath = verdictCachePath(home)
+    mkdirSync(dirname(cachePath), { recursive: true })
+    writeFileSync(cachePath, JSON.stringify({
+      [expectedCacheKey(command, home, home)]: { decision: 'ask', reason: `cached for exactly ${command}`, at: Date.now() - 1000 },
+    }))
+
+    const payload = JSON.parse(run(home, command, { cwd: home, apiKey: 'test-key-unused-on-cache-hit' }))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+    assert.match(payload.systemMessage, new RegExp(`cached for exactly ${command}`))
+  }
+})
+
+test('entries cached under the shape that folded identities stop matching after the upgrade', () => {
+  // Version 2 keyed `gh pr merge 13` to the same shape as `gh pr merge 12`;
+  // an entry written then would otherwise keep answering for both.
+  assert.ok(GATE_DECISION_RULES_VERSION >= 3, 'GATE_DECISION_RULES_VERSION must move past 2 so identity-folded entries miss')
+})
+
+// ---------------------------------------------------------------------------
 // Deny tier -- NEVER_SILENTLY used to only ever emit 'ask', even for the
 // three rules whose blast radius is beyond the repository AND beyond
 // recovery (rm -rf /, DROP/TRUNCATE TABLE, terraform/tofu destroy). These

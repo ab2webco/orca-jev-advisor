@@ -369,6 +369,33 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   because Claude Code does not offer plugin compaction there yet. They are
   logged as `notApplied: headless`.
 
+## What changed in 0.6.5
+
+- **A cached verdict no longer answers for a different target.** The
+  command gate remembers Jev's verdict for 30 days, keyed by the command's
+  shape rather than its exact text, so `rm -rf dist` and `rm -rf build`
+  share one answer. Until now that shape also blurred WHICH thing a
+  command acted on: `gh pr merge 12` and `gh pr merge 13`, or
+  `git push origin feature/x` and `git push origin main`, had the same
+  shape. Once the first was allowed, the second was allowed from the
+  cache, and Jev never saw it.
+- **What stays exact now**: for `gh`, `glab` and `jira`, the PR, issue,
+  MR or ticket number, a URL, the `--repo` owner/repo, the target named
+  right after the subcommand (`gh pr merge feature/x`,
+  `gh repo delete acme/app`) and a `gh api` endpoint. For `git push`, the
+  remote and every branch or refspec. Everything else folds as before:
+  file arguments, titles, bodies and messages still share one answer, so
+  the cache keeps its reach.
+- **Secrets stay out.** A URL keeps only its scheme, host and path, never
+  a password, a query string or a fragment. A `gh api` endpoint drops its
+  query string. Bodies, titles, request fields, headers and push options
+  are never kept, even when they look like a number.
+- **Old entries are retired.** Every verdict cached before 0.6.5 misses
+  once, and the command is judged fresh.
+- **Not covered**: a branch or repository named after an unrelated flag
+  (`gh pr merge --squash feature/x`) still folds, because the gate cannot
+  tell whether that flag takes a value. A PR number there is still exact.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.
