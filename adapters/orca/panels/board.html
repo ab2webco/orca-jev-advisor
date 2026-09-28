@@ -665,6 +665,11 @@
           'consumption.modelRouterExtraCost': 'Costo extra estimado a precio de lista: ${{amount}}.',
           'consumption.modelRouterEstimateScope': 'Cubre solo las bajadas de modelo en un cambio de etapa: los pasos que corrieron en el modelo más barato, menos la reescritura de caché que costó cada cambio.',
           'consumption.modelRouterNoEstimateYet': 'Todavía no hay ninguna bajada en un cambio de etapa que estimar.',
+          'consumption.stewardHeading': 'Guardián de contexto',
+          'consumption.stewardEmpty': 'Todavía no hay decisiones del guardián de contexto.',
+          'consumption.stewardApplied': 'Compactaciones aplicadas: {{applied}} · habría compactado: {{would}} (solo mide)',
+          'consumption.stewardFreed': 'Estimación: en promedio, unos {{tokens}} tokens menos que releer en cada paso siguiente de una sesión compactada.',
+          'consumption.stewardNoFreed': 'Todavía no hay compactaciones aplicadas que estimar.',
         },
         en: {
           'window.label': 'Time window',
@@ -852,6 +857,11 @@
           'consumption.modelRouterExtraCost': 'Estimated extra cost at list prices: ${{amount}}.',
           'consumption.modelRouterEstimateScope': 'Covers downgrades at a stage change only: the steps that ran on the cheaper model, minus the cache rewrite each switch cost.',
           'consumption.modelRouterNoEstimateYet': 'No downgrade at a stage change to estimate yet.',
+          'consumption.stewardHeading': 'Context steward',
+          'consumption.stewardEmpty': 'No context steward decisions yet.',
+          'consumption.stewardApplied': 'Compactions applied: {{applied}} · would have compacted: {{would}} (measuring only)',
+          'consumption.stewardFreed': 'Estimate: on average, about {{tokens}} tokens fewer to re-read on each later step of a compacted session.',
+          'consumption.stewardNoFreed': 'No applied compaction to estimate yet.',
         }
       }
       /**
@@ -1780,6 +1790,21 @@
       }
 
       /**
+       * The context steward (odd/tasks/jev-context-steward.md): the last
+       * 24h's compactions, and an ESTIMATE of the context each one took off
+       * every later step (per step, never multiplied: the logs carry no
+       * session id). `steward` null: no log yet, one honest line.
+       */
+      function consumptionStewardBlock (steward) {
+        if (!steward) return line(t('consumption.stewardEmpty'), 'empty-line')
+        var parts = [line(t('consumption.stewardApplied', { applied: num(steward.applied), would: num(steward.wouldCompact) }))]
+        parts.push(steward.freedPerStep === null || steward.freedPerStep === undefined
+          ? line(t('consumption.stewardNoFreed'), 'empty-line')
+          : line(t('consumption.stewardFreed', { tokens: num(steward.freedPerStep) })))
+        return parts.join('')
+      }
+
+      /**
        * `summary`: the raw `consumptionSummary` storage value, or `null`
        * before the worker's first publish. Primary window: last24h when it
        * has any steps, else last7d -- last24h is the more actionable window,
@@ -1803,8 +1828,9 @@
         var hasUsage = (last24h.stepCount || 0) > 0 || (last7d.stepCount || 0) > 0
         var hasQuota = accounts.length > 0
         var hasModelRouter = !!summary.modelRouter
+        var hasSteward = !!summary.steward
 
-        if (!hasUsage && !hasQuota && !hasModelRouter) {
+        if (!hasUsage && !hasQuota && !hasModelRouter && !hasSteward) {
           fill('consumption-body', 'consumption-empty', '', t('consumption.empty'))
           return
         }
@@ -1838,6 +1864,9 @@
 
         parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.modelRouterHeading')) + '</b></p>')
         parts.push(consumptionModelRouterBlock(summary.modelRouter))
+
+        parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.stewardHeading')) + '</b></p>')
+        parts.push(consumptionStewardBlock(summary.steward))
 
         fill('consumption-body', 'consumption-empty', parts.join(''), '')
       }

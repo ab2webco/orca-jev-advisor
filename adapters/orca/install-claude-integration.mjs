@@ -77,6 +77,12 @@
  *             per-tier effort (`{"complex":"xhigh"}`; only what differs
  *             from the defaults is stored), with the same guarantees.
  *             Rejects an unknown target, tier, effort or shape.
+ *             Rows also carry `steward` ({mode, threshold}, the context
+ *             steward's per-account settings).
+ * steward-set <target> <json>  Writes that ONE target's context steward
+ *             settings (`{"mode":"active","threshold":120000}`), with the
+ *             same guarantees. Rejects an unknown target, mode, a
+ *             threshold out of range or a bad shape.
  *
  * Always prints exactly one JSON line to stdout, nothing else. Never
  * touches anything but ~/.claude/settings.json, ~/.claude/skills/
@@ -110,7 +116,7 @@ import {
   skillsDirFor
 } from '../../src/core/orca_accounts.ts'
 import { buildModSkillsHooksManifest, buildModSkillsPluginManifest, computeModSkillsDigest, walkModSkillsClosure } from '../../src/core/mod_skills_copy.ts'
-import { ROUTER_MODES, ROUTER_USER_CONFIG, parseTierEffortStrict, planRouterEffortWrite, planRouterModeWrite, routerEffortFromSettings, routerModeFromSettings } from '../../src/core/model_router_mode.ts'
+import { ROUTER_MODES, ROUTER_USER_CONFIG, parseStewardSettingsStrict, parseTierEffortStrict, planRouterEffortWrite, planRouterModeWrite, planStewardWrite, routerEffortFromSettings, stewardFromSettings, routerModeFromSettings } from '../../src/core/model_router_mode.ts'
 import { ROUTER_TIERS, parseVaultEnv, resolveAccountTiers } from '../../src/core/model_router_accounts.ts'
 import { parseModelsMirror } from '../../src/core/model_mirror.ts'
 import { parseQuota } from '../../src/core/consumption.ts'
@@ -1248,7 +1254,7 @@ async function routerModeStatus () {
     const resolved = resolveAccountTiers({ env: parseVaultEnv(settings), catalog, quota: quota.accounts.find((row) => row.id === id) ?? null })
     const tiers = {}
     for (const tier of ROUTER_TIERS) tiers[tier] = { modelId: resolved[tier].modelId, label: resolved[tier].label, supportsEffort: resolved[tier].supportsEffort }
-    targets.push({ target: id, mode: routerModeFromSettings(settings), effort: routerEffortFromSettings(settings), tiers })
+    targets.push({ target: id, mode: routerModeFromSettings(settings), effort: routerEffortFromSettings(settings), tiers, steward: stewardFromSettings(settings) })
   }
   return { ok: true, targets }
 }
@@ -1332,6 +1338,41 @@ async function routerEffortSet (targetId, effortArg) {
   return { ok: false, reason: 'concurrent-change', detail: `settings.json at ${settingsPath} kept changing while the router effort was being written; nothing was written` }
 }
 
+/**
+ * steward-set <target> <json>: the context steward's mode and threshold
+ * (`{"mode":"active","threshold":120000}`), written exactly as
+ * routerEffortSet writes the effort -- plan from the raw text, replace only
+ * if unchanged since, one retry, never a lost edit.
+ */
+async function stewardSet (targetId, stewardArg) {
+  if (typeof targetId !== 'string' || targetId.length === 0) {
+    return { ok: false, reason: 'missing-target', detail: 'usage: steward-set <target> <json>' }
+  }
+  let parsed = null
+  try {
+    parsed = parseStewardSettingsStrict(JSON.parse(String(stewardArg)))
+  } catch {
+    parsed = null
+  }
+  if (parsed === null) {
+    return { ok: false, reason: 'unknown-steward', detail: `unrecognized steward settings: ${String(stewardArg).slice(0, 120)}` }
+  }
+  const discovery = await discoverTargets()
+  const target = findRouterTarget(discovery.targets, targetId)
+  if (target === undefined) {
+    return { ok: false, reason: 'unknown-target', detail: `unrecognized target: ${String(targetId).slice(0, 60)}` }
+  }
+  const settingsPath = settingsPathFor(PLATFORM, target)
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await readRawSettings(settingsPath)
+    const plan = planStewardWrite(raw, parsed)
+    if (plan.kind === 'refuse') return { ok: false, reason: plan.reason, detail: `settings.json at ${settingsPath} is not a JSON object; left as it is` }
+    if (plan.kind === 'unchanged') return { ok: true, target: targetId, steward: parsed, unchanged: true }
+    if (await writeSettingsIfUnchanged(settingsPath, plan.text, raw)) return { ok: true, target: targetId, steward: parsed }
+  }
+  return { ok: false, reason: 'concurrent-change', detail: `settings.json at ${settingsPath} kept changing while the steward settings were being written; nothing was written` }
+}
+
 /** settings.json's raw text, or null when there is no file yet. */
 async function readRawSettings (settingsPath) {
   try {
@@ -1372,6 +1413,8 @@ async function main () {
       result = await routerModeSet(process.argv[3], process.argv[4])
     } else if (mode === 'router-effort-set') {
       result = await routerEffortSet(process.argv[3], process.argv[4])
+    } else if (mode === 'steward-set') {
+      result = await stewardSet(process.argv[3], process.argv[4])
     } else {
       const pluginRoot = process.argv[3]
       if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {

@@ -64,8 +64,21 @@ export type RouterPromptOrigin = {
   kind: string
 }
 
+/**
+ * The context steward's count of this session's person turns and where it
+ * last compacted (in measure mode: would have), for its cooldown of three
+ * person turns between two compactions. A count of its own, not the
+ * transcript's, so a compaction cannot reset it.
+ */
+export type StewardState = {
+  /** Person prompts submitted this session (not slash commands, not empty ones). */
+  personTurns: number
+  /** `personTurns` at the last compaction; null before any. */
+  lastCompactionTurn: number | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'orca-jev-mod-skills': { routerSticky: RouterSticky; routerPromptOrigin: RouterPromptOrigin }
+    'orca-jev-mod-skills': { routerSticky: RouterSticky; routerPromptOrigin: RouterPromptOrigin; steward: StewardState }
   }
 }

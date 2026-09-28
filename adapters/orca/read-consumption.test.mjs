@@ -290,3 +290,44 @@ test('a present CLAUDE.md and .claude.json feed real numbers into the recommenda
   assert.equal(result.recommendations.claudeMdSize.overThreshold, true)
   assert.equal(result.recommendations.mcpServerCount.count, 3)
 })
+
+// ---------------------------------------------------------------------------
+// The context steward's hourly logs (odd/tasks/jev-context-steward.md)
+// ---------------------------------------------------------------------------
+
+function stewardFileName (ms) {
+  return `context-steward-decisions-${new Date(ms).toISOString().slice(0, 13)}.jsonl`
+}
+
+function writeStewardFile (home, ms, rows) {
+  const dir = cacheDirFor(home)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, stewardFileName(ms)), rows.map((r) => `${JSON.stringify(r)}\n`).join(''), 'utf8')
+}
+
+function stewardRow (overrides = {}) {
+  return { at: new Date().toISOString(), account: 'acct-a', project: 'project-c', mode: 'active', contextBefore: 150000, decision: 'boundary', confidence: 0.9, compact: true, applied: true, contextAfter: 30000, ...overrides }
+}
+
+test('steward is null until a context-steward-decisions file exists', () => {
+  const result = run(makeHome())
+  assert.equal(result.ok, true)
+  assert.equal(result.steward, null)
+})
+
+test('steward summarizes the last 24h: compactions applied, measure-mode ones, context freed per later step', () => {
+  const home = makeHome()
+  const now = Date.now()
+  writeStewardFile(home, now, [stewardRow(), stewardRow({ mode: 'measure', applied: false, contextAfter: null }), stewardRow({ decision: 'mid-task', compact: false, applied: false, contextAfter: null })])
+  const result = run(home)
+  assert.deepEqual(result.steward, { decisions: 3, applied: 1, wouldCompact: 1, freedPerStep: 120000 })
+})
+
+test('a steward log more than 8 days old is pruned, same retention as the others', () => {
+  const home = makeHome()
+  const oldMs = Date.now() - 9 * 24 * 60 * 60 * 1000
+  writeStewardFile(home, oldMs, [stewardRow({ at: new Date(oldMs).toISOString() })])
+  const oldPath = join(cacheDirFor(home), stewardFileName(oldMs))
+  assert.equal(run(home).ok, true)
+  assert.equal(existsSync(oldPath), false)
+})

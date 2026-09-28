@@ -1968,7 +1968,7 @@ async function attendModelRouterStatusRefresh (orca, storageHost, options = {}) 
 async function attendModelRouterConfigRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(MODEL_ROUTER_CONFIG_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string' ||
-      typeof request.target !== 'string' || (typeof request.mode !== 'string' && !isRecord(request.effort))) return
+      typeof request.target !== 'string' || (typeof request.mode !== 'string' && !isRecord(request.effort) && !isRecord(request.steward))) return
 
   await storageHost.delete(MODEL_ROUTER_CONFIG_REQUEST_KEY).catch((error) =>
     orca.log(`model router config request cleanup failed: ${error.message}`))
@@ -1982,9 +1982,11 @@ async function attendModelRouterConfigRequest (orca, storageHost, options = {}) 
   }
 
   const runScript = options.runScript ?? runClaudeIntegrationScript
-  const result = isRecord(request.effort)
-    ? await runScript('router-effort-set', [request.target, JSON.stringify(request.effort)])
-    : await runScript('router-mode-set', [request.target, request.mode])
+  const result = isRecord(request.steward)
+    ? await runScript('steward-set', [request.target, JSON.stringify(request.steward)])
+    : isRecord(request.effort)
+      ? await runScript('router-effort-set', [request.target, JSON.stringify(request.effort)])
+      : await runScript('router-mode-set', [request.target, request.mode])
   if (!result.ok) {
     orca.log(`model router config script (set) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }

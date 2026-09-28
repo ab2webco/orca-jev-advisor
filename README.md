@@ -336,6 +336,39 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   step actually sends, not the raw target computed at spawn, so the two
   can no longer disagree.
 
+## What changed in 0.6.4
+
+- **A context steward that compacts the conversation when a task is
+  done.** Every later step of a long session re-reads the whole context
+  from cache, and that re-reading is most of what a long session costs.
+  After a turn ends, if the context is over the account's threshold
+  (120k tokens by default), Jev is asked one question: did this turn close
+  a task, is the work still in the middle of one, or has the person moved
+  to a new topic? When a task closed, the steward compacts the main
+  conversation. The summary keeps the task file with its open items and
+  next step, the branch, the last commits, PR numbers, decisions and
+  standing constraints. Mid-task it does nothing, unless the context
+  reaches the hard limit (80% of the window). Subagents are never
+  compacted.
+- **It starts by only measuring.** The default mode is `measure`: it logs
+  what it would have done and changes nothing. `active` is opt-in per
+  account, in the config panel's Models tab, next to the router. The
+  threshold is set there too.
+- **What Jev sees**: the last two prompts a person wrote (redacted, at
+  most 600 characters), the turn's counts (tool calls, edits, tests,
+  commits) and the context size. No file paths and no file contents.
+- **Where you see it**: the status line shows `contexto 90k → 10k (tarea
+  cerrada)`, or what it would have done in measure mode. The board's
+  Consumption tab counts compactions applied and estimates the tokens
+  each later step no longer re-reads.
+- **Measured live** in one interactive session: the context went from
+  about 90k to 10k tokens, and the next step's cache read fell from
+  89,940 to 42,165 tokens (−53%). What remains is the fixed system and
+  tools prefix, which no compaction touches.
+- **Not yet**: headless (`claude -p` / SDK) sessions are never compacted,
+  because Claude Code does not offer plugin compaction there yet. They are
+  logged as `notApplied: headless`.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.
