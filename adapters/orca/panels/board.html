@@ -1154,9 +1154,13 @@
       // locale mirror for the gate and the skills mod is written by
       // config.html alone; both panels doing it would race for no gain.
       // ---------- render: stats ---------------------------------------------
+      // Quotes too: this output lands inside title="..." and aria-label="...",
+      // and a branch or folder name from a cloned repo may carry a `"`
+      // (QA 0.6.5 A9, JEVADV-69).
       function esc (text) {
         return String(text == null ? '' : text)
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
       }
       function pct (fraction) {
         return fraction === null || fraction === undefined ? null : Math.round(fraction * 1000) / 10

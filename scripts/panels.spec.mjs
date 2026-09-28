@@ -3425,3 +3425,24 @@ test('every activity.* key in one language catalog exists in the other, and the 
     await browser.close()
   }
 })
+
+// QA 0.6.5 A9 (JEVADV-69): esc() escaped & < > but not quotes, and its output
+// lands inside title="..." and aria-label="..." through innerHTML. A branch
+// or folder name is data the plugin reads from third-party repositories, and
+// a `"` in one closed the attribute and bound a real handler.
+test('a quote in a branch or project name stays text inside its attribute and binds no handler', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const hostile = 'x" onmouseover="window.__pwned=1" data-x=\'y'
+  const board = { entries: [{ worktreeId: 'wt-evil', project: 'github:example/' + hostile, projectName: hostile, rama: hostile, paneKey: 'pane-e', state: 'working', receivedAt: 1, updatedAt: new Date().toISOString() }] }
+  const { browser, page, errors } = await openBoardPanel({ board })
+  try {
+    const found = await page.evaluate(() => ({
+      handlers: document.querySelectorAll('[onmouseover]').length,
+      titles: Array.from(document.querySelectorAll('#cards .live-row')).map((row) => row.title)
+    }))
+    assert.equal(found.handlers, 0, 'a quote in the data closed an attribute and bound a handler')
+    assert.ok(found.titles.some((title) => title.includes(hostile)), `the raw name must survive as text in the title: ${JSON.stringify(found.titles)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

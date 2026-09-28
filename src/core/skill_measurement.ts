@@ -14,6 +14,7 @@
 
 import { isRecord, isString } from "../guards.ts";
 import type { ModSkillsReadiness } from "./mod_skills_readiness.ts";
+import { redactSecretsForJev } from "./secret_redaction.ts";
 
 export type MeasurementMode = "measurement" | "active";
 
@@ -100,8 +101,9 @@ export interface BuildDecisionRecordInput {
   readonly readiness: ModSkillsReadiness | null;
 }
 
+/** The prompt is stored redacted: this record lives on disk unrotated (QA 0.6.5 A1, JEVADV-61). */
 export function buildDecisionRecord(input: BuildDecisionRecordInput): DecisionRecord {
-  return { type: "decision", ...input };
+  return { type: "decision", ...input, prompt: redactSecretsForJev(input.prompt).text };
 }
 
 export function buildObservationRecord(id: string, skill: string, at: string): ObservationRecord {

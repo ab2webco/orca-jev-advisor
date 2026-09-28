@@ -72,3 +72,33 @@ test("two heredocs in one command are decided independently: a shell-fed one kee
   assert.ok(inspected.includes(shellBody), "the shell-fed heredoc must keep its own body");
   assert.ok(!inspected.includes(otherBody), "the OTHER heredoc, fed to python3, must still lose its own body");
 });
+
+// QA 0.6.5 C2 (JEVADV-60): only an UNQUOTED `<<` opens a heredoc. A `<<`
+// inside quotes, or the last two `<` of a `<<<` here-string, consumes no
+// following lines in the shell, so those lines really run and must stay in
+// the text the rules read.
+test("a quoted << or a <<< here-string opens no heredoc, so the next lines stay visible", () => {
+  const run = phrase("git", "clean", "-f");
+  for (const command of [
+    `grep -n '<<EOF' docs/\n${run}\nEOF`,
+    `grep -n "<<EOF" docs/\n${run}\nEOF`,
+    `cat <<< EOF\n${run}\nEOF`,
+    `cat <<<EOF\n${run}\nEOF`,
+    `echo hi # <<EOF\n${run}\nEOF`,
+  ]) {
+    assert.equal(withoutHeredocBodies(command), command, command);
+  }
+});
+
+test("a real heredoc after a here-string or a quoted << on the same line is still stripped", () => {
+  const body = phrase("git", "clean", "-f");
+  for (const command of [`cat <<< "$x" <<EOF\n${body}\nEOF`, `grep '<<A' f; cat <<'EOF'\n${body}\nEOF`]) {
+    assert.ok(!withoutHeredocBodies(command).includes(body), command);
+  }
+});
+
+test("an escaped quote inside $'...' does not close it, so a << after it is still quoted", () => {
+  const run = phrase("git", "clean", "-f");
+  const command = `echo $'it\\' <<EOF'\n${run}\nEOF`;
+  assert.equal(withoutHeredocBodies(command), command);
+});

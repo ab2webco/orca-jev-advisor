@@ -29,6 +29,7 @@ import { isRecord, isString } from "../guards.ts";
 import type { ModelEntry } from "./model_catalog.ts";
 import { buildComplexityQuestion, scoreComplexity, type ComplexityTier } from "./decisions.ts";
 import type { Answer, JsonValue, Question, ScoreQuestion } from "./jev.ts";
+import { redactSecretsForJev } from "./secret_redaction.ts";
 
 // ---------------------------------------------------------------------------
 // The Agent tool's own input
@@ -116,11 +117,14 @@ export function buildModelQuestion(ladder: readonly ModelEntry[]): ScoreQuestion
  */
 export function buildModelState(input: AgentToolInput, ladder: readonly ModelEntry[]): JsonValue {
   const smallestFirst = [...ladder].reverse();
-  const truncated = input.prompt.length > MODEL_STATE_PROMPT_CHARS;
-  const prompt = truncated ? input.prompt.slice(0, MODEL_STATE_PROMPT_CHARS) : input.prompt;
+  // Redacted FIRST and cut second, so a cut can never leave half a secret
+  // unredacted (QA 0.6.5 A1, JEVADV-61; same order as buildTierState).
+  const redacted = redactSecretsForJev(input.prompt).text;
+  const truncated = redacted.length > MODEL_STATE_PROMPT_CHARS;
+  const prompt = truncated ? redacted.slice(0, MODEL_STATE_PROMPT_CHARS) : redacted;
   return {
     task: {
-      description: input.description,
+      description: input.description === null ? null : redactSecretsForJev(input.description).text,
       subagentType: input.subagentType,
       prompt,
       promptTruncated: truncated,

@@ -50,6 +50,7 @@ export function withoutHeredocBodies(command: string): string {
   const kept: string[] = [];
   let awaiting: string | null = null;
   let awaitingIsShell = false;
+  let quote: Quote = null;
 
   for (const line of lines) {
     if (awaiting !== null) {
@@ -63,13 +64,88 @@ export function withoutHeredocBodies(command: string): string {
     kept.push(line);
     // Only the LAST heredoc opener on a line decides what the next lines are,
     // which is also how the shell queues them.
-    const openers = [...line.matchAll(/<<-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/g)];
-    const last = openers.at(-1);
-    if (last) {
-      awaiting = last[1] ?? last[2] ?? last[3] ?? null;
+    const scan = scanHeredocOpeners(line, quote);
+    quote = scan.quote;
+    const last = scan.delimiters.at(-1);
+    if (last !== undefined) {
+      awaiting = last;
       awaitingIsShell = SHELL_READERS.test(line);
     }
   }
 
   return kept.join("\n");
+}
+
+/** The quote open at a point in the line; `$'` is ANSI-C quoting, where `\'` does not close it. */
+type Quote = "'" | "$'" | '"' | null;
+
+const HEREDOC_DELIMITER = /^-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/;
+
+/**
+ * The delimiters of the heredocs `line` really opens, and the quote still
+ * open at its end (a quoted string can span lines).
+ *
+ * QA 0.6.5 C2 (JEVADV-60): a `<<` inside quotes (`grep -n '<<EOF' docs/`),
+ * the last two `<` of a `<<<` here-string, and a `<<` in a `#` comment open
+ * nothing in the shell, so the lines after them really run. Matching `<<`
+ * anywhere in the text treated them as openers and hid those lines from the
+ * rules. An unclosed quote carries over and keeps later lines visible, which
+ * errs toward judging more text, never less.
+ */
+function scanHeredocOpeners(line: string, openQuote: Quote): { delimiters: string[]; quote: Quote } {
+  const delimiters: string[] = [];
+  let quote = openQuote;
+  let index = 0;
+  while (index < line.length) {
+    const char = line[index];
+    if (quote === "$'") {
+      if (char === "\\") index += 2;
+      else {
+        if (char === "'") quote = null;
+        index += 1;
+      }
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      index += 1;
+      continue;
+    }
+    if (char === "\\") {
+      index += 2;
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') quote = null;
+      index += 1;
+      continue;
+    }
+    if (char === "$" && line[index + 1] === "'") {
+      quote = "$'";
+      index += 2;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      index += 1;
+      continue;
+    }
+    if (char === "#" && (index === 0 || /[\s;&|(]/.test(line[index - 1] ?? ""))) break;
+    if (line.startsWith("<<<", index)) {
+      index += 3;
+      continue;
+    }
+    if (line.startsWith("<<", index)) {
+      const match = HEREDOC_DELIMITER.exec(line.slice(index + 2));
+      if (match !== null) {
+        delimiters.push(match[1] ?? match[2] ?? match[3] ?? "");
+        index += 2 + match[0].length;
+        continue;
+      }
+      index += 2;
+      continue;
+    }
+    index += 1;
+  }
+  return { delimiters, quote };
 }

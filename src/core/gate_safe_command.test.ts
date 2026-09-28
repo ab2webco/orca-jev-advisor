@@ -304,3 +304,47 @@ test("a stray apostrophe before a newline never lets mentionsRatherThanRuns swal
 test("a literal newline inside a properly quoted argument is conservatively unsafe too, not a crash -- costs a Jev round-trip instead of a silent allow", () => {
   assert.equal(isObviouslySafeCommand('echo "a\nb"'), false);
 });
+
+// QA 0.6.5 C1 (JEVADV-59): `awk` has system(), pipes and getline, and GNU
+// `sed` has the `e` command and flag, `w` and `-i` -- each runs or writes for
+// real. Both verbs used to be in the safe list and the mention-only list on
+// their leading word alone, so the hook exited before tier 1b, the cache and
+// Jev. They stay safe only when the program provably cannot run or write.
+test("awk or sed -n whose program can run a command or write a file is never safe, nor a mention", () => {
+  for (const command of [
+    `awk 'BEGIN { system("touch pwned") }' data.txt`,
+    `awk '{ print | "sh" }' data.txt`,
+    `awk 'BEGIN { "id" | getline x; print x }'`,
+    `awk -f prog.awk data.txt`,
+    `awk '@load "filefuncs"; BEGIN { }'`,
+    `awk "BEGIN { system(\\"id\\") }"`,
+    `sed -n 's/.*/touch pwned/e' f.txt`,
+    `sed -n '1e touch pwned' f.txt`,
+    `sed -n '1w out.txt' f.txt`,
+    `sed -n -i '1p' f.txt`,
+    `sed -n -f script.sed f.txt`,
+    `sed -n '/git push --force/p;1e id' notes.md`,
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), false, command);
+    assert.equal(mentionsRatherThanRuns(command), false, command);
+  }
+});
+
+test("awk and sed -n that only read and print stay safe and stay mentions", () => {
+  for (const command of [
+    "sed -n '1,40p' file.ts",
+    "sed -n 55,209p src/core/x.ts",
+    "sed -n '/foo/,/bar/p' notes.md",
+    "sed -n '1p;5p;$p' notes.md",
+    "sed -n -e '1,5p' -e '9p' notes.md",
+    "sed -n '1,40p' file.ts 2>/dev/null",
+    "cat file.ts | sed -n 1,5p",
+    "awk '{print $1}' data.txt",
+    "awk -F: '{print $1}' /etc/passwd",
+    "awk -v n=3 'NR==n' data.txt",
+    "awk '/git push --force/' notes.md",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+    assert.equal(mentionsRatherThanRuns(command), true, command);
+  }
+});

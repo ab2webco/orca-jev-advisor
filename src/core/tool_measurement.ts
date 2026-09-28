@@ -12,6 +12,8 @@
 // never. Appending a second line when it does is the only option once the
 // first line is already on disk.
 
+import { redactSecretsForJev } from "./secret_redaction.ts";
+
 export type MeasurementMode = "measurement" | "active";
 
 export interface WideMeasurement {
@@ -70,8 +72,9 @@ export interface BuildDecisionRecordInput {
   readonly latencyMs: { readonly wide: number | null; readonly fit: number | null };
 }
 
+/** The prompt is stored redacted: this record lives on disk unrotated (QA 0.6.5 A1, JEVADV-61). */
 export function buildDecisionRecord(input: BuildDecisionRecordInput): DecisionRecord {
-  return { type: "decision", ...input };
+  return { type: "decision", ...input, prompt: redactSecretsForJev(input.prompt).text };
 }
 
 export function buildObservationRecord(id: string, tool: string, at: string): ObservationRecord {

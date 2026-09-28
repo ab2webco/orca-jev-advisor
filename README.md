@@ -396,6 +396,31 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   (`gh pr merge --squash feature/x`) still folds, because the gate cannot
   tell whether that flag takes a value. A PR number there is still exact.
 
+## What changed in 0.6.6
+
+- **Tool suggestions work again.** Jev accepts at most 255 options in one
+  question, and a session with MCP servers carries 266 to 448 tools, so
+  every tool decision since 2026-09-26 failed and none was ever made. The
+  tools are now asked in batches Jev accepts, and a failed decision records
+  the HTTP status Jev answered.
+- **`awk` and `sed -n` are no longer waved through on their name alone.**
+  `awk` can run a command with `system()`, a pipe or `getline`, and GNU
+  `sed` with its `e` command; both used to skip every check. They still
+  skip Jev when they only read and print (`sed -n '1,40p' file`,
+  `awk '{print $1}' file`); anything else is judged.
+- **A `<<` inside quotes, a `<<<` here-string or a `<<` in a comment no
+  longer hides the next lines.** The shell runs those lines, so the local
+  rules now read them.
+- **Secrets are removed from prompts before Jev sees them in every
+  feature.** The gate, router and steward already did this; the subagent
+  model choice and the skill and tool suggestions now do too, and so do the
+  skill and tool records written to disk.
+- **A quote in a project or branch name can no longer inject code into the
+  Advisor board.**
+- **Not covered**: a real command inside a quoted `awk` program still
+  reads as data to the local rules, so Jev judges it rather than a local
+  deny.
+
 ## What you actually see
 
 Nothing, most of the time. That is the point.
