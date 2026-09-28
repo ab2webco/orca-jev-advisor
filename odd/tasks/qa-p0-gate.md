@@ -23,7 +23,7 @@ Out of scope: the remaining high, medium and low findings (JEVADV-62..74).
 - [x] T1 C1 awk / sed -n (RED: QA repro failed; GREEN: 38/38 unit, 2266/2266 suite)
 - [x] T2 C2 phantom heredoc (RED: QA repros failed in unit and hook tests; GREEN: 11/11 unit, 2271/2271 suite). Also added a C1 hook test: awk system() no longer passes tier 1a silently. Found: the local deny rules still read the quoted awk program as data (A3, JEVADV-63)
 - [x] T3 A1 redaction in model, skill and tool decisions (RED: 4/4 paths carried the secret; GREEN: 4/4, 2283/2283 suite)
-- [ ] T4 A9 esc() quotes
+- [x] T4 A9 esc() quotes (RED: hostile project id bound an onmouseover handler; GREEN: 142/142 panels spec. Screenshots looked at: board Activity 1440 light, 768 dark, 390 light, 320 dark; script reports no overflow and no script errors across all 80)
 - [x] T5 mod-tools 255-choice limit (RED: unit exports missing, hook test saw 1 call for 300 tools; GREEN: 29/29 unit, 2279/2279 suite). Skills not batched: rosters are ~64, far from the limit; revisit if one grows past 255.
 
 ## Acceptance criteria
