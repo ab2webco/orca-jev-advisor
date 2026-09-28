@@ -148,6 +148,31 @@
       .v3 { --viz: var(--ring, var(--fb-ring)); }
       .vd { --viz: var(--destructive, var(--fb-destructive)); }
 
+      /* JEVADV-63 -- per-project activity cards (Activity tab). Each
+         project's own nested card reuses .card's own border/padding/radius;
+         its gate-outcome and token figures reuse .figures/.figure (odd/tasks/
+         board-leftovers.md L5: different units never share one bar scale);
+         "advised"/"blocked" borrow .v3/.vd's own --viz variable to colour
+         just that figure's number -- no new hue, no background fill. */
+      .act-projects { display: grid; gap: 10px; }
+      .act-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+      .act-name { font-weight: 600; overflow-wrap: anywhere; }
+      .act-age { margin-left: auto; font-size: 11px; white-space: nowrap;
+                 color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .act-chart-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
+      .act-chart { flex: none; overflow: visible; }
+      .act-chart rect, .act-chart path { fill: var(--viz); }
+      .act-chart-total { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+      .figures .figure.vd dd, .figures .figure.v3 dd { color: var(--viz); }
+      .act-model + .act-model { margin-top: 8px; }
+      /* Same look as .live-toggle, under its own name so the two never
+         collide (they sit in different sections of the same tab). */
+      .act-toggle { margin-top: 8px; background: none; border: 1px solid var(--border, var(--fb-border));
+                    border-radius: 9999px; padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer;
+                    color: var(--foreground, var(--fb-foreground)); }
+      .act-toggle:hover { background: var(--accent, var(--fb-accent)); }
+      .act-toggle:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+
       .cards { display: grid; gap: 10px; grid-template-columns: 1fr; padding: 10px 12px; }
       @media (min-width: 720px) { .cards { grid-template-columns: 1fr 1fr; } .card.wide { grid-column: 1 / -1; } }
       .card {
@@ -415,7 +440,8 @@
       </section>
 
       <section class="card wide" id="card-projects">
-        <h2 data-i18n="stats.byProjectHeading"></h2>
+        <h2 data-i18n="activity.heading"></h2>
+        <div id="projects-empty" class="empty-line" style="display:none"></div>
         <div id="projects-body"></div>
       </section>
     </div>
@@ -498,8 +524,22 @@
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
           'stats.listingChars': 'Caracteres de listado no enviados',
-          'stats.byProjectHeading': 'Por proyecto (todo el registro)',
-          'stats.byProjectEmpty': 'Sin datos todavía.',
+          'activity.heading': 'Actividad por proyecto (7 días)',
+          'activity.empty': 'Todavía no hay actividad.',
+          'activity.unavailable': 'No se pudo calcular la actividad esta vez. Se vuelve a intentar en el próximo refresco.',
+          'activity.showMore': 'ver más ({{n}})',
+          'activity.showLess': 'ver menos',
+          'activity.chartAriaLabel': 'Actividad de 7 días para {{project}}: {{judged}} comandos juzgados, {{steps}} pasos.',
+          'activity.weekBreakdown': '{{judged}} comandos juzgados · {{steps}} pasos',
+          'activity.gateAllowed': 'Permitidas',
+          'activity.gateAdvised': 'Aconsejadas',
+          'activity.gateAsked': 'Preguntadas',
+          'activity.gateBlocked': 'Bloqueadas',
+          'activity.estimatedCost': 'Costo estimado a precio de lista: ${{amount}}.',
+          'activity.totalEstimatedCost': 'Costo total estimado a precio de lista: ${{amount}}.',
+          'activity.routerSaved': '{{switches}} cambio(s) de modelo, un ahorro estimado de ${{amount}} a precio de lista.',
+          'activity.routerCost': '{{switches}} cambio(s) de modelo, un costo extra estimado de ${{amount}} a precio de lista.',
+          'activity.routerNoEstimate': '{{switches}} cambio(s) de modelo, todavía sin estimación de ahorro.',
           'stats.recentHeading': 'Últimas decisiones del gate',
           'stats.recentEmpty': 'Sin decisiones todavía.',
           'stats.recentCached': 'caché',
@@ -670,8 +710,22 @@
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
           'stats.listingChars': 'Listing characters not sent',
-          'stats.byProjectHeading': 'By project (whole log)',
-          'stats.byProjectEmpty': 'No data yet.',
+          'activity.heading': 'Activity by project (7 days)',
+          'activity.empty': 'No activity yet.',
+          'activity.unavailable': 'Activity could not be calculated this time. It will try again on the next refresh.',
+          'activity.showMore': 'show more ({{n}})',
+          'activity.showLess': 'show less',
+          'activity.chartAriaLabel': '7-day activity for {{project}}: {{judged}} judged commands, {{steps}} steps.',
+          'activity.weekBreakdown': '{{judged}} judged commands · {{steps}} steps',
+          'activity.gateAllowed': 'Allowed',
+          'activity.gateAdvised': 'Advised',
+          'activity.gateAsked': 'Asked',
+          'activity.gateBlocked': 'Blocked',
+          'activity.estimatedCost': 'Estimated cost at list prices: ${{amount}}.',
+          'activity.totalEstimatedCost': 'Total estimated cost at list prices: ${{amount}}.',
+          'activity.routerSaved': '{{switches}} model switch(es), an estimated ${{amount}} saved at list prices.',
+          'activity.routerCost': '{{switches}} model switch(es), an estimated ${{amount}} extra cost at list prices.',
+          'activity.routerNoEstimate': '{{switches}} model switch(es), no saving estimate yet.',
           'stats.recentHeading': 'Latest gate decisions',
           'stats.recentEmpty': 'No decisions yet.',
           'stats.recentCached': 'cache',
@@ -1474,21 +1528,6 @@
         fill('speed-body', 'speed-empty', parts.join(''), '')
       }
 
-      function renderProjects (gate, mod) {
-        var totals = {}
-        ;(gate.byProject || []).forEach(function (p) {
-          var key = projectLabel(p.project); totals[key] = (totals[key] || 0) + (p.total || 0)
-        })
-        ;(mod.byProject || []).forEach(function (p) {
-          var key = projectLabel(p.key); totals[key] = (totals[key] || 0) + (p.count || 0)
-        })
-        var rows = Object.keys(totals)
-          .map(function (key) { return { label: key, value: totals[key] } })
-          .sort(function (a, b) { return b.value - a.value })
-          .slice(0, 8)
-        fill('projects-body', null, hbars(rows, 'v2'), t('stats.byProjectEmpty'))
-      }
-
       /** rows: [{ label, value }] as labelled numbers, for figures that
        *  share no unit and so must not be drawn on one bar scale. The
        *  number is printed before its label (`column-reverse` keeps the
@@ -1795,6 +1834,183 @@
         fill('consumption-body', 'consumption-empty', parts.join(''), '')
       }
 
+      // ---------- render: activity per project (JEVADV-63) --------------------
+      // `activityByProjectSummary`'s own shape (src/core/activity_by_project.ts,
+      // adapters/orca/read-activity.mjs): {ok, projects: ProjectActivity[]
+      // (aggregateActivityByProject's own ranking -- lastActivityAt descending,
+      // ties by total interactions -- NEVER re-sorted here), corruptLines,
+      // checkedAt} or {ok:false, reason, detail, checkedAt}. Empty state is
+      // {ok:true, projects:[], ...}. Same null/ok:false/empty three-way split
+      // as renderConsumption above.
+      var ACTIVITY_TOP_N = 6
+      var activityExpanded = false
+      var lastActivitySummary = null
+
+      /** One day's combined interaction count -- judged commands plus main
+       *  and subagent steps, the same combination
+       *  aggregateActivityByProject's own ranking already sums (its
+       *  totalInteractions()), reused here as the 7-day chart's one
+       *  magnitude per bar (dataviz skill: discrete daily points of one
+       *  magnitude -> a bar-per-day strip, one hue, board.html's own .v1).
+       *  Different KINDS of count folded into one total is not the same
+       *  thing the "no shared scale" rule forbids -- that rule is about
+       *  tokens/cost/steps never sharing one AXIS (see activityTokensBlock,
+       *  activityRouterLine below), not about two event counts summing to
+       *  one total. */
+      function activityDayTotal (day) {
+        return (day.judgedCommands || 0) + (day.mainSteps || 0) + (day.subagentSteps || 0)
+      }
+
+      /** dataviz skill mark spec: bars <=24px thick, a 4px rounded data-end
+       *  square at the baseline, grown from a single baseline. One hue
+       *  (.v1) -- a single series needs no legend box. Every bar keeps a
+       *  native SVG <title> (day: value), the cheapest possible hover
+       *  affordance with no chart library and no custom JS reaching this
+       *  sandboxed panel. A day with nothing in it still gets its slot (the
+       *  Decisions section: "always 7 entries even when a day is empty"),
+       *  drawn as a flat hairline at the baseline, never omitted. */
+      function activityChart (project, days) {
+        var BAR_W = 10, GAP = 3, MAX_H = 22, BASELINE = 26, RADIUS = 3
+        var values = days.map(activityDayTotal)
+        var max = values.reduce(function (m, v) { return Math.max(m, v) }, 0)
+        var width = days.length * BAR_W + (days.length - 1) * GAP
+        var bars = days.map(function (d, i) {
+          var value = values[i]
+          var x = i * (BAR_W + GAP)
+          var titleText = esc(d.day) + ': ' + num(value)
+          if (max <= 0 || value <= 0) {
+            return '<rect x="' + x + '" y="' + (BASELINE - 1) + '" width="' + BAR_W + '" height="1"><title>' + titleText + '</title></rect>'
+          }
+          var h = Math.max(2, Math.round((value / max) * MAX_H))
+          var r = Math.min(RADIUS, h, BAR_W / 2)
+          var yTop = BASELINE - h
+          var pathD = 'M' + x + ',' + BASELINE +
+            ' L' + x + ',' + (yTop + r) +
+            ' Q' + x + ',' + yTop + ' ' + (x + r) + ',' + yTop +
+            ' L' + (x + BAR_W - r) + ',' + yTop +
+            ' Q' + (x + BAR_W) + ',' + yTop + ' ' + (x + BAR_W) + ',' + (yTop + r) +
+            ' L' + (x + BAR_W) + ',' + BASELINE + ' Z'
+          return '<path d="' + pathD + '"><title>' + titleText + '</title></path>'
+        }).join('')
+        var judgedTotal = days.reduce(function (s, d) { return s + (d.judgedCommands || 0) }, 0)
+        var stepsTotal = days.reduce(function (s, d) { return s + (d.mainSteps || 0) + (d.subagentSteps || 0) }, 0)
+        var label = t('activity.chartAriaLabel', { project: projectLabel(project), judged: num(judgedTotal), steps: num(stepsTotal) })
+        return {
+          svg: '<svg class="act-chart v1" viewBox="0 0 ' + width + ' 28" width="' + width + '" height="28" role="img" aria-label="' + esc(label) + '">' + bars + '</svg>',
+          judgedTotal: judgedTotal,
+          stepsTotal: stepsTotal
+        }
+      }
+
+      /** Allowed/advised/asked/blocked as labelled numbers, never a stacked
+       *  bar (odd/tasks/jev-063-activity.md Decisions: four different-
+       *  meaning counts, not one whole). Blocked/advised borrow .vd/.v3's
+       *  own --viz variable for just their <dd> text colour, allowed/asked
+       *  stay the normal text colour -- no new hue, no background fill. */
+      function activityGateFigures (outcomes) {
+        var o = outcomes || {}
+        var rows = [
+          { cls: '', label: t('activity.gateAllowed'), value: o.allowed || 0 },
+          { cls: 'v3', label: t('activity.gateAdvised'), value: o.advised || 0 },
+          { cls: '', label: t('activity.gateAsked'), value: o.asked || 0 },
+          { cls: 'vd', label: t('activity.gateBlocked'), value: o.blocked || 0 }
+        ]
+        return '<dl class="figures">' + rows.map(function (r) {
+          return '<div class="figure ' + r.cls + '"><dt>' + esc(r.label) + '</dt><dd>' + esc(num(r.value)) + '</dd></div>'
+        }).join('') + '</dl>'
+      }
+
+      /** Compact per-model token counts plus an estimated cost, no bar
+       *  (four different units: four token kinds and a dollar estimate) --
+       *  reuses friendlyModelName/figures/line exactly as
+       *  consumptionModelBlock does, without its percentage bars (those
+       *  describe one model's own share of its own total; this is raw
+       *  counts). A project with no turn-usage rows in the window has an
+       *  empty tokensByModel array -- an honestly empty section, so this
+       *  returns '' rather than a lone "$0.00 estimated" with nothing to
+       *  break down. */
+      function activityTokensBlock (tokensByModel, totalCost) {
+        var models = tokensByModel || []
+        if (models.length === 0) return ''
+        var rows = models.map(function (m) {
+          return '<div class="act-model"><p class="kpi-sub"><b title="' + esc(m.model) + '">' + esc(friendlyModelName(m.model)) + '</b></p>' +
+            figures([
+              { label: t('consumption.input'), value: m.input || 0 },
+              { label: t('consumption.output'), value: m.output || 0 },
+              { label: t('consumption.cacheRead'), value: m.cacheRead || 0 },
+              { label: t('consumption.cacheWrite'), value: m.cacheWrite || 0 }
+            ]) +
+            line(t('activity.estimatedCost', { amount: (m.estimatedCostUsd || 0).toFixed(2) })) +
+            '</div>'
+        }).join('')
+        return rows + line(t('activity.totalEstimatedCost', { amount: (totalCost || 0).toFixed(2) }))
+      }
+
+      /** "N switches, ~$X saved/extra cost (estimate)" -- reuses the exact
+       *  never-negative-saving convention consumptionModelRouterBlock above
+       *  already applies (Math.abs + relabel to "extra cost" below zero),
+       *  never reimplementing the math. `router` is null when the project
+       *  has no router-decision rows in the window at all (never a fake
+       *  zero row), in which case this whole line is omitted. */
+      function activityRouterLine (router) {
+        if (!router) return ''
+        var estimate = router.savedEstimate
+        if (estimate === null || estimate === undefined) {
+          return line(t('activity.routerNoEstimate', { switches: num(router.applied) }))
+        }
+        var key = estimate < 0 ? 'activity.routerCost' : 'activity.routerSaved'
+        return line(t(key, { switches: num(router.applied), amount: Math.abs(estimate).toFixed(2) }))
+      }
+
+      function activityProjectCard (entry) {
+        var chart = activityChart(entry.project, entry.days)
+        var name = projectLabel(entry.project)
+        var ageHtml = entry.lastActivityAt ? '<span class="act-age">' + esc(ago(entry.lastActivityAt)) + '</span>' : ''
+        return '<article class="card act-card">' +
+          '<div class="act-card-head"><span class="act-name" title="' + esc(name) + '">' + esc(name) + '</span>' + ageHtml + '</div>' +
+          '<div class="act-chart-wrap">' + chart.svg +
+            '<div><span class="act-chart-total">' + esc(num(chart.judgedTotal + chart.stepsTotal)) + '</span><br>' +
+            '<span class="cmp-foot">' + esc(t('activity.weekBreakdown', { judged: num(chart.judgedTotal), steps: num(chart.stepsTotal) })) + '</span></div>' +
+          '</div>' +
+          activityGateFigures(entry.gateOutcomes) +
+          activityTokensBlock(entry.tokensByModel, entry.totalEstimatedCostUsd) +
+          activityRouterLine(entry.router) +
+        '</article>'
+      }
+
+      /** Top ACTIVITY_TOP_N projects, in the array's own pre-ranked order
+       *  (never re-sorted here -- see the module comment above), plus a
+       *  "show more" toggle for the rest, the same interaction pattern as
+       *  the live-status list's own toggle (a button, aria-expanded, focus
+       *  returned to the button after re-render) under its own class/id
+       *  names so the two never collide. */
+      function renderActivityProjects (summary) {
+        lastActivitySummary = summary
+        if (!summary) { fill('projects-body', 'projects-empty', '', t('activity.empty')); return }
+        if (summary.ok === false) { fill('projects-body', 'projects-empty', '', t('activity.unavailable')); return }
+        var projects = Array.isArray(summary.projects) ? summary.projects : []
+        if (projects.length === 0) { fill('projects-body', 'projects-empty', '', t('activity.empty')); return }
+        var shown = activityExpanded ? projects : projects.slice(0, ACTIVITY_TOP_N)
+        var extra = projects.length - ACTIVITY_TOP_N
+        var list = '<div class="act-projects" id="projects-list">' + shown.map(activityProjectCard).join('') + '</div>'
+        var toggle = extra > 0
+          ? '<button type="button" class="act-toggle" data-activity-toggle aria-controls="projects-list" aria-expanded="' + (activityExpanded ? 'true' : 'false') + '">' +
+            esc(activityExpanded ? t('activity.showLess') : t('activity.showMore', { n: String(extra) })) + '</button>'
+          : ''
+        fill('projects-body', 'projects-empty', list + toggle, '')
+      }
+
+      // One listener for the toggle, which is re-rendered with the cards;
+      // the same pattern as cardsEl's own live-toggle listener below.
+      el('projects-body').addEventListener('click', function (event) {
+        var button = event.target && event.target.closest ? event.target.closest('[data-activity-toggle]') : null
+        if (!button) return
+        activityExpanded = !activityExpanded
+        renderActivityProjects(lastActivitySummary)
+        var again = el('projects-body').querySelector('[data-activity-toggle]')
+        if (again) again.focus()
+      })
+
       function renderUnmeasured () {
         el('unmeasured-body').innerHTML = [
           'unmeasured.money', 'unmeasured.extrapolation',
@@ -1859,15 +2075,17 @@
         // An empty log gets one card that says why, never a column of empty
         // sections and never a zero standing in for "nothing yet". With tabs
         // (odd/tasks/board-tabs-and-names.md T2) that rule holds per tab:
-        // Gate's is card-empty, and the live, consumption and skills cards
-        // always show, each saying in its own words that nothing is there
-        // yet -- otherwise the Activity or Skills tab would open blank.
+        // Gate's is card-empty, and the live, activity, consumption and
+        // skills cards always show, each saying in its own words that
+        // nothing is there yet -- otherwise the Activity or Skills tab
+        // would open blank. card-projects (JEVADV-63) manages its own empty
+        // state through renderActivityProjects, fed by its own storage key
+        // (activityByProjectSummary), not by hasGate/hasSkills.
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
         show('windows', hasGate)
         show('card-status', hasGate || kindIssue)
         show('card-recent', hasGate)
-        show('card-projects', hasGate || hasSkills)
         show('card-speed', hasMeasurements)
         show('card-unmeasured', hasMeasurements)
 
@@ -1896,7 +2114,6 @@
           renderSpeed(ab)
         }
         renderSkills(mod)
-        if (hasGate || hasSkills) renderProjects(gate, mod)
       }
 
       // ---------- render: live board -----------------------------------------
@@ -2043,12 +2260,14 @@
           read('measurementsSummary', usuario),
           read(WORKER_HEARTBEAT_KEY, false),
           read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null }),
-          read('consumptionSummary', usuario)
+          read('consumptionSummary', usuario),
+          read('activityByProjectSummary', usuario)
         ]).then(function (results) {
           render(results[0] || { entries: [] })
           renderStats(results[1], results[3])
           renderWorkerNote(results[2])
           renderConsumption(results[4])
+          renderActivityProjects(results[5])
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
           // Same rule as config.html: a raw fault message is written for

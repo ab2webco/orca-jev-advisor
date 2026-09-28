@@ -136,22 +136,111 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
       (RED against the current shape), then GREEN. Keep
       `mod_skills_validate.test.mjs` and hooks `tsc` green.
       Route: delegated writer. Trigger: writer (2+ files, JEVADV-43-sensitive).
-- [ ] A2 `src/core/activity_by_project.ts`: pure 7-day-per-project fold over
+- [x] A2 `src/core/activity_by_project.ts`: pure 7-day-per-project fold over
       gate rows + turn-usage rows + router-decision rows. Unit tests first:
       empty data, a single day, old records without a project, ranking,
       never-negative router saving. Route: delegated writer.
-- [ ] A3 `adapters/orca/read-activity.mjs` + `main.mjs` wiring: publish
+- [x] A3 `adapters/orca/read-activity.mjs` + `main.mjs` wiring: publish
       `activityByProjectSummary` on the consumption cadence. Tests under
       isolation env vars. Route: delegated writer.
-- [ ] A4 `board.html`: per-project cards (chart, gate outcomes, tokens/cost,
+- [x] A4 `board.html`: per-project cards (chart, gate outcomes, tokens/cost,
       router line), top 6 + show-more, i18n, empty states, `role="img"`
       aria labels. Route: delegated writer, then inline visual pass.
-- [ ] A5 `panels.spec.mjs` tests + `screenshot-panels.mjs` `activity-ready`
+- [x] A5 `panels.spec.mjs` tests + `screenshot-panels.mjs` `activity-ready`
       scenario. Route: delegated writer.
 - [ ] A6 Version bump to 0.6.3 (`package.json`, `orca-plugin.json` if
       versioned) + README "What changed in 0.6.3". Route: inline.
 - [ ] A7 Screenshots: `npm run shots` + `activity-ready` scenario at 1440,
       768, 390, 320, both themes. Read every image. Route: inline.
+- [ ] A8 **(queued live via `brief-063-context-steward.md`, unrelated to the
+      Activity cards themselves, must land after A1-A7 and before
+      STATUS: DONE)** "Jev context steward" — the biggest measured saving in
+      a private replay of real sessions (evidence kept out of this public
+      repo per the 0.6.3 privacy rule below; generic finding: cache reads
+      dominate cost regardless of model choice, and compacting a main
+      context once it passes a token threshold would have saved roughly
+      half the re-read context, an upper bound that does not model detail
+      lost to compaction — see the private replay notes, not tracked here,
+      for the full figures).
+      Engine primitives (verify exact shapes in
+      `adapters/claude/mod-skills/claude-code.d.ts` before writing):
+      `$.session.usage()` (context size/percent, free), `$.session.compact({
+      instructions })` (a `session.compact` event, trigger `plugin`, run
+      between turns — rejects mid-turn), `turn.complete` (main conversation
+      only; subagents carry `agentId` and are never compacted). A plugin
+      cannot run `/clear`, only suggest it.
+      Behaviour: on the main conversation's `turn.complete`, read context
+      size; at/above the threshold (default 120k tokens, configurable per
+      account beside the router settings), ask Jev one typed question — is
+      this a task boundary? (`boundary` / `mid-task` / `new-topic`), fed
+      Jev's state (redacted last-prompt excerpt per the router's own
+      redaction, a compact per-turn activity summary — tool counts, whether
+      it committed/pushed/opened a PR/ran tests and whether they passed —
+      context size, turns since last compaction). `boundary` at confidence
+      ≥0.70: compact once the turn has fully ended, instructions preserving
+      active feature documents (`odd/tasks/*.md` paths seen in the
+      conversation) with their open checklist items and next step, branch
+      names/last commits/PR numbers, decisions made and the person's
+      standing constraints, and anything the person said is pending.
+      `new-topic`: compact the same way plus a one-line "/clear would be
+      cheaper still" suggestion. `mid-task` or low confidence: do nothing,
+      except the hard limit (≥80% of the context window) compacts
+      regardless, same preserving instructions. Never compact twice within
+      3 person turns; never compact a subagent; never compact in measure
+      mode.
+      Modes: `off`/`measure`/`active` per account, same settings surface the
+      router already writes, shown in the config panel's Models tab next to
+      the router; default `measure`, the owner's machine flips to `active`
+      after release; measure mode only logs what it would have done.
+      Log/visibility: `context-steward-decisions-*.jsonl` (hourly, pruned
+      like the others), `{at, account, project, contextBefore, decision,
+      confidence, applied, contextAfter}`, no prompt text; a status-line
+      part ("jev · contexto 312k → 38k (tarea cerrada)" applied, "(solo
+      mide)" in measure mode); a board Consumption-tab line for compactions
+      applied and the estimated tokens no longer re-read, labelled an
+      estimate.
+      Tests (RED first): a boundary above threshold compacts with
+      preserving instructions; `mid-task` does not compact; the hard limit
+      compacts; the 3-turn cooldown; measure mode changes nothing; a
+      subagent is never compacted; a Jev failure means no compaction except
+      at the hard limit; `mod_skills_validate.test.mjs` stays green.
+      Live check (separate from the unit suite): in a fresh interactive or
+      `claude -p` session on a throwaway/scratch repository (never a real
+      client or project repo), steward active, threshold lowered for the
+      test (e.g. 30k) — read enough files to pass it, then commit something
+      trivial in a scratch git repo under the scratchpad (never a real
+      repo) — confirm the next step's API cacheRead drops, report
+      before/after numbers and the compaction summary's kept items (numbers
+      from this throwaway repo are fine to report; they are not the
+      owner's real usage).
+      Report requirement: before `STATUS: DONE`, append a "Context steward"
+      section to this feature's final report.
+      **0.6.3 privacy rule (queued live via `brief-063-privacy.md`, applies
+      to this whole feature, not just A8):** this repository is public.
+      Never write a real email outside `@example.com`/`@example.org`, a real
+      Orca account id, an absolute `/Users/<real-name>/…` path, a real
+      client/project name from the owner's machine, or a real usage number/
+      cost/decision count/replay finding into any tracked file (feature
+      docs, reports, README, commit messages included) — evidence stays
+      generic ("measured on real sessions, roughly half the re-read context
+      was saved"), never the owner's own figures, names or ids. Before each
+      commit, check the staged diff for these patterns and fix any hit.
+      A repo-wide test enforcing this (email/`/Users/` path/optional
+      `~/.config/orca-supervisor/private-terms.txt` denylist scan over
+      every tracked file) was requested too, but is deliberately **not**
+      added by this feature: a scan run 2026-09-27 found the pattern
+      already present pre-existing on this branch outside Activity's own
+      files (real `/Users/<real-name>/` paths in several `odd/tasks/*.md`
+      and `src/core/*.test.ts` files, a real owner-domain email in
+      `adapters/orca/main.test.mjs`/`scripts/panels.spec.mjs`'s existing
+      router-email tests) — adding a hard-failing test now would break
+      `npm test` over files outside this task's scope, which the
+      constraints above forbid touching. The privacy brief says a separate
+      scrub of what is already on main is underway elsewhere; the
+      repo-wide enforcement test belongs after that scrub lands, as its own
+      task, not folded into A8.
+      Route: delegated writer, strict TDD (RED first, same as every other
+      task here).
 - [x] R1 **(added live, unrelated to Activity, must land before STATUS: DONE)**
       Bugfix: subagent cold-first-step effort must apply the tier's effort
       in both directions, and the router-decision log must match what the
@@ -300,4 +389,183 @@ TDD: strict (repo default). Runner: `node --test --experimental-strip-types`
   landed in this same worktree during the run). `tsc -p
   adapters/claude/mod-skills/tsconfig.json`: clean.
   `mod_skills_validate.test.mjs`: pass. `node_modules` unlinked before
-  commit. Commit: see git log (`fix(router): ...`).
+  commit. Commit: `dc32c17` — `fix(router): apply tier effort both ways on
+  a subagent's cold first step`.
+- 2026-09-27: A2 done and committed (`d210658`,
+  `feat(activity): pure per-project 7-day activity aggregation`), run
+  concurrently with R1 (disjoint files — verified no overlap).
+  `src/core/activity_by_project.ts`: `aggregateActivityByProject(gateRows,
+  turnUsageRows, routerDecisionRows, nowMs): ActivityByProjectSummary`
+  (`{projects: ProjectActivity[]}`, each `{project, lastActivityAt, days:
+  7×{day, judgedCommands, mainSteps, subagentSteps}, gateOutcomes:
+  {allowed,advised,asked,blocked}, steps: {main,subagent}, tokensByModel:
+  {model,input,output,cacheRead,cacheWrite,estimatedCostUsd}[],
+  totalEstimatedCostUsd, router: RouterDecisionSummary | null}`).
+  No generic model-id price classifier existed; added `pricesForModel`
+  to `src/core/model_router_accounts.ts` (reuses `baseModelId`,
+  `ANTHROPIC_PRICES`, `FABLE_ID`, `fablePrices` verbatim — no new
+  matching), its own 4 tests. Router saving passed straight through from
+  `summarizeRouterDecisions` unmodified (sign handling stays A4's job, per
+  the board's own existing convention). All windows (including
+  `lastActivityAt`) strictly bounded to the last 7 local calendar days;
+  router estimate computed per-project from that project's own rows only
+  (never inflated by a shared account). RED confirmed (missing export,
+  then `ERR_MODULE_NOT_FOUND` for the new module), then GREEN.
+  `npm test`: 2167→2181 (14 new). `node_modules` unlinked before commit.
+  Next: A3 (worker wiring) can rely on this exact shape.
+- 2026-09-27: A3 done and committed (`4e6d673`,
+  `feat(activity): publish per-project activity summary from the worker`).
+  New `adapters/orca/log-files.mjs` (no side effects, importable): holds
+  `readJsonl`, `listHourlyFiles(cacheDir, pattern)`, `readJsonlRows`,
+  `isRecord`, the two hourly file-name patterns, and — decision gap, made
+  by the writer — `toTurnUsageRecord`/`toGateDecisionRecord` too (moved out
+  of `read-consumption.mjs`/`read-measurements.mjs`, which now import them;
+  avoids a second copy of row-checking logic drifting, given
+  `read-measurements.mjs`'s own header already warns a drifted check has
+  silently dropped real rows three times before). New
+  `adapters/orca/read-activity.mjs` sidecar: reads gate-decisions.jsonl +
+  hourly turn-usage/router files (last 8 days, matching
+  `read-consumption.mjs`'s own retention; prunes nothing, per the feature
+  doc's decision), calls `aggregateActivityByProject`, prints
+  `{ok:true, projects, corruptLines, checkedAt}` (or `{ok:false, reason,
+  detail, checkedAt}`) via `process.stdout.write`. `main.mjs`:
+  `ACTIVITY_REFRESH_MS = CONSUMPTION_REFRESH_MS` (10 min),
+  `activitySidecarArgv()` (read-only: `PLUGIN_ROOT` + `CACHE_DIR`, no write
+  grant — this sidecar prunes nothing), `publishActivitySummary` with the
+  same injectable-override test convention as `publishConsumptionSummary`,
+  wired into `activate()`'s existing timer/teardown pattern (now four
+  timers). RED confirmed (10 new tests failing on missing
+  module/exports), then GREEN. `npm test`: 2181→2191 (10 new).
+  `mod_skills_validate.test.mjs`: pass. `node_modules` unlinked before
+  commit. **Payload shape for A4** (storage key
+  `activityByProjectSummary`): `{ok, projects: ProjectActivity[]
+  (aggregateActivityByProject's exact output, ranked), corruptLines,
+  checkedAt}` — empty state is `{ok:true, projects:[], corruptLines:0,
+  checkedAt}`.
+- 2026-09-27: two live additions folded in before A4/A5 started, both from
+  briefs handed mid-session (read in full, never copied into the repo
+  verbatim):
+  1. A8 "Jev context steward" queued (`brief-063-context-steward.md`),
+     sequenced after A1-A7 per the brief's own instruction — task entry
+     added above with its full behaviour spec, evidence kept generic per
+     the privacy rule below (the brief's own real figures and its private
+     replay-report path were not copied into this doc).
+  2. A 0.6.3-wide privacy rule (`brief-063-privacy.md`): this repo is
+     public, so no real email/account id/absolute owner home path/client
+     or project name/real usage number may enter any tracked file; note
+     folded into A8's task entry (the only place this session wrote real
+     evidence before the rule arrived — fixed in place, not left for
+     later). A repo-wide enforcement test was requested too; a scan found
+     it would immediately fail against pre-existing content outside this
+     feature's own files (real absolute home-directory paths already tracked in
+     two other `odd/tasks/*.md` files and several `src/core/*.test.ts`
+     files; a real owner-domain email already in
+     `adapters/orca/main.test.mjs` and in this file's own pre-existing
+     `scripts/panels.spec.mjs` router-email tests, both untouched by this
+     feature) — out of scope to fix per "do not touch files outside your
+     task to scrub them," so that test is deliberately not added here;
+     flagged as a gap for whoever owns the separate main-branch scrub the
+     privacy brief mentions. This session's own new/changed files (A4/A5)
+     were checked by hand for the same three patterns before committing.
+- 2026-09-27: A4+A5 done and committed (`board.html` per-project cards +
+  `panels.spec.mjs`/`screenshot-panels.mjs` tests and fixture), strict TDD.
+  `#card-projects`/`#projects-body` kept (Playwright's `activity: ['card-
+  live','card-projects']` section-id pin untouched); replaced with: one
+  `<article class="card act-card">` per project, top `ACTIVITY_TOP_N=6` by
+  the array's own pre-ranked order (never re-sorted), a "show more" toggle
+  mirroring the live-list's own pattern exactly (`data-activity-toggle`,
+  `aria-expanded`, `aria-controls="projects-list"`, focus returned to the
+  new button after re-render, its own `.act-toggle` CSS class so it never
+  collides with `.live-toggle`). Per card: name (`projectLabel()`) + last
+  activity (`ago()`, omitted entirely when `lastActivityAt` is null); a
+  7-day inline-SVG bar chart (`activityChart`), one hue (`.v1`), a rounded-
+  top/square-baseline `<path>` per day (dataviz skill mark spec) or a
+  1px baseline hairline for a zero day, a native `<title>` per bar for
+  hover, `role="img"` with a full accurate aria-label; gate outcomes as
+  `.figures`/`.figure` labelled numbers (never a bar), blocked/advised
+  borrowing `.vd`/`.v3`'s own `--viz` variable for just the number's text
+  colour (new CSS rule `.figures .figure.vd dd, .figures .figure.v3 dd
+  { color: var(--viz) }`, no new hue); tokens/cost per model
+  (`activityTokensBlock`, reuses `friendlyModelName`/`figures`/`line`,
+  no bar, omitted entirely when `tokensByModel` is empty rather than a
+  lone "$0.00"); a router line only when `router` is non-null, reusing the
+  exact `Math.abs`+relabel-to-"extra cost" convention
+  `consumptionModelRouterBlock` already established (never reimplemented).
+  New `activity.*` i18n keys (16, es+en, both accented with no `' -- '`,
+  reusing existing `consumption.input/output/cacheRead/cacheWrite` labels
+  for the token rows rather than duplicating them); removed
+  `stats.byProjectHeading`/`stats.byProjectEmpty` (confirmed unused
+  elsewhere first) and the old `renderProjects`/hbars-based "By project"
+  code and its `show('card-projects', hasGate || hasSkills)` gating --
+  `card-projects` now always shows, like `card-live`, managing its own
+  empty state via `renderActivityProjects` off the new
+  `activityByProjectSummary` storage key wired into `reload()`.
+  Per-bar chart value: `judgedCommands + mainSteps + subagentSteps` per
+  day -- the exact same combination `activity_by_project.ts`'s own
+  `totalInteractions()` already uses to rank projects, reused here as one
+  honest "how busy was this day" magnitude; the card's own text underneath
+  the chart still breaks it back out into "N judged commands · M steps"
+  (and the aria-label states both numbers too), so the single-magnitude
+  bar never hides the two real units it is made of.
+  `dataviz` skill invoked before writing chart code, per its own
+  form/color/validate/marks/interaction/accessibility procedure -- form
+  and color were already fixed by this doc's own Decisions section, so
+  only marks/anatomy/accessibility applied (a bar-per-day strip, one hue,
+  no legend needed for a single series, native-title hover, `role="img"`
+  aria-label as the accessible equivalent of a table view for a chart this
+  small).
+  Two existing tests depended on the removed "By project" flat list and
+  had to be deleted, not just the one the prompt anticipated: `skills-
+  ready: every "By project" row is a name...` (found via the earlier
+  `#projects-body .hrow`/`renderProjects` grep) AND `L3: a skills-mod
+  "(unknown)" project reads as the unknown-project label, merged with the
+  gate's` (es/en) -- this second one used the same now-deleted
+  `boardProjectRows` helper but didn't match the grep terms used to find
+  the first one (it referenced `measurementsSummary.gate.byProject`/
+  `.modSkills.byProject` directly, not the literal i18n key strings); its
+  own full-suite run caught the miss (`ReferenceError: boardProjectRows is
+  not defined`), fixed, and a second full run confirmed clean. Lesson
+  recorded here since it's the kind of thing a narrower grep misses: when
+  removing a UI section, search for every helper/selector it introduced,
+  not just its own i18n keys.
+  `touchingControls(page)`: no exemption needed. The new toggle is the
+  only interactive control inside `#projects-body`'s current render (like
+  `data-live-toggle` inside `#cards`), so the pairwise-neighbour check
+  never has a second control in that parent to compare it against; a
+  dedicated `activity-ready` test (7 projects, forcing the toggle open)
+  confirms `touchingControls` returns `[]` both collapsed and expanded.
+  RED confirmed the intended way: wrote every new test first against the
+  current (pre-A4) `board.html` (a real `git stash push -u -m
+  "jev-063-a4-board-html-wip" -- adapters/orca/panels/board.html"`,
+  captured its SHA, ran the filtered suite -- all 11 new tests failed for
+  the right reason, i.e. old markup), then `git stash apply <sha>` +
+  `git stash drop <sha>` to restore A4 and confirm GREEN. One real bug the
+  RED/GREEN cycle caught: the show-more toggle test's own helper re-clicked
+  `#tab-activity` on every read, which stole DOM focus from the just-
+  clicked toggle button and broke the "focus stays on the toggle"
+  assertion -- fixed by splitting `activityCards` (clicks the tab once)
+  from a new `activityCardsState` (reads state with no click), the same
+  distinction the live-list's own tests never needed because they only
+  ever read state once per click.
+  `npm run test:panels`: 123→135 (2 obsolete tests removed, 12 new added,
+  0 failing; two full runs, ~15 min each, confirmed identical results);
+  Playwright genuinely ran (no `chromium` skip-guard hit, every test's own
+  timing logged). `npm test`: 2191 pass, 0 fail (unaffected, as expected --
+  neither changed file is in its glob). `node_modules` unlinked before
+  commit. A personal screenshot pass (not the full `npm run shots` matrix,
+  which is A7's job): `activity-ready` scenario shot at all 4 widths, both
+  themes, both panels (80 images, 0 overflow, 0 script errors); read
+  1440/light, 1440/dark and 320/light of the board's Activity tab by eye --
+  cards, chart, figures and the show-more toggle all read correctly in
+  both themes and at phone width, `.figures`' own `auto-fit` grid collapses
+  gate-outcome/token numbers to one column at 320px with no truncation.
+  Not personally looked at: 768px, the expanded (post-toggle) card list,
+  and the config.html shots this same run also produced (irrelevant to
+  this feature). Decision gaps flagged for the parent: (a) blocked/advised
+  render in their colour even when the count is 0 (a literal reading of
+  the Decisions section's fixed per-category colours, not a conditional
+  "only colour it when it's bad" rule -- worth a second look in the A7
+  pass since a red "0" can read as an alarm out of context); (b) the
+  7-day chart's per-bar magnitude combines judged commands and steps into
+  one number (see above) rather than picking one alone, per the prompt's
+  explicit "your call" on this point.
