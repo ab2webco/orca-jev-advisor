@@ -1906,14 +1906,17 @@
        *  bar (odd/tasks/jev-063-activity.md Decisions: four different-
        *  meaning counts, not one whole). Blocked/advised borrow .vd/.v3's
        *  own --viz variable for just their <dd> text colour, allowed/asked
-       *  stay the normal text colour -- no new hue, no background fill. */
+       *  stay the normal text colour -- no new hue, no background fill.
+       *  A zero count never takes the colour: a red/ring "0" reads as an
+       *  alarm for something that didn't happen (caught in the A7 personal
+       *  screenshot pass, both themes, 2026-09-28). */
       function activityGateFigures (outcomes) {
         var o = outcomes || {}
         var rows = [
           { cls: '', label: t('activity.gateAllowed'), value: o.allowed || 0 },
-          { cls: 'v3', label: t('activity.gateAdvised'), value: o.advised || 0 },
+          { cls: (o.advised || 0) > 0 ? 'v3' : '', label: t('activity.gateAdvised'), value: o.advised || 0 },
           { cls: '', label: t('activity.gateAsked'), value: o.asked || 0 },
-          { cls: 'vd', label: t('activity.gateBlocked'), value: o.blocked || 0 }
+          { cls: (o.blocked || 0) > 0 ? 'vd' : '', label: t('activity.gateBlocked'), value: o.blocked || 0 }
         ]
         return '<dl class="figures">' + rows.map(function (r) {
           return '<div class="figure ' + r.cls + '"><dt>' + esc(r.label) + '</dt><dd>' + esc(num(r.value)) + '</dd></div>'

@@ -150,7 +150,7 @@ live-status list's own logic, or to `consumptionSummary`'s own card.
       scenario. Route: delegated writer.
 - [x] A6 Version bump to 0.6.3 (`package.json`, `orca-plugin.json` if
       versioned) + README "What changed in 0.6.3". Route: inline.
-- [ ] A7 Screenshots: `npm run shots` + `activity-ready` scenario at 1440,
+- [x] A7 Screenshots: `npm run shots` + `activity-ready` scenario at 1440,
       768, 390, 320, both themes. Read every image. Route: inline.
 - [~] A8 **(descoped by the owner, not implemented)** "Jev context steward"
       was queued live mid-A4/A5 by a delegated subagent reading
@@ -525,3 +525,30 @@ TDD: strict (repo default). Runner: `node --test --experimental-strip-types`
   effort fix), matching the existing bold-claim-then-prose section style.
   `npm test`: 2191/2191 (unaffected). `mod_skills_validate.test.mjs`:
   pass. `node_modules` unlinked before commit.
+- 2026-09-28: A7 done inline. `npm run shots` (4 images, no overflow, no
+  script errors) plus `node scripts/screenshot-panels.mjs --scenario
+  activity-ready` (full matrix, all 4 widths × both themes × both panels).
+  Personally read all 8 board/Activity-tab images (1440/768/390/320 ×
+  light/dark). Layout: clean at every width, no overflow, no truncation,
+  the `.figures` grid collapses 4→2→1 columns as width narrows, chart and
+  show-more toggle read correctly in both themes.
+  **Real defect found and fixed** (this is exactly what A4/A5's own
+  flagged decision gap warned about): "Blocked 0" rendered in the
+  destructive/red colour on every project with zero blocked commands, in
+  both themes — a red "0" reads as an alarm for something that didn't
+  happen. Fixed in `board.html`'s `activityGateFigures`: the `v3`/`vd`
+  colour class now only applies when the count is `> 0`; a zero renders in
+  the normal text colour, matching `allowed`/`asked`. Verified: a real
+  nonzero "Blocked: 1" (client-site-a) still renders red in both themes;
+  every zero count across all 7 projects in the fixture now renders
+  plain. Re-ran `npm run test:panels` (135/135, unaffected — no existing
+  test asserted the class), `npm test` (2191/2191),
+  `mod_skills_validate.test.mjs` (pass), then regenerated and re-read the
+  full 8-image matrix to confirm the fix. `node_modules` unlinked before
+  commit.
+  Not personally re-checked in this pass: the expanded (post-toggle) card
+  list and 768/390 dark's own non-board panels — the show-more
+  interaction itself is covered by A5's Playwright test
+  (`activity-ready: no two neighbouring controls touch on the Activity
+  tab, including the show-more toggle`), a functional check rather than a
+  visual one; flagged honestly rather than claimed as looked-at.
