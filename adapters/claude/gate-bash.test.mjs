@@ -2687,3 +2687,27 @@ test('a command whose first outcome was a policy ask (never an advice) gets no r
   const second = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId }))
   assert.equal(second.hookSpecificOutput.permissionDecision, 'ask', 'no retry pass exists, so the identical retry stays a human ask, never allow')
 })
+
+// QA 0.6.5 C2 (JEVADV-60), end to end: a quoted `<<` or a `<<<` here-string
+// used to open a phantom heredoc that hid the next lines from the deny tier,
+// and the mention-only verb in front (`grep`, `cat`) then read as a mere
+// mention. Those lines really run, so the deny tier must see them.
+test('a quoted << or a <<< here-string never hides the next line\'s discard from the deny tier', () => {
+  const discard = ['git', 'reset', '--hard'].join(' ')
+  for (const command of [`grep -n '<<EOF' docs/\n${discard}\nEOF`, `cat <<< EOF\n${discard}\nEOF`]) {
+    const home = makeHome()
+    assert.equal(decisionFor(home, command), 'deny', command)
+  }
+})
+
+// QA 0.6.5 C1 (JEVADV-59), end to end: awk's system() used to pass tier 1a
+// on its leading verb, so the hook exited silently before any later tier or
+// Jev read the command. It must now leave tier 1a (a non-empty answer), while
+// a print-only awk still passes silently. The local deny rules still read
+// the quoted program as data (QA A3, JEVADV-63), so with no key this lands on
+// the notice path rather than a deny.
+test('awk running a command through system() no longer passes tier 1a silently', () => {
+  const discard = ['git', 'reset', '--hard'].join(' ')
+  assert.notEqual(decisionFor(makeHome(), `awk 'BEGIN { system("${discard}") }'`), 'none')
+  assert.equal(decisionFor(makeHome(), "awk 'BEGIN { print 1 }'"), 'none')
+})

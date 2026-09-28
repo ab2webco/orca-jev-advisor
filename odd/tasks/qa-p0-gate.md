@@ -21,7 +21,7 @@ Out of scope: the remaining high, medium and low findings (JEVADV-62..74).
 
 ## Checklist
 - [x] T1 C1 awk / sed -n (RED: QA repro failed; GREEN: 38/38 unit, 2266/2266 suite)
-- [ ] T2 C2 phantom heredoc
+- [x] T2 C2 phantom heredoc (RED: QA repros failed in unit and hook tests; GREEN: 11/11 unit, 2271/2271 suite). Also added a C1 hook test: awk system() no longer passes tier 1a silently. Found: the local deny rules still read the quoted awk program as data (A3, JEVADV-63)
 - [ ] T3 A1 redaction in model, skill and tool decisions
 - [ ] T4 A9 esc() quotes
 - [ ] T5 mod-tools 255-choice limit
