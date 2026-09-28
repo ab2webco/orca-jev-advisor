@@ -206,7 +206,8 @@
       .router-effort .actions { margin-top: 8px; }
       /* The context steward: mode, threshold in thousands of tokens, save. */
       .steward-row { align-items: center; margin-bottom: 14px; }
-      .steward-row input[type="number"] { flex: 0 0 6em; width: 6em; }
+      .steward-row .steward-threshold { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+      .steward-row input[type="number"] { width: 6em; }
       .steward-row .steward-unit { font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .checkbox-row .checkbox-text { display: flex; flex-direction: column; gap: 2px; }
       .checkbox-row .checkbox-label { font-size: 12px; font-weight: 500;
@@ -2770,9 +2771,12 @@
         })
 
         row.appendChild(text)
+        // The number and its unit wrap together, never apart.
+        var threshold = elMake('span', 'steward-threshold')
+        threshold.appendChild(input)
+        threshold.appendChild(unit)
         row.appendChild(select)
-        row.appendChild(input)
-        row.appendChild(unit)
+        row.appendChild(threshold)
         row.appendChild(saveBtn)
         row.appendChild(saidEl)
         return row

@@ -694,9 +694,10 @@ const ROUTER_READY = {
     // 0.6.2: the per-tier effort and the model each tier resolves to, as
     // install-claude-integration.mjs's router-mode-status publishes them.
     targets: [
-      { target: 'home', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
-      { target: 'cccccccc-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC },
-      { target: 'bbbbbbbb-0000-4000-8000-000000000002', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC },
+      // The context steward's per-target settings (odd/tasks/jev-context-steward.md).
+      { target: 'home', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'measure', threshold: 120000 } },
+      { target: 'cccccccc-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'active', threshold: 150000 } },
+      { target: 'bbbbbbbb-0000-4000-8000-000000000002', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'off', threshold: 120000 } },
     ],
     checkedAt: iso,
   },
@@ -714,6 +715,8 @@ const ROUTER_READY = {
       savedEstimate: 0.0847,
       switchesEstimated: 3,
     },
+    // summarizeStewardDecisions' shape; synthetic figures.
+    steward: { decisions: 7, applied: 3, wouldCompact: 2, freedPerStep: 342000 },
   },
 }
 
