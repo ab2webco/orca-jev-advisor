@@ -293,6 +293,13 @@ export function stewardDecisionFileName(atIso: string): string {
   return `context-steward-decisions-${atIso.slice(0, 13)}.jsonl`;
 }
 
+/**
+ * Why a compaction the decision called for did not happen: measure mode;
+ * a new turn had started; the engine rejected it; a headless (-p / SDK)
+ * session, where the engine does not offer it; or a hook skipped it.
+ */
+export type StewardNotApplied = "measure" | "turn-running" | "rejected" | "headless" | "skipped";
+
 export interface StewardRecord {
   readonly at: string;
   readonly account: string;
@@ -304,6 +311,7 @@ export interface StewardRecord {
   readonly compact: boolean;
   readonly applied: boolean;
   readonly contextAfter: number | null;
+  readonly notApplied: StewardNotApplied | null;
 }
 
 export interface StewardRecordInput {
@@ -315,6 +323,7 @@ export interface StewardRecordInput {
   readonly decision: StewardDecision;
   readonly applied: boolean;
   readonly contextAfter: number | null;
+  readonly notApplied: StewardNotApplied | null;
 }
 
 /** One log line: numbers and names only, never prompt text. */
@@ -330,6 +339,7 @@ export function stewardDecisionRecord(input: StewardRecordInput): StewardRecord 
     compact: input.decision.compact,
     applied: input.applied,
     contextAfter: input.contextAfter,
+    notApplied: input.notApplied,
   };
 }
 

@@ -153,7 +153,7 @@ import type { SubagentDecision } from '../../../../src/core/model_router_subagen
 import { isPersonPromptOrigin } from '../../../../src/core/model_router_origin.ts'
 import type { RouterPromptOrigin, RouterSessionStats, RouterSticky, StewardState } from '../types/index.d.ts'
 import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
-import type { StewardDecision, StewardJudgment, StewardMode } from '../../../../src/core/context_steward.ts'
+import type { StewardDecision, StewardJudgment, StewardMode, StewardNotApplied } from '../../../../src/core/context_steward.ts'
 import { stewardFromSettings } from '../../../../src/core/model_router_mode.ts'
 
 const DEFAULT_BUDGET_MS = 800
@@ -1254,7 +1254,7 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
     // Measure mode keeps the cooldown as if it had compacted, so its log
     // reads the cadence active mode would have.
     if (decision.compact) await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...(await readStewardState($)), lastCompactionTurn: state.personTurns })
-    await finishSteward($, plan, false, null, host)
+    await finishSteward($, plan, false, null, decision.compact ? 'measure' : null, host)
   } catch {
     // The steward never affects the session on a failure.
   }
@@ -1264,38 +1264,42 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
 async function attemptStewardCompaction($: EngineInterface, plan: StewardPlan, attempt: number, host: StewardHost): Promise<void> {
   try {
     if (host.runningTurn() !== null) {
-      await finishSteward($, plan, false, null, host)
+      await finishSteward($, plan, false, null, 'turn-running', host)
       return
     }
     let result: SessionCompactResult | null = null
+    let headless = false
     try {
       result = await $.session.compact({ instructions: plan.instructions })
-    } catch {
+    } catch (error) {
+      // A -p / SDK session: the engine does not offer compaction between
+      // turns there (seen live), so a retry can never succeed.
+      headless = error instanceof Error && error.message.includes('headless')
       result = null
     }
     if (result === null) {
-      if (attempt < STEWARD_ATTEMPTS && host.runningTurn() === null) {
+      if (!headless && attempt < STEWARD_ATTEMPTS && host.runningTurn() === null) {
         $.clock.after(STEWARD_RETRY_MS, () => attemptStewardCompaction($, plan, attempt + 1, host))
         return
       }
-      await finishSteward($, plan, false, null, host)
+      await finishSteward($, plan, false, null, headless ? 'headless' : host.runningTurn() !== null ? 'turn-running' : 'rejected', host)
       return
     }
     if (result.skip !== undefined) {
-      await finishSteward($, plan, false, null, host)
+      await finishSteward($, plan, false, null, 'skipped', host)
       return
     }
-    await finishSteward($, plan, true, result.tokensAfter ?? null, host)
+    await finishSteward($, plan, true, result.tokensAfter ?? null, null, host)
   } catch {
     // See stewardAfterTurn.
   }
 }
 
 /** The decision's log line, the cooldown mark when applied, the status line part and, on a topic change, the /clear suggestion. */
-async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boolean, contextAfter: number | null, host: StewardHost): Promise<void> {
+async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boolean, contextAfter: number | null, notApplied: StewardNotApplied | null, host: StewardHost): Promise<void> {
   if (applied) await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...(await readStewardState($)), lastCompactionTurn: plan.personTurns })
   const at = new Date(await $.clock.now()).toISOString()
-  const record = stewardDecisionRecord({ at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter })
+  const record = stewardDecisionRecord({ at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied })
   await appendStewardDecision($, at, `${JSON.stringify(record)}\n`)
   host.show(stewardStatusPart(plan.locale, { mode: plan.mode, decision: plan.decision.decision, applied, before: plan.contextBefore, after: contextAfter }))
   if (applied && plan.decision.suggestClear) $.ui.toast(stewardClearHint(plan.locale), { timeoutMs: 15000 })

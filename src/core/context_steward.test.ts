@@ -215,8 +215,8 @@ test("threshold: 120k by default; a whole number of tokens between 10k and 2M", 
 
 test("record: hourly file, the brief's fields and no prompt text", () => {
   assert.equal(stewardDecisionFileName("2026-09-28T14:05:00.000Z"), "context-steward-decisions-2026-09-28T14.jsonl");
-  const record = stewardDecisionRecord({ at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: { decision: "boundary", compact: true, suggestClear: false, confidence: 0.8 }, applied: true, contextAfter: 30_000 });
-  assert.deepEqual(record, { at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.8, compact: true, applied: true, contextAfter: 30_000 });
+  const record = stewardDecisionRecord({ at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: { decision: "boundary", compact: true, suggestClear: false, confidence: 0.8 }, applied: true, contextAfter: 30_000, notApplied: null });
+  assert.deepEqual(record, { at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.8, compact: true, applied: true, contextAfter: 30_000, notApplied: null });
 });
 
 test("tokens read as k", () => {

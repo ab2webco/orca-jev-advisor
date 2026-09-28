@@ -31,7 +31,7 @@ interface FakeHost {
   timers: TimerFn[];
   messages: unknown[];
   usage: { tokens: number | undefined; percent: number | undefined; window: number };
-  compactResult: { messages: unknown[]; tokensBefore?: number; tokensAfter?: number } | { skip: string } | "reject";
+  compactResult: { messages: unknown[]; tokensBefore?: number; tokensAfter?: number } | { skip: string } | "reject" | "headless";
 }
 
 const HOME = "/home/dev";
@@ -67,6 +67,7 @@ function makeEngine(host: FakeHost): unknown {
       compact: async (args?: { instructions?: string }) => {
         host.compactCalls.push({ instructions: args?.instructions });
         if (host.compactResult === "reject") throw new Error("a turn is running");
+        if (host.compactResult === "headless") throw new Error("orca-jev-mod-skills: $.session.compact: not available in a headless (-p / SDK) session yet");
         return host.compactResult;
       },
     },
@@ -205,7 +206,7 @@ test("steward, active: a confident boundary above the threshold compacts once wi
   for (const needle of ["odd/tasks/feature-a.md", "open checklist items", "next step", "feat-x", "1a2b3c4 feat: one (feat-x)", "pending"]) assert.ok(instructions.includes(needle), `keeps ${needle}`);
   const log = stewardLog(host);
   assert.equal(log.length, 1);
-  assert.deepEqual({ ...log[0], at: "x" }, { at: "x", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.85, compact: true, applied: true, contextAfter: 30_000 });
+  assert.deepEqual({ ...log[0], at: "x" }, { at: "x", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.85, compact: true, applied: true, contextAfter: 30_000, notApplied: null });
   assert.ok(host.statusLines.some((line) => line?.includes("150k → 30k (tarea cerrada)")), `status: ${host.statusLines.join(" | ")}`);
   assert.deepEqual(host.toasts, []);
 });
@@ -311,6 +312,7 @@ test("steward, measure: decides and logs, compacts nothing, and says it only mea
   assert.equal(log[0]?.compact, true);
   assert.equal(log[0]?.applied, false);
   assert.equal(log[0]?.contextAfter, null);
+  assert.equal(log[0]?.notApplied, "measure");
   assert.ok(host.statusLines.some((line) => line?.includes("150k → compactaría (tema nuevo · solo mide)")), `status: ${host.statusLines.join(" | ")}`);
 });
 
@@ -377,6 +379,7 @@ test("steward: a new turn that started before the timer ran is never compacted u
   await runTimers(host);
   assert.equal(host.compactCalls.length, 0);
   assert.equal(stewardLog(host)[0]?.applied, false);
+  assert.equal(stewardLog(host)[0]?.notApplied, "turn-running");
 });
 
 test("steward: a compaction the engine rejects is retried on a later timer, then given up; never throws", async () => {
@@ -389,6 +392,7 @@ test("steward: a compaction the engine rejects is retried on a later timer, then
   const log = stewardLog(host);
   assert.equal(log.length, 1);
   assert.equal(log[0]?.applied, false);
+  assert.equal(log[0]?.notApplied, "rejected");
 });
 
 test("steward: a compaction a hook skipped is not applied", async () => {
@@ -399,4 +403,15 @@ test("steward: a compaction a hook skipped is not applied", async () => {
   await personTurn(host, engine, "commit it", verdict("boundary", 0.9));
   assert.equal(host.compactCalls.length, 1);
   assert.equal(stewardLog(host)[0]?.applied, false);
+  assert.equal(stewardLog(host)[0]?.notApplied, "skipped");
+});
+
+test("steward: a headless session, where the engine refuses compaction, is logged as such and not retried", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.compactResult = "headless";
+  await personTurn(host, engine, "commit it", verdict("boundary", 0.9));
+  assert.equal(host.compactCalls.length, 1);
+  assert.equal(stewardLog(host)[0]?.notApplied, "headless");
 });
