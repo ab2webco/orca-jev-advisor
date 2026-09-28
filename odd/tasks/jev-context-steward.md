@@ -44,15 +44,15 @@ of the account's settings.json (`stewardMode`, `stewardThreshold`), shown in
 the config panel's Models tab next to the router.
 
 ## Tasks
-- [ ] S1 core: `src/core/context_steward.ts` (gate, Jev state/question,
+- [x] S1 core: `src/core/context_steward.ts` (gate, Jev state/question,
   decision, preserving instructions, record, status text) + tests
-- [ ] S2 hooks: `turn.complete` → timer → Jev → compact/log/status + hooks tests
-- [ ] S3 settings: `stewardMode`/`stewardThreshold` read/write (core, installer
+- [x] S2 hooks: `turn.complete` → timer → Jev → compact/log/status + hooks tests
+- [x] S3 settings: `stewardMode`/`stewardThreshold` read/write (core, installer
   `steward-set`, main bridge) + tests
-- [ ] S4 panel: Models tab steward row (mode + threshold) + panel tests + shots
-- [ ] S5 consumption: prune `context-steward-decisions-*.jsonl`; board
+- [x] S4 panel: Models tab steward row (mode + threshold) + panel tests + shots
+- [x] S5 consumption: prune `context-steward-decisions-*.jsonl`; board
   Consumption line (compactions applied, estimated tokens no longer re-read)
-- [ ] S6 live check: low threshold in a scratch session; cacheRead drops
+- [x] S6 live check: low threshold in a scratch session; cacheRead drops
 
 ## Acceptance
 - Tests (RED first): boundary above threshold compacts with preserving
@@ -65,3 +65,31 @@ the config panel's Models tab next to the router.
 - Live: the step after a steward compaction reads fewer cached tokens.
 
 ## Progress
+- S1: RED (module missing), GREEN 30/30 core tests. Commit `3ee297d`.
+- S3 core: RED (missing exports), GREEN; `342e4b1`. Installer/bridge: RED 4,
+  GREEN 163/163; `505691d`.
+- S2: RED 18/18 (no `turn.start`/`turn.complete` hooks), GREEN 18/18; hooks
+  `tsc` exit 0; validate 1/1; `d012311`.
+- S5: RED 3 core + 3 sidecar, GREEN; `1842d64`. S4/S5 panels: RED 3 config +
+  2 board Playwright tests, GREEN; `03ccac1`.
+- Live check (interactive session, scratch git repo, threshold 30k, Sonnet 5):
+  Jev judged the commit a boundary, the session compacted to about a tenth of
+  its conversational context, the next step's cached re-read fell by about
+  half (what remains is the fixed system/tools prefix), and the next answer
+  named the branch, the last commit and the feature document's next step
+  from the summary alone.
+- Found live: `$.session.compact` is refused in a headless (`-p` / SDK)
+  session. The log now says why a compaction was not applied
+  (`notApplied`: measure, turn-running, rejected, headless, skipped) and a
+  headless refusal is not retried; `bddc98c`.
+- Seen in screenshots at 320px: the threshold's unit wrapped away from its
+  number; fixed, `0139289`. Looked at: Models tab and Consumption tab at
+  1440, 768, 390 and 320, light and dark (router-ready scenario).
+
+## Known gaps
+- Headless (`-p` / SDK) sessions are logged, never compacted: the engine does
+  not offer plugin compaction there yet.
+- The Consumption estimate is per later step (context freed), not a total:
+  the logs carry no session id and one account runs several sessions.
+- The steward's status part stays until its next decision (a later turn
+  below the threshold leaves the last compaction's line up).
