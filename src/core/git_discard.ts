@@ -939,6 +939,8 @@ function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> 
  */
 function interpreterCodePositions(tokens: readonly ScanToken[]): ReadonlySet<number> {
   const plain = tokens.map((token) => token.text);
+  const script = scriptProgramCodePosition(plain);
+  if (script !== null) return script;
   const { name: program, index: programIndex } = resolveProgram(plain, INTERPRETER_CODE_PROGRAMS);
   const positions = new Set<number>();
   const flags = INTERPRETER_CODE_FLAGS.get(program);
@@ -948,6 +950,62 @@ function interpreterCodePositions(tokens: readonly ScanToken[]): ReadonlySet<num
   }
   return positions;
 }
+
+/**
+ * awk's program and sed's script are code (QA 0.6.5 C1 follow-up): awk runs
+ * commands through `system()`, `print | "cmd"` and `"cmd" | getline`, GNU
+ * sed through its `e` command and flag. Unlike python's `-c`, the code is
+ * usually the first positional argument, so it is found by skipping the
+ * options that take a value. `-e`/`--expression` values are sed code too.
+ * Null when the segment is not awk or sed, so the flag table decides.
+ * A print-only program never gets here as a match: mentionsRatherThanRuns
+ * already reads it as a mention before any rule runs.
+ */
+const AWK_PROGRAMS: ReadonlySet<string> = new Set(["awk", "gawk", "mawk", "nawk"]);
+const SED_PROGRAMS: ReadonlySet<string> = new Set(["sed", "gsed"]);
+const SCRIPT_PROGRAMS: ReadonlySet<string> = new Set([...AWK_PROGRAMS, ...SED_PROGRAMS]);
+const AWK_VALUE_OPTIONS: ReadonlySet<string> = new Set(["-F", "-v", "-f", "--field-separator", "--assign", "--file"]);
+const SED_VALUE_OPTIONS: ReadonlySet<string> = new Set(["-f", "--file", "-l", "--line-length"]);
+const SED_CODE_OPTIONS: ReadonlySet<string> = new Set(["-e", "--expression"]);
+
+function scriptProgramCodePosition(plain: readonly string[]): ReadonlySet<number> | null {
+  const { name: program, index: programIndex } = resolveProgram(plain, SCRIPT_PROGRAMS);
+  if (!SCRIPT_PROGRAMS.has(program)) return null;
+  const isAwk = AWK_PROGRAMS.has(program);
+  const valueOptions = isAwk ? AWK_VALUE_OPTIONS : SED_VALUE_OPTIONS;
+  const positions = new Set<number>();
+  let readsProgramFile = false;
+  for (let j = programIndex + 1; j < plain.length; j += 1) {
+    const token = plain[j] ?? "";
+    if (token === "--") {
+      if (!readsProgramFile && positions.size === 0 && j + 1 < plain.length) positions.add(j + 1);
+      break;
+    }
+    if (!isAwk && SED_CODE_OPTIONS.has(token)) {
+      if (j + 1 < plain.length) positions.add(j + 1);
+      j += 1;
+      continue;
+    }
+    if (valueOptions.has(token)) {
+      if (token === "-f" || token === "--file") readsProgramFile = true;
+      j += 1;
+      continue;
+    }
+    if (token.startsWith("-")) continue;
+    // The first positional is the program, unless it came from -f or -e.
+    if (!readsProgramFile && positions.size === 0) positions.add(j);
+    break;
+  }
+  // Only a program that CAN run a command is code; a sed or awk that merely
+  // edits or prints text naming one stays a mention (JEVADV-36).
+  const runs = isAwk ? AWK_RUNS_A_COMMAND : SED_RUNS_A_COMMAND;
+  return new Set([...positions].filter((index) => runs.test(plain[index] ?? "")));
+}
+
+/** awk runs a command through system(), a pipe to or from a string, or getline from one. */
+const AWK_RUNS_A_COMMAND = /\bsystem\s*\(|\||\bgetline\b/;
+/** GNU sed runs one with the `e` command (`1e cmd`, `e` alone) or the `e` flag of `s` (`s/a/b/e`). */
+const SED_RUNS_A_COMMAND = /(?:^|[;{}\n]|\d|\$|\/)\s*e(?:\s|$|;)|\bs(.).*\1.*\1[gpIiMm0-9w]*e/;
 
 /** The token indexes that are a SQL-exec position -- see SQL_EXEC_FLAGS' own doc comment above. Never opaque under ANY mode, including "command-strict". */
 function sqlExecPositions(tokens: readonly ScanToken[]): ReadonlySet<number> {

@@ -635,3 +635,17 @@ test("someSegmentMatches: every gate-level mention case pins to 'ask', not 'deny
   assert.equal(someSegmentMatches('some-unknown-tool "please never git push --force"', forcePush), "ask");
   assert.equal(someSegmentMatches('some-tool -n watch "…git reset --hard…" f', resetClean), "ask");
 });
+
+// QA 0.6.5 C1 follow-up: awk's program and sed's script are code too. awk
+// runs commands through system(), `print | "cmd"` and `"cmd" | getline`, and
+// GNU sed through its `e` command and flag. Measured live on 0.6.6: an
+// `awk 'BEGIN { system("git reset --hard") }'` left tier 1a but the rules
+// read its program as data, and Jev allowed it as "reversible, local".
+test("someSegmentMatches: awk programs and sed scripts are interpreter code -- 'code' severity, like python3 -c", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches(`awk 'BEGIN { system("git push --force origin main") }'`, forcePush), "code");
+  assert.equal(someSegmentMatches(`awk -F: -v n=1 '{ system("git push --force origin main") }' data.txt`, forcePush), "code");
+  assert.equal(someSegmentMatches(`gawk '{ print | "git push --force origin main" }' data.txt`, forcePush), "code");
+  assert.equal(someSegmentMatches(`sed -n '1e git push --force origin main' notes.md`, forcePush), "code");
+  assert.equal(someSegmentMatches(`sed -e 's/x/git push --force origin main/e' notes.md`, forcePush), "code");
+});

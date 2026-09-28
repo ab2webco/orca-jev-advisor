@@ -2711,3 +2711,16 @@ test('awk running a command through system() no longer passes tier 1a silently',
   assert.notEqual(decisionFor(makeHome(), `awk 'BEGIN { system("${discard}") }'`), 'none')
   assert.equal(decisionFor(makeHome(), "awk 'BEGIN { print 1 }'"), 'none')
 })
+
+test('a real awk system() hard reset is an advice, exactly like python3 -c, never a silent allow', () => {
+  const home = makeHome()
+  const discard = ['git', 'reset', '--hard'].join(' ')
+  const payload = JSON.parse(run(home, `awk 'BEGIN { system("${discard}") }'`))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i)
+})
+
+test('a print-only awk that only mentions a discard still passes silently', () => {
+  const discard = ['git', 'reset', '--hard'].join(' ')
+  assert.equal(decisionFor(makeHome(), `awk '/${discard}/' notes.md`), 'none')
+})
