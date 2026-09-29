@@ -150,7 +150,7 @@ refusal. That is one machine's own replay, not a guarantee about yours.
     same lower tier on two turns in a row AND an estimated saving over the
     remaining steps that beats the cache rewrite by 20%.
   - **What it picks from.** Four tiers per account: Haiku 4.5 (no effort),
-    Sonnet 5 (medium), Opus 5.5 (high), and Fable 5.1 (extra high) only
+    Sonnet 5.5 (medium), Opus 5.5 (high), and Fable 5.1 (extra high) only
     when the catalog marks it available and the account has an open Fable
     weekly window; otherwise the top tier is Opus. A gateway account (a
     non-Anthropic `ANTHROPIC_BASE_URL`) uses the models its own
@@ -436,6 +436,25 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   data in `~/.config/orca-ide` (or `$XDG_CONFIG_HOME/orca-ide`), not
   `~/.config/orca`, so an install run without Orca's own
   `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
+
+## What changed in 0.6.10
+
+- **The standard tier now uses Sonnet 5.5.** All four models (Haiku 4.5,
+  Sonnet 5.5, Opus 5.5 and Fable 5.1) carry their published prices, the
+  effort levels they support and their context windows, all from one
+  catalog. Fable 5.1 is priced at its published $10 / $50 per million
+  tokens; it used to be estimated as twice Opus.
+- **A long conversation is never moved to a model that cannot hold it.**
+  Haiku 4.5 has a 200K context window and the others 1M. The router keeps
+  the context window as a floor on every decision, so a conversation that
+  no longer fits Haiku stays on a larger model.
+- **The Board names models from the catalog**, so a model shows the same
+  name there as in the router and the Models tab.
+- **The catalog checks Anthropic's public pages once a day.** The plugin
+  reads the public models and pricing pages (now fetched from
+  `platform.claude.com`) and offers any change through the existing
+  catalog notice. If a page fails or changes format, the last good data
+  is kept.
 
 ## What changed in 0.6.9
 

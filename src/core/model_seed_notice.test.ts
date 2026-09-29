@@ -56,6 +56,31 @@ test("diff reports shipped ids the install lacks and fields that differ, never a
   );
 });
 
+test("diff compares the docs fields by value: a changed price is a changed row, an equal copy is not", () => {
+  const prices = { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 };
+  const existing = [
+    entry({ id: "same", tier: "standard", prices, thinkingReadsFrom: ["x"] }),
+    entry({ id: "repriced", prices }),
+    entry({ id: "grew", contextWindow: 200_000 }),
+    entry({ id: "old-row" }),
+  ];
+  const shipped = [
+    entry({ id: "same", tier: "standard", prices: { ...prices }, thinkingReadsFrom: ["x"] }),
+    entry({ id: "repriced", prices: { ...prices, output: 12 } }),
+    entry({ id: "grew", contextWindow: 1_000_000 }),
+    entry({ id: "old-row", tier: "simple", supportsEffort: false }),
+  ];
+  const diff = diffModelSeed(existing, shipped);
+  assert.deepEqual(
+    diff.differing.map((row) => ({ id: row.id, fields: row.fields })),
+    [
+      { id: "repriced", fields: ["prices"] },
+      { id: "grew", fields: ["contextWindow"] },
+      { id: "old-row", fields: ["tier", "supportsEffort"] },
+    ],
+  );
+});
+
 test("a notice is due only when the shipped version is newer and something differs", () => {
   const shipped = [entry({ id: "a" }), entry({ id: "b" })];
   const due = decideModelSeedNotice({ shippedVersion: 2, offeredVersion: 1, existing: [entry({ id: "a" })], shipped });

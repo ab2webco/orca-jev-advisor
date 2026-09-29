@@ -9,10 +9,10 @@ import { subagentModelLabel, subagentWhy, subagentsStatusPart } from "./subagent
 function entry(id: string, rank: number): ModelEntry {
   return { id, provider: "anthropic", label: id, rank, agentModel: id, source: "", available: true };
 }
-const TIERS = resolveAccountTiers({ env: {}, catalog: [entry("claude-opus-5-5", 1), entry("claude-sonnet-5", 2), entry("claude-haiku-4-5-20251001", 3)], quota: null });
+const TIERS = resolveAccountTiers({ env: {}, catalog: [entry("claude-opus-5-5", 1), entry("claude-sonnet-5-5", 2), entry("claude-haiku-4-5-20251001", 3)], quota: null });
 
 function decision(overrides: Partial<SubagentDecision>): SubagentDecision {
-  return { tier: "standard", confidence: 0.9, current: "claude-opus-5-5", proposed: "claude-sonnet-5", model: "claude-opus-5-5", changed: false, reason: "same", guard: null, ...overrides };
+  return { tier: "standard", confidence: 0.9, current: "claude-opus-5-5", proposed: "claude-sonnet-5-5", model: "claude-opus-5-5", changed: false, reason: "same", guard: null, ...overrides };
 }
 
 test("subagentWhy: an explicit model kept is an explicit request", () => {
@@ -46,7 +46,7 @@ test("subagentModelLabel: the account's label for a known id, a family name for 
   assert.equal(subagentModelLabel("claude-opus-5-5[1m]", TIERS), "Opus 5.5");
   assert.equal(subagentModelLabel("opus", TIERS), "Opus 5.5");
   assert.equal(subagentModelLabel("sonnet", null), "Sonnet");
-  assert.equal(subagentModelLabel("claude-sonnet-5", null), "Sonnet");
+  assert.equal(subagentModelLabel("claude-sonnet-5-5", null), "Sonnet");
   assert.equal(subagentModelLabel("some-gateway-model", null), "some-gateway-model");
 });
 
@@ -57,11 +57,11 @@ test("subagentsStatusPart: nothing running shows nothing", () => {
 test("subagentsStatusPart: groups by model and reason, in the order they started", () => {
   const running = [
     { label: "Opus 5.5", why: "explicit" as const },
-    { label: "Sonnet 5", why: "chosen" as const },
+    { label: "Sonnet 5.5", why: "chosen" as const },
     { label: "Opus 5.5", why: "explicit" as const },
   ];
-  assert.equal(subagentsStatusPart("es", running), "agentes: 2 en Opus 5.5 (pedido explícito), 1 en Sonnet 5 (lo eligió Jev)");
-  assert.equal(subagentsStatusPart("en", running), "agents: 2 on Opus 5.5 (explicit request), 1 on Sonnet 5 (chosen by Jev)");
+  assert.equal(subagentsStatusPart("es", running), "agentes: 2 en Opus 5.5 (pedido explícito), 1 en Sonnet 5.5 (lo eligió Jev)");
+  assert.equal(subagentsStatusPart("en", running), "agents: 2 on Opus 5.5 (explicit request), 1 on Sonnet 5.5 (chosen by Jev)");
 });
 
 test("subagentsStatusPart: every reason has words in both languages", () => {

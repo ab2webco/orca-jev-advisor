@@ -30,6 +30,7 @@ export type ModelRouterKey =
   | "why.prices-unknown"
   | "why.unknown-savings"
   | "why.pointer-prompt"
+  | "why.context-window"
   | "agents.lead"
   | "agents.group"
   | "agents.why.explicit"
@@ -71,6 +72,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.prices-unknown": "precios desconocidos",
     "why.unknown-savings": "ahorro aún sin medir",
     "why.pointer-prompt": "el mensaje remite a un documento",
+    "why.context-window": "el contexto no cabe en un modelo menor",
     // 0.6.8 T6: the subagents running now (subagent_status.ts).
     "agents.lead": "agentes: {{groups}}",
     "agents.group": "{{n}} en {{model}} ({{why}})",
@@ -112,6 +114,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.prices-unknown": "prices unknown",
     "why.unknown-savings": "saving not measured yet",
     "why.pointer-prompt": "the prompt points to a document",
+    "why.context-window": "the context does not fit a smaller model",
     "agents.lead": "agents: {{groups}}",
     "agents.group": "{{n}} on {{model}} ({{why}})",
     "agents.why.explicit": "explicit request",

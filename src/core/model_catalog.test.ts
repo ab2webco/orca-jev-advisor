@@ -56,8 +56,59 @@ test("the shipped Claude ladder follows the models overview, largest first", () 
   const ladder = orderedLadder(parseModelSeedEntries(seedFile)).filter((row) => row.rank !== null);
   assert.deepEqual(
     ladder.map((row) => row.id),
-    ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+    ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"],
   );
+});
+
+test("seed v2: every shipped row carries its tier, prices, effort support and context window from the docs", () => {
+  assert.ok(parseModelSeedVersion(seedFile) >= 2, "the seed must be version 2 so existing installs are offered Sonnet 5.5");
+  const byId = new Map(parseModelSeedEntries(seedFile).map((row) => [row.id, row] as const));
+  const sonnet = byId.get("claude-sonnet-5-5");
+  assert.equal(sonnet?.label, "Claude Sonnet 5.5");
+  assert.equal(sonnet?.summary, "The best combination of speed and intelligence");
+  assert.equal(sonnet?.tier, "standard");
+  assert.deepEqual(sonnet?.prices, { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 });
+  assert.deepEqual(sonnet?.thinkingReadsFrom, ["claude-sonnet-5", "claude-haiku-4-5-20251001"]);
+  assert.equal(sonnet?.defaultEffort, "high");
+  const fable = byId.get("claude-fable-5-1");
+  assert.equal(fable?.tier, "frontier");
+  assert.deepEqual(fable?.prices, { input: 10, cacheWrite: 20, cacheRead: 0.25, output: 50 });
+  assert.equal(fable?.contextWindow, 1_000_000);
+  assert.equal(fable?.thinkingReadsFrom, undefined, "compatibility the docs do not state is never invented");
+  const opus = byId.get("claude-opus-5-5");
+  assert.equal(opus?.tier, "complex");
+  assert.equal(opus?.defaultEffort, "medium");
+  const haiku = byId.get("claude-haiku-4-5-20251001");
+  assert.equal(haiku?.tier, "simple");
+  assert.equal(haiku?.supportsEffort, false);
+  assert.equal(haiku?.defaultEffort, undefined);
+  assert.equal(haiku?.contextWindow, 200_000);
+  assert.equal(haiku?.retiresNotBefore, "2026-10-15");
+  assert.equal(byId.has("claude-sonnet-5"), false, "Sonnet 5 is legacy");
+});
+
+test("the optional docs fields validate when present and are not required", () => {
+  const full = {
+    ...entry({ id: "a" }),
+    tier: "standard",
+    prices: { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 },
+    supportsEffort: true,
+    contextWindow: 1_000_000,
+    thinkingReadsFrom: ["b"],
+    defaultEffort: "high",
+    retiresNotBefore: "2027-09-28",
+  };
+  assert.equal(isModelEntry(full), true);
+  assert.equal(isModelEntry(entry({ id: "a" })), true);
+  assert.equal(isModelEntry({ ...full, tier: "huge" }), false);
+  assert.equal(isModelEntry({ ...full, prices: { input: 2, output: 10 } }), false);
+  assert.equal(isModelEntry({ ...full, prices: { input: -1, cacheWrite: 4, cacheRead: 0.2, output: 10 } }), false);
+  assert.equal(isModelEntry({ ...full, supportsEffort: "yes" }), false);
+  assert.equal(isModelEntry({ ...full, contextWindow: 1.5 }), false);
+  assert.equal(isModelEntry({ ...full, contextWindow: 0 }), false);
+  assert.equal(isModelEntry({ ...full, thinkingReadsFrom: [3] }), false);
+  assert.equal(isModelEntry({ ...full, defaultEffort: "" }), false);
+  assert.equal(isModelEntry({ ...full, retiresNotBefore: "soon" }), false);
 });
 
 test("malformed rows cost only themselves", () => {

@@ -27,6 +27,19 @@
 
 import { isBoolean, isRecord, isString } from "../guards.ts";
 
+export type RouterTier = "simple" | "standard" | "complex" | "frontier";
+
+/** Weakest first: an index into this list is a tier's strength. */
+export const ROUTER_TIERS: readonly RouterTier[] = ["simple", "standard", "complex", "frontier"];
+
+/** List prices in $ per million tokens. `cacheWrite` is the 1-hour cache write price. */
+export interface ModelPrices {
+  readonly input: number;
+  readonly cacheWrite: number;
+  readonly cacheRead: number;
+  readonly output: number;
+}
+
 export interface ModelEntry {
   readonly id: string;
   readonly provider: string;
@@ -41,6 +54,18 @@ export interface ModelEntry {
   readonly available: boolean;
   /** The provider's own one-line description, quoted from `source`. */
   readonly summary?: string;
+  /** The router tier this model serves on an Anthropic account. */
+  readonly tier?: RouterTier;
+  readonly prices?: ModelPrices;
+  readonly supportsEffort?: boolean;
+  /** Context window in tokens. */
+  readonly contextWindow?: number;
+  /** Model ids whose thinking blocks this model can read; absent = only its own. */
+  readonly thinkingReadsFrom?: readonly string[];
+  /** The API's default effort level; informational. */
+  readonly defaultEffort?: string;
+  /** ISO date before which the provider will not retire the model; informational. */
+  readonly retiresNotBefore?: string;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -49,6 +74,32 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isRank(value: unknown): value is number | null {
   return value === null || (typeof value === "number" && Number.isInteger(value) && value >= 1);
+}
+
+export function isRouterTier(value: unknown): value is RouterTier {
+  return ROUTER_TIERS.some((tier) => tier === value);
+}
+
+function isPrice(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+export function isModelPrices(value: unknown): value is ModelPrices {
+  return (
+    isRecord(value) && isPrice(value.input) && isPrice(value.cacheWrite) && isPrice(value.cacheRead) && isPrice(value.output)
+  );
+}
+
+function isContextWindow(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isIsoDate(value: unknown): value is string {
+  return isString(value) && /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function optional(value: unknown, guard: (candidate: unknown) => boolean): boolean {
+  return value === undefined || guard(value);
 }
 
 export function isModelEntry(value: unknown): value is ModelEntry {
@@ -61,7 +112,14 @@ export function isModelEntry(value: unknown): value is ModelEntry {
     isNonEmptyString(value.agentModel) &&
     isString(value.source) &&
     isBoolean(value.available) &&
-    (value.summary === undefined || isString(value.summary))
+    (value.summary === undefined || isString(value.summary)) &&
+    optional(value.tier, isRouterTier) &&
+    optional(value.prices, isModelPrices) &&
+    optional(value.supportsEffort, isBoolean) &&
+    optional(value.contextWindow, isContextWindow) &&
+    optional(value.thinkingReadsFrom, (ids) => Array.isArray(ids) && ids.every(isNonEmptyString)) &&
+    optional(value.defaultEffort, isNonEmptyString) &&
+    optional(value.retiresNotBefore, isIsoDate)
   );
 }
 

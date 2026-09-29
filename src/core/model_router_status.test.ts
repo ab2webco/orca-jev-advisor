@@ -127,3 +127,8 @@ test("nit 10: the person's own switch reads as their choice, both locales, both 
   assert.equal(routerPersonStatusText("en", "active", "Sonnet 5"), "model: Sonnet 5 · kept: your choice");
   assert.equal(routerPersonStatusText("en", "measure", "Sonnet 5"), "would use: Sonnet 5 · would keep: your choice");
 });
+
+test("kept by the context-window floor: named in both locales", () => {
+  assert.equal(routerStatusText("es", "active", { ...KEPT, kept: "context-window" }), "modelo: Opus 5.5 · esfuerzo muy alto · se mantiene: el contexto no cabe en un modelo menor (Jev: consultar)");
+  assert.equal(routerStatusText("en", "active", { ...KEPT, kept: "context-window" }), "model: Opus 5.5 · extra high effort · kept: the context does not fit a smaller model (Jev: ask)");
+});

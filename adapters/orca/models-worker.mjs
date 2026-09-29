@@ -22,6 +22,10 @@
  *                                          own runSecretMirrorScript).
  *   options.readSummary(catalog)       -- read-model-measurements.mjs, fed
  *                                          the stored catalog.
+ *   options.fetchText(url)             -- one public docs page as markdown,
+ *                                          `{ ok: true, text }` or
+ *                                          `{ ok: false, detail }`, never a
+ *                                          throw (refreshModelDocs).
  *
  * Neither has a default here: this file never spawns a child process
  * itself (that plumbing -- PLUGIN_ROOT, CONFIG_DIR, CACHE_DIR, sidecarEnv,
@@ -54,6 +58,19 @@ import {
   parseModelOfferedVersion,
   shouldSeedModels,
 } from '../../src/core/model_seed_notice.ts'
+import {
+  docsCheckDue,
+  docsSeedRows,
+  effectiveModelSeed,
+  MODELS_OVERVIEW_URL,
+  MODELS_PRICING_URL,
+  nextDocsSeed,
+  parseDocsCheck,
+  parseDocsSeed,
+  parseModelPricing,
+  parseModelsOverview,
+  shippedOffer,
+} from '../../src/core/model_docs.ts'
 
 // ---------------------------------------------------------------------------
 // Storage keys. `models`/`modelsConfig` are written directly by the config
@@ -69,6 +86,11 @@ export const MODELS_SEED_NOTICE_KEY = 'modelsSeedNotice'
 export const MODELS_SEED_REQUEST_KEY = 'modelsSeedRequest'
 export const MODELS_SEED_RESULT_KEY = 'modelsSeedResult'
 export const MODEL_MEASUREMENTS_KEY = 'modelMeasurements'
+/** The rows the daily docs check last read, `{ version, fetchedAt, models }`
+ *  (src/core/model_docs.ts), offered like a newer shipped seed. */
+export const MODELS_DOCS_SEED_KEY = 'modelsDocsSeed'
+/** When the docs check last ran and how it went: `{ at, ok, detail? }`. */
+export const MODELS_DOCS_CHECK_KEY = 'modelsDocsCheck'
 // Re-exported so every model-related storage key this plugin owns can be
 // imported from one place; model_seed_notice.ts remains the one place that
 // DEFINES them (it also owns shouldSeedModels/parseModelOfferedVersion,
@@ -104,10 +126,19 @@ function nowIso (options) {
  *  destructive, the same "retried next tick, costs one log line" contract
  *  seedPoliciesIfEmpty/computePolicySeedNoticeDecision already use for
  *  their own seed file. */
-async function readSeedPayload (options) {
+async function readShippedPayload (options) {
   if (typeof options.seedPayload === 'function') return options.seedPayload()
   const raw = await readFile(MODELS_SEED_PATH, 'utf8')
   return JSON.parse(raw)
+}
+
+/** The baseline to offer: the docs check's rows when they are newer than
+ *  the shipped seed (model_docs.ts's effectiveModelSeed), else the shipped
+ *  seed. Planting, the notice and applying a choice all read this one, so
+ *  the rows a person accepts are the rows they were shown. */
+async function readSeedPayload (storageHost, options) {
+  const shipped = await readShippedPayload(options)
+  return effectiveModelSeed(shipped, parseDocsSeed(await storageHost.get(MODELS_DOCS_SEED_KEY)))
 }
 
 /** Whether the last readout this worker published considered the catalog
@@ -179,7 +210,7 @@ export async function seedModelsIfEmpty (orca, storageHost, options = {}) {
     const existing = parseModelCatalog(stored)
     if (!shouldSeedModels(marker, existing)) return
 
-    const seed = await readSeedPayload(options)
+    const seed = await readSeedPayload(storageHost, options)
     const entries = parseModelSeedEntries(seed)
     if (entries.length > 0) await storageHost.set(MODELS_KEY, entries)
     await storageHost.set(MODEL_SEED_MARKER_KEY, true)
@@ -229,7 +260,7 @@ function noticeItems (diff) {
  *  own computePolicySeedNoticeDecision. */
 async function computeModelsSeedNotice (orca, storageHost, options) {
   try {
-    const seed = await readSeedPayload(options)
+    const seed = await readSeedPayload(storageHost, options)
     const shipped = parseModelSeedEntries(seed)
     const shippedVersion = parseModelSeedVersion(seed)
     const [offeredMarker, storedModels] = await Promise.all([
@@ -301,7 +332,7 @@ export async function publishModelsSeedNotice (orca, storageHost, options = {}) 
  * on it, so the notice stops nagging.
  */
 async function applyModelsSeedRequest (orca, storageHost, request, options) {
-  const seed = await readSeedPayload(options)
+  const seed = await readSeedPayload(storageHost, options)
   const shipped = parseModelSeedEntries(seed)
   const shippedVersion = parseModelSeedVersion(seed)
 
@@ -362,6 +393,44 @@ export async function attendModelsSeedRequest (orca, storageHost, options = {}) 
     detail: result.detail ?? null,
   }).catch((err) => orca.log(`models seed result publish failed: ${err.message}`))
 
+  await publishModelsSeedNotice(orca, storageHost, options)
+}
+
+/**
+ * The daily docs check: reads Anthropic's public models overview and
+ * pricing pages (options.fetchText), turns them into catalog rows
+ * (model_docs.ts) and stores them as the docs seed, which the seed notice
+ * then offers when they differ from what this install has. Runs at most
+ * once a day, counted from the last attempt. Any failure -- a fetch, a page
+ * whose tables changed shape -- keeps the last good docs seed, logs one
+ * line, and changes nothing else: the stored catalog, and so routing, only
+ * ever changes when the person accepts an offer.
+ */
+export async function refreshModelDocs (orca, storageHost, options = {}) {
+  const at = nowIso(options)
+  const fail = async (detail) => {
+    orca.log(`model docs check failed: ${String(detail).slice(0, 160)}`)
+    await storageHost.set(MODELS_DOCS_CHECK_KEY, { at, ok: false, detail: String(detail).slice(0, 160) })
+      .catch(() => {})
+  }
+  try {
+    if (!docsCheckDue(parseDocsCheck(await storageHost.get(MODELS_DOCS_CHECK_KEY)), Date.parse(at))) return
+    await storageHost.set(MODELS_DOCS_CHECK_KEY, { at, ok: false, detail: 'in progress' })
+    const [overview, pricing] = await Promise.all([options.fetchText(MODELS_OVERVIEW_URL), options.fetchText(MODELS_PRICING_URL)])
+    if (!overview.ok) return fail(`models overview: ${overview.detail}`)
+    if (!pricing.ok) return fail(`pricing: ${pricing.detail}`)
+    const overviewRows = parseModelsOverview(overview.text)
+    const prices = parseModelPricing(pricing.text)
+    if (overviewRows.length === 0) return fail('models overview: no model table found')
+    if (prices.size === 0) return fail('pricing: no model pricing table found')
+    const shipped = await readShippedPayload(options)
+    const rows = docsSeedRows(overviewRows, prices, shippedOffer(shipped).models)
+    const previous = parseDocsSeed(await storageHost.get(MODELS_DOCS_SEED_KEY))
+    await storageHost.set(MODELS_DOCS_SEED_KEY, nextDocsSeed(previous, rows, shippedOffer(shipped), at))
+    await storageHost.set(MODELS_DOCS_CHECK_KEY, { at, ok: true })
+  } catch (error) {
+    return fail(error?.message ?? error)
+  }
   await publishModelsSeedNotice(orca, storageHost, options)
 }
 

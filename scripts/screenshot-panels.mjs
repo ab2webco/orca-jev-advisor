@@ -94,7 +94,7 @@ const MODEL_MEASUREMENT_RECORDS = [
   {
     type: 'model-decision', id: 'tool-2', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
     subagentType: 'Explore', promptChars: 90, requestedModel: 'opus',
-    recommended: { id: 'claude-sonnet-5', agentModel: 'sonnet', rank: 3 },
+    recommended: { id: 'claude-sonnet-5-5', agentModel: 'sonnet', rank: 3 },
     score: 0.31, confidence: 0.81, applied: false, rewriteReason: 'measurement', ladderSize: 3,
     latencyMs: 448, permissionMode: 'default', complexity: { tier: 'trivial', tierIndex: 0, score: 0.1 },
   },
@@ -104,7 +104,7 @@ const MODEL_MEASUREMENT_RECORDS = [
   {
     type: 'model-decision', id: 'tool-3', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
     subagentType: 'general-purpose', promptChars: 512, requestedModel: 'sonnet',
-    recommended: { id: 'claude-sonnet-5', agentModel: 'sonnet', rank: 3 },
+    recommended: { id: 'claude-sonnet-5-5', agentModel: 'sonnet', rank: 3 },
     score: 0.55, confidence: 0.69, applied: false, rewriteReason: 'measurement', ladderSize: 3,
     latencyMs: 390, permissionMode: 'default', complexity: { tier: 'standard', tierIndex: 1, score: 0.4 },
   },
@@ -654,7 +654,7 @@ const CONSUMPTION_READY = {
       last24h: {
         stepCount: 42,
         byModel: [
-          { model: 'claude-sonnet-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+          { model: 'claude-sonnet-5-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
           { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
         ],
         avgMainStepContextReread: 162345,
@@ -664,7 +664,7 @@ const CONSUMPTION_READY = {
       },
       last7d: {
         stepCount: 300,
-        byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+        byModel: [{ model: 'claude-sonnet-5-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
         avgMainStepContextReread: 150500,
         subagentShare: 0.3,
         byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } },
@@ -694,7 +694,7 @@ const CONSUMPTION_READY = {
  * (one row per target, off/measure/active) and the board's Consumption
  * card's own "Model router" subsection, both populated at once: this
  * computer in `measure`, one Orca account in `active`, and a realistic
- * decision summary (real current model ids: Sonnet 5/Opus 5.5/Haiku 4.5,
+ * decision summary (real current model ids: Sonnet 5.5/Opus 5.5/Haiku 4.5,
  * same as CONSUMPTION_READY above) with decisions at all three points, an
  * applied switch, and a real dollar estimate -- so both new UI pieces show
  * their populated state, not the honest-but-uninteresting empty one.
@@ -702,7 +702,7 @@ const CONSUMPTION_READY = {
 const ROUTER_EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const ROUTER_TIERS_ANTHROPIC = {
   simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
-  standard: { modelId: 'claude-sonnet-5', label: 'Sonnet 5', supportsEffort: true },
+  standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
 }
@@ -908,7 +908,7 @@ const ACTIVITY_READY_PROJECTS = [
     gateOutcomes: { allowed: 58, advised: 6, asked: 3, blocked: 1 },
     steps: { main: 90, subagent: 34 },
     tokensByModel: [
-      { model: 'claude-sonnet-5', input: 42000, output: 8100, cacheRead: 310000, cacheWrite: 15200, estimatedCostUsd: 1.86 },
+      { model: 'claude-sonnet-5-5', input: 42000, output: 8100, cacheRead: 310000, cacheWrite: 15200, estimatedCostUsd: 1.86 },
       { model: 'claude-opus-5-5', input: 3200, output: 900, cacheRead: 40000, cacheWrite: 2100, estimatedCostUsd: 0.71 },
     ],
     totalEstimatedCostUsd: 2.57,
@@ -929,7 +929,7 @@ const ACTIVITY_READY_PROJECTS = [
     days: activityDaysFixture(4, 6, 10),
     gateOutcomes: { allowed: 20, advised: 1, asked: 2, blocked: 0 },
     steps: { main: 40, subagent: 6 },
-    tokensByModel: [{ model: 'claude-sonnet-5', input: 15000, output: 2600, cacheRead: 90000, cacheWrite: 5100, estimatedCostUsd: 0.52 }],
+    tokensByModel: [{ model: 'claude-sonnet-5-5', input: 15000, output: 2600, cacheRead: 90000, cacheWrite: 5100, estimatedCostUsd: 0.52 }],
     totalEstimatedCostUsd: 0.52,
     router: {
       total: 3, applied: 2, measured: 1,
@@ -968,7 +968,7 @@ const ACTIVITY_READY_PROJECTS = [
     days: activityDaysFixture(0, 1, 2),
     gateOutcomes: { allowed: 3, advised: 0, asked: 0, blocked: 0 },
     steps: { main: 4, subagent: 0 },
-    tokensByModel: [{ model: 'claude-sonnet-5', input: 2000, output: 400, cacheRead: 6000, cacheWrite: 300, estimatedCostUsd: 0.02 }],
+    tokensByModel: [{ model: 'claude-sonnet-5-5', input: 2000, output: 400, cacheRead: 6000, cacheWrite: 300, estimatedCostUsd: 0.02 }],
     totalEstimatedCostUsd: 0.02,
     router: null,
   },

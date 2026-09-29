@@ -68,6 +68,7 @@ import {
   mirrorModels,
   publishModelMeasurements,
   publishModelsSeedNotice,
+  refreshModelDocs,
   seedModelsIfEmpty,
 } from './models-worker.mjs'
 
@@ -1250,11 +1251,30 @@ function runReadModelMeasurementsScript (catalog) {
   )
 }
 
+const MODEL_DOCS_TIMEOUT_MS = 15_000
+const MODEL_DOCS_MAX_CHARS = 1024 * 1024
+
+/** One public docs page as markdown for models-worker.mjs's daily docs
+ *  check -- a plain fetch from this worker, the same way the Jev calls in
+ *  this file reach the network. Never throws: any failure is `{ ok: false,
+ *  detail }`, and the caller keeps its last good data. */
+async function fetchDocsText (url) {
+  try {
+    const response = await fetch(url, { headers: { Accept: 'text/markdown' }, signal: AbortSignal.timeout(MODEL_DOCS_TIMEOUT_MS) })
+    if (!response.ok) return { ok: false, detail: `HTTP ${response.status}` }
+    const text = await response.text()
+    if (text.length > MODEL_DOCS_MAX_CHARS) return { ok: false, detail: `page larger than ${MODEL_DOCS_MAX_CHARS} characters` }
+    return { ok: true, text }
+  } catch (error) {
+    return { ok: false, detail: String(error?.message ?? error).slice(0, 160) }
+  }
+}
+
 /** The real `options` every models-worker.mjs call in this file passes --
- *  its own sidecar-spawning dependencies, kept in one place so the several
- *  call sites below cannot drift onto two different mirror/readSummary
- *  implementations. */
-const MODELS_WORKER_OPTIONS = { mirror: runSecretMirrorScript, readSummary: runReadModelMeasurementsScript }
+ *  its own sidecar-spawning and network dependencies, kept in one place so
+ *  the several call sites below cannot drift onto two different
+ *  mirror/readSummary/fetchText implementations. */
+const MODELS_WORKER_OPTIONS = { mirror: runSecretMirrorScript, readSummary: runReadModelMeasurementsScript, fetchText: fetchDocsText }
 
 // ---------------------------------------------------------------------------
 // Consumption summary (JEV-060 slice 1, T4) -- aggregates T1's hourly
@@ -2732,6 +2752,10 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial models mirror failed: ${error.message}`))
     .then(() => publishModelsSeedNotice(orca, storageHost, MODELS_WORKER_OPTIONS))
     .catch((error) => orca.log(`initial models seed notice failed: ${error.message}`))
+    // The daily docs check: at most once a day, so on most activations
+    // this returns without a request.
+    .then(() => refreshModelDocs(orca, storageHost, MODELS_WORKER_OPTIONS))
+    .catch((error) => orca.log(`initial model docs check failed: ${error.message}`))
   // "Al activarse, el worker debe dejar funcionando todo lo que hoy es
   // manual" (T8): every activation re-asserts the hook, the env var and the
   // mod-skills link, idempotently -- a fresh install where none of this
@@ -2789,6 +2813,9 @@ export default function activate (orca) {
     // 0.6.2 E7: a mode set from a terminal shows up without a panel save.
     publishModelRouterStatus(orca, storageHost)
       .catch((error) => orca.log(`model router status refresh failed: ${error.message}`))
+    // Gated to once a day inside; this tick only gives it a chance to run.
+    refreshModelDocs(orca, storageHost, MODELS_WORKER_OPTIONS)
+      .catch((error) => orca.log(`model docs check refresh failed: ${error.message}`))
   }, ACCOUNT_QUOTA_REFRESH_MS)
   if (typeof accountQuotaTimer.unref === 'function') accountQuotaTimer.unref()
 

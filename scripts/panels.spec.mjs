@@ -1871,6 +1871,12 @@ test('changing a row\'s mode and clicking its save button sends a modelRouterCon
  *  loosely. Two models, one quota account near its weekly limit, and every
  *  one of the four recommendation triggers present with overThreshold: true
  *  so the populated test can assert on every warning line at once. */
+/** The person's stored catalog (storage key `models`): the Board names models from it. */
+const BOARD_MODELS = [
+  { id: 'claude-opus-5-5', provider: 'anthropic', label: 'Claude Opus 5.5', rank: 2, agentModel: 'opus', source: '', available: true },
+  { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Claude Sonnet 5', rank: 3, agentModel: 'sonnet', source: '', available: true }
+]
+
 const POPULATED_CONSUMPTION = {
   ok: true,
   usage: {
@@ -1977,7 +1983,7 @@ test('a side that reported no token figure says so instead of printing a zero', 
 })
 
 test('a populated consumptionSummary renders real per-model shares, quota bars, and every present overThreshold recommendation', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION, models: BOARD_MODELS })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Sonnet 5/, 'the first model\'s friendly name did not render')
@@ -2553,7 +2559,7 @@ test('no two neighbouring controls touch on any board tab', { skip: chromium ? f
 
 const TIERS_ANTHROPIC = {
   simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
-  standard: { modelId: 'claude-sonnet-5', label: 'Sonnet 5', supportsEffort: true },
+  standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true }
 }
@@ -2577,7 +2583,7 @@ test('0.6.2: each account shows tier → the model it resolves to → its effort
     }))
     assert.deepEqual(table, [
       { cells: ['Ask', 'Haiku 4.5'], effort: null },
-      { cells: ['Implement', 'Sonnet 5'], effort: 'medium' },
+      { cells: ['Implement', 'Sonnet 5.5'], effort: 'medium' },
       { cells: ['Analyse', 'Opus 5.5'], effort: 'xhigh' },
       { cells: ['Deep reasoning', 'Opus 5.5'], effort: 'xhigh' }
     ])
@@ -3488,7 +3494,7 @@ test('activity: a populated card shows gate outcomes and tokens/cost by model', 
     ],
     totalEstimatedCostUsd: 1.23
   })
-  const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
+  const { browser, page, errors } = await openBoardPanel({ ...activitySummary([project]), models: BOARD_MODELS })
   try {
     const detail = await activityCardDetail(page, 'alpha')
     assert.ok(detail, 'expected a card for "alpha"')

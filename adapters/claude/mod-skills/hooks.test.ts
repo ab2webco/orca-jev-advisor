@@ -926,7 +926,7 @@ const ROUTER_DECISIONS_PATH = `${CACHE_DIR}/model-router-decisions-${TURN_USAGE_
 const SEED_MODELS = [
   { id: "claude-fable-5-1", provider: "anthropic", label: "Claude Fable 5.1", rank: 1, agentModel: "fable", source: "", available: false },
   { id: "claude-opus-5-5", provider: "anthropic", label: "Claude Opus 5.5", rank: 2, agentModel: "opus", source: "", available: true },
-  { id: "claude-sonnet-5", provider: "anthropic", label: "Claude Sonnet 5", rank: 3, agentModel: "sonnet", source: "", available: true },
+  { id: "claude-sonnet-5-5", provider: "anthropic", label: "Claude Sonnet 5.5", rank: 3, agentModel: "sonnet", source: "", available: true },
   { id: "claude-haiku-4-5-20251001", provider: "anthropic", label: "Claude Haiku 4.5", rank: 4, agentModel: "haiku", source: "", available: true },
 ];
 
@@ -1061,7 +1061,7 @@ test("router, active: a standard prompt runs on Sonnet at medium effort", async 
   host.fetchQueue.push(tierAnswer("standard"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
-  assert.equal(seen.model, "claude-sonnet-5");
+  assert.equal(seen.model, "claude-sonnet-5-5");
   assert.equal(seen.effort, "medium");
 });
 
@@ -1161,7 +1161,7 @@ test("router, active: the person switching model mid-session wins -- the router 
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
   host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
-  const manual = turnStepEvent({ index: 1, model: "claude-sonnet-5", effort: "medium" });
+  const manual = turnStepEvent({ index: 1, model: "claude-sonnet-5-5", effort: "medium" });
   assert.deepEqual(await stepThrough(handlers, engine, manual), manual);
 });
 
@@ -1385,10 +1385,10 @@ test("JEV-061 slice 2: a subagent routed to Sonnet for standard work gets medium
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnThrough(handlers, engine, spawnEvent());
 
-  const first = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  const first = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
   assert.equal(first.effort, "medium");
 
-  const second = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-sonnet-5", effort: "xhigh" }));
+  const second = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-sonnet-5-5", effort: "xhigh" }));
   assert.equal(second.effort, "medium", "kept sticky on a later step of the same agent");
 });
 
@@ -1399,7 +1399,7 @@ test("JEV-061 slice 2: an explicit parent model leaves the subagent's effort unt
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnThrough(handlers, engine, spawnEvent({ model: "sonnet" }));
 
-  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
   assert.equal(step.effort, "xhigh");
 });
 
@@ -1419,7 +1419,7 @@ test("JEV-061 slice 2, 0.6.3 F0: an unguarded subagent's effort is raised when t
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
-  await spawnThrough(handlers, engine, spawnEvent({ parentModel: "claude-sonnet-5" }));
+  await spawnThrough(handlers, engine, spawnEvent({ parentModel: "claude-sonnet-5-5" }));
 
   // complex -> high, and this step only carries "low" -- unguarded, the tier's effort wins.
   const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "low" }));
@@ -1435,7 +1435,7 @@ test("JEV-061 slice 2: measure mode changes nothing", async () => {
   const { handlers, engine } = loadHooks(host);
   await spawnThrough(handlers, engine, spawnEvent());
 
-  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
   assert.equal(step.effort, "xhigh");
 });
 
@@ -1912,7 +1912,7 @@ test("0.6.2 E3 (hook): the account's per-tier effort setting is what the router 
   host.files.set(`${ACCOUNT_DIR}/settings.json`, JSON.stringify({ env: {}, pluginConfigs: { "orca-jev-mod-skills@skills-dir": { options: { routerMode: "active", routerEffort: { complex: "xhigh", simple: "bogus" } } } } }));
   host.fetchQueue.push(tierAnswer("complex"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
-  const first = await promptTurn(host, handlers, engine, 1, "why does checkout double-charge sometimes?", { model: "claude-sonnet-5", effort: "medium" });
+  const first = await promptTurn(host, handlers, engine, 1, "why does checkout double-charge sometimes?", { model: "claude-sonnet-5-5", effort: "medium" });
   assert.equal(first.model, "claude-opus-5-5");
   assert.equal(first.effort, "xhigh");
 });
@@ -2028,8 +2028,8 @@ test("nit 10 (hook): after the person switches model, the router part says it is
   await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
   assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
   host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
-  await stepThrough(handlers, engine, turnStepEvent({ index: 1, model: "claude-sonnet-5", effort: "medium" }));
-  assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5 · kept: your choice");
+  await stepThrough(handlers, engine, turnStepEvent({ index: 1, model: "claude-sonnet-5-5", effort: "medium" }));
+  assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5.5 · kept: your choice");
 });
 
 // JEVADV-76: Jev rejects a choice over more than 255 options with a 400, and
@@ -2135,7 +2135,7 @@ test("T6: with the router off a subagent still shows, on the model it inherited"
   const host = makeFakeHost();
   seedRouterAccount(host);
   const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
-  await spawnAs(handlers, engine, spawnEvent(), "agent-1", "claude-sonnet-5");
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1", "claude-sonnet-5-5");
   assert.match(lastStatus(host), /agents: 1 on Sonnet \(inherited\)/);
 });
 
