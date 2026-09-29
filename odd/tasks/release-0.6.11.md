@@ -40,7 +40,7 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
   - [x] T2e accounts added after Configure get connected: the worker re-scans
         `claude-accounts/` and installs on new ones (only once Configure has run),
         and re-installs when a hook points at a stale plugin root (9f34b9b; npm test 2545/2545)
-- [x] T3 redaction of repo, branch, worktree, policies, advisor.decide (ca7d6f4, e9eb13f, d7daaa4, d185cab; npm test 2565/2565)
+- [x] T3 redaction of repo, branch, worktree, policies, advisor.decide (ca7d6f4, e9eb13f, d7daaa4, d185cab; command and prompt text through the same table 953a9d8, 93810a6; npm test 2581/2581)
 - [ ] T4 calibrated confidence floor
 - [ ] T5 effort before model
 - [x] T6 live quota from `$.session.usage().rateLimits` (five_hour, seven_day: percentUsed, resetsAt), tighter-of-two band, `quotaSource` in the decision record; live figure dropped once its resetsAt passes, mirror fills a missing window while <= 30 min old (de5d377, 65402bf, 12de4d6; npm test 2575/2575; no panel touched)
