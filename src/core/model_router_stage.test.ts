@@ -542,10 +542,64 @@ test("E1: an upgrade back to the session's own model uses the tier's effort, not
   assert.equal(decision.effortTarget, "high");
 });
 
-test("E1: frontier work on Opus (no Fable) upgrades at xhigh, the frontier tier's own effort", () => {
-  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "frontier", confidence: 0.9 }, currentModel: "claude-sonnet-5-5", currentEffort: "medium" });
+test("E1: frontier work on Opus (no Fable) upgrades at xhigh, the frontier tier's own effort, once effort is at its ceiling", () => {
+  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "frontier", confidence: 0.9 }, currentModel: "claude-sonnet-5-5", currentEffort: "high" });
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.effort, "xhigh");
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.11 T5: effort before model (a model change drops the prompt cache)
+// ---------------------------------------------------------------------------
+
+const ON_SONNET = { currentModel: "claude-sonnet-5-5", configuredModel: "claude-sonnet-5-5", configuredEffort: "medium" } as const;
+
+test("T5: a one-step upgrade first raises the effort on the current model when it is below what the work asks", () => {
+  const decision = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "medium" });
+  assert.equal(decision.reason, "effort-raise");
+  assert.equal(decision.model, "claude-sonnet-5-5");
+  assert.equal(decision.effort, "high");
+  assert.equal(decision.changed, true);
+  assert.equal(decision.effortTarget, "high");
+  assert.equal(decision.pending, null);
+});
+
+test("T5: the effort is capped at high on the smaller model, even for frontier work", () => {
+  const decision = stage({ ...ON_SONNET, jev: { tier: "frontier", confidence: 0.9 }, currentEffort: "low" });
+  assert.equal(decision.reason, "effort-raise");
+  assert.equal(decision.effort, "high");
+});
+
+test("T5: the model changes when the need persists on the next turn (effort already at its ceiling)", () => {
+  const first = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "medium" });
+  const next = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: first.effort });
+  assert.equal(next.reason, "upgrade");
+  assert.equal(next.model, "claude-opus-5-5");
+  assert.equal(next.effort, "high");
+});
+
+test("T5: a multi-step upgrade, a guard, a person's own effort and a model with no effort are unchanged", () => {
+  const twoSteps = stage({ ...ON_SONNET, tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null });
+  assert.equal(twoSteps.reason, "upgrade");
+  const guarded = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "medium", guards: { ...CALM, text: "Read /x/brief.md and do what it says" } });
+  assert.equal(guarded.reason, "upgrade", "a guard forces the model, not a delay");
+  const own = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "max", configuredEffort: "max" });
+  assert.equal(own.reason, "upgrade", "a person's own max is at the ceiling already");
+  const numeric = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: 32_000, configuredEffort: 32_000 });
+  assert.equal(numeric.reason, "upgrade");
+});
+
+test("T5: under the confidence floor nothing changes, model or effort", () => {
+  const decision = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.6 }, currentEffort: "medium", guards: { ...CALM, confidence: 0.6 } });
+  assert.equal(decision.reason, "low-confidence");
+  assert.equal(decision.changed, false);
+});
+
+test("T5: downgrades keep their own hysteresis and break-even; effort is not lowered first", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.9 }, currentEffort: "high" });
+  assert.equal(decision.reason, "hysteresis");
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.effort, "high");
 });
 
 test("E1: a person's max or numeric effort is never lowered by an upgrade back to their own model", () => {

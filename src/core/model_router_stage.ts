@@ -500,6 +500,12 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   if (proposedRank === currentRank) return out(decideEffort(input, base, targetEffort, guards, currentRank));
   if (proposedRank > currentRank) {
     if (input.jev.confidence < CONFIDENCE_FLOOR && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
+    // 0.6.11 T5: a model change drops the prompt cache, an effort change does
+    // not. One tier up, with nothing forcing it, raise the effort on the
+    // model already running first; the model follows only if the need shows
+    // again on a later turn, when the effort is already at its ceiling.
+    const raised = oneStepEffortRaise(input, current, judged, guards, currentTooSmall, proposedRank - currentRank);
+    if (raised !== null) return out({ ...stay, ...base, effort: raised, changed: true, reason: "effort-raise", guard: null, pending: null, effortTarget: raised });
     // The tier's effort, even back on the session's own model (0.6.2 E1: a
     // sticky `xhigh` is the account's default, not what this work needs);
     // only a person's own `max` or numeric budget is kept, never lowered.
@@ -531,6 +537,29 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   const model = exactModelId(target.modelId, input.configuredModel);
   const effort = model === input.configuredModel ? input.configuredEffort : targetEffort;
   return out({ ...base, current, model, effort, changed: true, reason: "downgrade", guard: null, pending: null, breakEven: result, effortTarget: null });
+}
+
+/** The most effort the effort-first step asks of a smaller model: the larger one exists for beyond it. */
+const EFFORT_FIRST_CEILING: TierEffort = "high";
+
+/**
+ * 0.6.11 T5: the effort to raise the current model to before changing it, or
+ * null when the model must change now: more than one tier up, any guard, a
+ * context the model cannot hold, a model that takes no effort, a person's own
+ * `max` or budget, or an effort already at the ceiling for this work.
+ */
+function oneStepEffortRaise(input: StageDecisionInput, current: string, judged: RouterTier, guards: readonly RouterGuard[], currentTooSmall: boolean, steps: number): TierEffort | null {
+  if (steps !== 1 || guards.length > 0 || currentTooSmall) return null;
+  if (typeof input.currentEffort === "number") return null;
+  if (isPersonEffort(input.configuredEffort) && input.currentEffort === input.configuredEffort) return null;
+  const asked = tierEffortOn(input.tiers, current, judged, input.tierEffort);
+  const askedRank = effortRank(asked);
+  if (asked === null || askedRank === null) return null;
+  const capRank = effortRank(EFFORT_FIRST_CEILING) ?? askedRank;
+  const ceiling = askedRank < capRank ? asked : EFFORT_FIRST_CEILING;
+  const ceilingRank = Math.min(askedRank, capRank);
+  const from = effortRank(input.currentEffort);
+  return from === null || from < ceilingRank ? ceiling : null;
 }
 
 /**
