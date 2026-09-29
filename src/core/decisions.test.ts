@@ -30,6 +30,7 @@ import {
 } from "./decisions.ts";
 import type { Policy, PolicyScope } from "./decisions.ts";
 import type { Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer } from "./jev.ts";
+import { createJevPseudonyms } from "./jev_pseudonyms.ts";
 
 const ACTION = "do something";
 
@@ -617,9 +618,24 @@ test("buildActionGateState: a command with nothing secret-shaped is passed throu
   assert.equal(state.proposed_command, "git status");
 });
 
-test("buildActionGateState: context and destination are unaffected by redaction -- only the command is ever touched", () => {
-  const state = buildActionGateState("export TOKEN=abc123456789", "repo context here", { label: "a client site", kind: "client-site" });
-  assert.equal(state.context, "repo context here");
+// 0.6.11 T3: context and destination pass through the same redaction as the
+// command -- secrets, plus every repository, branch and path name the gate
+// registered while rendering the context (see jev_pseudonyms.ts).
+test("buildActionGateState: context and destination go through redaction too -- secrets and every known name", () => {
+  const names = createJevPseudonyms();
+  const context = `repository ${names.name("repo", "acme-shop")}, branch ${names.name("branch", "feat/login")}`;
+  const state = buildActionGateState("git status", `${context} TOKEN=abc123456789`, { label: "the acme-shop storefront", kind: "client-site" }, undefined, names);
+  assert.equal(state.context, "repository <repo-1>, branch <branch-1> TOKEN=[REDACTED]");
+  assert.deepEqual(state.destination, { kind: "client-site", description: "the <repo-1> storefront" });
+});
+
+test("buildActionGateState: a derived destination label (a bare repository name) never reaches Jev in clear", () => {
+  const state = buildActionGateState("git status", "some context", { label: "acme-shop (acme-shop-hotfix)", kind: "project" });
+  assert.deepEqual(state.destination, { kind: "project", description: "<repo-1> (<repo-2>)" });
+});
+
+test("buildActionGateState: a written destination description with no known name reaches Jev unchanged", () => {
+  const state = buildActionGateState("git status", "some context", { label: "a client site", kind: "client-site" });
   assert.deepEqual(state.destination, { kind: "client-site", description: "a client site" });
 });
 
