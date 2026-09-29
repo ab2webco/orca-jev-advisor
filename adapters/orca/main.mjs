@@ -62,6 +62,7 @@ import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
+import { managedNodeRoots } from '../../src/core/node_runtime.ts'
 import {
   attendModelsMirrorRequest,
   attendModelsSeedRequest,
@@ -832,6 +833,29 @@ const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 // (install, uninstall, router-mode-set, router-effort-set) needs the write
 // grants too.
 const READ_ONLY_MODES = ['status', 'router-mode-status']
+// The modes that run `node --version` (and, for the doctor, the hooks
+// themselves): everything else must stay unable to start a process.
+const CHILD_PROCESS_MODES = ['install', 'status']
+
+/** The `--permission` flags the installer runs under for `mode`. */
+function claudeIntegrationPermissionArgs (mode) {
+  const args = [
+    '--permission',
+    `--allow-fs-read=${PLUGIN_ROOT}`,
+    `--allow-fs-read=${CONFIG_DIR}`,
+    `--allow-fs-read=${CLAUDE_HOME_DIR}`,
+    `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
+  ]
+  if (!READ_ONLY_MODES.includes(mode)) {
+    args.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
+  }
+  if (CHILD_PROCESS_MODES.includes(mode)) {
+    // Listing installed Node versions (nvm, fnm) needs to read their roots.
+    for (const { root } of managedNodeRoots(PLATFORM, HOME_PATHS.home)) args.push(`--allow-fs-read=${root}`)
+    args.push('--allow-child-process')
+  }
+  return args
+}
 
 /** `extraArgs` replaces the single positional `pluginRoot` every OTHER mode
  *  passes by default -- router-mode-status needs none, router-mode-set
@@ -839,16 +863,7 @@ const READ_ONLY_MODES = ['status', 'router-mode-status']
 function runClaudeIntegrationScript (mode, extraArgs = [PLUGIN_ROOT]) {
   return new Promise((resolve) => {
     try {
-      const permissionArgs = [
-        '--permission',
-        `--allow-fs-read=${PLUGIN_ROOT}`,
-        `--allow-fs-read=${CONFIG_DIR}`,
-        `--allow-fs-read=${CLAUDE_HOME_DIR}`,
-        `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
-      ]
-      if (!READ_ONLY_MODES.includes(mode)) {
-        permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
-      }
+      const permissionArgs = claudeIntegrationPermissionArgs(mode)
       execFile(process.execPath, [...permissionArgs, CLAUDE_INTEGRATION_SCRIPT, mode, ...extraArgs], {
         timeout: CLAUDE_INTEGRATION_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
@@ -903,7 +918,8 @@ function claudeIntegrationResultPayload (id, result) {
     ok: result.ok,
     reason: result.reason ?? null,
     detail: result.detail ?? null,
-    modCopyWarning: result.modCopyWarning ?? null
+    modCopyWarning: result.modCopyWarning ?? null,
+    node: result.node ?? null
   }
 }
 
@@ -2890,6 +2906,7 @@ export {
   CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  claudeIntegrationPermissionArgs,
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,

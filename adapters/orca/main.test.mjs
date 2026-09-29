@@ -52,6 +52,7 @@ const {
   CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  claudeIntegrationPermissionArgs,
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
@@ -232,6 +233,28 @@ test('claudeIntegrationResultPayload carries modCopyWarning through -- P5, the p
 test('claudeIntegrationResultPayload reports modCopyWarning as null when the install had nothing to warn about', () => {
   const payload = claudeIntegrationResultPayload('ci-3', { ok: true })
   assert.equal(payload.modCopyWarning, null)
+})
+
+test('claudeIntegrationResultPayload carries the Node the hooks were pointed at, so the panel can say when it is too old', () => {
+  const node = { state: 'too-old', path: '/usr/local/bin/node', version: 'v20.11.0' }
+  assert.deepEqual(claudeIntegrationResultPayload('ci-4', { ok: true, node }).node, node)
+  assert.equal(claudeIntegrationResultPayload('ci-5', { ok: true }).node, null)
+})
+
+test('claudeIntegrationPermissionArgs: only the modes that probe Node or run hooks may spawn children', () => {
+  for (const mode of ['install', 'status']) {
+    assert.ok(claudeIntegrationPermissionArgs(mode).includes('--allow-child-process'), mode)
+  }
+  for (const mode of ['uninstall', 'router-mode-status', 'router-mode-set', 'router-effort-set', 'steward-set']) {
+    assert.ok(!claudeIntegrationPermissionArgs(mode).includes('--allow-child-process'), mode)
+  }
+})
+
+test('claudeIntegrationPermissionArgs: install may read the Node version managers\' directories, and status stays read-only', () => {
+  const install = claudeIntegrationPermissionArgs('install')
+  assert.ok(install.some((arg) => arg.startsWith('--allow-fs-read=') && arg.endsWith('.nvm/versions/node')))
+  assert.ok(install.some((arg) => arg.startsWith('--allow-fs-write=')))
+  assert.ok(!claudeIntegrationPermissionArgs('status').some((arg) => arg.startsWith('--allow-fs-write=')))
 })
 
 test('attendLocaleRequest: an expired request publishes reason "expired"', async () => {

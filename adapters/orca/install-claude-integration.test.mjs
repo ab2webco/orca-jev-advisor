@@ -55,8 +55,8 @@ function modCopyMarkerPathFor (home) {
  *  skills-mod copy to fail (P5) passes a directory with no `adapters/claude/
  *  mod-skills` under it instead, which fails `cp()` the same way a real
  *  permission problem would -- no chmod gymnastics needed. */
-function run (mode, home, pluginRoot = PLUGIN_ROOT) {
-  const env = { ...process.env, HOME: home }
+function run (mode, home, pluginRoot = PLUGIN_ROOT, extraEnv = {}) {
+  const env = { ...process.env, HOME: home, ...extraEnv }
   delete env.ORCA_USER_DATA_PATH
   delete env.XDG_CONFIG_HOME
   delete env.XDG_CACHE_HOME
@@ -1192,4 +1192,71 @@ test('T2d: a symlink to somewhere else at the mod path is left untouched too', (
   assert.equal(result.modCopyWarning, 'foreign-mod-copy')
   assert.equal(lstatSync(copyPath).isSymbolicLink(), true)
   assert.equal(readFileSync(join(elsewhere, 'SKILL.md'), 'utf8'), 'theirs')
+})
+
+// 0.6.11 T2a: hooks run an absolute Node >= 24 found at install time.
+
+/** A stand-in `node` that only answers --version, the one thing the installer asks of it. */
+function fakeNode (home, name, version) {
+  const path = join(home, 'fake-bin', name, 'node')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `#!/bin/sh\necho ${version}\n`, { mode: 0o755 })
+  chmodSync(path, 0o755)
+  return path
+}
+
+const NODE_HOOK_EVENTS = [['PreToolUse', 'Bash'], ['PostToolUse', 'Bash'], ['PermissionDenied', 'Bash'], ['PostToolUseFailure', 'Bash'], ['PreToolUse', 'Agent'], ['PostToolUse', 'Agent'], ['PostToolUseFailure', 'Agent']]
+
+function hookCommands (settings) {
+  return NODE_HOOK_EVENTS.flatMap(([event, matcher]) => (group(settings, event, matcher)?.hooks ?? [])
+    .filter((h) => String(h.statusMessage).startsWith('orca-jev-advisor')).map((h) => h.command))
+}
+
+test('T2a: every hook command is the absolute Node >= 24 found at install time', () => {
+  const home = makeHome()
+  const good = fakeNode(home, 'good', 'v26.9.0')
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: good })
+  assert.deepEqual(result.node, { state: 'ok', path: good, version: 'v26.9.0' })
+  assert.equal(result.nodeCommandVerified, true)
+  const commands = hookCommands(readSettings(home))
+  assert.equal(commands.length, 7)
+  assert.deepEqual([...new Set(commands)], [good])
+})
+
+test('T2a: a Node older than 24 is skipped when a newer one is later in the list', () => {
+  const home = makeHome()
+  const old = fakeNode(home, 'old', 'v20.11.0')
+  const good = fakeNode(home, 'good', 'v24.1.0')
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: `${old}:${join(home, 'nowhere', 'node')}:${good}` })
+  assert.equal(result.node.state, 'ok')
+  assert.equal(result.node.path, good)
+  assert.deepEqual([...new Set(hookCommands(readSettings(home)))], [good])
+})
+
+test('T2a: only an old Node -> too-old with the version seen; the hooks are still written', () => {
+  const home = makeHome()
+  const old = fakeNode(home, 'old', 'v20.11.0')
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: old })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.node, { state: 'too-old', path: old, version: 'v20.11.0' })
+  assert.equal(result.nodeCommandVerified, false)
+  assert.equal(hookCommands(readSettings(home)).length, 7)
+  assert.ok(!hookCommands(readSettings(home)).includes(old), 'a too-old Node must not become the hook command')
+})
+
+test('T2a: no Node at all -> missing, hooks still written', () => {
+  const home = makeHome()
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: join(home, 'nowhere', 'node') })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.node, { state: 'missing', path: null, version: null })
+  assert.equal(hookCommands(readSettings(home)).length, 7)
+})
+
+test('T2a: status probes the command the installed hooks actually use', () => {
+  const home = makeHome()
+  const good = fakeNode(home, 'good', 'v26.9.0')
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: good })
+  assert.deepEqual(run('status', home).node, { state: 'ok', path: good, version: 'v26.9.0' })
+  writeFileSync(good, '#!/bin/sh\necho v20.11.0\n', { mode: 0o755 })
+  assert.deepEqual(run('status', home).node, { state: 'too-old', path: good, version: 'v20.11.0' })
 })

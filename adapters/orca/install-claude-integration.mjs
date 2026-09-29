@@ -100,12 +100,14 @@ import {
   guardedRm as rm,
   guardedWriteFile as writeFile
 } from '../../src/core/guarded_fs.ts'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
 import { DEFAULT_LOCALE, parseLocaleFile } from '../../src/core/i18n.ts'
+import { classifyNode, managedNodeRoots, nodeCandidatePaths } from '../../src/core/node_runtime.ts'
 import {
   ORCA_USER_DATA_ENV,
   accountConfigTarget,
@@ -309,11 +311,10 @@ function localizedMarker (family, locale) {
  *  ours. `locale` picks which of `markers` the freshly-built `entry` itself
  *  carries -- defaults to DEFAULT_LOCALE for a caller (status/uninstall)
  *  that only needs `markers`/`path`, never a fresh `entry`. */
-function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE) {
+function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE, node = resolveNodeCommand()) {
   const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
   const outcomePath = join(pluginRoot, 'adapters', 'claude', 'gate-outcome.ts')
   const agentModelPath = join(pluginRoot, 'adapters', 'claude', 'agent-model.ts')
-  const node = resolveNodeCommand()
   const gateMarker = localizedMarker('gate', locale)
   const agentModelMarker = localizedMarker('agentModel', locale)
   return {
@@ -404,6 +405,71 @@ function agentModelHookEntry (nodeCommand, agentModelPath, timeoutSeconds, marke
 function resolveNodeCommand () {
   if (process.versions.electron === undefined) return { command: process.execPath, verified: true }
   return { command: 'node', verified: false }
+}
+
+const NODE_PROBE_TIMEOUT_MS = 3000
+const NODE_CANDIDATES_ENV = 'ORCA_JEV_NODE_CANDIDATES'
+
+/** Runs `<command> --version` and classifies the answer; a command that does not run is `missing`. */
+function probeNode (command) {
+  return new Promise((resolve) => {
+    execFile(command, ['--version'], { timeout: NODE_PROBE_TIMEOUT_MS, maxBuffer: 4096 }, (error, stdout) => {
+      resolve(error ? classifyNode(command, '') : classifyNode(command, String(stdout)))
+    })
+  })
+}
+
+async function listDirNames (dir) {
+  try {
+    return (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name)
+  } catch {
+    return []
+  }
+}
+
+/** The first Node >= 24 among the override list, PATH and the well-known
+ *  install places; failing that, the first Node that runs at all (so the
+ *  report can say which version it saw). */
+async function findNode () {
+  const managed = {}
+  for (const { root } of managedNodeRoots(PLATFORM, HOME)) managed[root] = await listDirNames(root)
+  const candidates = nodeCandidatePaths({ platform: PLATFORM, home: HOME, pathEnv: process.env.PATH ?? '', override: process.env[NODE_CANDIDATES_ENV], managed })
+  let firstSeen = null
+  for (const candidate of candidates) {
+    const info = await probeNode(candidate)
+    if (info.state === 'ok') return info
+    if (info.state === 'too-old' && firstSeen === null) firstSeen = info
+  }
+  return firstSeen ?? { state: 'missing', path: null, version: null }
+}
+
+/**
+ * What install writes as every hook's `command`, and what it saw. A real
+ * Node running this sidecar is trusted as before (execPath); under Electron
+ * the bare `node` of the GUI's PATH is exactly what went wrong, so an
+ * absolute Node >= 24 is looked for instead. When none qualifies the old
+ * fallback is kept -- the hooks are still written -- and `info` says why it
+ * is not good enough.
+ */
+async function resolveNode () {
+  const fallback = resolveNodeCommand()
+  if (process.versions.electron === undefined && process.env[NODE_CANDIDATES_ENV] === undefined) {
+    return { ...fallback, info: classifyNode(process.execPath, process.version) }
+  }
+  const info = await findNode()
+  if (info.state === 'ok') return { command: info.path, verified: true, info }
+  return { ...fallback, verified: false, info }
+}
+
+/** The Node an installed hook command really resolves to: probed as written, or, for a bare name, the first match on PATH. */
+async function probeHookCommand (command) {
+  if (isAbsolute(command)) return probeNode(command)
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (dir.length === 0) continue
+    const info = await probeNode(join(dir, command))
+    if (info.state !== 'missing') return info
+  }
+  return { state: 'missing', path: null, version: null }
 }
 
 // ---------------------------------------------------------------------------
@@ -926,7 +992,8 @@ function modCopyPathFor (target) {
 
 async function install (pluginRoot) {
   const locale = await resolveLocale()
-  const { node, specs } = hookSpecs(pluginRoot, locale)
+  const node = await resolveNode()
+  const { specs } = hookSpecs(pluginRoot, locale, node)
   const discovery = await discoverTargets()
   const stored = (await readInstallState()) ?? {}
   const states = targetStates(stored)
@@ -1017,7 +1084,8 @@ async function install (pluginRoot) {
     },
     modCopyWarning: perTarget.find((t) => t.ok && t.modCopyWarning)?.modCopyWarning ?? null,
     failures: failed,
-    nodeCommandVerified: nodeVerified
+    nodeCommandVerified: nodeVerified,
+    node: node.info
   }
 }
 
@@ -1136,6 +1204,7 @@ async function status (pluginRoot) {
   const modPlan = await planModSkillsCopy(pluginRoot).catch(() => null)
 
   const perTarget = []
+  const discoveredGateCommands = []
   for (const target of discovery.targets) {
     const settingsPath = settingsPathFor(PLATFORM, target)
     let settings = {}
@@ -1146,6 +1215,7 @@ async function status (pluginRoot) {
       readError = String(error?.message ?? error).slice(0, 200)
     }
     const ownGateHook = findMarkedHook(findGroup(settings, gateSpec.event, gateSpec.matcher), gateSpec.markers)
+    discoveredGateCommands.push(ownGateHook?.command)
     const ownPostHook = findMarkedHook(findGroup(settings, postSpec.event, postSpec.matcher), postSpec.markers)
     const ownDeniedHook = findMarkedHook(findGroup(settings, deniedSpec.event, deniedSpec.matcher), deniedSpec.markers)
     const ownPostFailureHook = findMarkedHook(findGroup(settings, postFailureSpec.event, postFailureSpec.matcher), postFailureSpec.markers)
@@ -1196,9 +1266,13 @@ async function status (pluginRoot) {
     })
   }
 
+  const installedGate = discoveredGateCommands.find((c) => typeof c === 'string')
+  const node = installedGate !== undefined ? await probeHookCommand(installedGate) : await findNode()
+
   const orcaTargets = perTarget.filter((t) => t.orcaManaged)
   return {
     ok: true,
+    node,
     targets: perTarget,
     // The headline figures the panel shows: "installed" must mean every
     // place Claude Code actually reads, and the Orca panes are the ones
