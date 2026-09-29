@@ -696,3 +696,48 @@ test("F10: a failed cd is looking around, not the work failing; deno check and t
   assert.equal(raisesPreviousFailure(failedTurn("Bash", { command: "tsc -p ." }, "error TS2322")), true);
   assert.equal(raisesPreviousFailure(failedTurn("Bash", { command: "cd app && npm run build" }, "build failed")), true, "a cd followed by real work is the work");
 });
+
+// ---------------------------------------------------------------------------
+// Context-window floor: never a model whose window the context would overflow
+// ---------------------------------------------------------------------------
+
+const BIG_CONTEXT = { contextTokens: 300_000, avgOutput: 700, medianStepsPerTurn: 40 };
+
+test("context floor: with 300K of context a simple turn never goes to Haiku (200K); it goes to the next tier that fits", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.95 }, usage: BIG_CONTEXT, pending: { tier: "standard", turns: 5 } });
+  assert.notEqual(decision.model, "claude-haiku-4-5-20251001");
+  assert.notEqual(decision.proposed, "claude-haiku-4-5-20251001");
+  assert.equal(decision.proposed, "claude-sonnet-5-5");
+  assert.equal(decision.guard, "context-window");
+});
+
+test("context floor: the 10% margin counts -- 185K does not fit a 200K window", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.95 }, usage: { ...BIG_CONTEXT, contextTokens: 185_000 } });
+  assert.equal(decision.proposed, "claude-sonnet-5-5");
+  assert.equal(decision.guard, "context-window");
+  const fits = stage({ jev: { tier: "simple", confidence: 0.95 }, usage: { ...BIG_CONTEXT, contextTokens: 180_000 } });
+  assert.equal(fits.proposed, "claude-haiku-4-5-20251001");
+  assert.notEqual(fits.guard, "context-window");
+});
+
+test("context floor: a session already on a model too small for its context moves up, whatever Jev's confidence", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.4 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-haiku-4-5-20251001", configuredEffort: null, usage: BIG_CONTEXT });
+  assert.equal(decision.model, "claude-sonnet-5-5");
+  assert.equal(decision.changed, true);
+  assert.equal(decision.guard, "context-window");
+});
+
+test("context floor: when no tier fits, the current model is held and the guard is named", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.95 }, usage: { ...BIG_CONTEXT, contextTokens: 950_000 } });
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.changed, false);
+  assert.equal(decision.reason, "held-by-guard");
+  assert.equal(decision.guard, "context-window");
+});
+
+test("context floor: an unknown window (a gateway) or an unknown context applies no floor", () => {
+  const gateway = stage({ tiers: GATEWAY, jev: { tier: "simple", confidence: 0.95 }, currentModel: "big", configuredModel: "big", usage: BIG_CONTEXT });
+  assert.notEqual(gateway.guard, "context-window");
+  const unknown = stage({ jev: { tier: "simple", confidence: 0.95 }, usage: null });
+  assert.equal(unknown.proposed, "claude-haiku-4-5-20251001");
+});

@@ -14,7 +14,7 @@
 
 import type { QuotaAccount } from "./consumption.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
-import type { ModelPrices, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
+import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
 import type { GuardContext, QuotaBand, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
 
@@ -111,6 +111,24 @@ export function effortBreakEven(input: EffortBreakEvenInput): BreakEven {
   const stepSaving = (input.currentOutput - input.targetOutput) * input.prices.output * PER_TOKEN;
   const steps = expectedSteps(input.medianStepsPerTurn);
   return { contextTokens: input.contextTokens, switchCost, stepSaving, expectedSteps: steps, worthIt: stepSaving * steps > BREAK_EVEN_MARGIN * switchCost };
+}
+
+// ---------------------------------------------------------------------------
+// The context-window floor
+// ---------------------------------------------------------------------------
+
+/** The share of a model's window kept free: the context must stay within the rest. */
+export const CONTEXT_WINDOW_MARGIN = 0.1;
+
+/** Whether `contextTokens` stays within a model's window less the margin; an unknown window (a gateway) always fits. */
+export function fitsContext(model: ResolvedTierModel, contextTokens: number): boolean {
+  return model.contextWindow === null || contextTokens <= model.contextWindow * (1 - CONTEXT_WINDOW_MARGIN);
+}
+
+/** The weakest (collapsed) tier at or above `tier` whose model fits the context, or null when none does. */
+export function contextFloorTier(tiers: ResolvedTiers, tier: RouterTier, contextTokens: number): RouterTier | null {
+  const fitting = ROUTER_TIERS.slice(ROUTER_TIERS.indexOf(tier)).find((candidate) => fitsContext(tiers[candidate], contextTokens));
+  return fitting === undefined ? null : collapseTier(tiers, fitting);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,6 +361,11 @@ function effortBelowOwn(input: StageDecisionInput): boolean {
   return current === null || current < own;
 }
 
+/** A decision the context-window floor shaped names it, unless another guard already explains it. */
+function withContextGuard(decision: StageDecision, floored: boolean): StageDecision {
+  return floored && decision.guard === null ? { ...decision, guard: "context-window" } : decision;
+}
+
 export function decideStage(input: StageDecisionInput): StageDecision {
   const current = input.currentModel;
   const stay = { current, model: current, effort: input.currentEffort, changed: false, breakEven: null, effortTarget: null } as const;
@@ -369,10 +392,18 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   // (shifted) tier, so frontier work on an account without Fable still runs
   // Opus at the frontier's effort (0.6.2 E1).
   const judged = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
-  const tier = collapseTier(input.tiers, judged);
+  const judgedTier = collapseTier(input.tiers, judged);
+  // The context-window floor: never a model the context would overflow.
+  const context = input.usage?.contextTokens ?? null;
+  const fitted = context === null ? judgedTier : contextFloorTier(input.tiers, judgedTier, context);
+  const tier = fitted ?? judgedTier;
+  const currentTier = currentRank === null ? null : (ROUTER_TIERS[currentRank] ?? null);
+  const currentTooSmall = context !== null && currentTier !== null && !fitsContext(input.tiers[currentTier], context);
+  const out = (decision: StageDecision): StageDecision =>
+    withContextGuard(decision, tier !== judgedTier || (currentTooSmall && decision.changed));
   const target = input.tiers[tier];
   const targetEffort = target.supportsEffort ? (input.tierEffort ?? TIER_EFFORT)[judged] : null;
-  const base = { tier, confidence: input.jev.confidence, proposed: target.modelId };
+  const base = { tier: judgedTier, confidence: input.jev.confidence, proposed: target.modelId };
   const proposedRank = modelRank(input.tiers, target.modelId);
 
   // Below the session's own model while any guard holds: restore at least
@@ -387,18 +418,19 @@ export function decideStage(input: StageDecisionInput): StageDecision {
     const effort = toTarget ? targetEffort : guardedEffort(input.configuredEffort, tierEffortOn(input.tiers, input.configuredModel, judged, input.tierEffort));
     return { ...base, current, model, effort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null, breakEven: null, effortTarget: null };
   }
+  if (fitted === null) return { ...stay, ...base, reason: "held-by-guard", guard: "context-window", pending: null };
   if (currentRank === null || proposedRank === null) {
-    return { ...stay, ...base, reason: "same", guard: null, pending: null };
+    return out({ ...stay, ...base, reason: "same", guard: null, pending: null });
   }
   if (proposedRank <= currentRank && guards.length > 0 && effortBelowOwn(input)) {
     // Review finding 1: under a guard, an effort lowered on the session's own
     // model comes back to its own (or the tier's, when higher).
     const effort = guardedEffort(input.configuredEffort, tierEffortOn(input.tiers, current, judged, input.tierEffort));
-    return { ...stay, ...base, effort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null };
+    return out({ ...stay, ...base, effort, changed: true, reason: "floor-restore", guard: floorGuard, pending: null });
   }
-  if (proposedRank === currentRank) return decideEffort(input, base, targetEffort, guards, currentRank);
+  if (proposedRank === currentRank) return out(decideEffort(input, base, targetEffort, guards, currentRank));
   if (proposedRank > currentRank) {
-    if (input.jev.confidence < 0.7) return { ...stay, ...base, reason: "low-confidence", guard: null, pending: null };
+    if (input.jev.confidence < 0.7 && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
     // The tier's effort, even back on the session's own model (0.6.2 E1: a
     // sticky `xhigh` is the account's default, not what this work needs);
     // only a person's own `max` or numeric budget is kept, never lowered.
@@ -406,31 +438,30 @@ export function decideStage(input: StageDecisionInput): StageDecision {
     const own = model === input.configuredModel;
     // Under a guard, never below the session's own effort (0.6.2 F0).
     const effort = own && guards.length > 0 ? guardedEffort(input.configuredEffort, targetEffort) : own && isPersonEffort(input.configuredEffort) ? input.configuredEffort : targetEffort;
-    return { ...base, current, model, effort, changed: true, reason: "upgrade", guard: null, pending: null, breakEven: null, effortTarget: effort };
+    return out({ ...base, current, model, effort, changed: true, reason: "upgrade", guard: null, pending: null, breakEven: null, effortTarget: effort });
   }
 
   // Downgrade. A guard holds the model; the effort may still rise to the
   // tier's (0.6.2 F0).
   if (guards.length > 0) {
     const effort = guardedEffort(input.currentEffort, tierEffortOn(input.tiers, current, judged, input.tierEffort));
-    if (effort !== input.currentEffort) return { ...stay, ...base, effort, changed: true, reason: "effort-raise", guard: guards[0] ?? null, pending: null, effortTarget: effort };
-    return { ...stay, ...base, reason: "held-by-guard", guard: guards[0] ?? null, pending: null };
+    if (effort !== input.currentEffort) return out({ ...stay, ...base, effort, changed: true, reason: "effort-raise", guard: guards[0] ?? null, pending: null, effortTarget: effort });
+    return out({ ...stay, ...base, reason: "held-by-guard", guard: guards[0] ?? null, pending: null });
   }
   const pending: PendingLower = { tier, turns: input.pending !== null && input.pending.tier === tier && input.pending.effort === undefined ? input.pending.turns + 1 : 1 };
-  const currentTier = ROUTER_TIERS[currentRank] ?? "complex";
-  const prices = { current: input.tiers[currentTier].prices, proposed: target.prices };
-  if (prices.current === null || prices.proposed === null) return { ...stay, ...base, reason: "prices-unknown", guard: null, pending };
-  if (pending.turns < hysteresisTurns(input.band)) return { ...stay, ...base, reason: "hysteresis", guard: null, pending };
+  const prices = { current: input.tiers[currentTier ?? "complex"].prices, proposed: target.prices };
+  if (prices.current === null || prices.proposed === null) return out({ ...stay, ...base, reason: "prices-unknown", guard: null, pending });
+  if (pending.turns < hysteresisTurns(input.band)) return out({ ...stay, ...base, reason: "hysteresis", guard: null, pending });
   const result =
     input.usage === null
       ? null
       : breakEven({ contextTokens: input.usage.contextTokens, avgOutput: input.usage.avgOutput, current: prices.current, proposed: prices.proposed, medianStepsPerTurn: input.usage.medianStepsPerTurn });
-  if (result === null || !result.worthIt) return { ...stay, ...base, reason: "break-even", guard: null, pending, breakEven: result };
+  if (result === null || !result.worthIt) return out({ ...stay, ...base, reason: "break-even", guard: null, pending, breakEven: result });
   // Back down to the session's own model: its exact id (a `[1m]` suffix
   // included) and its own effort, so nothing is rewritten any more (N1).
   const model = exactModelId(target.modelId, input.configuredModel);
   const effort = model === input.configuredModel ? input.configuredEffort : targetEffort;
-  return { ...base, current, model, effort, changed: true, reason: "downgrade", guard: null, pending: null, breakEven: result, effortTarget: null };
+  return out({ ...base, current, model, effort, changed: true, reason: "downgrade", guard: null, pending: null, breakEven: result, effortTarget: null });
 }
 
 /**

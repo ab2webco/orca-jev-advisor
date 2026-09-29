@@ -240,8 +240,10 @@ export function isPointerPrompt(text: string): boolean {
  * sensitive topic are facts in Jev's state (buildTierState). F11: a client
  * site and a scoped policy are no router guard either; client protection is
  * the Bash gate's, and the destination kind stays a fact in Jev's state.
+ * `context-window` is not one activeGuards raises: the stage decision names
+ * it when the context would overflow the window of Jev's model.
  */
-export type RouterGuard = "low-confidence" | "pointer-prompt";
+export type RouterGuard = "low-confidence" | "pointer-prompt" | "context-window";
 
 export interface GuardContext {
   readonly text: string;
