@@ -106,7 +106,7 @@ import {
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
 import { DEFAULT_LOCALE, parseLocaleFile } from '../../src/core/i18n.ts'
@@ -1584,7 +1584,9 @@ async function main () {
     } else if (mode === 'steward-set') {
       result = await stewardSet(process.argv[3], process.argv[4])
     } else {
-      const pluginRoot = process.argv[3]
+      const givenRoot = process.argv[3]
+      // Hooks run from whatever repository Claude is in, so a relative root would only work in this one.
+      const pluginRoot = typeof givenRoot === 'string' && givenRoot.length > 0 ? resolvePath(givenRoot) : givenRoot
       if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
         result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status> <pluginRoot>' }
       } else if (mode === 'install') {

@@ -109,6 +109,18 @@ const OUTCOME_MARKER = 'orca-jev-advisor: recording what you decided'
 const AGENT_MODEL_MARKER = 'orca-jev-advisor: asking Jev which model this subagent needs'
 const AGENT_OUTCOME_MARKER = 'orca-jev-advisor: recording which model the subagent ran on'
 
+test('a relative plugin root is written as an absolute path, so the hook runs from any repository', () => {
+  const home = makeHome()
+  const env = { ...process.env, HOME: home, ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor') }
+  delete env.ORCA_USER_DATA_PATH
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT_PATH, 'install', '.'], { env, cwd: PLUGIN_ROOT, encoding: 'utf8' }))
+  assert.equal(result.ok, true)
+  const gateEntries = ownEntries(readSettings(home), 'PreToolUse', GATE_MARKER)
+  assert.deepEqual(gateEntries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-bash.ts')])
+})
+
 test('a fresh install registers all four events, each with its own hook', () => {
   const home = makeHome()
   const result = run('install', home)
