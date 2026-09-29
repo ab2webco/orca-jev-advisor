@@ -2850,7 +2850,7 @@
             buttonGroup.appendChild(btn)
           })
 
-          var saveBtn = elMake('button')
+          var saveBtn = elMake('button', 'model-router-save')
           saveBtn.type = 'button'
           saveBtn.textContent = t('modelRouter.save')
 
@@ -2910,7 +2910,7 @@
         var unit = elMake('span', 'steward-unit')
         unit.textContent = t('modelRouter.stewardUnit')
 
-        var saveBtn = elMake('button')
+        var saveBtn = elMake('button', 'model-router-steward-save')
         saveBtn.type = 'button'
         saveBtn.textContent = t('modelRouter.stewardSave')
         var saidEl = elMake('span', 'said')

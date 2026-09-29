@@ -1841,7 +1841,7 @@ test('changing a row\'s mode and clicking its save button sends a modelRouterCon
       const group = document.querySelector('#model-router-rows .mode-buttons[data-model-router-target="home"]')
       group.querySelectorAll('button')[2].click() // click 'active' button
     })
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) button[type="button"]:not(.active)')
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
     assert.equal(typeof request.id, 'string')
@@ -2636,9 +2636,10 @@ test('steward: saving sends that target\'s mode and threshold in tokens', { skip
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
   try {
     await page.click('#tab-models')
-    await page.selectOption('[data-steward-target="home"] select', 'active')
+    // Click the third button (active mode) for steward
+    await page.evaluate(() => document.querySelector('[data-steward-target="home"] .mode-buttons').querySelectorAll('button')[2].click())
     await page.fill('[data-steward-target="home"] input[type=number]', '100')
-    await page.click('[data-steward-target="home"] button')
+    await page.click('[data-steward-target="home"] .model-router-steward-save')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
     assert.equal(request.target, 'home')
@@ -2655,7 +2656,7 @@ test('steward: a threshold out of range is refused in place and nothing is sent'
   try {
     await page.click('#tab-models')
     await page.fill('[data-steward-target="home"] input[type=number]', '5')
-    await page.click('[data-steward-target="home"] button')
+    await page.click('[data-steward-target="home"] .model-router-steward-save')
     await page.waitForTimeout(500)
     const written = await page.evaluate(() => window.__written.modelRouterConfigRequest ?? null)
     assert.equal(written, null)
@@ -2774,7 +2775,7 @@ test('0.6.2 E7: a save over a mode that changed elsewhere writes nothing and sho
     await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
     await page.waitForTimeout(1500)
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[0].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) button[type="button"]:not(.active)')
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => {
       const modes = Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((g) => Array.from(g.querySelectorAll('button')).findIndex((b) => b.className === 'active'))
       return modes[0] === 2 // 'active' is index 2
@@ -2801,11 +2802,11 @@ test('finding 5: a second save on the same row is not refused as "changed outsid
     await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
     await page.waitForTimeout(1500)
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[2].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) button[type="button"]:not(.active)')
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 15000 })
     await page.waitForTimeout(2500)
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[1].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) button[type="button"]:not(.active)')
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'measure', undefined, { timeout: 15000 })
     const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
     assert.doesNotMatch(text, /changed outside this panel/)
@@ -2832,7 +2833,7 @@ test('nit 6: a status published without the request id but newer than the reques
   try {
     await page.click('#tab-models')
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[2].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) button[type="button"]:not(.active)')
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 8000 })
   } finally {
     await browser.close()
