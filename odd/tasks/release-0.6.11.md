@@ -28,9 +28,9 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
 ## Checklist
 - [x] T1 hourly measurement partitions, read across files (5baf81c; npm test 2498/2498, test:panels 155/155)
 - [ ] T2 one-step install and doctor
-  - [ ] T2a hooks run an absolute Node >= 24 found at install time (not bare `node`
+  - [x] T2a hooks run an absolute Node >= 24 found at install time (not bare `node`
         from the GUI PATH); none found → status says `node: missing|too-old` with
-        the version seen, and the config panel shows it
+        the version seen, and the config panel shows it (06c04b1; npm test 2518/2518; panel Node tests 20/20)
   - [ ] T2b doctor executes each installed hook command with a harmless payload
         and names what failed; every hook's `pathMatches` counts, not only the gate
   - [x] T2c M6: `install()` writes settings through `writeSettingsIfUnchanged`
