@@ -16,6 +16,7 @@ import {
   hysteresisTurns,
   medianOf,
   quotaBandOf,
+  quotaPressureOf,
   shiftForPressure,
   summarizePreviousTurn,
   summarizeSinceLastPrompt,
@@ -90,6 +91,61 @@ test("quota bands: < 80 normal, 80–94 economy, ≥ 95 strong economy", () => {
   assert.equal(quotaBandOf(quota(94.9), FRESH, NOW), "economy");
   assert.equal(quotaBandOf(quota(95), FRESH, NOW), "strong-economy");
   assert.equal(quotaBandOf(quota(100), FRESH, NOW), "strong-economy");
+});
+
+function quotaBoth(session: number | null, weekly: number | null): QuotaAccount {
+  return { id: "a", status: "ok", sessionUsedPercent: session, weeklyUsedPercent: weekly, resetsAt: null };
+}
+
+test("quota bands: the band is the tighter of the 5-hour and the 7-day window", () => {
+  assert.equal(quotaBandOf(quotaBoth(96, 10), FRESH, NOW), "strong-economy");
+  assert.equal(quotaBandOf(quotaBoth(85, 10), FRESH, NOW), "economy");
+  assert.equal(quotaBandOf(quotaBoth(85, 96), FRESH, NOW), "strong-economy");
+  assert.equal(quotaBandOf(quotaBoth(10, 85), FRESH, NOW), "economy");
+  assert.equal(quotaBandOf(quotaBoth(null, 85), FRESH, NOW), "economy");
+  assert.equal(quotaBandOf(quotaBoth(96, null), FRESH, NOW), "strong-economy");
+  assert.equal(quotaBandOf(quotaBoth(null, null), FRESH, NOW), "normal");
+});
+
+// Live rate limits (0.6.11 T6): the figures Claude Code gives its status line,
+// read through `$.session.usage().rateLimits`.
+const LATER = new Date(NOW + 60 * 60_000).toISOString();
+const EARLIER = new Date(NOW - 60_000).toISOString();
+
+test("quota pressure: a live reading wins over the mirror and says so", () => {
+  const live = [
+    { kind: "five_hour", percentUsed: 97, resetsAt: LATER },
+    { kind: "seven_day", percentUsed: 40, resetsAt: LATER },
+  ];
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(0, 0), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "strong-economy", source: "live" });
+  const calm = [
+    { kind: "five_hour", percentUsed: 5, resetsAt: LATER },
+    { kind: "seven_day", percentUsed: 10, resetsAt: LATER },
+  ];
+  assert.deepEqual(quotaPressureOf({ live: calm, mirror: quotaBoth(99, 99), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "normal", source: "live" });
+});
+
+test("quota pressure: no live reading falls back to the mirror, or to none", () => {
+  assert.deepEqual(quotaPressureOf({ live: [], mirror: quotaBoth(10, 85), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "economy", source: "mirror" });
+  assert.deepEqual(quotaPressureOf({ live: [], mirror: quotaBoth(10, 85), mirrorCheckedAt: new Date(NOW - 31 * 60_000).toISOString(), nowMs: NOW }), { band: "normal", source: "none" });
+  assert.deepEqual(quotaPressureOf({ live: [], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "none" });
+});
+
+test("quota pressure: a live window that already reset is not a reading", () => {
+  const live = [{ kind: "five_hour", percentUsed: 99, resetsAt: EARLIER }];
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(10, 85), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "economy", source: "mirror" });
+});
+
+test("quota pressure: a window without a reset time still counts; other kinds (spend_limit) and junk are ignored", () => {
+  assert.deepEqual(quotaPressureOf({ live: [{ kind: "five_hour", percentUsed: 90 }], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "economy", source: "live" });
+  assert.deepEqual(quotaPressureOf({ live: [{ kind: "spend_limit", percentUsed: 150, resetsAt: LATER }], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "none" });
+  assert.deepEqual(quotaPressureOf({ live: [{ kind: "five_hour", percentUsed: Number.NaN }], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "none" });
+});
+
+test("quota pressure: a window the live reading lacks is filled from the fresh mirror", () => {
+  const live = [{ kind: "five_hour", percentUsed: 10, resetsAt: LATER }];
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(0, 96), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "strong-economy", source: "live+mirror" });
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(0, 96), mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "live" });
 });
 
 test("quota bands: missing, unknown or stale (> 30 min) quota means normal", () => {

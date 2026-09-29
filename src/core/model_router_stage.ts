@@ -26,14 +26,86 @@ export { shiftForPressure };
 
 const STALE_QUOTA_MS = 30 * 60_000;
 
-/** The band for this account's weekly usage; a missing, unknown or stale (> 30 min) quota is normal. */
-export function quotaBandOf(quota: QuotaAccount | null, checkedAt: string | null, nowMs: number): QuotaBand {
-  if (quota === null || quota.weeklyUsedPercent === null || checkedAt === null) return "normal";
-  const checkedMs = Date.parse(checkedAt);
-  if (!Number.isFinite(checkedMs) || nowMs - checkedMs > STALE_QUOTA_MS) return "normal";
-  if (quota.weeklyUsedPercent >= 95) return "strong-economy";
-  if (quota.weeklyUsedPercent >= 80) return "economy";
+/** One rate-limit window of `$.session.usage().rateLimits`: what Claude Code hands its status line. */
+export interface LiveRateLimit {
+  readonly kind: string;
+  readonly percentUsed: number;
+  readonly resetsAt?: string;
+}
+
+/** Where the band's figures came from: the live status-line reading, the Orca mirror, both (one window each), or nothing usable. */
+export type QuotaSource = "live" | "live+mirror" | "mirror" | "none";
+
+export interface QuotaPressure {
+  readonly band: QuotaBand;
+  readonly source: QuotaSource;
+}
+
+export interface QuotaPressureInput {
+  readonly live: readonly LiveRateLimit[];
+  readonly mirror: QuotaAccount | null;
+  readonly mirrorCheckedAt: string | null;
+  readonly nowMs: number;
+}
+
+function bandOfPercent(percent: number): QuotaBand {
+  if (percent >= 95) return "strong-economy";
+  if (percent >= 80) return "economy";
   return "normal";
+}
+
+const BAND_ORDER: Readonly<Record<QuotaBand, number>> = { normal: 0, economy: 1, "strong-economy": 2 };
+
+/**
+ * A live window's figure, or null. The live reading carries no read time of
+ * its own (it is what the session's last API response reported), so its
+ * freshness bound is the window itself: once `resetsAt` has passed, the
+ * figure describes a window that no longer exists and is dropped. A window
+ * with no reset time is trusted as reported.
+ */
+function liveFigure(live: readonly LiveRateLimit[], kind: "five_hour" | "seven_day", nowMs: number): number | null {
+  for (const window of live) {
+    if (window.kind !== kind || !Number.isFinite(window.percentUsed)) continue;
+    if (window.resetsAt !== undefined) {
+      const resetMs = Date.parse(window.resetsAt);
+      if (Number.isFinite(resetMs) && resetMs <= nowMs) continue;
+    }
+    return window.percentUsed;
+  }
+  return null;
+}
+
+/**
+ * The band is the tighter of the 5-hour and the 7-day window. Each window
+ * prefers the live reading; a window the live reading lacks is filled from
+ * the Orca mirror while that is fresh (<= 30 min); otherwise it is unknown
+ * and calm. `source` says which fed the band.
+ */
+export function quotaPressureOf(input: QuotaPressureInput): QuotaPressure {
+  const checkedMs = input.mirrorCheckedAt === null ? Number.NaN : Date.parse(input.mirrorCheckedAt);
+  const mirrorFresh = input.mirror !== null && Number.isFinite(checkedMs) && input.nowMs - checkedMs <= STALE_QUOTA_MS;
+  const mirrorFigures: Readonly<Record<"five_hour" | "seven_day", number | null>> = mirrorFresh && input.mirror !== null
+    ? { five_hour: input.mirror.sessionUsedPercent, seven_day: input.mirror.weeklyUsedPercent }
+    : { five_hour: null, seven_day: null };
+  let liveUsed = false;
+  let mirrorUsed = false;
+  let band: QuotaBand = "normal";
+  for (const kind of ["five_hour", "seven_day"] as const) {
+    const fromLive = liveFigure(input.live, kind, input.nowMs);
+    const figure = fromLive ?? mirrorFigures[kind];
+    if (figure === null) continue;
+    if (fromLive !== null) liveUsed = true;
+    else mirrorUsed = true;
+    const windowBand = bandOfPercent(figure);
+    if (BAND_ORDER[windowBand] > BAND_ORDER[band]) band = windowBand;
+  }
+  const source: QuotaSource = liveUsed ? (mirrorUsed ? "live+mirror" : "live") : mirrorUsed ? "mirror" : "none";
+  return { band, source };
+}
+
+/** The band from the Orca mirror alone: the tighter of its 5-hour and weekly figures; a missing, unknown or stale (> 30 min) quota is normal. */
+export function quotaBandOf(quota: QuotaAccount | null, checkedAt: string | null, nowMs: number): QuotaBand {
+  return quotaPressureOf({ live: [], mirror: quota, mirrorCheckedAt: checkedAt, nowMs }).band;
 }
 
 /** Consecutive turns a lower tier must repeat before a downgrade (§6.4-§6.5). */
