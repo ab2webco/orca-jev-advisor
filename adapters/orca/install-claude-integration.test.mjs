@@ -1157,3 +1157,39 @@ test('T2c: an edit made while uninstall runs survives, and our hooks are gone', 
   assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] })
   assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 0)
 })
+
+// 0.6.11 T2d (M7): install replaces only a copy that is ours (a marker, or a
+// symlink to our source); anything else at that path is left untouched and
+// reported through modCopyWarning.
+
+test('T2d: a foreign directory at the mod path is left untouched and reported as foreign-mod-copy', () => {
+  const home = makeHome()
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(copyPath, { recursive: true })
+  writeFileSync(join(copyPath, 'not-ours.txt'), 'a real skill someone else installed', 'utf8')
+
+  const result = run('install', home)
+  assert.equal(result.ok, true, 'the hooks and env still install')
+  assert.equal(result.changes.modCopy, false)
+  assert.equal(result.modCopyWarning, 'foreign-mod-copy')
+  assert.equal(result.targets[0].modCopyWarning, 'foreign-mod-copy')
+  assert.match(result.targets[0].modCopyDetail, /not installed by Orca Jev/)
+  assert.equal(readFileSync(join(copyPath, 'not-ours.txt'), 'utf8'), 'a real skill someone else installed')
+  assert.equal(existsSync(modCopyMarkerPathFor(home)), false, 'no marker may claim a directory that is not ours')
+  assert.equal(ownEntries(readSettings(home), 'PreToolUse', GATE_MARKER).length, 1)
+})
+
+test('T2d: a symlink to somewhere else at the mod path is left untouched too', () => {
+  const home = makeHome()
+  const elsewhere = join(home, 'somebody-elses-skill')
+  mkdirSync(elsewhere, { recursive: true })
+  writeFileSync(join(elsewhere, 'SKILL.md'), 'theirs', 'utf8')
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(dirname(copyPath), { recursive: true })
+  symlinkSync(elsewhere, copyPath, 'dir')
+
+  const result = run('install', home)
+  assert.equal(result.modCopyWarning, 'foreign-mod-copy')
+  assert.equal(lstatSync(copyPath).isSymbolicLink(), true)
+  assert.equal(readFileSync(join(elsewhere, 'SKILL.md'), 'utf8'), 'theirs')
+})

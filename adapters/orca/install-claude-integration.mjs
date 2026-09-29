@@ -832,7 +832,7 @@ async function modCopyState (modCopyPath, markerPath, source, digest) {
     if (error?.code === 'ENOENT') return null
     throw error
   })
-  if (!st) return { exists: false, ours: false, current: false, hasManifest: false }
+  if (!st) return { exists: false, ours: false, foreign: false, current: false, hasManifest: false }
 
   const marker = await readModCopyMarker(markerPath)
   let ours
@@ -847,7 +847,11 @@ async function modCopyState (modCopyPath, markerPath, source, digest) {
 
   const hasManifest = await pathExists(join(modCopyPath, ...MOD_SKILLS_MANIFEST_PATH.split('/')))
   const current = ours && !st.isSymbolicLink() && marker !== null && typeof marker.digest === 'string' && digest !== null && marker.digest === digest && hasManifest
-  return { exists: true, ours, current, hasManifest }
+  // A marker at all means an earlier install of this mod (any plugin root)
+  // wrote it, so replacing is fine; no marker and not a link to our source
+  // means somebody else's files, which install must never delete.
+  const foreign = marker === null && !ours
+  return { exists: true, ours, foreign, current, hasManifest }
 }
 
 async function installModCopy (pluginRoot, modCopyPath, markerPath) {
@@ -861,10 +865,13 @@ async function installModCopy (pluginRoot, modCopyPath, markerPath) {
 
   const state = await modCopyState(modCopyPath, markerPath, source, plan.digest)
   if (state.current) return { changed: false }
+  if (state.foreign) {
+    return { changed: false, reason: 'foreign-mod-copy', detail: `${modCopyPath} exists and was not installed by Orca Jev; it was left untouched, so the skills mod is not on disk here` }
+  }
 
   if (state.exists) {
-    // Stale (different plugin root or changed content), an unrecognized
-    // leftover, or -- always -- a pre-fix symlink: replace wholesale rather
+    // Stale (different plugin root or changed content) or -- always -- a
+    // pre-fix symlink: replace wholesale rather
     // than merging into it or trusting a symlink's target as good enough,
     // the same way a stale settings.json container is never partially
     // reused. `rm` on a path that is itself a symlink removes the link,
