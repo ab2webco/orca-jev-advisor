@@ -1461,6 +1461,77 @@ test('the Agent model hooks line renders only when the field exists, and never a
   }
 })
 
+// 0.6.11 T2a -- the Node the installed hooks run on: a clear line when it is
+// too old or missing, a plain confirmation when it is fine, nothing when an
+// older worker never reported it.
+const NODE_STATUS_SHAPES = {
+  ok: { state: 'ok', path: '/opt/homebrew/bin/node', version: 'v26.9.0' },
+  'too-old': { state: 'too-old', path: '/usr/local/bin/node', version: 'v20.11.0' },
+  missing: { state: 'missing', path: null, version: null }
+}
+
+for (const locale of ['en', 'es']) {
+  for (const [shape, node] of Object.entries(NODE_STATUS_SHAPES)) {
+    test(`the Node line says what the hooks run on (${locale}, ${shape})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+      const { browser, page, errors } = await openPanel({
+        claudeIntegrationStatus: {
+          ok: true,
+          hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+          env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+          node,
+          secretMirror: { ok: true, exists: false },
+          checkedAt: new Date().toISOString()
+        }
+      }, locale)
+      try {
+        const lines = await page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+        const nodeLine = lines.find((line) => /Node/.test(line))
+        assert.ok(nodeLine, `no Node line rendered: ${JSON.stringify(lines)}`)
+        assert.ok(!/undefined|null|\{\{/.test(nodeLine), `the Node line leaked a missing value: ${nodeLine}`)
+        if (node.version) assert.ok(nodeLine.includes(node.version) && nodeLine.includes(node.path), nodeLine)
+        if (shape === 'too-old' && locale === 'en') assert.equal(nodeLine, 'Node 24 or newer is required; found v20.11.0 at /usr/local/bin/node.')
+        if (shape !== 'ok') assert.match(nodeLine, locale === 'en' ? /24 or newer/ : /24 o superior/)
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    })
+  }
+}
+
+test('no Node line renders when the status has no node field', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({
+    claudeIntegrationStatus: {
+      ok: true,
+      hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+      env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+      secretMirror: { ok: true, exists: false },
+      checkedAt: new Date().toISOString()
+    }
+  })
+  try {
+    const lines = await page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+    assert.ok(!lines.some((line) => /Node/.test(line)), JSON.stringify(lines))
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every integration.node* key exists in both catalogs, and the es values are accented', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('integration.node') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('integration.node') === 0)
+    assert.ok(esKeys.length >= 3, 'the es catalog has no integration.node* keys')
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
+    assert.match(catalog.es['integration.nodeTooOld'], /[áéíóú]/u, 'Spanish copy keeps its accents')
+  } finally {
+    await browser.close()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // JEVADV-41 (part A) -- config.html shows one section-group at a time behind
 // an in-panel role="tablist" (#config-tabbar), so a long settings document

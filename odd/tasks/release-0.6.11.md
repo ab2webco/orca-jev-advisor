@@ -28,6 +28,18 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
 ## Checklist
 - [x] T1 hourly measurement partitions, read across files (5baf81c; npm test 2498/2498, test:panels 155/155)
 - [ ] T2 one-step install and doctor
+  - [x] T2a hooks run an absolute Node >= 24 found at install time (not bare `node`
+        from the GUI PATH); none found → status says `node: missing|too-old` with
+        the version seen, and the config panel shows it (06c04b1; npm test 2518/2518; panel Node tests 20/20)
+  - [x] T2b doctor executes each installed hook command with a harmless payload
+        and names what failed; every hook's `pathMatches` counts, not only the gate (6afe09c; npm test 2532/2532)
+  - [x] T2c M6: `install()` writes settings through `writeSettingsIfUnchanged`
+        with the same retry as router-mode/steward (2b34b26; installer tests 55/55)
+  - [x] T2d M7: install never deletes a mod-skills path it does not own; it
+        reports the conflict instead (6352189; adapters/orca tests 282/282)
+  - [x] T2e accounts added after Configure get connected: the worker re-scans
+        `claude-accounts/` and installs on new ones (only once Configure has run),
+        and re-installs when a hook points at a stale plugin root (9f34b9b; npm test 2545/2545)
 - [ ] T3 redaction of repo, branch, worktree, policies, advisor.decide
 - [ ] T4 calibrated confidence floor
 - [ ] T5 effort before model

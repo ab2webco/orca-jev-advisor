@@ -254,6 +254,8 @@ const READY = {
     // PreToolUse/PostToolUse/PostToolUseFailure hooks -- same fields as
     // `hook` above.
     agentModelHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+    // install-claude-integration.mjs's status().node: the Node the hooks run on.
+    node: { state: 'ok', path: '/opt/homebrew/bin/node', version: 'v26.9.0' },
     // statMirror()'s real shape. `{ ok: true }` alone left `exists` and
     // `path` undefined, and the panel photographed "Key file: doesn't exist
     // yet (undefined)." -- next to a secretStatus that says a key is set.
