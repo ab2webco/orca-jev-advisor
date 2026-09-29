@@ -5,21 +5,21 @@ import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from "./model_router_status.ts";
 
 test("status line, Spanish, active: the spec's own example", () => {
-  assert.equal(routerStatusText("es", "active", { label: "Sonnet 5", effort: "medium", tier: "standard" }), "modelo: Sonnet 5 · esfuerzo medio (etapa: implementar)");
+  assert.equal(routerStatusText("es", "active", { label: "Sonnet 5", effort: "medium", tier: "standard" }), "modelo: Sonnet 5 · esfuerzo medio");
 });
 
 test("status line, Spanish, measure: prefixed with mediría:", () => {
-  assert.equal(routerStatusText("es", "measure", { label: "Sonnet 5", effort: "medium", tier: "standard" }), "mediría: Sonnet 5 · esfuerzo medio (etapa: implementar)");
+  assert.equal(routerStatusText("es", "measure", { label: "Sonnet 5", effort: "medium", tier: "standard" }), "mediría: Sonnet 5 · esfuerzo medio");
 });
 
 test("status line, English, both modes", () => {
-  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "complex" }), "model: Opus 5.5 · high effort (stage: analyse)");
-  assert.equal(routerStatusText("en", "measure", { label: "Opus 5.5", effort: "xhigh", tier: "frontier" }), "would use: Opus 5.5 · extra high effort (stage: deep reasoning)");
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "complex" }), "model: Opus 5.5 · high effort");
+  assert.equal(routerStatusText("en", "measure", { label: "Opus 5.5", effort: "xhigh", tier: "frontier" }), "would use: Opus 5.5 · extra high effort");
 });
 
 test("status line: a model without effort shows none", () => {
-  assert.equal(routerStatusText("es", "active", { label: "Haiku 4.5", effort: null, tier: "simple" }), "modelo: Haiku 4.5 (etapa: consultar)");
-  assert.equal(routerStatusText("en", "measure", { label: "Haiku 4.5", effort: null, tier: "simple" }), "would use: Haiku 4.5 (stage: ask)");
+  assert.equal(routerStatusText("es", "active", { label: "Haiku 4.5", effort: null, tier: "simple" }), "modelo: Haiku 4.5");
+  assert.equal(routerStatusText("en", "measure", { label: "Haiku 4.5", effort: null, tier: "simple" }), "would use: Haiku 4.5");
 });
 
 test("the router catalog has the same keys in both locales", () => {
@@ -65,8 +65,8 @@ test("kept, with no effort: the effort segment is dropped", () => {
 });
 
 test("a switch, or no reason to keep, reads exactly as before", () => {
-  assert.equal(routerStatusText("es", "active", { label: "Haiku 4.5", effort: null, tier: "simple", kept: null }), "modelo: Haiku 4.5 (etapa: consultar)");
-  assert.equal(routerStatusText("en", "measure", { label: "Sonnet 5", effort: "medium", tier: "standard", kept: null }), "would use: Sonnet 5 · medium effort (stage: implement)");
+  assert.equal(routerStatusText("es", "active", { label: "Haiku 4.5", effort: null, tier: "simple", kept: null }), "modelo: Haiku 4.5");
+  assert.equal(routerStatusText("en", "measure", { label: "Sonnet 5", effort: "medium", tier: "standard", kept: null }), "would use: Sonnet 5 · medium effort");
 });
 
 const HELD = { changed: false, proposed: "claude-haiku-4-5-20251001", model: "claude-opus-5-5" } as const;
@@ -131,4 +131,15 @@ test("nit 10: the person's own switch reads as their choice, both locales, both 
 test("kept by the context-window floor: named in both locales", () => {
   assert.equal(routerStatusText("es", "active", { ...KEPT, kept: "context-window" }), "modelo: Opus 5.5 · esfuerzo muy alto · se mantiene: el contexto no cabe en un modelo menor (Jev: consultar)");
   assert.equal(routerStatusText("en", "active", { ...KEPT, kept: "context-window" }), "model: Opus 5.5 · extra high effort · kept: the context does not fit a smaller model (Jev: ask)");
+});
+
+test("status: a plain decision does not name a stage; only a kept model names Jev's tier, because there it explains something", () => {
+  for (const locale of ["es", "en"] as const) {
+    for (const mode of ["active", "measure"] as const) {
+      const plain = routerStatusText(locale, mode, { label: "Haiku 4.5", effort: null, tier: "simple" });
+      assert.ok(!/etapa|stage/i.test(plain), plain);
+      const kept = routerStatusText(locale, mode, { label: "Opus 5.5", effort: "high", tier: "simple", kept: "break-even" });
+      assert.ok(kept.includes("Jev:"), kept);
+    }
+  }
 });

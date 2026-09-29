@@ -46,10 +46,10 @@ export type ModelRouterKey =
 
 export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
   es: {
-    "status.active.effort": "modelo: {{model}} · esfuerzo {{effort}} (etapa: {{stage}})",
-    "status.active.noEffort": "modelo: {{model}} (etapa: {{stage}})",
-    "status.measure.effort": "mediría: {{model}} · esfuerzo {{effort}} (etapa: {{stage}})",
-    "status.measure.noEffort": "mediría: {{model}} (etapa: {{stage}})",
+    "status.active.effort": "modelo: {{model}} · esfuerzo {{effort}}",
+    "status.active.noEffort": "modelo: {{model}}",
+    "status.measure.effort": "mediría: {{model}} · esfuerzo {{effort}}",
+    "status.measure.noEffort": "mediría: {{model}}",
     "status.active.kept.effort": "modelo: {{model}} · esfuerzo {{effort}} · se mantiene: {{why}} (Jev: {{stage}})",
     "status.active.kept.noEffort": "modelo: {{model}} · se mantiene: {{why}} (Jev: {{stage}})",
     "status.measure.kept.effort": "mediría: {{model}} · esfuerzo {{effort}} · se mantendría: {{why}} (Jev: {{stage}})",
@@ -88,10 +88,10 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.no-jev": "heredado, sin respuesta de Jev",
   },
   en: {
-    "status.active.effort": "model: {{model}} · {{effort}} effort (stage: {{stage}})",
-    "status.active.noEffort": "model: {{model}} (stage: {{stage}})",
-    "status.measure.effort": "would use: {{model}} · {{effort}} effort (stage: {{stage}})",
-    "status.measure.noEffort": "would use: {{model}} (stage: {{stage}})",
+    "status.active.effort": "model: {{model}} · {{effort}} effort",
+    "status.active.noEffort": "model: {{model}}",
+    "status.measure.effort": "would use: {{model}} · {{effort}} effort",
+    "status.measure.noEffort": "would use: {{model}}",
     "status.active.kept.effort": "model: {{model}} · {{effort}} effort · kept: {{why}} (Jev: {{stage}})",
     "status.active.kept.noEffort": "model: {{model}} · kept: {{why}} (Jev: {{stage}})",
     "status.measure.kept.effort": "would use: {{model}} · {{effort}} effort · would keep: {{why}} (Jev: {{stage}})",

@@ -1074,7 +1074,7 @@ test("router, measure (the default): decides and logs at session start, changes 
   assert.equal(decision.quotaBand, "normal");
   for (const key of ["at", "confidence", "reason", "guard", "contextTokens", "switchCost", "stepSaving", "expectedSteps"]) assert.ok(key in decision, key);
   assert.equal(JSON.stringify(decision).includes("what time"), false, "no prompt text in the decision log");
-  assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5 (stage: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5");
 });
 
 test("router quota: the live 5-hour and 7-day figures set the band, and the record says live (0.6.11 T6)", async () => {
@@ -1174,7 +1174,7 @@ test("router, active: a simple first prompt runs on Haiku with no effort, and ev
   assert.equal(first.model, "claude-haiku-4-5-20251001");
   assert.equal("effort" in first, false);
   assert.equal(routerDecisionLines(host)[0]?.applied, true);
-  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5");
 
   host.messages = [...host.messages, { role: "assistant", text: "", toolUses: [] }];
   const second = await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, index: 1 }));
@@ -1331,7 +1331,7 @@ test("router, active, stage: a downgrade needs the same lower tier on 2 turns an
   assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · high effort · kept: waiting for another such turn (Jev: ask)");
   const turn3 = await playTurn(host, handlers, engine, 3, "and summarise them in one line", 4);
   assert.equal(turn3.model, "claude-haiku-4-5-20251001", "the second lower turn with a positive break-even switches");
-  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)", "a switch reads as before");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5", "a switch reads as before");
 
   const decisions = routerDecisionLines(host);
   assert.deepEqual(decisions.map((row) => row.point), ["start", "stage", "stage"]);
@@ -2155,7 +2155,7 @@ test("nit 10 (hook): after the person switches model, the router part says it is
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
-  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5");
   host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
   await stepThrough(handlers, engine, turnStepEvent({ index: 1, model: "claude-sonnet-5-5", effort: "medium" }));
   assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5.5 · kept: your choice");
