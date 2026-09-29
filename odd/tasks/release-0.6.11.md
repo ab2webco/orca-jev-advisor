@@ -33,8 +33,8 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
         the version seen, and the config panel shows it
   - [ ] T2b doctor executes each installed hook command with a harmless payload
         and names what failed; every hook's `pathMatches` counts, not only the gate
-  - [ ] T2c M6: `install()` writes settings through `writeSettingsIfUnchanged`
-        with the same retry as router-mode/steward
+  - [x] T2c M6: `install()` writes settings through `writeSettingsIfUnchanged`
+        with the same retry as router-mode/steward (2b34b26; installer tests 55/55)
   - [ ] T2d M7: install never deletes a mod-skills path it does not own; it
         reports the conflict instead
   - [ ] T2e accounts added after Configure get connected: the worker re-scans
