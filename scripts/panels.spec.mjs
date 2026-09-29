@@ -1661,6 +1661,62 @@ test('a machine where localStorage itself throws (Orca\'s sandboxed opaque-origi
 // row.
 // ---------------------------------------------------------------------------
 
+// 0.6.7 T5: "Waiting for you" -- what queue mode set aside for a person,
+// in the Gate tab, with how to release an item.
+test('the Gate tab lists what is waiting for a person: policy, project, command and when, with how to release it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    assert.equal(await page.isVisible('#card-waiting'), true)
+    const rows = await page.$$eval('#waiting-body li', (items) => items.map((li) => li.textContent))
+    assert.equal(rows.length, 2)
+    assert.match(rows[0], /client_always_asks/)
+    assert.match(rows[0], /acme-app/)
+    assert.match(rows[0], /gh pr merge 42/)
+    assert.match(rows[0], /ago|min|h\b|d\b/)
+    const heading = await page.textContent('#card-waiting h2')
+    assert.match(heading, /2/)
+    assert.match(await page.textContent('#waiting-release'), /run it again/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the waiting card stays hidden when nothing is queued', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.empty)
+  try {
+    assert.equal(await page.isVisible('#card-waiting'), false)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a long waiting command wraps inside a 320px board instead of widening it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready, 'en', 'light', { viewport: { width: 320, height: 900 } })
+  try {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    assert.equal(overflow, 0)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every waiting.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openBoardPanel(SCENARIOS.ready, 'es')
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('waiting.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('waiting.') === 0)
+    assert.ok(enKeys.length > 0, 'no waiting.* keys at all')
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('the calibration card\'s legend rows sum to asked, with no bucket left uncounted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
   try {
@@ -2069,7 +2125,7 @@ test('every consumption.* key in one language catalog exists in the other, and t
 
 const BOARD_TABS = ['gate', 'activity', 'consumption', 'skills']
 const BOARD_TAB_SECTIONS = {
-  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'windows'],
+  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'card-waiting', 'windows'],
   activity: ['card-live', 'card-projects'],
   consumption: ['card-consumption'],
   skills: ['card-skills']

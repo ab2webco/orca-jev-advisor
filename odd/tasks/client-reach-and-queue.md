@@ -84,7 +84,13 @@ path back from the panel; next release if the queue proves itself).
   seen (human_queue module missing; 6/8 gate queue tests, static panel,
   mirror and worker tests failing first); GREEN: `npm test` 2399/2399,
   `npm run test:panels` 147/147; Policies tab looked at 1440/768/390/320.
-- [ ] T5 board "Waiting for you"
+- [x] T5 board "Waiting for you" -- read-measurements.mjs publishes
+  `gate.waiting` (newest first, at most 20, the hashed key never leaves the
+  reader) and `gate.waitingTotal`; the Gate tab's first card lists policy,
+  project, command and age, says how to release one, and hides when
+  nothing waits. RED seen (reader, fixture shape, 2 Playwright tests, tab
+  map); GREEN: `npm test` 2401/2401, waiting + tab-map panel tests 6/6;
+  Gate tab looked at 1440/768/390/320, light and dark.
 - [ ] T6 subagents in the status line and the board
 - [ ] T7 explicit subagent models are judged, not pinned
 - [ ] T8 README and release

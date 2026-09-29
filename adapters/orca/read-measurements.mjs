@@ -15,6 +15,9 @@
  *                                 (src/core/approval_record.ts)
  *   ab-benchmark-results.jsonl    adapters/cli/ab_benchmark_cli.ts
  *                                 (src/core/ab_benchmark.ts, src/core/ab_report.ts)
+ *   human-queue.jsonl             adapters/claude/gate-bash.ts, queue mode
+ *                                 (src/core/human_queue.ts) -- the board's
+ *                                 "Waiting for you" list, gate.waiting
  *
  * Aggregation happens here, not in the worker or the panel: these files
  * can grow over a week of real use, and shipping every raw line across
@@ -44,12 +47,17 @@ import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
 import { modSkillsProjectName } from '../../src/core/project_name.ts'
 import { toGateDecisionRecord } from './log-files.mjs'
+import { HUMAN_QUEUE_FILE, parseHumanQueue, waitingItems } from '../../src/core/human_queue.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const MOD_SKILLS_LOG_PATH = join(CACHE_DIR, 'mod-skills-measurements.jsonl')
 const APPROVALS_LOG_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 const AB_BENCHMARK_LOG_PATH = join(CACHE_DIR, 'ab-benchmark-results.jsonl')
+const HUMAN_QUEUE_PATH = join(CACHE_DIR, HUMAN_QUEUE_FILE)
+
+/** The board shows at most this many waiting items; the rest are counted, not listed. */
+const WAITING_LIST_LIMIT = 20
 
 function isRecord (value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -137,6 +145,7 @@ async function aggregateGate () {
         latencyMs: d.latencyMs,
       })),
     notRunByCommandFamily: await aggregateNotRunByCommandFamily(),
+    ...(await aggregateWaiting(now)),
   }
 }
 
@@ -342,6 +351,26 @@ function gateHealth (decisions) {
  * never an invented cross-log join, and a pending record with no family
  * is impossible: toPendingApprovalRecord already requires the string.
  */
+/**
+ * 0.6.7 T5: what queue mode set aside for a person and nobody has come back
+ * for yet (src/core/human_queue.ts's waitingItems). Only what the board
+ * shows crosses: the hashed session key stays here. `waitingTotal` counts
+ * past the listed WAITING_LIST_LIMIT so a long queue is never understated.
+ */
+async function aggregateWaiting (now) {
+  let raw = ''
+  try {
+    raw = await readFile(HUMAN_QUEUE_PATH, 'utf8')
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error
+  }
+  const waiting = waitingItems(parseHumanQueue(raw), now)
+  return {
+    waiting: waiting.slice(0, WAITING_LIST_LIMIT).map((item) => ({ id: item.id, at: item.at, project: item.project, policyId: item.policyId, command: item.command })),
+    waitingTotal: waiting.length,
+  }
+}
+
 async function aggregateNotRunByCommandFamily () {
   const { pending, outcomes } = await readApprovalRecords()
   // notRunPerFamily reuses summarizeApprovals (src/core/approval_record.ts),

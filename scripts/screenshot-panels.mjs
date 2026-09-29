@@ -363,6 +363,13 @@ const READY = {
         { at: '2026-09-24T15:01:20.511Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'jev', verdict: 'advise', latencyMs: 640 },
         { at: '2026-09-24T15:00:58.640Z', project: 'orca-oss', commandFamily: 'git', source: 'cache', verdict: 'allow', latencyMs: null },
       ],
+      // 0.6.7 T5: what queue mode set aside for a person (read-measurements'
+      // aggregateWaiting). Example projects and commands, no real ones.
+      waiting: [
+        { id: 'w1', at: '2026-09-24T14:58:12.000Z', project: 'acme-app', policyId: 'client_always_asks', command: 'gh pr merge 42 --squash --delete-branch' },
+        { id: 'w2', at: '2026-09-24T14:31:40.000Z', project: 'acme-site', policyId: 'production_is_human', command: 'npm run deploy:production -- --region us-east-1 --confirm --tag release-2026-09-24-hotfix' },
+      ],
+      waitingTotal: 2,
     },
     modSkills: {
       totalDecisions: 0,
@@ -494,6 +501,8 @@ const EMPTY = {
       cacheHitRate: null,
       recent: [],
       notRunByCommandFamily: [],
+      waiting: [],
+      waitingTotal: 0,
     },
     modSkills: READY.measurementsSummary.modSkills,
     approvals: { ...emptyWindow('all').approvals, corruptLines: 0 },
