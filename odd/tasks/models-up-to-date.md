@@ -31,7 +31,7 @@ https://platform.claude.com/docs/en/about-claude/pricing
 - [x] T3b Thinking-loss guard: not needed. Main-loop routing decides only on a turn's first step (`e.index === 0` with a new turnId, hooks/index.ts routeMainStep); every later step replays the sticky model, so no switch ever lands mid-turn. `thinkingReadsFrom` is recorded in the seed as data.
 - [x] T3 Context-window floor: a step or subagent is never routed to a model whose context window is smaller than the current context plus a margin; logged as a guard. Stage decisions (point C) only: point A and subagent spawns have no context yet. Proof: model_router_stage.test.ts context-floor tests (300K never Haiku), npm test 2470/2470.
 - [ ] T3b Thinking-block compatibility: catalog field `thinkingReadsFrom`; on the main loop, a switch to a model that cannot read the current model's thinking blocks happens only on a turn's first step, never mid-turn (Sonnet 5.5 cannot read Opus 5.x / Fable blocks; the API drops them silently).
-- [ ] T4 Board labels read from the catalog instead of a hardcoded map.
+- [x] T4 Board labels read from the catalog instead of a hardcoded map. The Board reads the `models` storage key on every reload; an unknown id shows as itself. Proof: board_html_models.test.mjs 3/3; the two affected panels.spec board tests pass.
 - [ ] T5 Daily docs check: the worker reads the public models and pricing pages once a day, parses them into seed rows, and on a difference offers them through the existing seed notice. Any failure keeps the last good data and logs one line.
 - [ ] T6 Release 0.6.10: README section, versions, screenshots, PR, merge, release, catalog pointer.
 

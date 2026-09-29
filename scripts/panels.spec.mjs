@@ -1871,6 +1871,12 @@ test('changing a row\'s mode and clicking its save button sends a modelRouterCon
  *  loosely. Two models, one quota account near its weekly limit, and every
  *  one of the four recommendation triggers present with overThreshold: true
  *  so the populated test can assert on every warning line at once. */
+/** The person's stored catalog (storage key `models`): the Board names models from it. */
+const BOARD_MODELS = [
+  { id: 'claude-opus-5-5', provider: 'anthropic', label: 'Claude Opus 5.5', rank: 2, agentModel: 'opus', source: '', available: true },
+  { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Claude Sonnet 5', rank: 3, agentModel: 'sonnet', source: '', available: true }
+]
+
 const POPULATED_CONSUMPTION = {
   ok: true,
   usage: {
@@ -1977,7 +1983,7 @@ test('a side that reported no token figure says so instead of printing a zero', 
 })
 
 test('a populated consumptionSummary renders real per-model shares, quota bars, and every present overThreshold recommendation', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION, models: BOARD_MODELS })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Sonnet 5/, 'the first model\'s friendly name did not render')
@@ -3488,7 +3494,7 @@ test('activity: a populated card shows gate outcomes and tokens/cost by model', 
     ],
     totalEstimatedCostUsd: 1.23
   })
-  const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
+  const { browser, page, errors } = await openBoardPanel({ ...activitySummary([project]), models: BOARD_MODELS })
   try {
     const detail = await activityCardDetail(page, 'alpha')
     assert.ok(detail, 'expected a card for "alpha"')

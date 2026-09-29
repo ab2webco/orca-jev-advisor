@@ -1648,23 +1648,33 @@
         }
       }
 
-      /** The current model catalog (seed/models.json), shortened for this
-       *  card's compact rows -- the catalog's own `label` carries a
-       *  redundant "Claude " prefix ("Claude Sonnet 5") that this card drops.
-       *  An id outside this small known set (a future or renamed model)
-       *  falls back to itself, never blank -- see friendlyModelName below. */
-      var MODEL_FRIENDLY_NAMES = {
-        'claude-fable-5-1': 'Fable 5.1',
-        'claude-opus-5-5': 'Opus 5.5',
-        'claude-sonnet-5': 'Sonnet 5',
-        'claude-haiku-4-5-20251001': 'Haiku 4.5'
+      /** The person's model catalog (storage key `models`, the rows the
+       *  config panel edits), read on every reload: id -> label, shortened
+       *  for this card's compact rows -- the catalog's own `label` carries a
+       *  redundant "Claude " prefix ("Claude Sonnet 5.5") that this card
+       *  drops. */
+      var MODELS_KEY = 'models'
+      var modelLabels = {}
+
+      function modelLabelsFromCatalog (catalog) {
+        var labels = {}
+        if (!Array.isArray(catalog)) return labels
+        catalog.forEach(function (row) {
+          if (!row || typeof row !== 'object' || typeof row.id !== 'string' || typeof row.label !== 'string') return
+          var label = row.label.replace(/^Claude\s+/, '').trim()
+          if (label) labels[row.id] = label
+        })
+        return labels
       }
 
-      /** The friendly label for a model id, or the id itself when it is not
-       *  in MODEL_FRIENDLY_NAMES -- the raw id is never lost, it just moves
-       *  to the caller's `title` attribute instead of the visible text. */
+      /** The catalog label for a model id (a `[1m]` context suffix names the
+       *  same model), or the id itself when the catalog does not know it --
+       *  the raw id is never lost, it also stays in the caller's `title`. */
       function friendlyModelName (id) {
-        return MODEL_FRIENDLY_NAMES[id] || id
+        var base = String(id).split('[')[0]
+        if (Object.prototype.hasOwnProperty.call(modelLabels, id)) return modelLabels[id]
+        if (Object.prototype.hasOwnProperty.call(modelLabels, base)) return modelLabels[base]
+        return id
       }
 
       /** One model's input/cache-read/cache-write/output shares -- each a
@@ -2383,8 +2393,10 @@
           read(WORKER_HEARTBEAT_KEY, false),
           read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null }),
           read('consumptionSummary', usuario),
-          read('activityByProjectSummary', usuario)
+          read('activityByProjectSummary', usuario),
+          read(MODELS_KEY, false).catch(function () { return null })
         ]).then(function (results) {
+          modelLabels = modelLabelsFromCatalog(results[6])
           render(results[0] || { entries: [] })
           renderStats(results[1], results[3])
           renderWorkerNote(results[2])
