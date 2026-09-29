@@ -26,7 +26,7 @@ roadmap shown to the partner (share.onorca.dev/a/MUax4ZMJX3TV, section 06).
 Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
 
 ## Checklist
-- [ ] T1 hourly measurement partitions, read across files
+- [x] T1 hourly measurement partitions, read across files (5baf81c; npm test 2498/2498, test:panels 155/155)
 - [ ] T2 one-step install and doctor
 - [ ] T3 redaction of repo, branch, worktree, policies, advisor.decide
 - [ ] T4 calibrated confidence floor
