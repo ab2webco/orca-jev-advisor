@@ -43,7 +43,7 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
 - [x] T3 redaction of repo, branch, worktree, policies, advisor.decide (ca7d6f4, e9eb13f, d7daaa4, d185cab; npm test 2565/2565)
 - [ ] T4 calibrated confidence floor
 - [ ] T5 effort before model
-- [ ] T6 live quota
+- [x] T6 live quota from `$.session.usage().rateLimits` (five_hour, seven_day: percentUsed, resetsAt), tighter-of-two band, `quotaSource` in the decision record; live figure dropped once its resetsAt passes, mirror fills a missing window while <= 30 min old (de5d377, 65402bf, 12de4d6; npm test 2575/2575; no panel touched)
 - [ ] T7 README, release 0.6.11, live check on this machine
 
 ## Acceptance criteria
