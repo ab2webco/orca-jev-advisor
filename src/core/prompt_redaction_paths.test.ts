@@ -81,3 +81,20 @@ test("the skill and tool measurement records never write a secret to disk", () =
   assertRedacted(buildToolRecord({ ...common, orcaContext: { worktree: "/wt", project: "p", branch: "b" } }), "tool buildDecisionRecord");
   assertRedacted(buildSkillRecord({ ...common, orcaContext: { worktree: "/wt", proyecto: "p", rama: "b" }, listingWithheld: false, readiness: null }), "skill buildDecisionRecord");
 });
+
+// 0.6.11 T3: the prompt text reads with the same placeholders as the Orca context.
+test("the skill and tool decisions' prompt shows the Orca context's names as the same placeholders", () => {
+  const prompt = "push feat/acme-login from /home/dev/Projects/acme-shop and then run the tests in acme-shop";
+  const expected = "push <branch-1> from <path-1> and then run the tests in <repo-1>";
+  const skillOrca = { worktree: ORCA_NAMES.worktree, proyecto: ORCA_NAMES.project, rama: ORCA_NAMES.branch };
+  const skillWide = buildSkillWideState(prompt, [{ name: "s", description: "d" }], skillOrca) as { solicitud: string; orca_context: unknown };
+  const skillFit = buildSkillFitState(prompt, [{ name: "s", description: "d", excerpt: "e" }], skillOrca) as { solicitud: string };
+  const toolWide = buildToolWideState(prompt, [{ name: "t", description: "d" }], ORCA_NAMES) as { request: string; orcaContext: unknown };
+  const toolFit = buildToolFitState(prompt, [{ name: "t", description: "d", fullDescription: "f" }], ORCA_NAMES) as { request: string };
+  assert.equal(skillWide.solicitud, expected);
+  assert.equal(skillFit.solicitud, expected);
+  assert.equal(toolWide.request, expected);
+  assert.equal(toolFit.request, expected);
+  assert.deepEqual(skillWide.orca_context, REDACTED_ORCA);
+  assert.deepEqual(toolWide.orcaContext, REDACTED_ORCA);
+});
