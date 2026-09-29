@@ -8,7 +8,7 @@
  * does: the worker's own permission sandbox only lets it read its plugin
  * root, and every one of these lives outside it.
  *
- * Usage: node install-claude-integration.mjs <install|uninstall|status> <pluginRoot>
+ * Usage: node install-claude-integration.mjs <install|uninstall|status|hooks-check> <pluginRoot>
  *        node install-claude-integration.mjs router-mode-status
  *        node install-claude-integration.mjs router-mode-set <target> <mode>
  *
@@ -61,6 +61,9 @@
  *             as found.
  * status      Read-only: reports whether each of the seven is in place
  *             right now, for the config panel and advisor.doctor.
+ * hooks-check Runs each installed hook (gate-bash, gate-outcome,
+ *             agent-model) as its settings.json entry writes it, with a
+ *             no-op payload, and reports which ones failed and why.
  * router-mode-status  Read-only, no pluginRoot needed: `{ok, targets: [
  *             {target: "home" | "<account uuid>", mode}, ...]}`, one row
  *             per target discoverTargets() finds -- JEV-060 slice 2 §7/§9,
@@ -102,7 +105,7 @@ import {
 } from '../../src/core/guarded_fs.ts'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
@@ -1279,6 +1282,7 @@ async function status (pluginRoot) {
     // that matter most for a plugin shipped for Orca.
     hook: {
       installed: perTarget.every((t) => t.hook.installed),
+      pathMatches: perTarget.every((t) => t.hook.pathMatches),
       installedCount: perTarget.filter((t) => t.hook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.hook.installed),
@@ -1286,6 +1290,7 @@ async function status (pluginRoot) {
     },
     outcomeHook: {
       installed: perTarget.every((t) => t.outcomeHook.installed),
+      pathMatches: perTarget.every((t) => t.outcomeHook.pathMatches),
       installedCount: perTarget.filter((t) => t.outcomeHook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.outcomeHook.installed),
@@ -1293,6 +1298,7 @@ async function status (pluginRoot) {
     },
     agentModelHook: {
       installed: perTarget.every((t) => t.agentModelHook.installed),
+      pathMatches: perTarget.every((t) => t.agentModelHook.pathMatches),
       installedCount: perTarget.filter((t) => t.agentModelHook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.agentModelHook.installed),
@@ -1307,6 +1313,79 @@ async function status (pluginRoot) {
     orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
     statePath: STATE_PATH
   }
+}
+
+const HOOK_CHECK_TIMEOUT_MS = Number(process.env.ORCA_JEV_HOOK_CHECK_TIMEOUT_MS ?? '') || 5000
+
+/** One payload per hook that its own script treats as "nothing to do": an
+ *  obviously safe command for the gate, and events that never match a
+ *  pending approval or an Agent call for the other two -- so running them
+ *  writes and asks nothing, yet still loads every import. */
+function hookCheckPayloads () {
+  const base = { tool_use_id: 'orca-jev-hooks-check', cwd: tmpdir() }
+  return {
+    'gate-bash': { ...base, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
+    'gate-outcome': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
+    'agent-model': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } }
+  }
+}
+
+/** Runs `command args` with `payload` on stdin and says how it ended. */
+function runHookOnce (command, args, payload) {
+  return new Promise((resolve) => {
+    const env = { ...process.env }
+    delete env.ELECTRON_RUN_AS_NODE
+    try {
+      const child = execFile(command, args, { timeout: HOOK_CHECK_TIMEOUT_MS, maxBuffer: 256 * 1024, env }, (error, _stdout, stderr) => {
+        if (!error) return resolve({ ok: true, reason: null, detail: null })
+        const tail = String(stderr ?? '').trim().slice(-300)
+        if (error.killed) return resolve({ ok: false, reason: 'timeout', detail: `no answer within ${HOOK_CHECK_TIMEOUT_MS} ms` })
+        if (typeof error.code === 'number') return resolve({ ok: false, reason: 'exit-code', detail: `exited with code ${error.code}${tail ? `: ${tail}` : ''}` })
+        return resolve({ ok: false, reason: 'spawn-error', detail: String(error.code ?? error.message).slice(0, 200) })
+      })
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(JSON.stringify(payload))
+    } catch (error) {
+      resolve({ ok: false, reason: 'spawn-error', detail: String(error?.message ?? error).slice(0, 200) })
+    }
+  })
+}
+
+/**
+ * hooks-check: runs every installed hook exactly as its settings.json entry
+ * says (command, then args) with a payload it treats as a no-op, so a hook
+ * that cannot start (no Node, Node too old for type stripping, a stale
+ * path) fails here instead of silently failing open in every session. One
+ * run per distinct command and args, however many targets share it.
+ */
+async function hooksCheck (pluginRoot) {
+  const { specs } = hookSpecs(pluginRoot)
+  const families = [['gate-bash', specs[0]], ['gate-outcome', specs[1]], ['agent-model', specs[4]]]
+  const payloads = hookCheckPayloads()
+  const discovery = await discoverTargets()
+  const runs = new Map()
+  for (const target of discovery.targets) {
+    let settings
+    try {
+      settings = await readSettings(settingsPathFor(PLATFORM, target))
+    } catch {
+      continue
+    }
+    for (const [hook, spec] of families) {
+      const own = findMarkedHook(findGroup(settings, spec.event, spec.matcher), spec.markers)
+      if (own === undefined || typeof own.command !== 'string') continue
+      const args = Array.isArray(own.args) ? own.args.filter((a) => typeof a === 'string') : []
+      const key = JSON.stringify([hook, own.command, args])
+      const entry = runs.get(key) ?? { hook, command: own.command, args, targets: [] }
+      entry.targets.push(target.id)
+      runs.set(key, entry)
+    }
+  }
+  const results = await Promise.all([...runs.values()].map(async (entry) => ({
+    ...entry,
+    ...(await runHookOnce(entry.command, entry.args, payloads[entry.hook]))
+  })))
+  return { ok: true, results }
 }
 
 /**
@@ -1514,6 +1593,8 @@ async function main () {
         result = await uninstall(pluginRoot)
       } else if (mode === 'status') {
         result = await status(pluginRoot)
+      } else if (mode === 'hooks-check') {
+        result = await hooksCheck(pluginRoot)
       } else {
         result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
       }

@@ -53,6 +53,7 @@ const {
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
   claudeIntegrationPermissionArgs,
+  describeClaudeIntegration,
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
@@ -255,6 +256,73 @@ test('claudeIntegrationPermissionArgs: install may read the Node version manager
   assert.ok(install.some((arg) => arg.startsWith('--allow-fs-read=') && arg.endsWith('.nvm/versions/node')))
   assert.ok(install.some((arg) => arg.startsWith('--allow-fs-write=')))
   assert.ok(!claudeIntegrationPermissionArgs('status').some((arg) => arg.startsWith('--allow-fs-write=')))
+})
+
+const HEALTHY_STATUS = {
+  ok: true,
+  node: { state: 'ok', path: '/opt/homebrew/bin/node', version: 'v26.9.0' },
+  hook: { installed: true, pathMatches: true },
+  outcomeHook: { installed: true, pathMatches: true },
+  agentModelHook: { installed: true, pathMatches: true },
+  env: { installed: true, name: 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS' },
+  modCopy: { installed: true }
+}
+const HEALTHY_HOOK_RUNS = { ok: true, results: ['gate-bash', 'gate-outcome', 'agent-model'].map((hook) => ({ hook, targets: ['home'], ok: true, reason: null, detail: null })) }
+
+test('describeClaudeIntegration: everything in place and every hook ran is ok', () => {
+  const check = describeClaudeIntegration(HEALTHY_STATUS, HEALTHY_HOOK_RUNS)
+  assert.equal(check.id, 'claude-integration')
+  assert.equal(check.ok, true)
+})
+
+test('describeClaudeIntegration: a stale path counts for the outcome and Agent hooks, not only the gate', () => {
+  const outcome = describeClaudeIntegration({ ...HEALTHY_STATUS, outcomeHook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.equal(outcome.ok, false)
+  assert.match(outcome.detail, /gate-outcome\.ts/)
+  const agent = describeClaudeIntegration({ ...HEALTHY_STATUS, agentModelHook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.equal(agent.ok, false)
+  assert.match(agent.detail, /agent-model\.ts/)
+  const gate = describeClaudeIntegration({ ...HEALTHY_STATUS, hook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.match(gate.detail, /gate-bash\.ts/)
+})
+
+test('describeClaudeIntegration: names the hook that failed to run and why', () => {
+  const runs = { ok: true, results: [
+    { hook: 'gate-bash', targets: ['home'], ok: false, reason: 'exit-code', detail: 'exited with code 1: ERR_UNKNOWN_FILE_EXTENSION' },
+    { hook: 'gate-outcome', targets: ['home'], ok: true, reason: null, detail: null },
+    { hook: 'agent-model', targets: ['home'], ok: false, reason: 'timeout', detail: 'no answer within 5000 ms' }
+  ] }
+  const check = describeClaudeIntegration(HEALTHY_STATUS, runs)
+  assert.equal(check.ok, false)
+  assert.match(check.detail, /gate-bash.*exit-code.*ERR_UNKNOWN_FILE_EXTENSION/)
+  assert.match(check.detail, /agent-model.*timeout/)
+  assert.doesNotMatch(check.detail, /gate-outcome/)
+})
+
+test('describeClaudeIntegration: a Node that is too old or missing is a problem with the version seen', () => {
+  const old = describeClaudeIntegration({ ...HEALTHY_STATUS, node: { state: 'too-old', path: '/usr/local/bin/node', version: 'v20.11.0' } }, HEALTHY_HOOK_RUNS)
+  assert.equal(old.ok, false)
+  assert.match(old.detail, /Node 24 or newer.*v20\.11\.0.*\/usr\/local\/bin\/node/)
+  const missing = describeClaudeIntegration({ ...HEALTHY_STATUS, node: { state: 'missing', path: null, version: null } }, HEALTHY_HOOK_RUNS)
+  assert.match(missing.detail, /Node 24 or newer/)
+})
+
+test('describeClaudeIntegration: a hooks-check that itself failed is reported, never read as passing', () => {
+  const check = describeClaudeIntegration(HEALTHY_STATUS, { ok: false, reason: 'no-json', detail: 'timed out' })
+  assert.equal(check.ok, false)
+  assert.match(check.detail, /could not run the hooks/i)
+})
+
+test('describeClaudeIntegration: a status that could not be read says so', () => {
+  const check = describeClaudeIntegration({ ok: false, reason: 'exception', detail: 'boom' }, null)
+  assert.equal(check.ok, false)
+  assert.match(check.detail, /Could not read the status: boom/)
+})
+
+test('claudeIntegrationPermissionArgs: hooks-check is read-only on disk but may spawn the hooks', () => {
+  const args = claudeIntegrationPermissionArgs('hooks-check')
+  assert.ok(args.includes('--allow-child-process'))
+  assert.ok(!args.some((arg) => arg.startsWith('--allow-fs-write=')))
 })
 
 test('attendLocaleRequest: an expired request publishes reason "expired"', async () => {

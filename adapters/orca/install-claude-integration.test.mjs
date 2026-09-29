@@ -15,7 +15,7 @@
 
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1259,4 +1259,104 @@ test('T2a: status probes the command the installed hooks actually use', () => {
   assert.deepEqual(run('status', home).node, { state: 'ok', path: good, version: 'v26.9.0' })
   writeFileSync(good, '#!/bin/sh\necho v20.11.0\n', { mode: 0o755 })
   assert.deepEqual(run('status', home).node, { state: 'too-old', path: good, version: 'v20.11.0' })
+})
+
+// 0.6.11 T2b: the doctor runs every installed hook exactly as written, and
+// every hook's pathMatches counts.
+
+function hookResult (result, hook) {
+  return result.results.find((r) => r.hook === hook)
+}
+
+test('T2b: status aggregates pathMatches for all three hook families, per target and overall', () => {
+  const home = makeHome()
+  run('install', home)
+  const status = run('status', home)
+  assert.equal(status.hook.pathMatches, true)
+  assert.equal(status.outcomeHook.pathMatches, true)
+  assert.equal(status.agentModelHook.pathMatches, true)
+
+  const settings = readSettings(home)
+  const agentHook = agentGroup(settings, 'PreToolUse').hooks.find((h) => h.statusMessage === AGENT_MODEL_MARKER)
+  agentHook.args = ['/old/plugin/root/adapters/claude/agent-model.ts']
+  writeSettings(home, settings)
+  const stale = run('status', home)
+  assert.equal(stale.agentModelHook.pathMatches, false)
+  assert.equal(stale.hook.pathMatches, true)
+})
+
+test('T2b: hooks-check runs each installed hook as written and every one exits cleanly', () => {
+  const home = makeHome()
+  run('install', home)
+  const result = run('hooks-check', home, PLUGIN_ROOT, { ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor') })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.results.map((r) => r.hook).sort(), ['agent-model', 'gate-bash', 'gate-outcome'])
+  for (const r of result.results) assert.equal(r.ok, true, `${r.hook}: ${r.reason} ${r.detail}`)
+})
+
+test('T2b: hooks-check sends the exact command and args from settings, with a harmless JSON payload on stdin', () => {
+  const home = makeHome()
+  const recorder = join(home, 'fake-bin', 'rec', 'node')
+  mkdirSync(dirname(recorder), { recursive: true })
+  writeFileSync(recorder, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\n{ printf '%s\\n' "$1"; cat; } > "${recorder}.$$.run"\n`, { mode: 0o755 })
+  chmodSync(recorder, 0o755)
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: recorder })
+  const result = run('hooks-check', home)
+  assert.equal(result.results.every((r) => r.ok), true)
+  const runs = readdirSync(dirname(recorder)).filter((f) => f.endsWith('.run')).map((f) => readFileSync(join(dirname(recorder), f), 'utf8').split('\n'))
+  assert.deepEqual(runs.map(([arg]) => arg).sort(), ['gate-bash.ts', 'gate-outcome.ts', 'agent-model.ts'].map((f) => join(PLUGIN_ROOT, 'adapters', 'claude', f)).sort())
+  const payloads = runs.map(([, json]) => JSON.parse(json))
+  const gate = payloads.find((p) => p.hook_event_name === 'PreToolUse')
+  assert.equal(gate.tool_name, 'Bash')
+  assert.equal(gate.tool_input.command, 'pwd')
+})
+
+test('T2b: a hook that exits non-zero is named with its exit code and stderr', () => {
+  const home = makeHome()
+  const broken = join(home, 'fake-bin', 'broken', 'node')
+  mkdirSync(dirname(broken), { recursive: true })
+  writeFileSync(broken, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\necho "ERR_UNKNOWN_FILE_EXTENSION .ts" >&2\nexit 3\n', { mode: 0o755 })
+  chmodSync(broken, 0o755)
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: broken })
+  const result = run('hooks-check', home)
+  const gate = hookResult(result, 'gate-bash')
+  assert.equal(gate.ok, false)
+  assert.equal(gate.reason, 'exit-code')
+  assert.match(gate.detail, /3/)
+  assert.match(gate.detail, /ERR_UNKNOWN_FILE_EXTENSION/)
+})
+
+test('T2b: a command that cannot be started is reported as a spawn error', () => {
+  const home = makeHome()
+  run('install', home)
+  const settings = readSettings(home)
+  for (const [event, matcher] of NODE_HOOK_EVENTS) {
+    for (const h of group(settings, event, matcher).hooks) if (String(h.statusMessage).startsWith('orca-jev-advisor')) h.command = join(home, 'no-such-node')
+  }
+  writeSettings(home, settings)
+  const result = run('hooks-check', home)
+  for (const r of result.results) {
+    assert.equal(r.ok, false)
+    assert.equal(r.reason, 'spawn-error')
+  }
+})
+
+test('T2b: a hook that never returns is reported as a timeout', () => {
+  const home = makeHome()
+  const slow = join(home, 'fake-bin', 'slow', 'node')
+  mkdirSync(dirname(slow), { recursive: true })
+  writeFileSync(slow, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\nexec sleep 5\n', { mode: 0o755 })
+  chmodSync(slow, 0o755)
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: slow })
+  const result = run('hooks-check', home, PLUGIN_ROOT, { ORCA_JEV_HOOK_CHECK_TIMEOUT_MS: '400' })
+  const gate = hookResult(result, 'gate-bash')
+  assert.equal(gate.ok, false)
+  assert.equal(gate.reason, 'timeout')
+})
+
+test('T2b: a hook that is not installed is not run and not reported', () => {
+  const home = makeHome()
+  const result = run('hooks-check', home)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.results, [])
 })
