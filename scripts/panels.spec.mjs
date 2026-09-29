@@ -1802,9 +1802,10 @@ test('the model router section renders one row per target, with its current mode
   try {
     await page.click('#tab-models')
     const rows = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('#model-router-rows select')).map((select) => ({
-        target: select.getAttribute('data-model-router-target'),
-        value: select.value
+      const modes = ['off', 'measure', 'active']
+      return Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((group) => ({
+        target: group.getAttribute('data-model-router-target'),
+        value: modes[Array.from(group.querySelectorAll('button')).findIndex((b) => b.className === 'active')]
       }))
     })
     assert.deepEqual(rows, [
@@ -1835,8 +1836,12 @@ test('changing a row\'s mode and clicking its save button sends a modelRouterCon
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_TWO_TARGETS })
   try {
     await page.click('#tab-models')
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
-    await page.click('#model-router-rows .checkbox-row button')
+    // Click the third button (active mode) for the home target
+    await page.evaluate(() => {
+      const group = document.querySelector('#model-router-rows .mode-buttons[data-model-router-target="home"]')
+      group.querySelectorAll('button')[2].click() // click 'active' button
+    })
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
     assert.equal(typeof request.id, 'string')
@@ -2608,12 +2613,15 @@ test('steward: each account shows the context steward mode and threshold next to
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
   try {
     await page.click('#tab-models')
-    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('[data-steward-target]')).map((row) => ({
-      target: row.getAttribute('data-steward-target'),
-      mode: row.querySelector('select').value,
-      threshold: row.querySelector('input[type=number]').value,
-      text: row.innerText
-    })))
+    const rows = await page.evaluate(() => {
+      const modes = ['off', 'measure', 'active']
+      return Array.from(document.querySelectorAll('[data-steward-target]')).map((row) => ({
+        target: row.getAttribute('data-steward-target'),
+        mode: modes[Array.from(row.querySelector('.mode-buttons').querySelectorAll('button')).findIndex((b) => b.className === 'active')],
+        threshold: row.querySelector('input[type=number]').value,
+        text: row.innerText
+      }))
+    })
     assert.deepEqual(rows.map((r) => [r.target, r.mode, r.threshold]), [['home', 'measure', '120'], ['11112222-3333-4444-5555-666677778888', 'active', '150']])
     assert.match(rows[0].text, /Context steward/)
     const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
@@ -2628,9 +2636,10 @@ test('steward: saving sends that target\'s mode and threshold in tokens', { skip
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
   try {
     await page.click('#tab-models')
-    await page.selectOption('[data-steward-target="home"] select', 'active')
+    // Click the third button (active mode) for steward
+    await page.evaluate(() => document.querySelector('[data-steward-target="home"] .mode-buttons').querySelectorAll('button')[2].click())
     await page.fill('[data-steward-target="home"] input[type=number]', '100')
-    await page.click('[data-steward-target="home"] button')
+    await page.click('[data-steward-target="home"] .model-router-steward-save')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
     assert.equal(request.target, 'home')
@@ -2647,7 +2656,7 @@ test('steward: a threshold out of range is refused in place and nothing is sent'
   try {
     await page.click('#tab-models')
     await page.fill('[data-steward-target="home"] input[type=number]', '5')
-    await page.click('[data-steward-target="home"] button')
+    await page.click('[data-steward-target="home"] .model-router-steward-save')
     await page.waitForTimeout(500)
     const written = await page.evaluate(() => window.__written.modelRouterConfigRequest ?? null)
     assert.equal(written, null)
@@ -2745,8 +2754,14 @@ test('0.6.2 E7: opening the panel asks the worker for a fresh read and shows the
   const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshSequence: [ROUTER_ACCOUNTS_ACTIVE] })
   try {
     await page.click('#tab-models')
-    await page.waitForFunction(() => document.querySelector('select[data-model-router-target="home"]')?.value === 'active', undefined, { timeout: 10000 })
-    const modes = await page.evaluate(() => Array.from(document.querySelectorAll('#model-router-rows select[data-model-router-target]')).map((select) => select.value))
+    await page.waitForFunction(() => {
+      const modes = Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((g) => Array.from(g.querySelectorAll('button')).findIndex((b) => b.className === 'active'))
+      return modes[0] === 2 // 'active' is index 2
+    }, undefined, { timeout: 10000 })
+    const modes = await page.evaluate(() => {
+      const modeNames = ['off', 'measure', 'active']
+      return Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((g) => modeNames[Array.from(g.querySelectorAll('button')).findIndex((b) => b.className === 'active')])
+    })
     assert.deepEqual(modes, ['active', 'active', 'active'])
   } finally {
     await browser.close()
@@ -2759,9 +2774,12 @@ test('0.6.2 E7: a save over a mode that changed elsewhere writes nothing and sho
     await page.click('#tab-models')
     await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
     await page.waitForTimeout(1500)
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'off')
-    await page.click('#model-router-rows .checkbox-row button')
-    await page.waitForFunction(() => document.querySelector('select[data-model-router-target="home"]')?.value === 'active', undefined, { timeout: 10000 })
+    await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[0].click())
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
+    await page.waitForFunction(() => {
+      const modes = Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((g) => Array.from(g.querySelectorAll('button')).findIndex((b) => b.className === 'active'))
+      return modes[0] === 2 // 'active' is index 2
+    }, undefined, { timeout: 10000 })
     const written = await page.evaluate(() => window.__written.modelRouterConfigRequest ?? null)
     assert.equal(written, null, 'nothing may be written over a mode the row never showed')
     const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
@@ -2783,12 +2801,12 @@ test('finding 5: a second save on the same row is not refused as "changed outsid
     await page.click('#tab-models')
     await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
     await page.waitForTimeout(1500)
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
-    await page.click('#model-router-rows .checkbox-row button')
+    await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[2].click())
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 15000 })
     await page.waitForTimeout(2500)
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'measure')
-    await page.click('#model-router-rows .checkbox-row button')
+    await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[1].click())
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'measure', undefined, { timeout: 15000 })
     const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
     assert.doesNotMatch(text, /changed outside this panel/)
@@ -2801,9 +2819,10 @@ test('nit 6: the on-open refresh never discards a choice the person already made
   const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshSequence: [ROUTER_ACCOUNTS_ACTIVE], __routerRefreshDelayMs: 2500 })
   try {
     await page.click('#tab-models')
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'off')
+    await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[0].click())
     await page.waitForTimeout(4500)
-    assert.equal(await page.evaluate(() => document.querySelector('select[data-model-router-target="home"]').value), 'off')
+    const modeIndex = await page.evaluate(() => Array.from(document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')).findIndex((b) => b.className === 'active'))
+    assert.equal(modeIndex, 0, 'mode should remain "off"')
   } finally {
     await browser.close()
   }
@@ -2813,8 +2832,8 @@ test('nit 6: a status published without the request id but newer than the reques
   const { browser, page } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshWithoutId: true })
   try {
     await page.click('#tab-models')
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
-    await page.click('#model-router-rows .checkbox-row button')
+    await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[2].click())
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
     await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 8000 })
   } finally {
     await browser.close()

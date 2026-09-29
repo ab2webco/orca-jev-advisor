@@ -437,6 +437,14 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   `~/.config/orca`, so an install run without Orca's own
   `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
 
+## What changed in 0.6.9
+
+- **Every account's router and context steward mode can be changed again.**
+  In Orca, a drop-down lower down the settings panel did not open, so with
+  several accounts only the first rows could be changed. Off, Measure and
+  Active are now three buttons, with the chosen one filled in and announced
+  as pressed to screen readers.
+
 ## What changed in 0.6.8
 
 - **Work that stays inside your team no longer asks a person.** A new field
