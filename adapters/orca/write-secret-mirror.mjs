@@ -34,20 +34,20 @@
  *          0600 -- for adapters/claude/gate-bash.ts to read directly.
  *   policies-save  same as catalog-save, but for the team policies array,
  *          written to policies.json.
- *   team-owners-save  reads the team repositories setting (0.6.7 T1: the
+ *   team-owners-save  reads the team repositories setting (0.6.8 T1: the
  *          owners typed in the config panel, one per line) as a JSON array
  *          from stdin and atomically writes it, normalized through the same
  *          pure parser adapters/claude/gate-bash.ts reads back with
  *          (src/core/team_owners.ts's parseTeamOwners -- an invalid line is
  *          dropped, and a payload that is not an array writes `[]`, which
  *          changes no decision), to team-owners.json. Not secret.
- *   queue-mode-save  reads the queue mode setting (0.6.7 T4: "when a person
+ *   queue-mode-save  reads the queue mode setting (0.6.8 T4: "when a person
  *          must approve: ask now | queue and continue") as `{ enabled }`
  *          JSON from stdin and atomically writes it, normalized through
  *          src/core/queue_mode.ts's parseQueueMode (anything malformed is
  *          `{ enabled: false }`, ask now), to queue-mode.json. Not secret.
  *   explicit-models-save  reads the Models tab's "Models fixed by an agent
- *          definition" (0.6.7 T7) as `{ mode }` JSON from stdin and
+ *          definition" (0.6.8 T7) as `{ mode }` JSON from stdin and
  *          atomically writes it, normalized through
  *          src/core/explicit_models.ts's parseExplicitModels (anything
  *          malformed is `{ mode: "judge" }`, the default), to
@@ -176,7 +176,7 @@ try {
   // adapters/claude/gate-bash.ts reads these two files directly.
   CATALOG_PATH = join(CONFIG_DIR, 'catalog.json')
   POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
-  // The team repositories setting (0.6.7 T1) -- same channel, same ordinary
+  // The team repositories setting (0.6.8 T1) -- same channel, same ordinary
   // permissions, and the same filename constant gate-bash.ts reads.
   TEAM_OWNERS_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
   QUEUE_MODE_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)

@@ -366,7 +366,7 @@
       </section>
 
       <!--
-        0.6.7 T1. The owners whose repositories are the team's own
+        0.6.8 T1. The owners whose repositories are the team's own
         (src/core/team_owners.ts): the gate checks a command's remote
         against them before asking a requires_human policy, so it sits here,
         next to the policies it narrows. Saved by the Save button below to
@@ -380,7 +380,7 @@
       </section>
 
       <!--
-        0.6.7 T4. What the gate does when a requires_human policy needs a
+        0.6.8 T4. What the gate does when a requires_human policy needs a
         person (src/core/queue_mode.ts): ask now, or queue the action for the
         board's "Waiting for you" list and let the agent carry on. Saved by
         the Save button below to `queueMode` ({ enabled }); the worker
@@ -516,7 +516,7 @@
       </section>
 
       <!--
-        0.6.7 T7. What the router does with a subagent model the Agent call
+        0.6.8 T7. What the router does with a subagent model the Agent call
         or its agent definition already fixed (src/core/explicit_models.ts):
         judge it like any other (the default; lowered only in active mode,
         under the same guards) or keep it. Saved by the Save button below to
@@ -2505,7 +2505,7 @@
         return rows.filter(function (r) { return r.id.length > 0 && r.rule.length > 0 })
       }
 
-      // 0.6.7 T1: the team owners field. The panel only splits and trims;
+      // 0.6.8 T1: the team owners field. The panel only splits and trims;
       // src/core/team_owners.ts's parseTeamOwners (run by the worker and by
       // the gate) validates and normalizes, so there is one reading of what
       // an owner is, not two.
@@ -2517,7 +2517,7 @@
           : ''
       }
 
-      // 0.6.7 T4: the queue mode select. Only a stored { enabled: true }
+      // 0.6.8 T4: the queue mode select. Only a stored { enabled: true }
       // reads as "queue"; anything else (never set, malformed) is "ask now",
       // the same default src/core/queue_mode.ts's parseQueueMode applies.
       var queueModeEl = el('queue-mode')
@@ -2531,7 +2531,7 @@
         return { enabled: queueModeEl.value === 'queue' }
       }
 
-      // 0.6.7 T7: the explicit subagent models select. Only a stored
+      // 0.6.8 T7: the explicit subagent models select. Only a stored
       // { mode: 'keep' } keeps; anything else is "judge", the default
       // src/core/explicit_models.ts's parseExplicitModels applies.
       var explicitModelsEl = el('explicit-models')

@@ -64,7 +64,7 @@ interface FakeHost {
   failMessages: boolean;
   /** When true, `$.process.run` rejects (a missing or broken binary). */
   failProcess: boolean;
-  /** `$.agent.list()` rows (0.6.7 T6); null makes the call reject, like a host without it. */
+  /** `$.agent.list()` rows (0.6.8 T6); null makes the call reject, like a host without it. */
   agents: { id: string; status: string }[] | null;
 }
 
@@ -2065,7 +2065,7 @@ test("a tool roster over 255 asks stage 1 in batches that each stay within Jev's
 });
 
 // ---------------------------------------------------------------------------
-// 0.6.7 T6: the subagents running now, in the status line -- the model each
+// 0.6.8 T6: the subagents running now, in the status line -- the model each
 // one runs and why. Visibility only.
 // ---------------------------------------------------------------------------
 
@@ -2088,7 +2088,7 @@ function lastStatus(host: FakeHost): string {
 test("T6: a running subagent shows in the status line with its model and why", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  // Kept, so the explicit model stays what it was asked for (0.6.7 T7).
+  // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
   host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
@@ -2099,7 +2099,7 @@ test("T6: a running subagent shows in the status line with its model and why", a
 test("T6: two subagents on the same model and reason read as one group", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  // Kept, so the explicit model stays what it was asked for (0.6.7 T7).
+  // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
   host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
   host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
@@ -2121,7 +2121,7 @@ test("T6: a subagent that finished leaves the status line", async () => {
 test("T6: a subagent the host no longer lists as running is dropped at the next spawn", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
-  // Kept, so the explicit model stays what it was asked for (0.6.7 T7).
+  // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
   host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
   host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
@@ -2149,7 +2149,7 @@ test("T6: a subagent the router chose a model for says so (active mode)", async 
 });
 
 // ---------------------------------------------------------------------------
-// 0.6.7 T7: a model fixed by the Agent call or an agent definition is judged
+// 0.6.8 T7: a model fixed by the Agent call or an agent definition is judged
 // (the default), lowered only in active mode and under the usual guards.
 // ---------------------------------------------------------------------------
 

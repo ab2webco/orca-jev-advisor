@@ -8,7 +8,7 @@
 //     with the guards keeping at least the parent's;
 //   - an explicit `model` from the parent (the Agent call's, or the one an
 //     agent definition fixes) is intent: upgraded only when a guard holds,
-//     and lowered only when the person chose to have it judged (0.6.7 T7,
+//     and lowered only when the person chose to have it judged (0.6.8 T7,
 //     `explicitModels: "judge"`) and none of the floors below holds;
 //   - always a FULL model id: a family alias (`opus`) collapses to the
 //     parent's exact model when the parent is already in that family (§2.6).
@@ -48,7 +48,7 @@ export function explicitModelRank(tiers: ResolvedTiers, model: string): number |
 
 export type SubagentReason = "jev-failed" | "same" | "switch" | "held-by-guard" | "explicit" | "explicit-upgrade" | "explicit-lowered";
 
-/** 0.6.7 T7: what the router does with a model the spawn already fixed. */
+/** 0.6.8 T7: what the router does with a model the spawn already fixed. */
 export type ExplicitModelsPolicy = "judge" | "keep";
 
 export interface SubagentDecision {
@@ -72,14 +72,14 @@ export interface SubagentDecisionInput {
   readonly explicitModel: string | undefined;
   readonly guards: GuardContext;
   readonly band?: QuotaBand;
-  /** 0.6.7 T7: "judge" lets a confident verdict lower an explicit model; "keep" (the default here) never does. */
+  /** 0.6.8 T7: "judge" lets a confident verdict lower an explicit model; "keep" (the default here) never does. */
   readonly explicitModels?: ExplicitModelsPolicy;
   /** The session's destination kind; in a client's site an explicit model is never lowered below the parent's. */
   readonly destinationKind?: DestinationKind | null;
 }
 
 /**
- * 0.6.7 T7: the model a judged explicit model is lowered to, or null when it
+ * 0.6.8 T7: the model a judged explicit model is lowered to, or null when it
  * stays. Only below the explicit model's own rank, and never when a guard
  * holds (Jev unsure, a pointer prompt), the work is sensitive or already
  * failing -- the same floors every other router decision keeps. In a

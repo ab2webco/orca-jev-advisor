@@ -134,7 +134,7 @@ test("F0 subagentStepEffort: under a guard, the higher of the inherited and the 
 });
 
 // ---------------------------------------------------------------------------
-// 0.6.7 T7: a model fixed by the Agent call or an agent definition is judged,
+// 0.6.8 T7: a model fixed by the Agent call or an agent definition is judged,
 // not pinned, when the setting says so -- lowered only under the guards every
 // other decision keeps.
 // ---------------------------------------------------------------------------

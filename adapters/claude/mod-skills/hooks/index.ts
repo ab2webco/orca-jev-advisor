@@ -577,7 +577,7 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
 }
 
 /**
- * 0.6.7 T7: the Models tab's "Models fixed by an agent definition", from
+ * 0.6.8 T7: the Models tab's "Models fixed by an agent definition", from
  * the worker's explicit-models.json mirror. Missing or unreadable reads as
  * "judge", the setting's default (parseExplicitModels).
  */
@@ -592,7 +592,7 @@ async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMod
 }
 
 /**
- * 0.6.7 T7: the model the definition of `subagentType` fixes, read from the
+ * 0.6.8 T7: the model the definition of `subagentType` fixes, read from the
  * project's own `.claude/agents` first, then the account's (CLAUDE_CONFIG_DIR,
  * else `~/.claude`). null when none fixes one. Fails open to null.
  */
@@ -621,7 +621,7 @@ async function readAgentDefinitionModel($: EngineInterface, subagentType: string
 }
 
 /**
- * 0.6.7 T6: the status-line part for the subagents running now. First
+ * 0.6.8 T6: the status-line part for the subagents running now. First
  * drops, through `$.agent.list()`, any subagent that ended without its
  * turn.complete reaching this module (killed, failed): one the host lists
  * as not running, or no longer lists at all -- never `keep`, the one just
@@ -1087,7 +1087,7 @@ interface SubagentEffortTarget {
 }
 
 async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, next: Next<'agent.spawn'>, mode: RouterMode, options: PluginOptions, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, runningSubagents: Map<string, RunningSubagent>): Promise<AgentSpawnResult> {
-  // 0.6.7 T6: every started subagent is remembered with the model it runs
+  // 0.6.8 T6: every started subagent is remembered with the model it runs
   // and why, for the status line -- in every mode, a fork and a failure
   // included. Visibility only: this never changes what is spawned.
   const explicitModelGiven = e.model !== undefined && e.model !== 'inherit'
@@ -1104,7 +1104,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
   let labelTiers: ResolvedTiers | null = null
   let why: SubagentWhy = explicitModelGiven ? 'explicit' : 'inherited'
   try {
-    // 0.6.7 T7: a model the agent definition fixes counts as fixed too; the
+    // 0.6.8 T7: a model the agent definition fixes counts as fixed too; the
     // spawn input only carries the Agent call's own.
     const cwd = e.cwd ?? (await $.session.cwd())
     const fixedModel = explicitModelGiven ? (e.model as string) : await readAgentDefinitionModel($, e.subagentType, cwd)
@@ -1123,7 +1123,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
       explicitModel: fixedModel ?? undefined,
       guards: { text, activity: null, confidence: jev?.confidence ?? null },
       band,
-      // 0.6.7 T7: a model the spawn already fixed is judged unless the
+      // 0.6.8 T7: a model the spawn already fixed is judged unless the
       // person chose to keep them (the Models tab); only applied below in
       // active mode, like every other router decision.
       explicitModels: await readExplicitModels($),
@@ -1533,7 +1533,7 @@ export function register(on: On, options: PluginOptions): void {
   let routerStatusText: string | null = null
   // The context steward's part, set by its timer after a turn ends.
   let stewardStatusText: string | null = null
-  // 0.6.7 T6: the subagents running now (agent.spawn adds one, its own
+  // 0.6.8 T6: the subagents running now (agent.spawn adds one, its own
   // turn.complete removes it) and their status-line part.
   const runningSubagents = new Map<string, RunningSubagent>()
   let agentsStatusText: string | null = null
@@ -1980,7 +1980,7 @@ export function register(on: On, options: PluginOptions): void {
   })
 
   on('turn.complete', async ($, e, next) => {
-    // 0.6.7 T6: a subagent's own answer ends it; the status line drops it.
+    // 0.6.8 T6: a subagent's own answer ends it; the status line drops it.
     if (e.agentId !== undefined && runningSubagents.delete(e.agentId)) {
       try {
         agentsStatusText = await runningSubagentsStatus($, runningSubagents, null)

@@ -86,7 +86,7 @@ export interface TurnUsageWindowSummary {
    */
   readonly subagentShare: number | null;
   /**
-   * 0.6.7 T6: the main conversation and its subagents counted apart, as
+   * 0.6.8 T6: the main conversation and its subagents counted apart, as
    * real totals: how many steps each ran and the null-safe token total
    * (input+output+cacheRead+cacheWrite) of those steps. `tokens` is null
    * when none of that side's steps reported a figure -- never a made-up 0.

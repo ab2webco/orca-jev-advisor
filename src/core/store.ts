@@ -237,7 +237,7 @@ export async function setPolicies(host: StorageHost, policies: readonly PolicyRo
 }
 
 // ---------------------------------------------------------------------------
-// teamOwners (0.6.7 T1): the GitHub/GitLab owners whose repositories are the
+// teamOwners (0.6.8 T1): the GitHub/GitLab owners whose repositories are the
 // team's own, one per line as typed in the config panel. Read through
 // team_owners.ts's parseTeamOwners -- the same reader the mirror and the
 // gate use -- so an invalid line is dropped here exactly as it is there.
@@ -253,7 +253,7 @@ export async function getTeamOwners(host: StorageHost): Promise<readonly string[
 }
 
 // ---------------------------------------------------------------------------
-// queueMode (0.6.7 T4): when a person must approve and nobody is watching,
+// queueMode (0.6.8 T4): when a person must approve and nobody is watching,
 // queue the action and let the agent continue. Default: false (ask now).
 // ---------------------------------------------------------------------------
 
@@ -266,7 +266,7 @@ export async function getQueueMode(host: StorageHost): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// explicitModels (0.6.7 T7): whether the router may lower a subagent model
+// explicitModels (0.6.8 T7): whether the router may lower a subagent model
 // the spawn already fixed. Default: "judge" -- see src/core/explicit_models.ts.
 // ---------------------------------------------------------------------------
 

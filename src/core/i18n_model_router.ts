@@ -71,7 +71,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.prices-unknown": "precios desconocidos",
     "why.unknown-savings": "ahorro aún sin medir",
     "why.pointer-prompt": "el mensaje remite a un documento",
-    // 0.6.7 T6: the subagents running now (subagent_status.ts).
+    // 0.6.8 T6: the subagents running now (subagent_status.ts).
     "agents.lead": "agentes: {{groups}}",
     "agents.group": "{{n}} en {{model}} ({{why}})",
     "agents.why.explicit": "pedido explícito",

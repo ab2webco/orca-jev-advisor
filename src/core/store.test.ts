@@ -343,7 +343,7 @@ test("getBoard: a non-string projectName is malformed like any other wrong-typed
   assert.deepEqual(await getBoard(host), { entries: [] });
 });
 
-// 0.6.7 T1: the team repositories setting -- see src/core/team_owners.ts.
+// 0.6.8 T1: the team repositories setting -- see src/core/team_owners.ts.
 test("getTeamOwners: nothing stored reads as an empty list, which changes no decision", async () => {
   assert.deepEqual(await getTeamOwners(fakeHost()), []);
 });
@@ -357,7 +357,7 @@ test("getTeamOwners: a stored value that is not an array reads as empty", async 
   assert.deepEqual(await getTeamOwners(fakeHost({ teamOwners: { owners: ["acme-team"] } })), []);
 });
 
-// 0.6.7 T4: queue mode -- see src/core/queue_mode.ts.
+// 0.6.8 T4: queue mode -- see src/core/queue_mode.ts.
 test("getQueueMode: nothing stored reads as false (ask now, the default)", async () => {
   assert.equal(await getQueueMode(fakeHost()), false);
 });
@@ -377,7 +377,7 @@ test("getQueueMode: a malformed value reads as false", async () => {
   assert.equal(await getQueueMode(fakeHost({ queueMode: { enabled: "yes" } })), false);
 });
 
-// 0.6.7 T7: "Models fixed by an agent definition" -- see src/core/explicit_models.ts.
+// 0.6.8 T7: "Models fixed by an agent definition" -- see src/core/explicit_models.ts.
 test("getExplicitModels: nothing stored reads as judge, the default", async () => {
   assert.equal(await getExplicitModels(fakeHost()), "judge");
 });

@@ -687,7 +687,7 @@ test('every policies.* key in one language catalog exists in the other', { skip:
   }
 })
 
-// 0.6.7 T1: "Repositories your team owns" -- the owners typed one per line
+// 0.6.8 T1: "Repositories your team owns" -- the owners typed one per line
 // in the Policies tab, saved to `teamOwners` by the same Save button.
 test('the team owners field shows the stored owners one per line, and Save writes each line back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ teamOwners: ['acme-team', 'acme-tools'] })
@@ -721,7 +721,7 @@ test('an install that never set team owners shows an empty field and saves an em
   }
 })
 
-// 0.6.7 T4: "When a person must approve: ask now | queue and continue",
+// 0.6.8 T4: "When a person must approve: ask now | queue and continue",
 // saved to `queueMode` ({ enabled }) by the same Save button.
 test('the queue mode select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ queueMode: { enabled: true } })
@@ -753,7 +753,7 @@ test('an install that never set the queue mode shows "ask now" and saves it', { 
   }
 })
 
-// 0.6.7 T7: "Models fixed by an agent: judge them | keep them", in the
+// 0.6.8 T7: "Models fixed by an agent: judge them | keep them", in the
 // Models tab, saved to `explicitModels` ({ mode }) by the Save button.
 test('the explicit models select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ explicitModels: { mode: 'keep' } })
@@ -1693,7 +1693,7 @@ test('a machine where localStorage itself throws (Orca\'s sandboxed opaque-origi
 // row.
 // ---------------------------------------------------------------------------
 
-// 0.6.7 T5: "Waiting for you" -- what queue mode set aside for a person,
+// 0.6.8 T5: "Waiting for you" -- what queue mode set aside for a person,
 // in the Gate tab, with how to release an item.
 test('the Gate tab lists what is waiting for a person: policy, project, command and when, with how to release it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
@@ -1877,7 +1877,7 @@ const POPULATED_CONSUMPTION = {
       ],
       avgMainStepContextReread: 162345,
       subagentShare: 0.47,
-      // 0.6.7 T6: the same split, as real totals.
+      // 0.6.8 T6: the same split, as real totals.
       byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } }
     },
     last7d: {
@@ -1945,7 +1945,7 @@ const EMPTY_CONSUMPTION = {
   checkedAt: new Date().toISOString()
 }
 
-// 0.6.7 T6: subagent tokens counted apart from the main conversation.
+// 0.6.8 T6: subagent tokens counted apart from the main conversation.
 test('the Consumption tab counts the main conversation and the subagents apart, in tokens and steps', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
   try {

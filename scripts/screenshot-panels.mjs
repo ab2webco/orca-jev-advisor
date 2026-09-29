@@ -291,10 +291,10 @@ const READY = {
     { id: 'own_branch', kind: 'permits', rule: 'All work goes on a feature branch. Work happens there without asking.' },
     { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main or develop, not even a one-line fix.' },
   ],
-  // 0.6.7 T1: the team owners field, filled, so the Policies tab photographs
+  // 0.6.8 T1: the team owners field, filled, so the Policies tab photographs
   // it with real lines rather than only its placeholder. Example owners.
   teamOwners: ['acme-team', 'acme-tools'],
-  // 0.6.7 T4: queue mode on, so the Policies tab photographs the choice
+  // 0.6.8 T4: queue mode on, so the Policies tab photographs the choice
   // the board's "Waiting for you" list depends on.
   queueMode: { enabled: true },
   // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
@@ -363,7 +363,7 @@ const READY = {
         { at: '2026-09-24T15:01:20.511Z', project: 'orca-supervisor', commandFamily: 'rm -rf', source: 'jev', verdict: 'advise', latencyMs: 640 },
         { at: '2026-09-24T15:00:58.640Z', project: 'orca-oss', commandFamily: 'git', source: 'cache', verdict: 'allow', latencyMs: null },
       ],
-      // 0.6.7 T5: what queue mode set aside for a person (read-measurements'
+      // 0.6.8 T5: what queue mode set aside for a person (read-measurements'
       // aggregateWaiting). Example projects and commands, no real ones.
       waiting: [
         { id: 'w1', at: '2026-09-24T14:58:12.000Z', project: 'acme-app', policyId: 'client_always_asks', command: 'gh pr merge 42 --squash --delete-branch' },
@@ -659,7 +659,7 @@ const CONSUMPTION_READY = {
         ],
         avgMainStepContextReread: 162345,
         subagentShare: 0.47,
-        // 0.6.7 T6: the same split, as real totals.
+        // 0.6.8 T6: the same split, as real totals.
         byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } },
       },
       last7d: {

@@ -275,7 +275,7 @@ test("subagentShareTrigger: over the threshold reports the real percent, e.g. 47
   assert.equal(trigger?.subagentSharePercent, 47);
 });
 
-// 0.6.7 T6: subagent tokens counted apart from the main conversation, as
+// 0.6.8 T6: subagent tokens counted apart from the main conversation, as
 // real totals, not only as a share.
 test("aggregateTurnUsage: byAgent counts main and subagent steps and tokens apart", () => {
   const result = aggregateTurnUsage([

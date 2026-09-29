@@ -170,7 +170,7 @@ test('quota-save still saves normally against an isolated (mkdtemp-style) HOME',
   }
 })
 
-// 0.6.7 T1: the team repositories setting reaches the gate through this same
+// 0.6.8 T1: the team repositories setting reaches the gate through this same
 // script -- team-owners.json, next to catalog.json/policies.json.
 test('refuses team-owners-save against a real-looking, non-isolated HOME under the test runner', () => {
   assert.equal(existsSync(FAKE_REAL_HOME), false, 'fixture must not pre-exist')
@@ -207,7 +207,7 @@ test('team-owners-save writes an empty list for a payload that is not an array o
   }
 })
 
-// 0.6.7 T4: queue mode reaches the gate through this same script.
+// 0.6.8 T4: queue mode reaches the gate through this same script.
 test('queue-mode-save writes the normalized setting, and anything malformed as "ask now"', () => {
   const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-queue-mode-'))
   try {
@@ -222,7 +222,7 @@ test('queue-mode-save writes the normalized setting, and anything malformed as "
   }
 })
 
-// 0.6.7 T7: the explicit models setting reaches the hooks through this script.
+// 0.6.8 T7: the explicit models setting reaches the hooks through this script.
 test('explicit-models-save writes the normalized mode, and anything malformed as judge', () => {
   const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-explicit-models-'))
   try {

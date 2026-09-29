@@ -87,7 +87,7 @@ const ALLOWED_PUSH_OPTIONS: ReadonlySet<string> = new Set(["-u", "--set-upstream
  *  `:` (no `src:dst`, no `:branch` delete), no leading `+` (no forced
  *  update), no glob, and never `refs/...` -- the task's own words are "a
  *  plain branch name or HEAD", not a full ref path. `HEAD` itself is handled
- *  by the caller, not here. Exported for client_reach.ts (0.6.7 T2), which
+ *  by the caller, not here. Exported for client_reach.ts (0.6.8 T2), which
  *  reads a push's refspec with this same rule rather than a second one. */
 export function isPlainBranchRefspec(ref: string): boolean {
   if (ref.length === 0) return false;
@@ -145,7 +145,7 @@ function resolveCdTargetDir(cwd: string, dirArg: string): string {
  * catch an obfuscated destructive command), a local ALLOW has no such
  * obligation: anything even slightly unusual simply does not qualify and
  * falls through to the ordinary Jev path. Exported for client_reach.ts
- * (0.6.7 T2): a push it may call `internal` is exactly this shape, no wider.
+ * (0.6.8 T2): a push it may call `internal` is exactly this shape, no wider.
  */
 export function parsePushSegment(segmentText: string): readonly string[] | null {
   const tokens = tokenize(segmentText);
@@ -419,7 +419,7 @@ function stripQualifyingRedirections(segmentText: string): string | null {
 }
 
 /** The shell words behind stripQualifyingRedirections, before they are
- *  joined back into text -- exported for client_reach.ts (0.6.7 T2), which
+ *  joined back into text -- exported for client_reach.ts (0.6.8 T2), which
  *  needs the same redirection reading but keeps each quoted argument a
  *  single word (a joined `--title "a b"` would re-split into two). */
 export function tokensWithoutQualifyingRedirections(segmentText: string): string[] | null {

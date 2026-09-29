@@ -693,7 +693,7 @@ test('modSkills.byProject: a `repo:<id>` row with no worktree to name it counts 
   )
 })
 
-// 0.6.7 T5: the board's "Waiting for you" list, read from human-queue.jsonl
+// 0.6.8 T5: the board's "Waiting for you" list, read from human-queue.jsonl
 // (src/core/human_queue.ts) -- only what is still waiting, newest first, and
 // only what the board shows: policy, project, command, when.
 function writeHumanQueue (home, lines) {

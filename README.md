@@ -396,20 +396,6 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   (`gh pr merge --squash feature/x`) still folds, because the gate cannot
   tell whether that flag takes a value. A PR number there is still exact.
 
-## What changed in 0.6.7
-
-- **Linux works with Orca's own CLI and data folder.** On Linux the Orca
-  CLI is `orca-ide`, and a bare `orca` there is usually the GNOME screen
-  reader. The plugin called `orca` everywhere, so on Linux the account
-  list, the board's project names, the destination list, the doctor and
-  the project a session runs in all came back empty. It now runs
-  `ORCA_CLI_COMMAND` when Orca sets it, `orca-ide` on Linux and `orca`
-  elsewhere, and never falls back to `orca` on Linux.
-- **Orca's accounts are found on Linux.** A packaged Linux Orca keeps its
-  data in `~/.config/orca-ide` (or `$XDG_CONFIG_HOME/orca-ide`), not
-  `~/.config/orca`, so an install run without Orca's own
-  `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
-
 ## What changed in 0.6.6
 
 - **Tool suggestions work again.** Jev accepts at most 255 options in one
@@ -436,6 +422,57 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   skill and tool records written to disk.
 - **A quote in a project or branch name can no longer inject code into the
   Advisor board.**
+
+## What changed in 0.6.7
+
+- **Linux works with Orca's own CLI and data folder.** On Linux the Orca
+  CLI is `orca-ide`, and a bare `orca` there is usually the GNOME screen
+  reader. The plugin called `orca` everywhere, so on Linux the account
+  list, the board's project names, the destination list, the doctor and
+  the project a session runs in all came back empty. It now runs
+  `ORCA_CLI_COMMAND` when Orca sets it, `orca-ide` on Linux and `orca`
+  elsewhere, and never falls back to `orca` on Linux.
+- **Orca's accounts are found on Linux.** A packaged Linux Orca keeps its
+  data in `~/.config/orca-ide` (or `$XDG_CONFIG_HOME/orca-ide`), not
+  `~/.config/orca`, so an install run without Orca's own
+  `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
+
+## What changed in 0.6.8
+
+- **Work that stays inside your team no longer asks a person.** A new field
+  in the Policies tab, *Repositories your team owns*, lists the GitHub or
+  GitLab owners whose repositories are yours. When every part of a command
+  stays inside them (a local git command, pushing a work branch to one of
+  their repositories, opening, editing or commenting on a pull request
+  there, replying to a review), policies that require a person are not
+  asked about it. Merging, pushing to a protected branch, force pushes,
+  and anything aimed at a repository outside the list are still asked, and
+  `prohibits` policies are still judged. Empty (the default) changes
+  nothing.
+- **A person's approval no longer stalls an unattended agent, if you want
+  it that way.** *When a person must approve*, also in the Policies tab:
+  *Ask now* (the default, as before) or *Queue it and carry on*. Queued,
+  the command does not run; the agent is told it waits for a person, not to
+  retry it or work around it, and to carry on with the rest. The item shows
+  under **Waiting for you**, first in the board's Gate tab, with the
+  policy, project, command and when. To release one, tell the agent in
+  that session to run it again: you are asked at that moment. A queued
+  command never runs without you, and with no session id to match a retry
+  by, the gate asks now instead of queueing.
+- **The subagents running now are in the status line**, with the model each
+  one runs and why: `agents: 2 on Opus 5.5 (explicit request)`, `1 on
+  Haiku 4.5 (chosen by Jev)`. The Consumption tab counts the main
+  conversation's and the subagents' steps and tokens apart.
+- **A model fixed by the Agent call or an agent definition is judged, not
+  pinned.** *Models fixed by an agent* in the Models tab: *Judge them* (the
+  default) or *Keep them*. Judged, and only with the router in `active`
+  mode, Jev may lower that model when the task is simple and it is sure;
+  never when it is unsure, when the prompt points to a document, when the
+  work is sensitive or already failing, and in a client's repository never
+  below the session's own model. The status line says `lowered by Jev`
+  when it did. A definition's model is read from the project's
+  `.claude/agents` and then the account's; a plugin's own agents are not
+  read, so their model is judged like any other subagent's.
 
 ## What you actually see
 
@@ -490,11 +527,12 @@ and no key at all. The key only buys judgement on the grey cases.
 ## What it writes outside itself
 
 A plugin that reaches outside its own directory should say so. This one
-writes seven things, all listed in the settings panel. **Revert
+writes eleven things, all listed in the settings panel. **Revert
 everything** puts back the hook entries, the env var and the skills-mod
 copy. Clearing the key from the settings panel deletes the key file
 separately. The three JSON mirrors below are never deleted by any action
-here — each is only ever overwritten by its own next save:
+here — each is only ever overwritten by its own next save; the same goes
+for the three setting mirrors and the queue below:
 
 | What | Where | Why |
 |---|---|---|
@@ -505,12 +543,18 @@ here — each is only ever overwritten by its own next save:
 | A human-readable mirror of the destination catalog (not secret) | `~/.config/orca-supervisor/catalog.json` | the gate reads it outside Orca, with no channel back into plugin storage |
 | A human-readable mirror of the team policies (not secret) | `~/.config/orca-supervisor/policies.json` | same reason |
 | A human-readable mirror of the model catalog (not secret) | `~/.config/orca-supervisor/models-catalog.json` | the model hook reads it outside Orca to rank a recommendation |
+| Your team's repository owners (not secret) | `~/.config/orca-supervisor/team-owners.json` | the gate checks a command's remote against them |
+| *When a person must approve* and *Models fixed by an agent* (not secret) | `~/.config/orca-supervisor/queue-mode.json`, `explicit-models.json` | the gate and the router read them outside Orca |
+| The actions queued for a person, command redacted | `~/.cache/orca-supervisor/human-queue.jsonl` | the board's "Waiting for you" list; only written in queue mode |
 
 Nothing is sent anywhere except the questions themselves, to
 `api.typesafe.ai` (see "What leaves your machine" below). Your commands are
 not stored: the measurement log keeps a coarse command *family* (`git
 push`, `rm -rf`, `terraform`) and never the command, because a command can
-carry a secret in an env assignment.
+carry a secret in an env assignment. The one exception is a command queued
+for a person in queue mode: the board has to show you what waits, so it is
+kept locally, with credentials masked and cut to 200 characters, and the
+session it came from only as a hash.
 
 ## What leaves your machine
 

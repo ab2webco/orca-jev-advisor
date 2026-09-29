@@ -420,7 +420,7 @@ test("commandFamily still resolves the most dangerous part across a newline or a
 });
 
 // ---------------------------------------------------------------------------
-// teamInternal -- 0.6.7 T3. When the team owners are set and every segment
+// teamInternal -- 0.6.8 T3. When the team owners are set and every segment
 // of a command stays inside the team (client_reach.ts), the requires_human
 // policies are not put to Jev for it. Whatever then decides keeps its own
 // stopReason; this field records that the set-aside happened, so it can be

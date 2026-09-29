@@ -1,4 +1,4 @@
-// 0.6.7 T1: the "Repositories your team owns" setting -- the GitHub/GitLab
+// 0.6.8 T1: the "Repositories your team owns" setting -- the GitHub/GitLab
 // owners (users or organisations) whose repositories never reach a client.
 // parseTeamOwners is the one reader every side uses: the worker's mirror
 // (write-secret-mirror.mjs's team-owners-save), store.ts's getTeamOwners and

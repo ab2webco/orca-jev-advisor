@@ -352,7 +352,7 @@ function gateHealth (decisions) {
  * is impossible: toPendingApprovalRecord already requires the string.
  */
 /**
- * 0.6.7 T5: what queue mode set aside for a person and nobody has come back
+ * 0.6.8 T5: what queue mode set aside for a person and nobody has come back
  * for yet (src/core/human_queue.ts's waitingItems). Only what the board
  * shows crosses: the hashed session key stays here. `waitingTotal` counts
  * past the listed WAITING_LIST_LIMIT so a long queue is never understated.

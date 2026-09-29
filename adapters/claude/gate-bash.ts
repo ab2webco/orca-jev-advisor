@@ -174,14 +174,14 @@ const ENABLEMENT_CACHE_PATH = join(CACHE_DIR, 'gate-enablement.json')
 // the validation that stands between this file and the gate's decision.
 const CATALOG_MIRROR_PATH = join(CONFIG_DIR, 'catalog.json')
 const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
-// 0.6.7 T1/T3: the panel's "Repositories your team owns", mirrored by the
+// 0.6.8 T1/T3: the panel's "Repositories your team owns", mirrored by the
 // same sidecar on the same save. Fails open to an empty list, and an empty
 // list changes no decision -- see readTeamOwnersMirror below.
 const TEAM_OWNERS_MIRROR_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
-// 0.6.7 T4: queue mode -- "when a person must approve: ask now | queue and
+// 0.6.8 T4: queue mode -- "when a person must approve: ask now | queue and
 // continue". Defaults to false (ask now). See readQueueModeMirror below.
 const QUEUE_MODE_MIRROR_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
-// 0.6.7 T4/T5: the actions queued for a person -- see src/core/human_queue.ts.
+// 0.6.8 T4/T5: the actions queued for a person -- see src/core/human_queue.ts.
 const HUMAN_QUEUE_PATH = join(CACHE_DIR, HUMAN_QUEUE_FILE)
 // Written by adapters/orca/write-secret-mirror.mjs's deny-tier-config-save,
 // refreshed on plugin activation and on every config-panel save, same
@@ -1009,7 +1009,7 @@ function resolveAdviceOutcome(input: {
   readonly source: GateSource
   readonly stopReason: GateStopReason
   readonly latencyMs?: number | null
-  /** 0.6.7 T3: the requires_human policies were set aside for this command. */
+  /** 0.6.8 T3: the requires_human policies were set aside for this command. */
   readonly teamInternal?: boolean
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
@@ -1130,7 +1130,7 @@ function readPoliciesMirror(): readonly Policy[] {
 }
 
 /**
- * 0.6.7 T3: the team owners, best-effort like the two mirrors above. Failing
+ * 0.6.8 T3: the team owners, best-effort like the two mirrors above. Failing
  * open is safe here in the other direction too: a missing, unreadable or
  * malformed file reads as no owners, and with no owners nothing is ever
  * called team-internal, so every decision stays exactly what it was.
@@ -1171,7 +1171,7 @@ function appendHumanQueueEntry(entry: HumanQueueEntry): boolean {
 }
 
 /**
- * 0.6.7 T4: queue mode's one decision point, for a `requires_human` ask
+ * 0.6.8 T4: queue mode's one decision point, for a `requires_human` ask
  * fresh from Jev or replayed from the cache. Returns true when the command
  * was queued (and the deny already emitted); false when the caller asks the
  * person as usual. It asks as usual when:
@@ -1382,7 +1382,7 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       latencyMs,
       stopReason,
       ...(policyId !== null ? { policyId } : {}),
-      // 0.6.7 T3: the requires_human policies were set aside for this
+      // 0.6.8 T3: the requires_human policies were set aside for this
       // command -- see main()'s own note where that is decided.
       teamInternal,
       // BuildGateDecisionRecordInput declares this required -- true for
@@ -1579,7 +1579,7 @@ type JevOutcome =
  * `commandScopedPolicies` is resolved once in main() (the same
  * destination/scope filtering this function used to repeat on its own) and
  * handed in, because main() may set the requires_human ones aside for a
- * team-internal command (0.6.7 T3) -- the cache key and this question must
+ * team-internal command (0.6.8 T3) -- the cache key and this question must
  * judge the very same policy set.
  */
 async function askJev(apiKey: string, command: string, context: string, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[]): Promise<JevOutcome> {
@@ -1867,7 +1867,7 @@ async function main(): Promise<void> {
   const policiesMirror = readPoliciesMirror()
   const scopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
 
-  // 0.6.7 T3: a requires_human policy protects work that reaches a client,
+  // 0.6.8 T3: a requires_human policy protects work that reaches a client,
   // and Jev, asked from the sentence alone, also asked about work that never
   // leaves the team (a work-branch push, a pull request in the team's own
   // repository, a review reply). With the team owners set, the facts decide
@@ -1994,7 +1994,7 @@ async function main(): Promise<void> {
       resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
       return
     }
-    // 0.6.7 T4: a cached requires_human ask is queued the same way a fresh
+    // 0.6.8 T4: a cached requires_human ask is queued the same way a fresh
     // one is -- see tryQueueForPerson.
     if (hit.decision === 'ask' && typeof hit.policyId === 'string' && tryQueueForPerson({ queueMode, command, cwd, sessionId, policyId: hit.policyId, source: 'cache', latencyMs: null, teamInternal })) return
     appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null, teamInternal)
@@ -2153,7 +2153,7 @@ async function main(): Promise<void> {
     }
     writeCache(cache)
   }
-  // 0.6.7 T4: queue mode, after the verdict is cached AS the ask it is --
+  // 0.6.8 T4: queue mode, after the verdict is cached AS the ask it is --
   // queueing never turns a policy stop into an advice, so a later hit (in
   // another session, or with queue mode off) still asks.
   if (resolved.decision === 'ask' && resolved.policyId !== null && tryQueueForPerson({ queueMode, command, cwd, sessionId, policyId: resolved.policyId, source: 'jev', latencyMs: jevLatencyMs, teamInternal })) return

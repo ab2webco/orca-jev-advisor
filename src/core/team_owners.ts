@@ -1,4 +1,4 @@
-// 0.6.7 T1: the "Repositories your team owns" setting.
+// 0.6.8 T1: the "Repositories your team owns" setting.
 //
 // A `requires_human` policy protects work that reaches a client. Asked from
 // the policy sentence alone, Jev also flagged work that never leaves the

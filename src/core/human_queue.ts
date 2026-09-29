@@ -1,4 +1,4 @@
-// 0.6.7 T4/T5: the queue of actions waiting for a person.
+// 0.6.8 T4/T5: the queue of actions waiting for a person.
 //
 // In queue mode ("when a person must approve: queue and continue"), the
 // first `requires_human` stop of a command in a session is not put to a

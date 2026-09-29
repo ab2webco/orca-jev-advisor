@@ -1,4 +1,4 @@
-// 0.6.7 T2: whether a command stays inside the team, decided from facts.
+// 0.6.8 T2: whether a command stays inside the team, decided from facts.
 //
 // A `requires_human` policy protects work that reaches a client ("anything
 // that touches a client's product gets confirmed with a human"). Jev judged

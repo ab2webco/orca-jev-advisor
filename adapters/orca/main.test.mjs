@@ -1994,7 +1994,7 @@ test('nit 11: one account list is shared by the quota mirror, the board and the 
   assert.equal(calls, 4, 'a failed list is never reused')
 })
 
-// 0.6.7 T1: the team repositories setting rides the same mirror as the
+// 0.6.8 T1: the team repositories setting rides the same mirror as the
 // catalog and policies -- saved by the panel to `teamOwners`, mirrored on the
 // same trigger, to team-owners.json, for gate-bash.ts to read.
 test('mirrorCatalogAndPolicies also mirrors the team owners, normalized, through team-owners-save', async () => {
@@ -2023,7 +2023,7 @@ test('mirrorCatalogAndPolicies logs a failed team-owners mirror by reason, never
   assert.ok(orca._logs.some((line) => /team owners mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
 })
 
-// 0.6.7 T4: "When a person must approve" rides the same mirror, to
+// 0.6.8 T4: "When a person must approve" rides the same mirror, to
 // queue-mode.json, for gate-bash.ts to read.
 test('mirrorCatalogAndPolicies mirrors the queue mode setting through queue-mode-save', async () => {
   const calls = []
@@ -2048,7 +2048,7 @@ test('mirrorCatalogAndPolicies logs a failed queue mode mirror by reason, never 
   assert.ok(orca._logs.some((line) => /queue mode mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
 })
 
-// 0.6.7 T7: "Models fixed by an agent definition" rides the same mirror, to
+// 0.6.8 T7: "Models fixed by an agent definition" rides the same mirror, to
 // explicit-models.json, for the hooks module to read.
 test('mirrorCatalogAndPolicies mirrors the explicit models setting, judge by default', async () => {
   const calls = []

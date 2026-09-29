@@ -1,4 +1,4 @@
-// 0.6.7 T6: the subagents running now, in the status line -- which model
+// 0.6.8 T6: the subagents running now, in the status line -- which model
 // each one runs and why that model (`agentes: 2 en Opus 5.5 (pedido
 // explícito)`). Visibility only: nothing here decides anything; it reads
 // what the router (model_router_subagent.ts) already decided at spawn.

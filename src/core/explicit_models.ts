@@ -1,4 +1,4 @@
-// 0.6.7 T7: "Models fixed by an agent definition: judge them | keep them".
+// 0.6.8 T7: "Models fixed by an agent definition: judge them | keep them".
 //
 // A subagent's model can be fixed before the router sees it: by the Agent
 // call's own `model`, or by the agent definition it runs. "judge" (the

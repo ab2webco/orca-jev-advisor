@@ -2726,7 +2726,7 @@ test('a print-only awk that only mentions a discard still passes silently', () =
 })
 
 // ---------------------------------------------------------------------------
-// 0.6.7 T3: a command that stays inside the team is never put to a
+// 0.6.8 T3: a command that stays inside the team is never put to a
 // requires_human policy. With the team owners set (team-owners.json, the
 // panel's "Repositories your team owns") and every segment of the command
 // `internal` (src/core/client_reach.ts), the requires_human policies are set
@@ -2789,7 +2789,7 @@ function runClientReach (command, repo, owners) {
   return { home, stdout, payload: stdout === '' ? null : JSON.parse(stdout), records: gateLogRecords(home) }
 }
 
-test('0.6.7 T3: with a team owner set, pushing a work branch to the team repository is allowed locally, with no requires_human ask', () => {
+test('0.6.8 T3: with a team owner set, pushing a work branch to the team repository is allowed locally, with no requires_human ask', () => {
   const repo = teamRepo()
   const home = makeHome()
   writePoliciesMirror(home, [CLIENT_ASKS])
@@ -2803,7 +2803,7 @@ test('0.6.7 T3: with a team owner set, pushing a work branch to the team reposit
   assert.equal(records[0].teamInternal, true, 'the set-aside must be measurable')
 })
 
-test('0.6.7 T3: with no team owners, the same push still falls through to the requires_human path, exactly as before', () => {
+test('0.6.8 T3: with no team owners, the same push still falls through to the requires_human path, exactly as before', () => {
   const repo = teamRepo()
   const home = makeHome()
   writePoliciesMirror(home, [CLIENT_ASKS])
@@ -2812,7 +2812,7 @@ test('0.6.7 T3: with no team owners, the same push still falls through to the re
   assert.equal(gateLogRecords(home).length, 0)
 })
 
-test('0.6.7 T3: with a team owner set, pushing and opening a pull request in the team repository is judged without the requires_human policy', () => {
+test('0.6.8 T3: with a team owner set, pushing and opening a pull request in the team repository is judged without the requires_human policy', () => {
   const repo = teamRepo()
   const command = 'git push -u origin feature/x && gh pr create --title "feat: x" --body "Adds x."'
   const { payload, records } = runClientReach(command, repo, ['acme-team'])
@@ -2823,7 +2823,7 @@ test('0.6.7 T3: with a team owner set, pushing and opening a pull request in the
   assert.equal(records[0].teamInternal, true)
 })
 
-test('0.6.7 T3: with no team owners, the pull request is still put to the requires_human policy', () => {
+test('0.6.8 T3: with no team owners, the pull request is still put to the requires_human policy', () => {
   const repo = teamRepo()
   const command = 'git push -u origin feature/x && gh pr create --title "feat: x" --body "Adds x."'
   const { payload, records } = runClientReach(command, repo, null)
@@ -2831,7 +2831,7 @@ test('0.6.7 T3: with no team owners, the pull request is still put to the requir
   assert.equal(Object.hasOwn(records[0], 'teamInternal'), false)
 })
 
-test('0.6.7 T3: an empty team owners file changes nothing either', () => {
+test('0.6.8 T3: an empty team owners file changes nothing either', () => {
   const repo = teamRepo()
   const command = 'gh pr create --title "feat: x" --body "Adds x."'
   assert.equal(runClientReach(command, repo, []).payload.hookSpecificOutput.permissionDecision, 'ask')
@@ -2847,31 +2847,31 @@ function assertUnchangedByTeamOwners (command, repo, expectedDecision) {
   assert.deepEqual(strip(withOwners.records), strip(withoutOwners.records), `${command}: nor what is recorded`)
 }
 
-test('0.6.7 T3: merging a pull request still reaches the requires_human policy', () => {
+test('0.6.8 T3: merging a pull request still reaches the requires_human policy', () => {
   assertUnchangedByTeamOwners(['gh pr ', 'mer', 'ge 12 --squash'].join(''), teamRepo(), 'ask')
 })
 
-test('0.6.7 T3: changing a repository setting outside the team still reaches the requires_human policy', () => {
+test('0.6.8 T3: changing a repository setting outside the team still reaches the requires_human policy', () => {
   assertUnchangedByTeamOwners('gh api -X PUT repos/acme-client/app/actions/permissions -f enabled=true', teamRepo(), 'ask')
 })
 
-test('0.6.7 T3: a push to a remote whose owner is not a team owner still reaches the requires_human policy', () => {
+test('0.6.8 T3: a push to a remote whose owner is not a team owner still reaches the requires_human policy', () => {
   const repo = teamRepo({ origin: TEAM_REMOTE, client: CLIENT_REMOTE })
   assertUnchangedByTeamOwners('git push -u client feature/x', repo, 'ask')
 })
 
-test('0.6.7 T3: a pull request in a fork, where gh would target the client upstream, still reaches the requires_human policy', () => {
+test('0.6.8 T3: a pull request in a fork, where gh would target the client upstream, still reaches the requires_human policy', () => {
   const repo = teamRepo({ origin: TEAM_REMOTE, upstream: CLIENT_REMOTE })
   assertUnchangedByTeamOwners('gh pr create --title "feat: x" --body "Adds x."', repo, 'ask')
 })
 
-test('0.6.7 T3: a push to main and a force push are still refused by the local rules first, exactly as before', () => {
+test('0.6.8 T3: a push to main and a force push are still refused by the local rules first, exactly as before', () => {
   const repo = teamRepo()
   assertUnchangedByTeamOwners('git push origin main', repo, 'deny')
   assertUnchangedByTeamOwners(['git push --', 'force origin feature/x'].join(''), repo, 'deny')
 })
 
-test('0.6.7 T3: a prohibits policy is still put to Jev for a team-internal command', () => {
+test('0.6.8 T3: a prohibits policy is still put to Jev for a team-internal command', () => {
   const repo = teamRepo()
   const command = 'gh pr create --title "feat: x" --body "Adds x."'
   const prohibits = { id: 'no_friday_prs', rule: 'No pull requests on Fridays.', kind: 'prohibits', scope: 'command' }
@@ -2891,7 +2891,7 @@ test('0.6.7 T3: a prohibits policy is still put to Jev for a team-internal comma
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'only the requires_human policy is set aside, the prohibits one is still judged')
 })
 
-// 0.6.7 T4: queue mode. In "queue and continue", the first requires_human
+// 0.6.8 T4: queue mode. In "queue and continue", the first requires_human
 // stop of a command in a session is queued for a person (human-queue.jsonl)
 // and the agent is told to carry on; an identical retry in the same session
 // is ASKED, never passed -- a queued command never runs without a person.

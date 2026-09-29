@@ -1,4 +1,4 @@
-// 0.6.7 T4: "When a person must approve: ask now | queue and continue" --
+// 0.6.8 T4: "When a person must approve: ask now | queue and continue" --
 // src/core/queue_mode.ts. It sits in the Policies tab, next to the
 // requires_human policies it applies to, and is saved by the same Save
 // button to the `queueMode` storage key ({ enabled }); the worker mirrors it

@@ -240,9 +240,9 @@ async function statSecretMirror () {
 // ---------------------------------------------------------------------------
 
 /** Mirrors the current catalog and policies to their JSON files, and the
- *  team repositories setting (0.6.7 T1) to team-owners.json and the queue
- *  mode (0.6.7 T4) to queue-mode.json and the explicit subagent models
- *  setting (0.6.7 T7) to explicit-models.json -- the panel saves all of them from the same button and nudges this same trigger.
+ *  team repositories setting (0.6.8 T1) to team-owners.json and the queue
+ *  mode (0.6.8 T4) to queue-mode.json and the explicit subagent models
+ *  setting (0.6.8 T7) to explicit-models.json -- the panel saves all of them from the same button and nudges this same trigger.
  *  Best-effort on each: a mirror failure is logged, never thrown, so it can
  *  never turn a successful panel save into a reported failure. The owners
  *  are always written, the empty list included: a person clearing the
@@ -263,12 +263,12 @@ async function mirrorCatalogAndPolicies (orca, storageHost, options = {}) {
   if (!teamOwnersResult.ok) {
     orca.log(`team owners mirror failed: ${String(teamOwnersResult.reason ?? 'unknown')} -- ${String(teamOwnersResult.detail ?? '').slice(0, 160)}`)
   }
-  // 0.6.7 T4: always written, "ask now" included, for the same reason.
+  // 0.6.8 T4: always written, "ask now" included, for the same reason.
   const queueModeResult = await run('queue-mode-save', JSON.stringify({ enabled: queueMode }))
   if (!queueModeResult.ok) {
     orca.log(`queue mode mirror failed: ${String(queueModeResult.reason ?? 'unknown')} -- ${String(queueModeResult.detail ?? '').slice(0, 160)}`)
   }
-  // 0.6.7 T7: the Models tab's "Models fixed by an agent definition", for
+  // 0.6.8 T7: the Models tab's "Models fixed by an agent definition", for
   // the hooks module; always written, the default included.
   const explicitModelsResult = await run('explicit-models-save', JSON.stringify({ mode: explicitModels }))
   if (!explicitModelsResult.ok) {

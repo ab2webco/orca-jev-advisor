@@ -71,7 +71,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    Distinct from every other bucket: it is the ONLY
  *                    stopReason whose own verdict is "allow" but whose
  *                    record still explains why nobody had to ask again.
- *   "queue"       -- 0.6.7 T4: queue mode set a `requires_human` stop aside
+ *   "queue"       -- 0.6.8 T4: queue mode set a `requires_human` stop aside
  *                    for a person (human-queue.jsonl) instead of asking one
  *                    who is not there; the verdict is "advise" (the model
  *                    was refused this attempt and told to carry on) and
@@ -129,7 +129,7 @@ export interface GateDecisionRecord {
    */
   readonly policyId?: string;
   /**
-   * 0.6.7 T3: present (always `true`) only when the team owners are set and
+   * 0.6.8 T3: present (always `true`) only when the team owners are set and
    * every segment of the command stayed inside the team (client_reach.ts),
    * so the requires_human policies were not put to Jev for it. Whatever then
    * decided keeps its own `stopReason` -- a local allow, the risk stage, a
@@ -287,7 +287,7 @@ export interface BuildGateDecisionRecordInput {
   readonly stopReason: GateStopReason;
   /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */
   readonly policyId?: string;
-  /** 0.6.7 T3 -- see GateDecisionRecord.teamInternal. `false` and absent both write no key. */
+  /** 0.6.8 T3 -- see GateDecisionRecord.teamInternal. `false` and absent both write no key. */
   readonly teamInternal?: boolean;
 }
 

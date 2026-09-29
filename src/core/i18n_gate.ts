@@ -111,7 +111,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // credentials is decided by a person, always, no exception for
     // urgency." Names only the policy and the command, never the rule.
     policyAskReason: "La política {{policyId}} pide que decidas si se ejecuta `{{segment}}`",
-    // 0.6.7 T4: queue mode. Model-facing, so deliberately identical in both
+    // 0.6.8 T4: queue mode. Model-facing, so deliberately identical in both
     // catalogs, like policyDeny: the command was queued for a person, it did
     // not run, and the only way forward is the person. No advice retry
     // clause -- an identical retry is ASKED, never passed.

@@ -151,7 +151,7 @@ export function parseGitConfigRemotePushUrl(configText: string, remoteName: stri
 
 /**
  * Every `[remote "<name>"]` section of already-read `.git/config`, in file
- * order, with its `url` and `pushurl` (null when absent) -- 0.6.7 T3, for
+ * order, with its `url` and `pushurl` (null when absent) -- 0.6.8 T3, for
  * client_reach.ts's facts: a bare `git push` or `gh pr` without `--repo`
  * may pick any remote, so the gate needs all of them, not just `origin`.
  * Same section reading as parseGitConfigRemoteUrl above.

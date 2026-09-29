@@ -1,4 +1,4 @@
-// 0.6.7 T1: "Repositories your team owns" -- the owners whose repositories
+// 0.6.8 T1: "Repositories your team owns" -- the owners whose repositories
 // never reach a client (see src/core/team_owners.ts). The field lives in the
 // Policies tab, next to the requires_human policies it narrows, and is saved
 // by the same Save button to the `teamOwners` storage key; the worker

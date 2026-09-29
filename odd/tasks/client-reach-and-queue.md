@@ -1,4 +1,8 @@
-# 0.6.7: the gate knows what reaches the client, and a person's approval never stalls an unattended agent
+# 0.6.8: the gate knows what reaches the client, and a person's approval never stalls an unattended agent
+
+Ships as 0.6.8: 0.6.7 went out first as a hotfix from main (the Linux
+`orca-ide` CLI), so this feature release took the next number. The owner
+quotes below keep the number they were said with.
 
 ## Objective
 A `requires_human` policy protects work that reaches the client. Today the
@@ -49,7 +53,7 @@ replying to a review). Every ask blocks the agent until a person comes back.
   or sensitive work) and only in the account's `active` router mode. A
   setting "Models fixed by an agent definition: judge them | keep them" in
   the Models tab, default "judge them".
-- T8 README and release 0.6.7.
+- T8 README and release 0.6.8.
 
 Out of scope: learning allows from approvals (a `requires_human` match is
 never learned; JEVADV-12 design, D2); approving from the board (needs a write
@@ -112,7 +116,12 @@ path back from the panel; next release if the queue proves itself).
   (decision, parser, store, mirror, worker, static panel and hook tests
   failing first); GREEN: `npm test` 2447/2447, `npm run test:panels`
   155/155; Models tab looked at 1440/768/390/320.
-- [ ] T8 README and release
+- [x] T8 README and release notes -- "What changed in 0.6.8" (T1-T7),
+  the files-written table (team-owners.json, queue-mode.json,
+  explicit-models.json, human-queue.jsonl) and the one exception to "your
+  commands are not stored"; package.json and orca-plugin.json at 0.6.8.
+  Push, PR, merge, tag, release, catalog PR and the live replay are the
+  coordinator's (they rebase this branch onto the 0.6.7 hotfix first).
 
 ## Acceptance criteria
 - With the team owner set, pushing a work branch and opening a pull request

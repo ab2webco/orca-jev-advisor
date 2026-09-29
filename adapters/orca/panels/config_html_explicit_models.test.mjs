@@ -1,4 +1,4 @@
-// 0.6.7 T7: "Models fixed by an agent definition: judge them | keep them" --
+// 0.6.8 T7: "Models fixed by an agent definition: judge them | keep them" --
 // src/core/explicit_models.ts. It sits in the Models tab, next to the
 // router it tells what to do with a subagent's fixed model, and is saved by
 // the Save button to the `explicitModels` storage key ({ mode }); the worker

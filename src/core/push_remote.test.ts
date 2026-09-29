@@ -263,7 +263,7 @@ test("resolvePushRemoteIsLocal: a direct github.com URL given as the push arg is
   assert.equal(result, false);
 });
 
-// 0.6.7 T3: every remote, for client_reach.ts's facts -- a bare `git push`
+// 0.6.8 T3: every remote, for client_reach.ts's facts -- a bare `git push`
 // or `gh pr` without --repo may pick any of them.
 test("parseGitConfigRemotes: lists every remote section with its url and pushurl", () => {
   const configText = [
