@@ -877,7 +877,7 @@ function runRouter (args, home, userDataDir) {
 /** A throwaway Orca `userData` dir with one fake account directory under
  *  `claude-accounts/<accountId>` -- all discoverTargets() itself needs to
  *  find it (settingsPathFor's own `auth/settings.json` is created lazily by
- *  writeSettingsAtomic on the first router-mode-set, exactly like a real
+ *  writeSettingsIfUnchanged on the first router-mode-set, exactly like a real
  *  account Orca has never written a hook into yet). */
 function makeUserDataWithAccount (home, accountId) {
   const userDataDir = join(home, 'orca-userdata')
