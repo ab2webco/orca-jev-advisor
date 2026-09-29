@@ -162,10 +162,15 @@ function anthropicModel(id: string, catalog: readonly ModelEntry[]): ResolvedTie
   };
 }
 
-/** The best-ranked catalog row carrying `tier` that the account serves (else the best-ranked one at all), or the built-in id. */
+/**
+ * The best-ranked catalog row carrying `tier` that the account serves (else
+ * the best-ranked one at all), or the built-in id. On a tied rank the later
+ * row wins: an accepted offer is appended after the row it supersedes.
+ */
 function tierModelId(tier: RouterTier, catalog: readonly ModelEntry[], served: (id: string) => boolean): string {
   const rows = catalog
     .filter((row) => row.tier === tier && row.rank !== null)
+    .reverse()
     .sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
   return (rows.find((row) => served(row.id)) ?? rows[0])?.id ?? ANTHROPIC_TIER_MODEL[tier];
 }

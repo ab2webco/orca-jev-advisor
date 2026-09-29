@@ -220,3 +220,9 @@ test("pricesForModel: Fable at its published price", () => {
 test("pricesForModel: an unrecognized model id resolves to null (tokens must still be counted at zero cost)", () => {
   assert.equal(pricesForModel("some-gateway-model"), null);
 });
+
+test("two rows of one tier at the same rank: the later one (a newer offer the person accepted) serves the tier", () => {
+  const newer: ModelEntry = { ...entry("claude-sonnet-6", 3, true), tier: "standard" };
+  const tiers = resolveAccountTiers({ env: {}, catalog: [...SEED_CATALOG, newer], quota: null });
+  assert.equal(tiers.standard.modelId, "claude-sonnet-6");
+});

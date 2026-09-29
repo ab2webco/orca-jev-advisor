@@ -5,6 +5,7 @@
 // discipline as main.test.mjs. See odd/tasks/model-reclassification.md T6.
 
 import { strict as assert } from 'node:assert'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
 import {
@@ -14,6 +15,8 @@ import {
   MODEL_SEED_MARKER_KEY,
   MODEL_SEED_OFFERED_VERSION_KEY,
   MODELS_CONFIG_KEY,
+  MODELS_DOCS_CHECK_KEY,
+  MODELS_DOCS_SEED_KEY,
   MODELS_KEY,
   MODELS_MIRROR_REQUEST_KEY,
   MODELS_SEED_NOTICE_KEY,
@@ -22,6 +25,7 @@ import {
   mirrorModels,
   publishModelMeasurements,
   publishModelsSeedNotice,
+  refreshModelDocs,
   seedModelsIfEmpty,
 } from './models-worker.mjs'
 
@@ -339,4 +343,82 @@ test('publishModelMeasurements: does not re-mirror when readiness is unchanged',
 
   await publishModelMeasurements(orca, storageHost, { mirror, readSummary })
   assert.equal(mirror.calls.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// refreshModelDocs: the daily docs check
+// ---------------------------------------------------------------------------
+
+const DOCS_OVERVIEW = readFileSync(new URL('../../src/core/fixtures/model_docs/models-overview.md', import.meta.url), 'utf8')
+const DOCS_PRICING = readFileSync(new URL('../../src/core/fixtures/model_docs/pricing.md', import.meta.url), 'utf8')
+const SHIPPED_V2 = JSON.parse(readFileSync(new URL('../../seed/models.json', import.meta.url), 'utf8'))
+const REPRICED_PRICING = DOCS_PRICING.replace(/\| Claude Opus 5\.5 +\| \$4 \/ MTok +\| \$5 \/ MTok +\| \$8 \/ MTok +\|/, '| Claude Opus 5.5 | $3 / MTok | $3.75 / MTok | $6 / MTok |')
+
+/** Records every URL asked for and answers from `pages` (url -> text), or fails. */
+function fakeFetchText (pages) {
+  const calls = []
+  const fn = async (url) => {
+    calls.push(url)
+    const text = pages[url]
+    return typeof text === 'string' ? { ok: true, text } : { ok: false, detail: 'HTTP 503' }
+  }
+  fn.calls = calls
+  return fn
+}
+
+const OVERVIEW_URL = 'https://platform.claude.com/docs/en/about-claude/models/overview'
+const PRICING_URL = 'https://platform.claude.com/docs/en/about-claude/pricing'
+const NOW = '2026-09-29T12:00:00.000Z'
+
+test('refreshModelDocs: a changed price on the docs is offered through the seed notice, and the catalog itself is untouched', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_V2.models, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 2 } })
+  const fetchText = fakeFetchText({ [OVERVIEW_URL]: DOCS_OVERVIEW, [PRICING_URL]: REPRICED_PRICING })
+  await refreshModelDocs(orca, storageHost, { fetchText, now: () => NOW })
+
+  assert.deepEqual(fetchText.calls.sort(), [PRICING_URL, OVERVIEW_URL].sort())
+  const docs = await storageHost.get(MODELS_DOCS_SEED_KEY)
+  assert.equal(docs.version, 3)
+  assert.equal(docs.fetchedAt, NOW)
+  const notice = await storageHost.get(MODELS_SEED_NOTICE_KEY)
+  assert.equal(notice.due, true)
+  assert.equal(notice.shippedVersion, 3)
+  assert.deepEqual(notice.items, [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', kind: 'changed', fields: ['prices'] }])
+  assert.deepEqual(await storageHost.get(MODELS_KEY), SHIPPED_V2.models, 'routing only changes when the person accepts')
+
+  await storageHost.set(MODELS_SEED_REQUEST_KEY, { id: 'req-docs', at: new Date().toISOString(), action: 'apply', acceptedIds: ['claude-opus-5-5'] })
+  await attendModelsSeedRequest(orca, storageHost, { mirror: noopMirror() })
+  const opus = (await storageHost.get(MODELS_KEY)).find((m) => m.id === 'claude-opus-5-5')
+  assert.deepEqual(opus.prices, { input: 3, cacheWrite: 6, cacheRead: 0.2, output: 20 })
+  assert.deepEqual(await storageHost.get(MODEL_SEED_OFFERED_VERSION_KEY), { version: 3 })
+})
+
+test('refreshModelDocs: docs that match the shipped seed offer nothing', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_V2.models, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 2 } })
+  await refreshModelDocs(orca, storageHost, { fetchText: fakeFetchText({ [OVERVIEW_URL]: DOCS_OVERVIEW, [PRICING_URL]: DOCS_PRICING }), now: () => NOW })
+  assert.equal((await storageHost.get(MODELS_DOCS_SEED_KEY)).version, 2)
+  assert.equal((await storageHost.get(MODELS_SEED_NOTICE_KEY)).due, false)
+})
+
+test('refreshModelDocs: at most once a day, a failed attempt included', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [MODELS_DOCS_CHECK_KEY]: { at: '2026-09-29T03:00:00.000Z' } })
+  const fetchText = fakeFetchText({})
+  await refreshModelDocs(orca, storageHost, { fetchText, now: () => NOW })
+  assert.deepEqual(fetchText.calls, [])
+})
+
+test('refreshModelDocs: a failed fetch or a page that changed format keeps the last good docs seed and logs one line', async () => {
+  const good = { version: 3, fetchedAt: '2026-09-27T00:00:00.000Z', models: SHIPPED_V2.models }
+  for (const pages of [{}, { [OVERVIEW_URL]: '<html>maintenance</html>', [PRICING_URL]: DOCS_PRICING }, { [OVERVIEW_URL]: DOCS_OVERVIEW, [PRICING_URL]: 'no table' }]) {
+    const orca = fakeOrca()
+    const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_V2.models, [MODELS_DOCS_SEED_KEY]: good })
+    await refreshModelDocs(orca, storageHost, { fetchText: fakeFetchText(pages), now: () => NOW })
+    assert.deepEqual(await storageHost.get(MODELS_DOCS_SEED_KEY), good)
+    assert.deepEqual(await storageHost.get(MODELS_KEY), SHIPPED_V2.models)
+    assert.equal(orca._logs.length, 1, JSON.stringify(orca._logs))
+    assert.match(orca._logs[0], /^model docs check failed: /)
+    assert.equal((await storageHost.get(MODELS_DOCS_CHECK_KEY)).at, NOW)
+  }
 })
