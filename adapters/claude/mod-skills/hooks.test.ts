@@ -98,8 +98,13 @@ const HOME = "/home/dev";
 const CONFIG_DIR = `${HOME}/.config/orca-supervisor`;
 const CACHE_DIR = `${HOME}/.cache/orca-supervisor`;
 const CWD = "/home/dev/Projects/sandbox";
-const SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements.jsonl`;
-const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
+// The fake clock starts at 2026-09-25T10:00Z and only moves a millisecond per read, so every record lands in this hour's files.
+const SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements-2026-09-25T10.jsonl`;
+const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements-2026-09-25T10.jsonl`;
+const LEGACY_SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements.jsonl`;
+const LEGACY_TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
+/** The engine's own limit: `$.fs.read` and `$.fs.write` reject above 4 MiB. */
+const FS_LIMIT_BYTES = 4 * 1024 * 1024;
 
 /** Builds a fake `$` (EngineInterface) backed by `host`'s mutable state. */
 function makeFakeEngine(host: FakeHost): unknown {
@@ -129,9 +134,11 @@ function makeFakeEngine(host: FakeHost): unknown {
       read: async (path: string) => {
         const content = host.files.get(path);
         if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        if (content.length > FS_LIMIT_BYTES) throw new Error("fake host: read over 4 MiB rejects");
         return content;
       },
       write: async (path: string, text: string) => {
+        if (text.length > FS_LIMIT_BYTES) throw new Error("fake host: write over 4 MiB rejects");
         host.files.set(path, text);
       },
       list: async (path: string) => {
@@ -562,6 +569,74 @@ test("readiness reflects a decision recorded earlier in this same session, not a
     999,
     "today's bug: readiness is cached once per process and never reflects a decision made earlier in the same session",
   );
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-62: a measurement log must never go silent. Seen live on
+// 2026-09-29: mod-tools-measurements.jsonl reached 4,194,231 bytes, every
+// append (a whole-file rewrite) crossed the engine's 4 MiB limit and was
+// swallowed, and nothing was recorded again.
+// ---------------------------------------------------------------------------
+
+function fullLegacyLog(pair: readonly Record<string, unknown>[]): string {
+  const head = pair.map((row) => `${JSON.stringify(row)}\n`).join("");
+  const filler = `${JSON.stringify({ type: "decision", id: "old", at: "2026-09-20T08:00:00.000Z", mode: "active", pad: "x".repeat(200) })}\n`;
+  return head + filler.repeat(Math.floor((FS_LIMIT_BYTES - 64 - head.length) / filler.length));
+}
+
+test("a legacy log at the 4 MiB limit: new records land in this hour's own file and the old history still counts", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const legacySkills = fullLegacyLog([
+    { type: "decision", id: "legacy", at: "2026-09-24T08:00:00.000Z", mode: "measurement", decision: { name: "graft-helper" } },
+    { type: "observation", id: "legacy", at: "2026-09-24T08:01:00.000Z", skill: "graft-helper" },
+  ]);
+  const legacyTools = fullLegacyLog([]);
+  host.files.set(LEGACY_SKILL_MEASUREMENTS_PATH, legacySkills);
+  host.files.set(LEGACY_TOOL_MEASUREMENTS_PATH, legacyTools);
+  const { handlers, engine } = loadHooks(host);
+
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+    jevResponse({ which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 }, needsOneTool: { type: "noul", noul: 0.1 } }),
+  );
+  await submitPrompt(handlers, engine, "what does this file do");
+
+  const skillRecord = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(skillRecord.mode, "measurement", "today's bug: the decision was lost because the whole-file rewrite crossed 4 MiB");
+  assert.equal(
+    (skillRecord.readiness as { comparableShortfall: number }).comparableShortfall,
+    999,
+    "readiness must still fold the comparable pair recorded in the legacy file",
+  );
+  assert.ok(host.files.has(TOOL_MEASUREMENTS_PATH), "the tool decision lands in this hour's own tool file");
+  assert.equal(host.files.get(LEGACY_SKILL_MEASUREMENTS_PATH), legacySkills, "the legacy file is only ever read, never rewritten");
+  assert.equal(host.files.get(LEGACY_TOOL_MEASUREMENTS_PATH), legacyTools, "the legacy file is only ever read, never rewritten");
+});
+
+test("the daily sampling cap counts today's hourly files, not only the legacy file", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 2 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const today = [
+    { type: "decision", id: "a", at: "2026-09-25T08:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "b", at: "2026-09-25T09:00:00.000Z", mode: "measurement" },
+  ];
+  host.files.set(`${CACHE_DIR}/mod-skills-measurements-2026-09-25T08.jsonl`, `${JSON.stringify(today[0])}\n`);
+  host.files.set(`${CACHE_DIR}/mod-skills-measurements-2026-09-25T09.jsonl`, `${JSON.stringify(today[1])}\n`);
+  const { handlers, engine } = loadHooks(host);
+
+  await submitPrompt(handlers, engine, "what does this file do");
+
+  assert.equal(host.fetchCalls.length, 0, "two samples already recorded today in hourly files: the cap of 2 is reached");
+  assert.equal(host.files.has(SKILL_MEASUREMENTS_PATH), false);
 });
 
 // ---------------------------------------------------------------------------

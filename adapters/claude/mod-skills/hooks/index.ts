@@ -83,6 +83,7 @@ import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/or
 import { modSkillsProjectName } from '../../../../src/core/project_name.ts'
 import { listSkillInventory, stripSkillFrontmatter } from '../../../../src/core/skill_inventory.ts'
 import type { SkillFs, SkillFsEntry, SkillFsStat, SkillSummary } from '../../../../src/core/skill_inventory.ts'
+import { measurementFileName, measurementFilesToRead, measurementLegacyFileName, type MeasurementLog } from '../../../../src/core/measurement_files.ts'
 import {
   DEFAULT_FITS_THRESHOLD,
   DEFAULT_GATE_THRESHOLD,
@@ -292,15 +293,12 @@ export async function resolveModSkillsSamplingConfig($: EngineInterface): Promis
  * toolMeasurementDecisionsToday (tools, JEVADV-4): the two logs are
  * counted the same tolerant way, only the file name differs.
  */
-async function measurementDecisionsTodayIn($: EngineInterface, fileName: string, today: string): Promise<number> {
+async function measurementDecisionsTodayIn($: EngineInterface, log: MeasurementLog, today: string): Promise<number> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return 0
-    const path = `${paths.cacheDir}/${fileName}`
-    if (!(await $.fs.exists(path))) return 0
-    const content = await $.fs.read(path)
     let count = 0
-    for (const line of content.split('\n')) {
+    for (const line of await readMeasurementLines($, paths.cacheDir, log, today)) {
       if (line.length === 0) continue
       let parsed: unknown
       try {
@@ -318,9 +316,43 @@ async function measurementDecisionsTodayIn($: EngineInterface, fileName: string,
   }
 }
 
+/**
+ * Every line of `log`'s files under `cacheDir` (see
+ * src/core/measurement_files.ts), or with `day` only that day's hours plus
+ * the legacy file -- which is skipped once it was last written before `day`,
+ * so a finished 4 MiB legacy file is not re-read on every prompt forever. A
+ * cache dir the engine cannot list reads as the legacy file alone.
+ */
+async function readMeasurementLines($: EngineInterface, cacheDir: string, log: MeasurementLog, day?: string): Promise<string[]> {
+  const legacy = measurementLegacyFileName(log)
+  let names: string[]
+  try {
+    names = (await $.fs.list(cacheDir)).filter((entry) => entry.kind === 'file').map((entry) => entry.name)
+  } catch {
+    names = [legacy]
+  }
+  const lines: string[] = []
+  for (const name of measurementFilesToRead(log, names, day)) {
+    const path = `${cacheDir}/${name}`
+    if (!(await $.fs.exists(path))) continue
+    if (name === legacy && day !== undefined && (await lastWrittenDay($, path)) < day) continue
+    lines.push(...(await $.fs.read(path)).split('\n'))
+  }
+  return lines
+}
+
+/** The UTC day `path` was last written, or `"9999-12-31"` (never skip it) when the engine cannot say. */
+async function lastWrittenDay($: EngineInterface, path: string): Promise<string> {
+  try {
+    return new Date((await $.fs.stat(path)).mtimeMs).toISOString().slice(0, 10)
+  } catch {
+    return '9999-12-31'
+  }
+}
+
 /** `measurementDecisionsTodayIn` over the skill-selection log (mod-skills-measurements.jsonl). */
 export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
-  return measurementDecisionsTodayIn($, 'mod-skills-measurements.jsonl', today)
+  return measurementDecisionsTodayIn($, 'mod-skills', today)
 }
 
 /**
@@ -334,7 +366,7 @@ export async function measurementDecisionsToday($: EngineInterface, today: strin
  * of a real count.
  */
 export async function toolMeasurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
-  return measurementDecisionsTodayIn($, 'mod-tools-measurements.jsonl', today)
+  return measurementDecisionsTodayIn($, 'mod-tools', today)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,17 +387,13 @@ export async function resolveModSkillsReadiness($: EngineInterface): Promise<Mod
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return null
-    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
     const rows: unknown[] = []
-    if (await $.fs.exists(path)) {
-      const content = await $.fs.read(path)
-      for (const line of content.split('\n')) {
-        if (line.length === 0) continue
-        try {
-          rows.push(JSON.parse(line))
-        } catch {
-          continue
-        }
+    for (const line of await readMeasurementLines($, paths.cacheDir, 'mod-skills')) {
+      if (line.length === 0) continue
+      try {
+        rows.push(JSON.parse(line))
+      } catch {
+        continue
       }
     }
     return evaluateModSkillsReadiness(computeComparableStats(rows), DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS)
@@ -488,22 +516,23 @@ async function appendToFile($: EngineInterface, path: string, line: string): Pro
   await $.fs.write(path, existing + line)
 }
 
-export async function appendMeasurement($: EngineInterface, line: string): Promise<void> {
+/** Appends one skill-selection record to the hour `at` falls in (src/core/measurement_files.ts). */
+export async function appendMeasurement($: EngineInterface, at: string, line: string): Promise<void> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return
-    await appendToFile($, `${paths.cacheDir}/mod-skills-measurements.jsonl`, line)
+    await appendToFile($, `${paths.cacheDir}/${measurementFileName('mod-skills', at)}`, line)
   } catch {
     // Measurement is best-effort and must never block or fail a prompt.
   }
 }
 
-/** Same shape as `appendMeasurement`, in its own file, for tool-selection records (src/core/tool_measurement.ts). */
-export async function appendToolMeasurement($: EngineInterface, line: string): Promise<void> {
+/** Same shape as `appendMeasurement`, in its own files, for tool-selection records (src/core/tool_measurement.ts). */
+export async function appendToolMeasurement($: EngineInterface, at: string, line: string): Promise<void> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return
-    await appendToFile($, `${paths.cacheDir}/mod-tools-measurements.jsonl`, line)
+    await appendToFile($, `${paths.cacheDir}/${measurementFileName('mod-tools', at)}`, line)
   } catch {
     // Measurement is best-effort and must never block or fail a prompt.
   }
@@ -1767,6 +1796,7 @@ export function register(on: On, options: PluginOptions): void {
         const readiness = await resolveModSkillsReadiness($)
         await appendMeasurement(
           $,
+          at,
           serializeRecord(
             buildDecisionRecord({
               id: measurementId,
@@ -1887,6 +1917,7 @@ export function register(on: On, options: PluginOptions): void {
         const at = new Date(await $.clock.now()).toISOString()
         await appendToolMeasurement(
           $,
+          at,
           serializeToolRecord(
             buildToolDecisionRecord({
               id: measurementId,
@@ -1939,7 +1970,7 @@ export function register(on: On, options: PluginOptions): void {
       const id = pendingMeasurementId
       pendingMeasurementId = null
       const at = new Date(await $.clock.now()).toISOString()
-      await appendMeasurement($, serializeRecord(buildObservationRecord(id, e.skill, at)))
+      await appendMeasurement($, at, serializeRecord(buildObservationRecord(id, e.skill, at)))
     }
     return next(e)
   })
@@ -2026,7 +2057,7 @@ export function register(on: On, options: PluginOptions): void {
       pendingToolMeasurementId = null
       try {
         const at = new Date(await $.clock.now()).toISOString()
-        await appendToolMeasurement($, serializeToolRecord(buildToolObservationRecord(id, e.tool, at)))
+        await appendToolMeasurement($, at, serializeToolRecord(buildToolObservationRecord(id, e.tool, at)))
       } catch {
         // Measurement is best-effort and must never block or fail a call.
       }
