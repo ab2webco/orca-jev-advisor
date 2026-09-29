@@ -1877,6 +1877,23 @@
           button.tabIndex = isActive ? 0 : -1
           panel.hidden = !isActive
         })
+        // Some Orca/Chromium builds (seen on Electron 43 / Chromium 150 lab)
+        // leave native controls -- <select> most visibly -- unclickable inside
+        // a tab-panel that has just gone from display:none to visible: the
+        // dropdown "shows" but never opens on click. The revealed panel is not
+        // in the layout/hit-test tree until the first relayout. Forcing it here
+        // (an offsetHeight read plus an imperceptible next-frame repaint nudge)
+        // makes the <select> open on the first click. Cheap and visually inert.
+        var shownPanel = tabPanel(key)
+        if (shownPanel) {
+          void shownPanel.offsetHeight
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(function () {
+              shownPanel.style.opacity = '0.999'
+              requestAnimationFrame(function () { shownPanel.style.opacity = '' })
+            })
+          }
+        }
         writeStoredTab(key)
         if (opts.focus) tabButton(key).focus()
       }
