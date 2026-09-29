@@ -18,7 +18,7 @@ test("the same value always gets the same placeholder, and different values get 
   assert.equal(names.name("repo", "acme-shop"), "<repo-1>");
   assert.equal(names.name("repo", "other"), "<repo-2>");
   assert.equal(names.name("branch", "feat/login"), "<branch-1>");
-  assert.equal(names.name("path", "/Users/me/acme-shop"), "<path-1>");
+  assert.equal(names.name("path", "/home/dev/acme-shop"), "<path-1>");
 });
 
 test("a protected branch name stays in clear: it carries risk meaning and identifies nobody", () => {
@@ -35,11 +35,11 @@ test("the identity table leaves everything as it is (the local, cache-key render
 
 test("redactText swaps every registered value in free text, longest first, on token boundaries", () => {
   const names = createJevPseudonyms();
-  names.name("path", "/Users/me/acme-shop");
+  names.name("path", "/home/dev/acme-shop");
   names.name("repo", "acme-shop");
   names.name("branch", "feat/login");
   assert.equal(
-    names.redactText("Never touch /Users/me/acme-shop/dist of acme-shop on feat/login; acme-shopper is someone else."),
+    names.redactText("Never touch /home/dev/acme-shop/dist of acme-shop on feat/login; acme-shopper is someone else."),
     "Never touch <path-1>/dist of <repo-1> on <branch-1>; acme-shopper is someone else.",
   );
 });
