@@ -89,7 +89,8 @@ test("buildWideState carries each candidate's name and description in the state"
     { name: "Read", description: "Reads a file." },
     { name: "Bash", description: "Runs a shell command." },
   ]);
-  assert.deepEqual(record.orcaContext, { worktree: "/wt", project: "orca-supervisor", branch: "refactor/english-artifacts" });
+  // 0.6.11 T3: the Orca context reaches Jev as placeholders, never in clear.
+  assert.deepEqual(record.orcaContext, { worktree: "<path-1>", project: "<repo-1>", branch: "<branch-1>" });
 });
 
 test("buildFitState carries each shortlisted candidate's full description as its card", () => {

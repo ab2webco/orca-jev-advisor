@@ -86,6 +86,22 @@ export function createJevPseudonyms(): JevNames {
   return { name, redactText, destinationDescription };
 }
 
+export interface OrcaContextNames {
+  readonly worktree: string | null;
+  readonly project: string | null;
+  readonly branch: string | null;
+}
+
+/** The Orca context a skill or tool decision sends Jev: each known name as a placeholder, an unknown one still null. */
+export function orcaContextForJev(context: OrcaContextNames): OrcaContextNames {
+  const names = createJevPseudonyms();
+  return {
+    worktree: context.worktree === null ? null : names.name("path", context.worktree),
+    project: context.project === null ? null : names.name("repo", context.project),
+    branch: context.branch === null ? null : names.name("branch", context.branch),
+  };
+}
+
 /** The local rendering: every name in clear. Never used for a Jev request. */
 export const IDENTITY_NAMES: JevNames = {
   name: (_kind, value) => value,
