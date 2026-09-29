@@ -28,7 +28,7 @@ function entry(id: string, rank: number, available: boolean): ModelEntry {
 const CATALOG: readonly ModelEntry[] = [
   entry("claude-fable-5-1", 1, false),
   entry("claude-opus-5-5", 2, true),
-  entry("claude-sonnet-5", 3, true),
+  entry("claude-sonnet-5-5", 3, true),
   entry("claude-haiku-4-5-20251001", 4, true),
 ];
 const TIERS = resolveAccountTiers({ env: {}, catalog: CATALOG, quota: null });
@@ -306,7 +306,7 @@ test("stage: an upgrade with confidence ≥ 0.70 switches immediately", () => {
 });
 
 test("stage: an upgrade under 0.70 waits when the session is already at or above its own model", () => {
-  const unsure = stage({ jev: { tier: "complex", confidence: 0.6 }, currentModel: "claude-sonnet-5", currentEffort: "medium", configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.6 } });
+  const unsure = stage({ jev: { tier: "complex", confidence: 0.6 }, currentModel: "claude-sonnet-5-5", currentEffort: "medium", configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.6 } });
   assert.equal(unsure.changed, false);
   assert.equal(unsure.reason, "low-confidence");
 });
@@ -320,13 +320,13 @@ test("stage: under ANY guard, a session running below its own model is restored 
   assert.equal(restore.reason, "floor-restore");
   assert.equal(restore.guard, "low-confidence", "F9: the failure itself is a fact for Jev, not the guard");
   // The live case: Haiku after a simple start, then an unsure standard turn on a Sonnet session.
-  const unsure = stage({ jev: { tier: "standard", confidence: 0.55 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.55 } });
-  assert.equal(unsure.model, "claude-sonnet-5");
+  const unsure = stage({ jev: { tier: "standard", confidence: 0.55 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.55 } });
+  assert.equal(unsure.model, "claude-sonnet-5-5");
   assert.equal(unsure.effort, "medium");
   assert.equal(unsure.reason, "floor-restore");
   assert.equal(unsure.guard, "low-confidence");
   // A guard with a proposal above the floor goes to the proposal.
-  const higher = stage({ jev: { tier: "complex", confidence: 0.5 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.5 } });
+  const higher = stage({ jev: { tier: "complex", confidence: 0.5 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.5 } });
   assert.equal(higher.model, "claude-opus-5-5");
 });
 
@@ -487,7 +487,7 @@ test("E1: an upgrade back to the session's own model uses the tier's effort, not
 });
 
 test("E1: frontier work on Opus (no Fable) upgrades at xhigh, the frontier tier's own effort", () => {
-  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "frontier", confidence: 0.9 }, currentModel: "claude-sonnet-5", currentEffort: "medium" });
+  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "frontier", confidence: 0.9 }, currentModel: "claude-sonnet-5-5", currentEffort: "medium" });
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.effort, "xhigh");
 });
@@ -564,7 +564,7 @@ test("E2 lower: the same lower effort must repeat on 2 consecutive person prompt
 });
 
 test("E2 lower: a different lower effort restarts the count", () => {
-  const decision = stage({ ...ON_OPUS_XHIGH, jev: { tier: "standard", confidence: 0.9 }, tiers: resolveAccountTiers({ env: {}, catalog: CATALOG.map((row) => (row.id === "claude-sonnet-5" ? { ...row, available: false } : row)), quota: null }), effortOutput: OUTPUTS_WORTH, pending: { tier: "complex", turns: 1, effort: "high" } });
+  const decision = stage({ ...ON_OPUS_XHIGH, jev: { tier: "standard", confidence: 0.9 }, tiers: resolveAccountTiers({ env: {}, catalog: CATALOG.map((row) => (row.id === "claude-sonnet-5-5" ? { ...row, available: false } : row)), quota: null }), effortOutput: OUTPUTS_WORTH, pending: { tier: "complex", turns: 1, effort: "high" } });
   assert.equal(decision.reason, "effort-hysteresis");
   assert.deepEqual(decision.pending, { tier: "standard", turns: 1, effort: "medium" });
 });
@@ -638,7 +638,7 @@ test("finding 1: under a guard, a lowered effort on the session's own model come
 });
 
 test("F0 stage: an upgrade back to the session's own model under a guard takes the higher of the configured and tier effort", () => {
-  const decision = stage({ ...XHIGH_SESSION, currentModel: "claude-sonnet-5", currentEffort: "medium", jev: { tier: "complex", confidence: 0.9 }, guards: { ...CALM, text: "Read /x/brief.md and do what it says" } });
+  const decision = stage({ ...XHIGH_SESSION, currentModel: "claude-sonnet-5-5", currentEffort: "medium", jev: { tier: "complex", confidence: 0.9 }, guards: { ...CALM, text: "Read /x/brief.md and do what it says" } });
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.effort, "xhigh");
 });

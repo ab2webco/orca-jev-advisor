@@ -11,7 +11,7 @@ function entry(id: string, rank: number, available: boolean): ModelEntry {
 }
 const TIERS = resolveAccountTiers({
   env: {},
-  catalog: [entry("claude-fable-5-1", 1, false), entry("claude-opus-5-5", 2, true), entry("claude-sonnet-5", 3, true), entry("claude-haiku-4-5-20251001", 4, true)],
+  catalog: [entry("claude-fable-5-1", 1, false), entry("claude-opus-5-5", 2, true), entry("claude-sonnet-5-5", 3, true), entry("claude-haiku-4-5-20251001", 4, true)],
   quota: null,
 });
 const CALM: GuardContext = { text: "list the files under src/", activity: null, confidence: 0.9 };
@@ -20,7 +20,7 @@ test("explicit model rank: aliases and full ids both place on the account's ladd
   assert.equal(explicitModelRank(TIERS, "haiku"), 0);
   assert.equal(explicitModelRank(TIERS, "sonnet"), 1);
   assert.equal(explicitModelRank(TIERS, "opus"), 2);
-  assert.equal(explicitModelRank(TIERS, "claude-sonnet-5"), 1);
+  assert.equal(explicitModelRank(TIERS, "claude-sonnet-5-5"), 1);
   assert.equal(explicitModelRank(TIERS, "fable"), 2, "fable collapses to Opus where the account has no Fable");
   assert.equal(explicitModelRank(TIERS, "inherit"), null);
   assert.equal(explicitModelRank(TIERS, "something-else"), null);
@@ -30,13 +30,13 @@ test("subagent: no explicit model -- the tier's full id, down or up from the par
   const down = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, parentModel: "claude-opus-5-5", explicitModel: undefined, guards: CALM });
   assert.equal(down.model, "claude-haiku-4-5-20251001");
   assert.equal(down.changed, true);
-  const up = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, parentModel: "claude-sonnet-5", explicitModel: undefined, guards: CALM });
+  const up = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, parentModel: "claude-sonnet-5-5", explicitModel: undefined, guards: CALM });
   assert.equal(up.model, "claude-opus-5-5");
 });
 
 test("subagent: always a full model id, never an alias", () => {
   for (const tier of ["simple", "standard", "complex", "frontier"] as const) {
-    const decision = decideSubagent({ tiers: TIERS, jev: { tier, confidence: 0.9 }, parentModel: "claude-sonnet-5", explicitModel: undefined, guards: CALM });
+    const decision = decideSubagent({ tiers: TIERS, jev: { tier, confidence: 0.9 }, parentModel: "claude-sonnet-5-5", explicitModel: undefined, guards: CALM });
     assert.ok(decision.model.startsWith("claude-"), decision.model);
   }
 });
@@ -119,7 +119,7 @@ test("finding 2: a same-model subagent under a guard names the guard", () => {
   assert.equal(pointer.guard, "pointer-prompt");
   const unsure = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.4 }, parentModel: "claude-opus-5-5", explicitModel: undefined, guards: { ...CALM, confidence: 0.4 } });
   assert.equal(unsure.guard, "low-confidence");
-  const up = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.4 }, parentModel: "claude-sonnet-5", explicitModel: undefined, guards: { ...CALM, confidence: 0.4 } });
+  const up = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.4 }, parentModel: "claude-sonnet-5-5", explicitModel: undefined, guards: { ...CALM, confidence: 0.4 } });
   assert.equal(up.reason, "switch");
   assert.equal(up.guard, "low-confidence");
 });
@@ -177,9 +177,9 @@ test("T7: failing work keeps the explicit model", () => {
 });
 
 test("T7: in a client's repository an explicit model is never lowered below the session's", () => {
-  const toParent = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-sonnet-5", explicitModel: "opus", guards: CALM, destinationKind: "client-site", ...JUDGE });
+  const toParent = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-sonnet-5-5", explicitModel: "opus", guards: CALM, destinationKind: "client-site", ...JUDGE });
   assert.equal(toParent.changed, true);
-  assert.equal(toParent.model, "claude-sonnet-5", "lowered only as far as the session's own model");
+  assert.equal(toParent.model, "claude-sonnet-5-5", "lowered only as far as the session's own model");
   assert.equal(toParent.reason, "explicit-lowered");
   const atParent = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5[1m]", explicitModel: "opus", guards: CALM, destinationKind: "client-site", ...JUDGE });
   assert.equal(atParent.changed, false);

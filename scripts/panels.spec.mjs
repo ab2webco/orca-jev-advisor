@@ -2553,7 +2553,7 @@ test('no two neighbouring controls touch on any board tab', { skip: chromium ? f
 
 const TIERS_ANTHROPIC = {
   simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
-  standard: { modelId: 'claude-sonnet-5', label: 'Sonnet 5', supportsEffort: true },
+  standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true }
 }
@@ -2577,7 +2577,7 @@ test('0.6.2: each account shows tier → the model it resolves to → its effort
     }))
     assert.deepEqual(table, [
       { cells: ['Ask', 'Haiku 4.5'], effort: null },
-      { cells: ['Implement', 'Sonnet 5'], effort: 'medium' },
+      { cells: ['Implement', 'Sonnet 5.5'], effort: 'medium' },
       { cells: ['Analyse', 'Opus 5.5'], effort: 'xhigh' },
       { cells: ['Deep reasoning', 'Opus 5.5'], effort: 'xhigh' }
     ])

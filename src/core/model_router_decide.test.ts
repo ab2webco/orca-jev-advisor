@@ -28,7 +28,7 @@ function entry(id: string, rank: number, available: boolean): ModelEntry {
 const CATALOG: readonly ModelEntry[] = [
   entry("claude-fable-5-1", 1, false),
   entry("claude-opus-5-5", 2, true),
-  entry("claude-sonnet-5", 3, true),
+  entry("claude-sonnet-5-5", 3, true),
   entry("claude-haiku-4-5-20251001", 4, true),
 ];
 const TIERS = resolveAccountTiers({ env: {}, catalog: CATALOG, quota: null });
@@ -160,7 +160,7 @@ test("start: a simple prompt on an Opus session moves to Haiku, with no effort (
 
 test("start: a standard prompt picks Sonnet at medium effort", () => {
   const decision = decideStart({ tiers: TIERS, jev: { tier: "standard", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
-  assert.equal(decision.model, "claude-sonnet-5");
+  assert.equal(decision.model, "claude-sonnet-5-5");
   assert.equal(decision.effort, "medium");
 });
 
@@ -176,7 +176,7 @@ test("start: any guard holds the session's configured model (and effort) instead
 });
 
 test("start: upgrading is always allowed, guards or not", () => {
-  const decision = decideStart({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: { ...CALM, text: "security review" } });
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, text: "security review" } });
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.effort, "high");
   assert.equal(decision.changed, true);
@@ -189,14 +189,14 @@ test("start: a configured model the account's tiers do not include is never gone
 });
 
 test("start: frontier collapses to complex where they resolve to the same model; the effort stays the frontier's (0.6.2 E1)", () => {
-  const decision = decideStart({ tiers: TIERS, jev: { tier: "frontier", confidence: 0.9 }, configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: CALM });
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "frontier", confidence: 0.9 }, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: CALM });
   assert.equal(decision.tier, "complex");
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.effort, "xhigh");
 });
 
 test("start: same model and effort as configured is no change", () => {
-  const decision = decideStart({ tiers: TIERS, jev: { tier: "standard", confidence: 0.9 }, configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: CALM });
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "standard", confidence: 0.9 }, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: CALM });
   assert.equal(decision.changed, false);
   assert.equal(decision.reason, "same");
 });
@@ -256,7 +256,7 @@ test("decision log record: effort is the subagent's own target effort, when the 
 test("start: quota pressure never shifts the first prompt's tier -- there is no previous turn to show it was read-only (G4)", () => {
   for (const band of ["economy", "strong-economy"] as const) {
     const decision = decideStart({ tiers: TIERS, jev: { tier: "standard", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM, band });
-    assert.equal(decision.model, "claude-sonnet-5");
+    assert.equal(decision.model, "claude-sonnet-5-5");
     assert.equal(decision.tier, "standard");
   }
 });
@@ -369,7 +369,7 @@ test("pointer-prompt is a guard: point A keeps the configured model and effort, 
 
 test("pointer-prompt never blocks an upgrade", () => {
   const text = "Read /tmp/brief-062.md completely and do what it says.";
-  const decision = decideStart({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, configuredModel: "claude-sonnet-5", configuredEffort: "medium", guards: { ...CALM, text } });
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, text } });
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.changed, true);
 });
