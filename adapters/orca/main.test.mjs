@@ -37,6 +37,7 @@ const {
   attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
+  attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
@@ -323,6 +324,57 @@ test('claudeIntegrationPermissionArgs: hooks-check is read-only on disk but may 
   const args = claudeIntegrationPermissionArgs('hooks-check')
   assert.ok(args.includes('--allow-child-process'))
   assert.ok(!args.some((arg) => arg.startsWith('--allow-fs-write=')))
+})
+
+// 0.6.11 T2e: the poll loop looks again for Orca accounts added after
+// Configure, at most once a minute, and installs only when Configure was done.
+
+const RESCAN_OK = { hook: { installed: true, pathMatches: true }, outcomeHook: { installed: true, pathMatches: true }, agentModelHook: { installed: true, pathMatches: true } }
+const RESCAN_BARE = { hook: { installed: false, pathMatches: false }, outcomeHook: { installed: false, pathMatches: false }, agentModelHook: { installed: false, pathMatches: false } }
+
+function rescanDeps (targets) {
+  const calls = { status: 0, install: 0, publish: 0 }
+  return {
+    calls,
+    deps: {
+      readStatus: async () => { calls.status += 1; return { ok: true, targets } },
+      install: async () => { calls.install += 1; return { ok: true } },
+      publish: async () => { calls.publish += 1 }
+    }
+  }
+}
+
+test('attendClaudeIntegrationRescan: a new account after Configure is installed, and the status published afterwards', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_OK }, { id: 'account:new', ...RESCAN_BARE }])
+  const memory = { lastCheckedAt: null, signature: null }
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 1_000 })
+  assert.deepEqual(calls, { status: 1, install: 1, publish: 1 })
+})
+
+test('attendClaudeIntegrationRescan: looks at most once a minute', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_OK }])
+  const memory = { lastCheckedAt: null, signature: null }
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 1_000 })
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 30_000 })
+  assert.equal(calls.status, 1)
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 61_000 })
+  assert.equal(calls.status, 2)
+})
+
+test('attendClaudeIntegrationRescan: never configured (nothing installed anywhere) installs nothing', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_BARE }, { id: 'account:a', ...RESCAN_BARE }])
+  await attendClaudeIntegrationRescan(fakeOrca(), { lastCheckedAt: null, signature: null }, { ...deps, now: () => 1_000 })
+  assert.deepEqual(calls, { status: 1, install: 0, publish: 0 })
+})
+
+test('attendClaudeIntegrationRescan: an install that cannot fix the account is not retried every minute', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_OK }, { id: 'account:stuck', ...RESCAN_BARE }])
+  const memory = { lastCheckedAt: null, signature: null }
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 1_000 })
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 62_000 })
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 123_000 })
+  assert.equal(calls.status, 3)
+  assert.equal(calls.install, 1)
 })
 
 test('attendLocaleRequest: an expired request publishes reason "expired"', async () => {

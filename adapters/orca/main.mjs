@@ -63,6 +63,7 @@ import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
 import { managedNodeRoots } from '../../src/core/node_runtime.ts'
+import { decideRescanInstall, isRescanDue } from '../../src/core/claude_integration_rescan.ts'
 import {
   attendModelsMirrorRequest,
   attendModelsSeedRequest,
@@ -1737,6 +1738,26 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
   await publishClaudeIntegrationStatus(orca, storageHost)
 }
 
+/**
+ * Looks again, at most once a minute, for what Configure would fix: an Orca
+ * account added since, or a hook left on an old plugin root. Installs only
+ * once the integration has been configured before (see
+ * decideRescanInstall). `memory` is the poll loop's own
+ * `{ lastCheckedAt, signature }`; `deps` is `{ readStatus, install, publish, now }`.
+ */
+async function attendClaudeIntegrationRescan (orca, memory, deps) {
+  const now = deps.now()
+  if (!isRescanDue(now, memory.lastCheckedAt)) return
+  memory.lastCheckedAt = now
+  const status = await deps.readStatus()
+  const decision = decideRescanInstall(status, memory.signature)
+  memory.signature = decision.signature
+  if (!decision.install) return
+  orca.log(`claude integration rescan: installing for ${decision.signature}`)
+  await deps.install()
+  await deps.publish()
+}
+
 // ---------------------------------------------------------------------------
 // Locale request/result/status -- same shape again: the panel's language
 // buttons cannot write ~/.config/orca-supervisor/locale themselves (same
@@ -2687,12 +2708,22 @@ export default function activate (orca) {
   const catalogPolicyMirrorSeen = { value: null }
   const policySeedNoticeSeen = { value: null }
   const modelsMirrorSeen = { value: null }
+  // The activation install covers the first minute; the first look comes after it.
+  const claudeRescanMemory = { lastCheckedAt: Date.now(), signature: null }
+  const claudeRescanDeps = {
+    readStatus: claudeIntegrationStatus,
+    install: () => installClaudeIntegration(orca),
+    publish: () => publishClaudeIntegrationStatus(orca, storageHost),
+    now: () => Date.now()
+  }
   const runSecretPoll = () => {
     publishWorkerHeartbeat(orca, storageHost)
       .then(() => attendSecretRequest(orca, storageHost, secretsHost))
       .catch((error) => orca.log(`secret request handling failed: ${error.message}`))
       .then(() => attendClaudeIntegrationRequest(orca, storageHost))
       .catch((error) => orca.log(`claude integration request handling failed: ${error.message}`))
+      .then(() => attendClaudeIntegrationRescan(orca, claudeRescanMemory, claudeRescanDeps))
+      .catch((error) => orca.log(`claude integration rescan failed: ${error.message}`))
       .then(() => attendLocaleRequest(orca, storageHost))
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
       .then(() => attendModSkillsConfigRequest(orca, storageHost))
@@ -2915,6 +2946,7 @@ export {
   attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
+  attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
