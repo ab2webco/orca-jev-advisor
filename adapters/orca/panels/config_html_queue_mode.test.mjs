@@ -45,10 +45,10 @@ const KEYS = ['queueMode.heading', 'queueMode.label', 'queueMode.ask', 'queueMod
 test('config.html: the queue mode is a labelled select with both choices, inside the Policies tab', () => {
   const policies = tabPanelMarkup('policies')
   assert.match(policies, /<section id="queue-mode-section">/)
-  assert.match(policies, /<label for="queue-mode" data-i18n="queueMode\.label"><\/label>/)
-  assert.match(policies, /<select id="queue-mode">/)
-  assert.match(policies, /<option value="ask" data-i18n="queueMode\.ask"><\/option>/)
-  assert.match(policies, /<option value="queue" data-i18n="queueMode\.queue"><\/option>/)
+  assert.match(policies, /<label id="queue-mode-label" data-i18n="queueMode\.label"><\/label>/)
+  assert.match(policies, /<div id="queue-mode" class="mode-buttons" role="group" aria-labelledby="queue-mode-label">/)
+  assert.match(policies, /<button type="button" data-value="ask" data-i18n="queueMode\.ask"><\/button>/)
+  assert.match(policies, /<button type="button" data-value="queue" data-i18n="queueMode\.queue"><\/button>/)
   assert.match(policies, /data-i18n="queueMode\.hint"/)
 })
 
