@@ -226,12 +226,13 @@ test("decision log: hourly file name, like turn-usage", () => {
 test("decision log record: exactly the spec's fields, no prompt text", () => {
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: { ...CALM, text: "secret prompt words" } });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal", project: null });
-  assert.deepEqual(Object.keys(record).sort(), ["account", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "project", "proposed", "quotaBand", "reason", "stepSaving", "switchCost", "tier"].sort());
+  assert.deepEqual(Object.keys(record).sort(), ["account", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "project", "proposed", "quotaBand", "quotaSource", "reason", "stepSaving", "switchCost", "tier"].sort());
   assert.equal(record.proposed, "claude-haiku-4-5-20251001");
   assert.equal(record.contextTokens, null);
   assert.equal(record.origin, null, "no origin given -- defaults to null");
   assert.equal(record.effort, null, "no effort given -- defaults to null");
   assert.equal(record.project, null, "no project given -- defaults to null");
+  assert.equal(record.quotaSource, null, "no quota source given -- defaults to null");
   assert.equal(JSON.stringify(record).includes("prompt words"), false);
 });
 
@@ -239,6 +240,12 @@ test("decision log record: project is carried through verbatim (JEVADV-63)", () 
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal", project: "orca-supervisor" });
   assert.equal(record.project, "orca-supervisor");
+});
+
+test("decision log record: quotaSource says which reading fed the band (0.6.11 T6)", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "economy", quotaSource: "live" });
+  assert.equal(record.quotaSource, "live");
 });
 
 test("decision log record: origin is the PromptOrigin kind, never the notification's text (JEV-061)", () => {

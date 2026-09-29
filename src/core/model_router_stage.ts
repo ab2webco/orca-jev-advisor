@@ -16,7 +16,7 @@ import type { QuotaAccount } from "./consumption.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
-import type { GuardContext, QuotaBand, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
+import type { GuardContext, QuotaBand, QuotaSource, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
 
 export { shiftForPressure };
 
@@ -32,9 +32,6 @@ export interface LiveRateLimit {
   readonly percentUsed: number;
   readonly resetsAt?: string;
 }
-
-/** Where the band's figures came from: the live status-line reading, the Orca mirror, both (one window each), or nothing usable. */
-export type QuotaSource = "live" | "live+mirror" | "mirror" | "none";
 
 export interface QuotaPressure {
   readonly band: QuotaBand;
