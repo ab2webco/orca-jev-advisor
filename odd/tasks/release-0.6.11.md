@@ -35,8 +35,8 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
         and names what failed; every hook's `pathMatches` counts, not only the gate
   - [x] T2c M6: `install()` writes settings through `writeSettingsIfUnchanged`
         with the same retry as router-mode/steward (2b34b26; installer tests 55/55)
-  - [ ] T2d M7: install never deletes a mod-skills path it does not own; it
-        reports the conflict instead
+  - [x] T2d M7: install never deletes a mod-skills path it does not own; it
+        reports the conflict instead (6352189; adapters/orca tests 282/282)
   - [ ] T2e accounts added after Configure get connected: the worker re-scans
         `claude-accounts/` and installs on new ones (only once Configure has run),
         and re-installs when a hook points at a stale plugin root
