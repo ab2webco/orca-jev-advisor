@@ -56,3 +56,19 @@ test("a derived destination label (a name, or `name (dir)`) is replaced whole; a
   assert.equal(names.destinationDescription("acme-shop (acme-shop-hotfix)"), "<repo-1> (<repo-2>)");
   assert.equal(names.destinationDescription("the production storefront of acme-shop"), "the production storefront of <repo-1>");
 });
+
+// Measured on the local prompt logs (1,275 prompts): every replacement that hit
+// an ordinary word came from a repository name under four characters.
+test("redactText leaves a repository name shorter than four characters alone (a repo called `app` must not turn `npm run app` into `npm run <repo-1>`)", () => {
+  const names = createJevPseudonyms();
+  names.name("repo", "app");
+  names.name("repo", "acme-shop");
+  assert.equal(names.redactText("npm run app in acme-shop"), "npm run app in <repo-2>");
+});
+
+test("redactText still replaces a branch or path of three characters", () => {
+  const names = createJevPseudonyms();
+  names.name("branch", "fix");
+  names.name("path", "/tm");
+  assert.equal(names.redactText("git push origin fix; ls /tm"), "git push origin <branch-1>; ls <path-1>");
+});

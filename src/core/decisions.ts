@@ -723,11 +723,14 @@ export interface GateDestinationContext {
  * through the same secret redaction as the command, and through the table:
  * a bare repository-name label is replaced whole, a written description
  * loses only the names already registered. Omitted, a fresh table still
- * keeps a bare-name label out of the request.
+ * keeps a bare-name label out of the request. The command reads with the same
+ * placeholders as the context ("git push origin <branch-1>"): secrets first,
+ * then the names the context registered -- the local cache key still holds
+ * the clear command.
  */
 export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext, deployPublishSignal?: string, names: JevNames = createJevPseudonyms()): Record<string, unknown> {
   const state: Record<string, unknown> = {
-    proposed_command: redactSecretsForJev(command).text,
+    proposed_command: names.redactText(redactSecretsForJev(command).text),
     context: redactSecretsForJev(names.redactText(context)).text,
     note: NOTE,
   };

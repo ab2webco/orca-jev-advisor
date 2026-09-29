@@ -702,3 +702,27 @@ test("buildDestinationState (advisor.decide) without policies still redacts the 
   const state = buildDestinationState("export TOKEN=abc123456789; deploy", "ctx");
   assert.equal(state.proposed_action, "export TOKEN=[REDACTED]; deploy");
 });
+
+test("buildActionGateState: the command reads with the same placeholders as the context, and rm -rf on a worktree path is shortened", () => {
+  const names = createJevPseudonyms();
+  const context = `current branch ${names.name("branch", "feature-x")}, worktree ${names.name("path", "/home/dev/Projects/acme-shop")}`;
+  const push = buildActionGateState("git push origin feature-x", context, undefined, undefined, names);
+  assert.equal(push.proposed_command, "git push origin <branch-1>");
+  assert.equal(push.context, "current branch <branch-1>, worktree <path-1>");
+  const rm = buildActionGateState("rm -rf /home/dev/Projects/acme-shop/build", context, undefined, undefined, names);
+  assert.equal(rm.proposed_command, "rm -rf <path-1>/build");
+});
+
+test("buildActionGateState: a protected branch and an unregistered word stay in clear in the command", () => {
+  const names = createJevPseudonyms();
+  names.name("branch", "main");
+  const state = buildActionGateState("git push origin main && npm test", "ctx", undefined, undefined, names);
+  assert.equal(state.proposed_command, "git push origin main && npm test");
+});
+
+test("buildActionGateState: secrets are removed first, then names, so a secret never leaves a name behind", () => {
+  const names = createJevPseudonyms();
+  names.name("repo", "acme-shop");
+  const state = buildActionGateState("cd acme-shop && export TOKEN=abc123456789", "ctx", undefined, undefined, names);
+  assert.equal(state.proposed_command, "cd <repo-1> && export TOKEN=[REDACTED]");
+});

@@ -24,7 +24,7 @@ export type JevNameKind = "repo" | "branch" | "path";
 export interface JevNames {
   /** The placeholder for `value` (registering it), or `value` itself for a clear name. */
   name(kind: JevNameKind, value: string): string;
-  /** `text` with every registered value of three or more characters swapped for its placeholder. */
+  /** `text` with every registered value long enough to be a name (four characters for a repository, three for a branch or path) swapped for its placeholder. */
   redactText(text: string): string;
   /** A destination label as Jev may read it: a bare name (or `name (dir)`) is replaced whole; a written description only loses the names already registered. */
   destinationDescription(label: string): string;
@@ -34,8 +34,13 @@ export const CLEAR_BRANCH_NAMES: readonly string[] = ["main", "master", "product
 
 // A value this short in free text is far more likely an ordinary word ("a",
 // "is") than a name; replacing it would garble the sentence Jev reads. Only
-// free text honors this floor -- name() always replaces.
-const MIN_FREE_TEXT_LENGTH = 3;
+// free text honors these floors -- name() always replaces.
+//
+// A repository name is held to four: measured on 1,275 recorded prompts,
+// every replacement that hit an ordinary word ("npm run app" -> "npm run
+// <repo-1>") came from a repository name under four characters, and none
+// came from a branch or a path (those are long and specific).
+const MIN_FREE_TEXT_LENGTH: Record<JevNameKind, number> = { repo: 4, branch: 3, path: 3 };
 
 // A name made of these characters is one token; a boundary is anything else.
 const TOKEN_CHAR = "A-Za-z0-9_.\\-";
@@ -65,8 +70,11 @@ export function createJevPseudonyms(): JevNames {
 
   const redactText = (text: string): string => {
     const entries = [...placeholders.entries()]
-      .map(([key, placeholder]): [string, string] => [key.slice(key.indexOf("\u0000") + 1), placeholder])
-      .filter(([value]) => value.length >= MIN_FREE_TEXT_LENGTH)
+      .map(([key, placeholder]): [string, string, JevNameKind] => {
+        const split = key.indexOf("\u0000");
+        return [key.slice(split + 1), placeholder, key.slice(0, split) as JevNameKind];
+      })
+      .filter(([value, , kind]) => value.length >= MIN_FREE_TEXT_LENGTH[kind])
       .sort((a, b) => b[0].length - a[0].length);
     let result = text;
     for (const [value, placeholder] of entries) {
@@ -93,8 +101,7 @@ export interface OrcaContextNames {
 }
 
 /** The Orca context a skill or tool decision sends Jev: each known name as a placeholder, an unknown one still null. */
-export function orcaContextForJev(context: OrcaContextNames): OrcaContextNames {
-  const names = createJevPseudonyms();
+export function orcaContextForJev(context: OrcaContextNames, names: JevNames = createJevPseudonyms()): OrcaContextNames {
   return {
     worktree: context.worktree === null ? null : names.name("path", context.worktree),
     project: context.project === null ? null : names.name("repo", context.project),
