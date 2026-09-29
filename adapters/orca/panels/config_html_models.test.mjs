@@ -417,6 +417,27 @@ test('modelsBuildRow: produces a row that satisfies isModelEntry exactly, so the
   assert.equal('summary' in minimal, false, 'a blank summary must be omitted, never sent as an empty string or undefined')
 })
 
+test('modelsBuildRow: keeps the docs fields a row already carries, so saving the ladder never erases prices or tiers', () => {
+  const modelsBuildRow = loadModelsBuildRow()
+  const docs = {
+    tier: 'standard',
+    prices: { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 },
+    supportsEffort: true,
+    contextWindow: 1000000,
+    thinkingReadsFrom: ['claude-sonnet-5'],
+    defaultEffort: 'high',
+    retiresNotBefore: '2027-09-28',
+  }
+  const row = modelsBuildRow({
+    id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', provider: 'anthropic', agentModel: 'sonnet',
+    source: 'https://example.test', rank: 3, available: true, ...docs,
+  })
+  assert.ok(isModelEntry(row), `row is not a valid ModelEntry: ${JSON.stringify(row)}`)
+  for (const [key, value] of Object.entries(docs)) assert.deepEqual(row[key], value, key)
+  const bare = modelsBuildRow({ id: 'y', label: 'Y', provider: 'anthropic', agentModel: 'haiku', source: '', rank: null, available: false })
+  for (const key of Object.keys(docs)) assert.equal(key in bare, false, `${key} must be omitted when absent`)
+})
+
 function loadModelsSplitLadder () {
   const src = extractFunction(configHtml, 'modelsSplitLadder')
   const factory = new Function(`${src}; return modelsSplitLadder`)

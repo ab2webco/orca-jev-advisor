@@ -221,6 +221,27 @@ test('publishModelsSeedNotice: the offered marker is never lowered', async () =>
   assert.deepEqual(offered, { version: 5 }, 'a shipped version behind the offered marker must never roll it back')
 })
 
+test('the shipped seed v2 offers Sonnet 5.5 to an install still on the v1 catalog, and accepting it stores the docs fields', async () => {
+  const orca = fakeOrca()
+  const v1 = [
+    entry({ id: 'claude-fable-5-1', label: 'Claude Fable 5.1', rank: 1, agentModel: 'fable', available: false }),
+    entry({ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', rank: 2, agentModel: 'opus' }),
+    entry({ id: 'claude-sonnet-5', label: 'Claude Sonnet 5', rank: 3, agentModel: 'sonnet' }),
+    entry({ id: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', rank: 4, agentModel: 'haiku' }),
+  ]
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: v1, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 1 } })
+  await publishModelsSeedNotice(orca, storageHost)
+  const notice = await storageHost.get(MODELS_SEED_NOTICE_KEY)
+  assert.equal(notice.due, true)
+  assert.deepEqual(notice.items.find((item) => item.id === 'claude-sonnet-5-5'), { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', kind: 'added', fields: [] })
+
+  await storageHost.set(MODELS_SEED_REQUEST_KEY, { id: 'req-v2', at: new Date().toISOString(), action: 'apply', acceptedIds: ['claude-sonnet-5-5'] })
+  await attendModelsSeedRequest(orca, storageHost, { mirror: noopMirror() })
+  const sonnet = (await storageHost.get(MODELS_KEY)).find((m) => m.id === 'claude-sonnet-5-5')
+  assert.equal(sonnet.tier, 'standard')
+  assert.deepEqual(sonnet.prices, { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 })
+})
+
 // ---------------------------------------------------------------------------
 // attendModelsSeedRequest
 // ---------------------------------------------------------------------------

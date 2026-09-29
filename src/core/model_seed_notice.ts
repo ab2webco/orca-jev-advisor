@@ -19,6 +19,7 @@
 // Pure: the worker reads the seed file and storage and writes the result.
 // ---------------------------------------------------------------------------
 
+import { isRecord } from "../guards.ts";
 import type { ModelEntry } from "./model_catalog.ts";
 
 /** Records that the shipped models have been offered to this install once. */
@@ -39,9 +40,46 @@ export function parseModelOfferedVersion(marker: unknown): number {
   return 0;
 }
 
-export type ModelSeedField = "provider" | "label" | "rank" | "agentModel" | "source" | "summary";
+export type ModelSeedField =
+  | "provider"
+  | "label"
+  | "rank"
+  | "agentModel"
+  | "source"
+  | "summary"
+  | "tier"
+  | "prices"
+  | "supportsEffort"
+  | "contextWindow"
+  | "thinkingReadsFrom"
+  | "defaultEffort"
+  | "retiresNotBefore";
 
-const COMPARED_FIELDS: readonly ModelSeedField[] = ["provider", "label", "rank", "agentModel", "source", "summary"];
+const COMPARED_FIELDS: readonly ModelSeedField[] = [
+  "provider",
+  "label",
+  "rank",
+  "agentModel",
+  "source",
+  "summary",
+  "tier",
+  "prices",
+  "supportsEffort",
+  "contextWindow",
+  "thinkingReadsFrom",
+  "defaultEffort",
+  "retiresNotBefore",
+];
+
+/** Field values are primitives, a prices record or an id list: compared by content, key order aside. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((item, i) => sameValue(item, b[i]));
+  if (isRecord(a) && isRecord(b)) {
+    const keys = Object.keys(a);
+    return keys.length === Object.keys(b).length && keys.every((key) => sameValue(a[key], b[key]));
+  }
+  return a === b;
+}
 
 export interface ModelSeedDifference {
   readonly id: string;
@@ -67,7 +105,7 @@ export function diffModelSeed(existing: readonly ModelEntry[], shipped: readonly
       added.push(seed);
       continue;
     }
-    const fields = COMPARED_FIELDS.filter((field) => current[field] !== seed[field]);
+    const fields = COMPARED_FIELDS.filter((field) => !sameValue(current[field], seed[field]));
     if (fields.length > 0) differing.push({ id: seed.id, existing: current, seed, fields });
   }
   return { added, differing };

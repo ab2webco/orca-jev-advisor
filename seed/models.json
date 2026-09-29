@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "models": [
     {
       "id": "claude-fable-5-1",
@@ -9,7 +9,13 @@
       "agentModel": "fable",
       "summary": "For demanding reasoning and long-horizon agentic work",
       "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
-      "available": false
+      "available": false,
+      "tier": "frontier",
+      "prices": { "input": 10, "cacheWrite": 20, "cacheRead": 0.25, "output": 50 },
+      "supportsEffort": true,
+      "contextWindow": 1000000,
+      "defaultEffort": "high",
+      "retiresNotBefore": "2027-09-01"
     },
     {
       "id": "claude-opus-5-5",
@@ -19,17 +25,30 @@
       "agentModel": "opus",
       "summary": "For long-running agentic coding and knowledge work",
       "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
-      "available": true
+      "available": true,
+      "tier": "complex",
+      "prices": { "input": 4, "cacheWrite": 8, "cacheRead": 0.2, "output": 20 },
+      "supportsEffort": true,
+      "contextWindow": 1000000,
+      "defaultEffort": "medium",
+      "retiresNotBefore": "2027-09-22"
     },
     {
-      "id": "claude-sonnet-5",
+      "id": "claude-sonnet-5-5",
       "provider": "anthropic",
-      "label": "Claude Sonnet 5",
+      "label": "Claude Sonnet 5.5",
       "rank": 3,
       "agentModel": "sonnet",
       "summary": "The best combination of speed and intelligence",
       "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
-      "available": true
+      "available": true,
+      "tier": "standard",
+      "prices": { "input": 2, "cacheWrite": 4, "cacheRead": 0.2, "output": 10 },
+      "supportsEffort": true,
+      "contextWindow": 1000000,
+      "thinkingReadsFrom": ["claude-sonnet-5", "claude-haiku-4-5-20251001"],
+      "defaultEffort": "high",
+      "retiresNotBefore": "2027-09-28"
     },
     {
       "id": "claude-haiku-4-5-20251001",
@@ -39,7 +58,12 @@
       "agentModel": "haiku",
       "summary": "The fastest model with near-frontier intelligence",
       "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
-      "available": true
+      "available": true,
+      "tier": "simple",
+      "prices": { "input": 1, "cacheWrite": 2, "cacheRead": 0.1, "output": 5 },
+      "supportsEffort": false,
+      "contextWindow": 200000,
+      "retiresNotBefore": "2026-10-15"
     }
   ]
 }

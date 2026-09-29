@@ -3610,6 +3610,10 @@
           available: !!fields.available
         }
         if (fields.summary) row.summary = fields.summary
+        var docsFields = ['tier', 'prices', 'supportsEffort', 'contextWindow', 'thinkingReadsFrom', 'defaultEffort', 'retiresNotBefore']
+        docsFields.forEach(function (key) {
+          if (fields[key] !== undefined && fields[key] !== null) row[key] = fields[key]
+        })
         return row
       }
 
