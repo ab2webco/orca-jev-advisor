@@ -412,29 +412,37 @@ function resolveNodeCommand () {
 
 async function readSettings (settingsPath) {
   try {
-    const raw = await readFile(settingsPath, 'utf8')
-    const parsed = JSON.parse(raw)
-    return isRecord(parsed) ? parsed : {}
+    return parseSettingsText(await readFile(settingsPath, 'utf8'))
   } catch (error) {
     if (error?.code === 'ENOENT') return {}
     throw new Error(`settings.json exists but could not be read/parsed: ${String(error?.message ?? error)}`)
   }
 }
 
-/** Writes settings.json atomically (temp file + rename): a crash mid-write
- *  leaves an incomplete TEMP file, never a half-written real one.
- *
- *  `ORCA_TEST_DELAY_BEFORE_RENAME_MS` is read only for the "corrupt the
- *  write on purpose" verification (a real SIGKILL sent to this process
- *  between the temp write and the rename); it is never set in normal
- *  operation, so it is a no-op there. */
-async function writeSettingsAtomic (settingsPath, settings) {
-  await mkdir(dirname(settingsPath), { recursive: true })
-  const tempPath = `${settingsPath}.${randomUUID()}.tmp`
-  await writeFile(tempPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
-  const testDelay = Number(process.env.ORCA_TEST_DELAY_BEFORE_RENAME_MS ?? '0')
-  if (testDelay > 0) await new Promise((resolve) => setTimeout(resolve, testDelay))
-  await rename(tempPath, settingsPath)
+function parseSettingsText (raw) {
+  const parsed = JSON.parse(raw)
+  return isRecord(parsed) ? parsed : {}
+}
+
+/** Runs `mutate` on the current settings and replaces the file only if it is
+ *  still what was read (writeSettingsIfUnchanged); on a lost race it re-reads
+ *  and merges again, once, then throws -- never a lost edit. Returns what
+ *  `mutate` returned on the attempt that landed. */
+async function mutateSettingsGuarded (settingsPath, mutate) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await readRawSettings(settingsPath)
+    let settings = {}
+    if (raw !== null) {
+      try {
+        settings = parseSettingsText(raw)
+      } catch (error) {
+        throw new Error(`settings.json exists but could not be read/parsed: ${String(error?.message ?? error)}`)
+      }
+    }
+    const result = mutate(settings)
+    if (await writeSettingsIfUnchanged(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, raw)) return result
+  }
+  throw new Error(`settings.json at ${settingsPath} kept changing while it was being written; nothing was written`)
 }
 
 /** Backs up the pre-modification settings.json exactly once: a run that
@@ -929,16 +937,16 @@ async function install (pluginRoot) {
       })
       await backupSettingsOnce(backupPathFor(target), rawBefore)
 
-      const settings = await readSettings(settingsPath)
-      const hookChanged = installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, specs[0].entry, state)
-      const postChanged = installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, specs[1].entry, state)
-      const deniedChanged = installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, specs[2].entry, state)
-      const postFailureChanged = installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, specs[3].entry, state)
-      const agentPreChanged = installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, specs[4].entry, state)
-      const agentPostChanged = installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, specs[5].entry, state)
-      const agentPostFailureChanged = installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, specs[6].entry, state)
-      const envChanged = installEnvVar(settings, state)
-      await writeSettingsAtomic(settingsPath, settings)
+      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
+        hookChanged: installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, specs[0].entry, state),
+        postChanged: installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, specs[1].entry, state),
+        deniedChanged: installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, specs[2].entry, state),
+        postFailureChanged: installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, specs[3].entry, state),
+        agentPreChanged: installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, specs[4].entry, state),
+        agentPostChanged: installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, specs[5].entry, state),
+        agentPostFailureChanged: installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, specs[6].entry, state),
+        envChanged: installEnvVar(settings, state)
+      }))
       states[target.id] = state
 
       const modCopyPath = modCopyPathFor(target)
@@ -1046,16 +1054,16 @@ async function uninstall (pluginRoot) {
     }
     migrateLegacyPreToolUseFlags(state)
     try {
-      const settings = await readSettings(settingsPath)
-      const hookChanged = uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, state)
-      const postChanged = uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, state)
-      const deniedChanged = uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, state)
-      const postFailureChanged = uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, state)
-      const agentPreChanged = uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, state)
-      const agentPostChanged = uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, state)
-      const agentPostFailureChanged = uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, state)
-      const envChanged = uninstallEnvVar(settings, state)
-      await writeSettingsAtomic(settingsPath, settings)
+      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
+        hookChanged: uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, state),
+        postChanged: uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, state),
+        deniedChanged: uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, state),
+        postFailureChanged: uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, state),
+        agentPreChanged: uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, state),
+        agentPostChanged: uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, state),
+        agentPostFailureChanged: uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, state),
+        envChanged: uninstallEnvVar(settings, state)
+      }))
       const modCopyPath = modCopyPathFor(target)
       const modResult = await uninstallModCopy(pluginRoot, modCopyPath, modCopyMarkerPathFor(modCopyPath))
       await rm(backupPathFor(target), { force: true })
@@ -1272,8 +1280,8 @@ async function readJsonOrNull (path) {
  * router-mode-set <target> <mode>: writes ONLY `pluginConfigs[<router key>]
  * .options.routerMode` into that target's settings.json (`withRouterMode`,
  * pure, keeps every other key exactly as found), creating the file if it
- * does not exist yet -- same atomic write (`writeSettingsAtomic`) install/
- * uninstall already use for every other settings.json change. Rejects an
+ * does not exist yet -- same guarded write (`mutateSettingsGuarded`) install/
+ * uninstall use for every other settings.json change. Rejects an
  * unknown target or mode rather than guessing one; neither reaches disk.
  */
 async function routerModeSet (targetId, modeArg) {
@@ -1386,8 +1394,8 @@ async function readRawSettings (settingsPath) {
 /** Writes `text` through a temp file and renames it over settings.json only
  *  if the file still reads exactly `expectedRaw` (null: still absent) right
  *  before the rename; otherwise removes the temp file and returns false.
- *  Honors the same test-only ORCA_TEST_DELAY_BEFORE_RENAME_MS as
- *  writeSettingsAtomic, before the re-read. */
+ *  Honors the test-only ORCA_TEST_DELAY_BEFORE_RENAME_MS (a
+ *  slow rename, to let a test race an edit in) before the re-read. */
 async function writeSettingsIfUnchanged (settingsPath, text, expectedRaw) {
   await mkdir(dirname(settingsPath), { recursive: true })
   const tempPath = `${settingsPath}.${randomUUID()}.tmp`

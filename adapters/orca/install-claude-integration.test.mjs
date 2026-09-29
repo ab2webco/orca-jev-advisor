@@ -1095,3 +1095,65 @@ test('steward-set: an unknown mode, a threshold out of range or a bad shape is r
   const noTarget = runRouter(['steward-set', 'account:nope', JSON.stringify({ mode: 'off', threshold: 120000 })], home)
   assert.equal(noTarget.reason, 'unknown-target')
 })
+
+// 0.6.11 T2c (M6): install and uninstall write settings.json through the same
+// guarded write as router-mode/steward, so an edit made while they run is
+// merged again instead of lost.
+
+function runAsync (mode, home, extraEnv) {
+  const env = { ...process.env, HOME: home, ...extraEnv }
+  delete env.ORCA_USER_DATA_PATH
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCRIPT_PATH, mode, PLUGIN_ROOT], { env })
+    let stdout = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.on('error', reject)
+    child.on('close', () => resolve(JSON.parse(stdout)))
+  })
+}
+
+test('T2c: an edit made while install runs survives, and the hooks are still installed', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
+  await sleep(250)
+  writeSettings(home, { model: 'opus', permissions: { allow: ['Bash(ls)'] } })
+  const result = await pending
+  assert.equal(result.ok, true)
+  const settings = readSettings(home)
+  assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] }, 'the concurrent edit must not be lost')
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1)
+  assert.equal(settings.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, '1')
+})
+
+test('T2c: a settings.json that keeps changing under install is reported as a failed target, never clobbered', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800' })
+  await sleep(300)
+  writeSettings(home, { model: 'opus', edit: 1 })
+  await sleep(1000)
+  writeSettings(home, { model: 'opus', edit: 2 })
+  const result = await pending
+  assert.equal(result.targets[0].ok, false)
+  assert.match(result.targets[0].detail, /kept changing/)
+  assert.deepEqual(readSettings(home), { model: 'opus', edit: 2 })
+})
+
+test('T2c: an edit made while uninstall runs survives, and our hooks are gone', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  run('install', home)
+  const pending = runAsync('uninstall', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
+  await sleep(250)
+  const during = readSettings(home)
+  writeSettings(home, { ...during, permissions: { allow: ['Bash(ls)'] } })
+  const result = await pending
+  assert.equal(result.ok, true)
+  const settings = readSettings(home)
+  assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] })
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 0)
+})
