@@ -201,10 +201,11 @@
       .mode-buttons { display: flex; gap: 4px; flex: 1 1 10em; }
       .mode-buttons button { flex: 1; padding: 6px 8px; font-size: 12px; border: 1px solid var(--border, var(--fb-border));
         background: var(--background, var(--fb-background)); color: var(--foreground, var(--fb-foreground));
-        cursor: pointer; border-radius: 4px; transition: all 0.12s; }
-      .mode-buttons button:hover { background: var(--muted-foreground, var(--fb-muted-foreground)); opacity: 0.5; }
-      .mode-buttons button.active { background: var(--accent, var(--fb-accent)); color: var(--accent-foreground, var(--fb-accent-foreground));
-        border-color: var(--accent, var(--fb-accent)); font-weight: 500; }
+        cursor: pointer; border-radius: 4px; }
+      .mode-buttons button:hover { border-color: var(--foreground, var(--fb-foreground)); }
+      /* Inverted, not --accent: in the light theme --accent is a near-white grey that reads as disabled. */
+      .mode-buttons button.active { background: var(--foreground, var(--fb-foreground)); color: var(--background, var(--fb-background));
+        border-color: var(--foreground, var(--fb-foreground)); font-weight: 600; }
       @media (max-width: 480px) { .router-row .router-target { flex-basis: 100%; } }
       /* 0.6.2: per account, tier → the model it resolves to → its effort. */
       .router-effort { margin: 8px 0 14px; }
@@ -2812,6 +2813,11 @@
 
       var MODEL_ROUTER_MODE_KEYS = { off: 'modelRouter.modeOff', measure: 'modelRouter.modeMeasure', active: 'modelRouter.modeActive' }
 
+      function pressModeButton (button, pressed) {
+        button.className = pressed ? 'active' : ''
+        button.setAttribute('aria-pressed', pressed ? 'true' : 'false')
+      }
+
       /** Set once the person changes a router select; the on-open refresh
        *  then leaves the rows alone instead of discarding the choice. */
       var modelRouterEdited = false
@@ -2835,16 +2841,16 @@
           // Mode buttons instead of select
           var buttonGroup = elMake('div', 'mode-buttons')
           buttonGroup.setAttribute('data-model-router-target', target.target)
+          buttonGroup.setAttribute('aria-label', modelRouterTargetLabel(target))
           var selectedMode = target.mode
           ;['off', 'measure', 'active'].forEach(function (mode) {
             var btn = elMake('button')
             btn.type = 'button'
             btn.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
-            if (mode === selectedMode) btn.className = 'active'
+            pressModeButton(btn, mode === selectedMode)
             btn.addEventListener('click', function () {
               selectedMode = mode
-              Array.from(buttonGroup.querySelectorAll('button')).forEach(function (b) { b.className = '' })
-              btn.className = 'active'
+              Array.from(buttonGroup.querySelectorAll('button')).forEach(function (b) { pressModeButton(b, b === btn) })
               modelRouterEdited = true
             })
             buttonGroup.appendChild(btn)
@@ -2889,11 +2895,10 @@
           var btn = elMake('button')
           btn.type = 'button'
           btn.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
-          if (mode === selectedMode) btn.className = 'active'
+          pressModeButton(btn, mode === selectedMode)
           btn.addEventListener('click', function () {
             selectedMode = mode
-            Array.from(buttonGroup.querySelectorAll('button')).forEach(function (b) { b.className = '' })
-            btn.className = 'active'
+            Array.from(buttonGroup.querySelectorAll('button')).forEach(function (b) { pressModeButton(b, b === btn) })
             modelRouterEdited = true
           })
           buttonGroup.appendChild(btn)
