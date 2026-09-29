@@ -143,10 +143,39 @@ const REVERSIBLE_GATE = 0.7;
 const EXTERNAL_GATE = 0.35;
 const CONSEQUENCE_CEILING = 1.5;
 
-/** Builds the two policy-stage questions ('cobertura' + 'es_del_tipo'). */
-export function buildPolicyQuestions(policies: readonly Policy[]): Record<string, Question> {
+// 0.6.11 T3: a policy id is text the developer wrote and can name a client,
+// so Jev sees each policy under a neutral key in list order, and the rule
+// passes through the same redaction as a command. interpretDestinationPolicy
+// maps the key Jev answers back to the policy, against the SAME list.
+const JEV_POLICY_KEY = /^policy_([1-9][0-9]*)$/;
+
+function jevPolicyKey(index: number): string {
+  return `policy_${index + 1}`;
+}
+
+function redactRuleForJev(rule: string, names: JevNames): string {
+  return redactSecretsForJev(names.redactText(rule)).text;
+}
+
+/** The policy a coverage answer names: a neutral key first, the real id as a fallback. */
+function policyForCoverageChoice(policies: readonly Policy[], choice: string): Policy | undefined {
+  const key = JEV_POLICY_KEY.exec(choice);
+  if (key !== null) {
+    const byKey = policies[Number(key[1]) - 1];
+    if (byKey !== undefined) return byKey;
+  }
+  return policies.find((p) => p.id === choice);
+}
+
+/**
+ * Builds the two policy-stage questions ('cobertura' + 'es_del_tipo').
+ * `names` is the pseudonym table the caller's context went through (the
+ * gate's), so a repository named in a rule reads as the same placeholder
+ * the context uses.
+ */
+export function buildPolicyQuestions(policies: readonly Policy[], names: JevNames = createJevPseudonyms()): Record<string, Question> {
   const criteria: Record<string, string> = Object.fromEntries([
-    ...policies.map((p): [string, string] => [p.id, p.rule]),
+    ...policies.map((p, index): [string, string] => [jevPolicyKey(index), redactRuleForJev(p.rule, names)]),
     [NO_POLICY, "None of the listed policies speaks to an action like this one."],
   ]);
   return {
@@ -210,10 +239,19 @@ export function buildDestinationRiskQuestions(): Record<string, Question> {
 }
 
 /** State payload shared by both stages, with the mandatory anti-injection note. */
+/**
+ * advisor.decide's state (adapters/orca/main.mjs). 0.6.11 T3: the action
+ * passes through the same secret redaction as a gate command, and each
+ * policy goes as `{ id: <neutral key>, rule: <redacted>, kind }` -- the same
+ * key buildPolicyQuestions uses -- never its real id, destinations or scope,
+ * which name repositories and matter only to the local filtering.
+ */
 export function buildDestinationState(action: string, context: string, policies: readonly Policy[] = []): Record<string, unknown> {
-  return policies.length > 0
-    ? { proposed_action: action, project_context: context, team_policies: policies, note: NOTE }
-    : { proposed_action: action, context: context, note: NOTE };
+  const proposedAction = redactSecretsForJev(action).text;
+  if (policies.length === 0) return { proposed_action: proposedAction, context: context, note: NOTE };
+  const names = createJevPseudonyms();
+  const teamPolicies = policies.map((p, index) => ({ id: jevPolicyKey(index), rule: redactRuleForJev(p.rule, names), kind: p.kind }));
+  return { proposed_action: proposedAction, project_context: context, team_policies: teamPolicies, note: NOTE };
 }
 
 /**
@@ -254,19 +292,20 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
   if (coverage.choice === NO_POLICY || coverage.confidence < COVERAGE_GATE) return null;
   if (match.noul < MATCH_GATE) return null;
 
-  const policy = policies.find((p) => p.id === coverage.choice);
+  const policy = policyForCoverageChoice(policies, coverage.choice);
   if (policy === undefined) return null;
 
   const kind = migratePolicyKind(policy.kind);
   if (kind === null) return null;
 
+  const policyId = policy.id;
   switch (kind) {
     case "permits":
-      return { action, outcome: "act", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.allowed", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
+      return { action, outcome: "act", source: "policy", policyId, rationale: [{ key: "policy.allowed", params: { policyId, rule: policy.rule } }], isPolicyGap: false };
     case "requires_human":
-      return { action, outcome: "ask", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.needsHuman", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
+      return { action, outcome: "ask", source: "policy", policyId, rationale: [{ key: "policy.needsHuman", params: { policyId, rule: policy.rule } }], isPolicyGap: false };
     case "prohibits":
-      return { action, outcome: "do_not", source: "policy", policyId: coverage.choice, rationale: [{ key: "policy.forbidden", params: { policyId: coverage.choice, rule: policy.rule } }], isPolicyGap: false };
+      return { action, outcome: "do_not", source: "policy", policyId, rationale: [{ key: "policy.forbidden", params: { policyId, rule: policy.rule } }], isPolicyGap: false };
     default: {
       // Fails safe, and deliberately not `return exhaustive`. That returned
       // the VALUE -- a string where the caller expects a decision object --

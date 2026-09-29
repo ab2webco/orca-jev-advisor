@@ -16,6 +16,8 @@ import test from "node:test";
 
 import {
   buildActionGateState,
+  buildDestinationState,
+  buildPolicyQuestions,
   buildSeedScopeIndex,
   CONSEQUENCE_NOISE_MARGIN,
   decideAction,
@@ -651,4 +653,52 @@ test("buildActionGateState: an omitted deployPublishSignal never adds the field 
 test("buildActionGateState: a deployPublishSignal is carried through verbatim, in its own field", () => {
   const state = buildActionGateState("gh workflow run deploy.yml", "some context", undefined, "triggers a deployment workflow on GitHub Actions");
   assert.equal(state.deployPublishSignal, "triggers a deployment workflow on GitHub Actions");
+});
+
+// ===========================================================================
+// 0.6.11 T3: policy text and advisor.decide pass through the same redaction
+// as prompts and commands. A policy id is text the developer wrote (it can
+// name a client), so Jev sees each policy under a neutral key -- policy_1,
+// policy_2, in list order -- and interpretDestinationPolicy maps the key it
+// answers back to the real policy locally.
+// ===========================================================================
+
+const T3_POLICIES: Policy[] = [
+  { id: "acme_prod_needs_a_human", rule: "Deploying acme-shop needs a person; the token is TOKEN=abc123456789", kind: "requires_human", destinations: ["acme-shop"], scope: "command" },
+  { id: "tests_are_fine", rule: "Running the tests is always fine.", kind: "permits" },
+];
+
+test("buildPolicyQuestions: Jev sees neutral keys and redacted rules, never a policy id or a secret", () => {
+  const names = createJevPseudonyms();
+  names.name("repo", "acme-shop");
+  const criteria = (buildPolicyQuestions(T3_POLICIES, names).coverage as { criteria: Record<string, string> }).criteria;
+  assert.deepEqual(Object.keys(criteria), ["policy_1", "policy_2", "no_policy"]);
+  assert.equal(criteria["policy_1"], "Deploying <repo-1> needs a person; the token is TOKEN=[REDACTED]");
+  assert.equal(criteria["policy_2"], "Running the tests is always fine.");
+});
+
+test("interpretDestinationPolicy: a neutral key Jev answers resolves to the real policy, and the decision names the real id", () => {
+  const decision = interpretDestinationPolicy(ACTION, T3_POLICIES, answers("policy_1", 0.9, 0.9));
+  assert.equal(decision?.outcome, "ask");
+  assert.equal(decision?.policyId, "acme_prod_needs_a_human");
+});
+
+test("interpretDestinationPolicy: a neutral key past the end of the list resolves to nothing", () => {
+  assert.equal(interpretDestinationPolicy(ACTION, T3_POLICIES, answers("policy_3", 0.9, 0.9)), null);
+});
+
+test("buildDestinationState (advisor.decide): the action and every policy are redacted; no id, destination or scope is sent", () => {
+  const state = buildDestinationState("export TOKEN=abc123456789; deploy", "ctx", T3_POLICIES);
+  const text = JSON.stringify(state);
+  assert.equal(state.proposed_action, "export TOKEN=[REDACTED]; deploy");
+  assert.deepEqual(state.team_policies, [
+    { id: "policy_1", rule: "Deploying acme-shop needs a person; the token is TOKEN=[REDACTED]", kind: "requires_human" },
+    { id: "policy_2", rule: "Running the tests is always fine.", kind: "permits" },
+  ]);
+  assert.ok(!text.includes("acme_prod_needs_a_human") && !text.includes("abc123456789"), "a policy id or a secret reached the request");
+});
+
+test("buildDestinationState (advisor.decide) without policies still redacts the action", () => {
+  const state = buildDestinationState("export TOKEN=abc123456789; deploy", "ctx");
+  assert.equal(state.proposed_action, "export TOKEN=[REDACTED]; deploy");
 });

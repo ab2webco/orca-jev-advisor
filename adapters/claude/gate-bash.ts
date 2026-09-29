@@ -1583,7 +1583,7 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
   try {
     const questions = {
       ...buildActionGateQuestions(),
-      ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies) : {}),
+      ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies, jevNames) : {}),
     }
     const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
     // The advise-model release, Part 3(a): a local, no-network fact ("this
