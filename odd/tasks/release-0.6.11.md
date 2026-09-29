@@ -41,7 +41,17 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
         `claude-accounts/` and installs on new ones (only once Configure has run),
         and re-installs when a hook points at a stale plugin root (9f34b9b; npm test 2545/2545)
 - [x] T3 redaction of repo, branch, worktree, policies, advisor.decide (ca7d6f4, e9eb13f, d7daaa4, d185cab; command and prompt text through the same table 953a9d8, 93810a6; npm test 2581/2581)
-- [ ] T4 calibrated confidence floor
+- [x] T4 confidence floor from the record: kept at 0.7, one named `CONFIDENCE_FLOOR` (see below; npm test 2581/2581)
+  - Record: 472 router decisions, 2026-09-27..29; 388 at start/stage, 137 held by the
+    low-confidence guard (was 142 of 389). Held if the floor were 0.5/0.6/0.7/0.8:
+    111/157/196/236 decisions (confidence below it).
+  - Ground truth: none. Records carry no session id; the only proxy (the next
+    judgment of the same account and project within an hour, at confidence >= 0.8,
+    proposing the same tier) agrees 48% at 0.9 confidence, 54% at 0.8, 50% at 0.7,
+    53% at 0.6, 44% at 0.5: confidence does not predict agreement, and adjacent prompts
+    legitimately differ, so it cannot say a hold was right or wrong. 3 days of data.
+    No figure supports a change, so the floor stays 0.7. Revisit once decisions record
+    the session and whether the person reversed the model.
 - [ ] T5 effort before model
 - [x] T6 live quota from `$.session.usage().rateLimits` (five_hour, seven_day: percentUsed, resetsAt), tighter-of-two band, `quotaSource` in the decision record; live figure dropped once its resetsAt passes, mirror fills a missing window while <= 30 min old (de5d377, 65402bf, 12de4d6; npm test 2575/2575; no panel touched)
 - [ ] T7 README, release 0.6.11, live check on this machine

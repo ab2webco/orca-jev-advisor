@@ -15,7 +15,7 @@
 import type { QuotaAccount } from "./consumption.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
+import { CONFIDENCE_FLOOR, TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
 import type { GuardContext, QuotaBand, QuotaSource, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
 
 export { shiftForPressure };
@@ -499,7 +499,7 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   }
   if (proposedRank === currentRank) return out(decideEffort(input, base, targetEffort, guards, currentRank));
   if (proposedRank > currentRank) {
-    if (input.jev.confidence < 0.7 && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
+    if (input.jev.confidence < CONFIDENCE_FLOOR && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
     // The tier's effort, even back on the session's own model (0.6.2 E1: a
     // sticky `xhigh` is the account's default, not what this work needs);
     // only a person's own `max` or numeric budget is kept, never lowered.
@@ -536,7 +536,7 @@ export function decideStage(input: StageDecisionInput): StageDecision {
 /**
  * 0.6.2 E2: Jev's tier resolves to the model the session already runs, so
  * only the effort can follow the work. A raise is quality: it applies at
- * once with confidence ≥ 0.70, and no guard blocks it. A lowering rewrites
+ * once with confidence at or above CONFIDENCE_FLOOR, and no guard blocks it. A lowering rewrites
  * the cache for an output-only saving, so it must earn it the way a model
  * downgrade does: no guard, the same lower effort on consecutive prompts,
  * and a break-even on the session's real output medians -- unknown ones
@@ -555,7 +555,7 @@ function decideEffort(input: StageDecisionInput, base: Pick<StageDecision, "tier
     return { ...stay, reason: "same", pending: null, effortTarget: null };
   }
   if (from === null || to > from) {
-    if ((input.jev?.confidence ?? 0) < 0.7) return { ...stay, reason: "low-confidence", pending: null, effortTarget: targetEffort };
+    if ((input.jev?.confidence ?? 0) < CONFIDENCE_FLOOR) return { ...stay, reason: "low-confidence", pending: null, effortTarget: targetEffort };
     return { ...stay, effort: targetEffort, changed: true, reason: "effort-raise", pending: null, effortTarget: targetEffort };
   }
   if (guards.length > 0) return { ...stay, reason: "held-by-guard", guard: guards[0] ?? null, pending: null, effortTarget: targetEffort };
