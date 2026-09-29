@@ -149,6 +149,24 @@ export function parseGitConfigRemotePushUrl(configText: string, remoteName: stri
   return configField(body, "pushurl") ?? configField(body, "url");
 }
 
+/**
+ * Every `[remote "<name>"]` section of already-read `.git/config`, in file
+ * order, with its `url` and `pushurl` (null when absent) -- 0.6.8 T3, for
+ * client_reach.ts's facts: a bare `git push` or `gh pr` without `--repo`
+ * may pick any remote, so the gate needs all of them, not just `origin`.
+ * Same section reading as parseGitConfigRemoteUrl above.
+ */
+export function parseGitConfigRemotes(configText: string): readonly { readonly name: string; readonly url: string | null; readonly pushUrl: string | null }[] {
+  const remotes: { name: string; url: string | null; pushUrl: string | null }[] = [];
+  for (const match of configText.matchAll(/^\[remote\s+"([^"]+)"\]\s*$/gm)) {
+    const name = match[1] ?? "";
+    const body = remoteConfigSection(configText, name);
+    if (body === null || remotes.some((remote) => remote.name === name)) continue;
+    remotes.push({ name, url: configField(body, "url"), pushUrl: configField(body, "pushurl") });
+  }
+  return remotes;
+}
+
 export interface ResolvePushRemoteInput {
   readonly command: string;
   readonly cwd: string;

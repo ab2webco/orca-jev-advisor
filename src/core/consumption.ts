@@ -85,6 +85,18 @@ export interface TurnUsageWindowSummary {
    * the grand total is 0 (no numeric data at all in the window).
    */
   readonly subagentShare: number | null;
+  /**
+   * 0.6.8 T6: the main conversation and its subagents counted apart, as
+   * real totals: how many steps each ran and the null-safe token total
+   * (input+output+cacheRead+cacheWrite) of those steps. `tokens` is null
+   * when none of that side's steps reported a figure -- never a made-up 0.
+   */
+  readonly byAgent: Readonly<Record<"main" | "subagent", AgentTokens>>;
+}
+
+export interface AgentTokens {
+  readonly stepCount: number;
+  readonly tokens: number | null;
 }
 
 export interface TurnUsageAggregation {
@@ -155,16 +167,24 @@ function summarizeWindow(steps: readonly TurnUsageRecord[]): TurnUsageWindowSumm
   let subagentTotal = 0;
   let grandTotal = 0;
   let anyData = false;
+  const agentSteps = { main: 0, subagent: 0 };
+  const agentTokens: Record<"main" | "subagent", number | null> = { main: null, subagent: null };
   for (const step of steps) {
+    agentSteps[step.agent] += 1;
     const { sum, hasData } = stepTotalTokens(step);
     if (!hasData) continue;
     anyData = true;
     grandTotal += sum;
+    agentTokens[step.agent] = (agentTokens[step.agent] ?? 0) + sum;
     if (step.agent === "subagent") subagentTotal += sum;
   }
   const subagentShare = anyData && grandTotal > 0 ? subagentTotal / grandTotal : null;
+  const byAgent = {
+    main: { stepCount: agentSteps.main, tokens: agentTokens.main },
+    subagent: { stepCount: agentSteps.subagent, tokens: agentTokens.subagent },
+  };
 
-  return { stepCount: steps.length, byModel, avgMainStepContextReread, subagentShare };
+  return { stepCount: steps.length, byModel, avgMainStepContextReread, subagentShare, byAgent };
 }
 
 /**

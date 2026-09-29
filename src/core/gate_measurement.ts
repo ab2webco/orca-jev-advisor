@@ -71,6 +71,11 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    Distinct from every other bucket: it is the ONLY
  *                    stopReason whose own verdict is "allow" but whose
  *                    record still explains why nobody had to ask again.
+ *   "queue"       -- 0.6.8 T4: queue mode set a `requires_human` stop aside
+ *                    for a person (human-queue.jsonl) instead of asking one
+ *                    who is not there; the verdict is "advise" (the model
+ *                    was refused this attempt and told to carry on) and
+ *                    `policyId` names the policy.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -80,7 +85,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  * no cache and no network) but gets its own, more specific stopReason so an
  * "allow" it produces is never confused with a NEVER_SILENTLY deny/ask.
  */
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -118,11 +123,21 @@ export interface GateDecisionRecord {
   readonly stopReason?: GateStopReason;
   /**
    * The policy that resolved this decision -- present only when
-   * `stopReason` is `"policy"`. The id only, never the command or the
+   * `stopReason` is `"policy"` or `"queue"`. The id only, never the command or the
    * policy's rule text: same privacy rule as every other field in this
    * file.
    */
   readonly policyId?: string;
+  /**
+   * 0.6.8 T3: present (always `true`) only when the team owners are set and
+   * every segment of the command stayed inside the team (client_reach.ts),
+   * so the requires_human policies were not put to Jev for it. Whatever then
+   * decided keeps its own `stopReason` -- a local allow, the risk stage, a
+   * `prohibits`/`permits` policy, the cache -- and this says why no
+   * requires_human policy could have. Absent on every other record, which
+   * stays exactly what it was before this field existed.
+   */
+  readonly teamInternal?: true;
 }
 
 /** The family for discarding uncommitted work. Records written before checkout and restore joined it carry `LEGACY_DISCARD_FAMILY`. */
@@ -272,6 +287,8 @@ export interface BuildGateDecisionRecordInput {
   readonly stopReason: GateStopReason;
   /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */
   readonly policyId?: string;
+  /** 0.6.8 T3 -- see GateDecisionRecord.teamInternal. `false` and absent both write no key. */
+  readonly teamInternal?: boolean;
 }
 
 export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): GateDecisionRecord {
@@ -303,6 +320,7 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     // absent one, and every non-"policy" stop must produce a record
     // byte-for-byte indistinguishable from one that never had this field.
     ...(input.policyId !== undefined ? { policyId: input.policyId } : {}),
+    ...(input.teamInternal === true ? { teamInternal: true as const } : {}),
   };
 }
 
@@ -326,7 +344,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "risk" ||
     value === "unreachable" ||
     value === "cache" ||
-    value === "advice-retry"
+    value === "advice-retry" ||
+    value === "queue"
   );
 }
 
@@ -346,7 +365,8 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     // present-but-wrong-type is not, same discipline as every other field.
     (record.pluginVersion === undefined || typeof record.pluginVersion === "string") &&
     (record.stopReason === undefined || isGateStopReason(record.stopReason)) &&
-    (record.policyId === undefined || typeof record.policyId === "string")
+    (record.policyId === undefined || typeof record.policyId === "string") &&
+    (record.teamInternal === undefined || record.teamInternal === true)
   );
 }
 

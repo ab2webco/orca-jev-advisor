@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { extractPushRemoteArg, isLocalRemoteReference, parseGitConfigRemotePushUrl, parseGitConfigRemoteUrl, resolvePushRemoteIsLocal } from "./push_remote.ts";
+import { extractPushRemoteArg, isLocalRemoteReference, parseGitConfigRemotePushUrl, parseGitConfigRemoteUrl, parseGitConfigRemotes, resolvePushRemoteIsLocal } from "./push_remote.ts";
 
 // ---------------------------------------------------------------------------
 // A bare remote NAME resolved through a REAL `.git/config` -- same fixture
@@ -261,4 +261,32 @@ test("resolvePushRemoteIsLocal: a direct file:// URL given as the push arg needs
 test("resolvePushRemoteIsLocal: a direct github.com URL given as the push arg is not local", () => {
   const result = resolvePushRemoteIsLocal({ command: "git push https://github.com/org/repo.git main", cwd: "/repo", readFile: fakeReader({}) });
   assert.equal(result, false);
+});
+
+// 0.6.8 T3: every remote, for client_reach.ts's facts -- a bare `git push`
+// or `gh pr` without --repo may pick any of them.
+test("parseGitConfigRemotes: lists every remote section with its url and pushurl", () => {
+  const configText = [
+    "[core]",
+    "\tbare = false",
+    '[remote "origin"]',
+    "\turl = git@github.com:acme-team/app.git",
+    "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+    '[branch "main"]',
+    "\tremote = origin",
+    '[remote "upstream"]',
+    "\turl = https://github.com/acme-client/app.git",
+    "\tpushurl = git@github.com:acme-team/app.git",
+    '[remote "empty"]',
+    "\tfetch = +refs/heads/*:refs/remotes/empty/*",
+  ].join("\n");
+  assert.deepEqual(parseGitConfigRemotes(configText), [
+    { name: "origin", url: "git@github.com:acme-team/app.git", pushUrl: null },
+    { name: "upstream", url: "https://github.com/acme-client/app.git", pushUrl: "git@github.com:acme-team/app.git" },
+    { name: "empty", url: null, pushUrl: null },
+  ]);
+});
+
+test("parseGitConfigRemotes: a config with no remote section lists none", () => {
+  assert.deepEqual(parseGitConfigRemotes("[core]\n\tbare = false\n"), []);
 });

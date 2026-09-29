@@ -55,7 +55,7 @@ import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeed
 import { mergePolicySeeds, resolvePolicySeedImport } from '../../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice, parseOfferedVersion } from '../../src/core/policy_seed_notice.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
-import { getBoard, getCatalog, getConfig, getPolicies, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
+import { getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getQueueMode, getTeamOwners, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
 import { DEFAULT_DERIVED_AUTONOMY, deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
@@ -239,18 +239,40 @@ async function statSecretMirror () {
 // file, via the same sidecar and the same clean-child sandbox.
 // ---------------------------------------------------------------------------
 
-/** Mirrors the current catalog and policies to their JSON files. Best-effort
- *  on each: a mirror failure is logged, never thrown, so it can never turn
- *  a successful panel save into a reported failure. */
-async function mirrorCatalogAndPolicies (orca, storageHost) {
-  const [catalog, policies] = await Promise.all([getCatalog(storageHost), getPolicies(storageHost)])
-  const catalogResult = await runSecretMirrorScript('catalog-save', JSON.stringify(catalog))
+/** Mirrors the current catalog and policies to their JSON files, and the
+ *  team repositories setting (0.6.8 T1) to team-owners.json and the queue
+ *  mode (0.6.8 T4) to queue-mode.json and the explicit subagent models
+ *  setting (0.6.8 T7) to explicit-models.json -- the panel saves all of them from the same button and nudges this same trigger.
+ *  Best-effort on each: a mirror failure is logged, never thrown, so it can
+ *  never turn a successful panel save into a reported failure. The owners
+ *  are always written, the empty list included: a person clearing the
+ *  field must not leave the previous list standing in the file the gate
+ *  reads. `options.run` is test-only; production spawns the real sidecar. */
+async function mirrorCatalogAndPolicies (orca, storageHost, options = {}) {
+  const run = options.run ?? runSecretMirrorScript
+  const [catalog, policies, teamOwners, queueMode, explicitModels] = await Promise.all([getCatalog(storageHost), getPolicies(storageHost), getTeamOwners(storageHost), getQueueMode(storageHost), getExplicitModels(storageHost)])
+  const catalogResult = await run('catalog-save', JSON.stringify(catalog))
   if (!catalogResult.ok) {
     orca.log(`catalog mirror failed: ${String(catalogResult.reason ?? 'unknown')} -- ${String(catalogResult.detail ?? '').slice(0, 160)}`)
   }
-  const policiesResult = await runSecretMirrorScript('policies-save', JSON.stringify(policies))
+  const policiesResult = await run('policies-save', JSON.stringify(policies))
   if (!policiesResult.ok) {
     orca.log(`policies mirror failed: ${String(policiesResult.reason ?? 'unknown')} -- ${String(policiesResult.detail ?? '').slice(0, 160)}`)
+  }
+  const teamOwnersResult = await run('team-owners-save', JSON.stringify(teamOwners))
+  if (!teamOwnersResult.ok) {
+    orca.log(`team owners mirror failed: ${String(teamOwnersResult.reason ?? 'unknown')} -- ${String(teamOwnersResult.detail ?? '').slice(0, 160)}`)
+  }
+  // 0.6.8 T4: always written, "ask now" included, for the same reason.
+  const queueModeResult = await run('queue-mode-save', JSON.stringify({ enabled: queueMode }))
+  if (!queueModeResult.ok) {
+    orca.log(`queue mode mirror failed: ${String(queueModeResult.reason ?? 'unknown')} -- ${String(queueModeResult.detail ?? '').slice(0, 160)}`)
+  }
+  // 0.6.8 T7: the Models tab's "Models fixed by an agent definition", for
+  // the hooks module; always written, the default included.
+  const explicitModelsResult = await run('explicit-models-save', JSON.stringify({ mode: explicitModels }))
+  if (!explicitModelsResult.ok) {
+    orca.log(`explicit models mirror failed: ${String(explicitModelsResult.reason ?? 'unknown')} -- ${String(explicitModelsResult.detail ?? '').slice(0, 160)}`)
   }
 }
 
@@ -2856,6 +2878,7 @@ export {
   LOCALE_STATUS_KEY,
   migrateLegacyPolicyKinds,
   mirrorAccountQuota,
+  mirrorCatalogAndPolicies,
   onAgentStatusChanged,
   MODEL_ROUTER_CONFIG_RESULT_KEY,
   MODEL_ROUTER_STATUS_KEY,

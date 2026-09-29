@@ -6,8 +6,10 @@
 // cache. The rules:
 //   - no explicit model: the tier's model, down or up from the parent's,
 //     with the guards keeping at least the parent's;
-//   - an explicit `model` from the parent is intent: never downgraded,
-//     upgraded only when a guard holds;
+//   - an explicit `model` from the parent (the Agent call's, or the one an
+//     agent definition fixes) is intent: upgraded only when a guard holds,
+//     and lowered only when the person chose to have it judged (0.6.8 T7,
+//     `explicitModels: "judge"`) and none of the floors below holds;
 //   - always a FULL model id: a family alias (`opus`) collapses to the
 //     parent's exact model when the parent is already in that family (§2.6).
 //
@@ -29,8 +31,8 @@
 
 import { FABLE_ID, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { activeGuards, shiftForPressure } from "./model_router_decide.ts";
-import type { GuardContext, QuotaBand, RouterGuard, SessionEffort, TierEffort, TierJudgment } from "./model_router_decide.ts";
+import { activeGuards, mentionsSensitiveTopic, shiftForPressure } from "./model_router_decide.ts";
+import type { DestinationKind, GuardContext, QuotaBand, RouterGuard, SessionEffort, TierEffort, TierJudgment } from "./model_router_decide.ts";
 
 const ALIAS_TIER: Readonly<Record<string, RouterTier>> = { haiku: "simple", sonnet: "standard", opus: "complex", fable: "frontier" };
 
@@ -44,7 +46,10 @@ export function explicitModelRank(tiers: ResolvedTiers, model: string): number |
   return modelRank(tiers, model);
 }
 
-export type SubagentReason = "jev-failed" | "same" | "switch" | "held-by-guard" | "explicit" | "explicit-upgrade";
+export type SubagentReason = "jev-failed" | "same" | "switch" | "held-by-guard" | "explicit" | "explicit-upgrade" | "explicit-lowered";
+
+/** 0.6.8 T7: what the router does with a model the spawn already fixed. */
+export type ExplicitModelsPolicy = "judge" | "keep";
 
 export interface SubagentDecision {
   readonly tier: RouterTier | null;
@@ -67,6 +72,32 @@ export interface SubagentDecisionInput {
   readonly explicitModel: string | undefined;
   readonly guards: GuardContext;
   readonly band?: QuotaBand;
+  /** 0.6.8 T7: "judge" lets a confident verdict lower an explicit model; "keep" (the default here) never does. */
+  readonly explicitModels?: ExplicitModelsPolicy;
+  /** The session's destination kind; in a client's site an explicit model is never lowered below the parent's. */
+  readonly destinationKind?: DestinationKind | null;
+}
+
+/**
+ * 0.6.8 T7: the model a judged explicit model is lowered to, or null when it
+ * stays. Only below the explicit model's own rank, and never when a guard
+ * holds (Jev unsure, a pointer prompt), the work is sensitive or already
+ * failing -- the same floors every other router decision keeps. In a
+ * client's site the floor is also the session's own model: lowered at most
+ * to it, exactly as the parent runs it.
+ */
+function loweredExplicitModel(input: SubagentDecisionInput, guards: readonly RouterGuard[], targetId: string, proposedRank: number | null, explicitRank: number | null): string | null {
+  if ((input.explicitModels ?? "keep") !== "judge" || guards.length > 0) return null;
+  if (proposedRank === null || explicitRank === null || proposedRank >= explicitRank) return null;
+  if (mentionsSensitiveTopic(input.guards.text)) return null;
+  const activity = input.guards.activity;
+  if (activity !== null && (activity.testsFailed > 0 || activity.errors > 0)) return null;
+  if (input.destinationKind === "client-site") {
+    const parentRank = modelRank(input.tiers, input.parentModel);
+    if (parentRank === null) return null;
+    if (proposedRank < parentRank) return parentRank < explicitRank ? input.parentModel : null;
+  }
+  return targetId;
 }
 
 export function decideSubagent(input: SubagentDecisionInput): SubagentDecision {
@@ -83,6 +114,8 @@ export function decideSubagent(input: SubagentDecisionInput): SubagentDecision {
 
   if (explicit !== null) {
     const explicitRank = explicitModelRank(input.tiers, explicit);
+    const lowered = loweredExplicitModel(input, guards, target.modelId, proposedRank, explicitRank);
+    if (lowered !== null) return { ...base, current, model: lowered, changed: true, reason: "explicit-lowered", guard: null };
     const upgrade = guards.length > 0 && proposedRank !== null && explicitRank !== null && proposedRank > explicitRank;
     if (!upgrade) return { ...stay, ...base, reason: "explicit", guard: guards[0] ?? null };
     return { ...base, current, model: target.modelId, changed: true, reason: "explicit-upgrade", guard: guards[0] ?? null };

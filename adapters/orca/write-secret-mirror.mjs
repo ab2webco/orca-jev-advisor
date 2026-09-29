@@ -18,7 +18,7 @@
  * works the same way on Windows, unlike the wrapper this project used
  * before), where the sandbox does not apply.
  *
- * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|models-save|quota-save|orca-ui-language-read>
+ * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|team-owners-save|queue-mode-save|explicit-models-save|models-save|quota-save|orca-ui-language-read>
  *   save   reads the new key from stdin (never argv, never logged), and
  *          atomically (temp file + rename) writes or replaces its
  *          TYPESAFE_API_KEY= line in the mirror file, mode 0600. Other
@@ -34,6 +34,24 @@
  *          0600 -- for adapters/claude/gate-bash.ts to read directly.
  *   policies-save  same as catalog-save, but for the team policies array,
  *          written to policies.json.
+ *   team-owners-save  reads the team repositories setting (0.6.8 T1: the
+ *          owners typed in the config panel, one per line) as a JSON array
+ *          from stdin and atomically writes it, normalized through the same
+ *          pure parser adapters/claude/gate-bash.ts reads back with
+ *          (src/core/team_owners.ts's parseTeamOwners -- an invalid line is
+ *          dropped, and a payload that is not an array writes `[]`, which
+ *          changes no decision), to team-owners.json. Not secret.
+ *   queue-mode-save  reads the queue mode setting (0.6.8 T4: "when a person
+ *          must approve: ask now | queue and continue") as `{ enabled }`
+ *          JSON from stdin and atomically writes it, normalized through
+ *          src/core/queue_mode.ts's parseQueueMode (anything malformed is
+ *          `{ enabled: false }`, ask now), to queue-mode.json. Not secret.
+ *   explicit-models-save  reads the Models tab's "Models fixed by an agent
+ *          definition" (0.6.8 T7) as `{ mode }` JSON from stdin and
+ *          atomically writes it, normalized through
+ *          src/core/explicit_models.ts's parseExplicitModels (anything
+ *          malformed is `{ mode: "judge" }`, the default), to
+ *          explicit-models.json. Not secret.
  *   mod-skills-config-save  reads `{active, activeTools}` as JSON from
  *          stdin and atomically writes it, normalized through the same pure
  *          parser adapters/claude/mod-skills reads back with
@@ -97,6 +115,9 @@ import { dirname, join } from 'node:path'
 import { normalizePlatform, resolveConfigDir } from '../../src/core/paths.ts'
 import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
 import { parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
+import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
+import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
+import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../src/core/explicit_models.ts'
 import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
 import { parseOrcaUiLanguage } from '../../src/core/orca_ui_language.ts'
 // Guarded stand-ins for the mutating fs/promises calls this file makes --
@@ -130,6 +151,9 @@ let MIRROR_PATH = ''
 let LOCALE_PATH = ''
 let CATALOG_PATH = ''
 let POLICIES_PATH = ''
+let TEAM_OWNERS_PATH = ''
+let QUEUE_MODE_PATH = ''
+let EXPLICIT_MODELS_PATH = ''
 let MOD_SKILLS_CONFIG_PATH = ''
 let DENY_TIER_CONFIG_PATH = ''
 let MODELS_PATH = ''
@@ -152,6 +176,11 @@ try {
   // adapters/claude/gate-bash.ts reads these two files directly.
   CATALOG_PATH = join(CONFIG_DIR, 'catalog.json')
   POLICIES_PATH = join(CONFIG_DIR, 'policies.json')
+  // The team repositories setting (0.6.8 T1) -- same channel, same ordinary
+  // permissions, and the same filename constant gate-bash.ts reads.
+  TEAM_OWNERS_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
+  QUEUE_MODE_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
+  EXPLICIT_MODELS_PATH = join(CONFIG_DIR, EXPLICIT_MODELS_MIRROR_FILE)
   // mod-skills' `active`/`activeTools` switches -- see
   // src/core/mod_skills_config.ts's module note (T10,
   // odd/tasks/panel-worker-wakeup.md). Neither is sensitive, so it gets
@@ -351,6 +380,35 @@ async function policiesSave (raw) {
   return { ok: true }
 }
 
+/** Normalizes the team owners through the same pure parser gate-bash.ts
+ *  reads back with, so what lands on disk is never a raw echo of what the
+ *  panel sent. Malformed JSON is not a failure here: it normalizes to `[]`,
+ *  the fail-safe empty list, exactly like a malformed file already reads. */
+async function teamOwnersSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  const owners = parseTeamOwners(parsed.ok ? parsed.value : null)
+  await writeAtomic(`${JSON.stringify(owners, null, 2)}\n`, TEAM_OWNERS_PATH, null)
+  return { ok: true }
+}
+
+/** Same as teamOwnersSave, for the queue mode: what lands on disk is
+ *  always `{ enabled: <boolean> }`, false for anything malformed. */
+async function queueModeSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  const enabled = parseQueueMode(parsed.ok ? parsed.value : null)
+  await writeAtomic(`${JSON.stringify({ enabled }, null, 2)}\n`, QUEUE_MODE_PATH, null)
+  return { ok: true }
+}
+
+/** Same again for the explicit subagent models setting: always
+ *  `{ mode: "judge" | "keep" }`, "judge" for anything malformed. */
+async function explicitModelsSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  const mode = parseExplicitModels(parsed.ok ? parsed.value : null)
+  await writeAtomic(`${JSON.stringify({ mode }, null, 2)}\n`, EXPLICIT_MODELS_PATH, null)
+  return { ok: true }
+}
+
 /** Normalizes the payload through the same pure parser the hooks sandbox
  *  reads back with, so what lands on disk is never a raw, unvalidated echo
  *  of whatever the panel sent -- a wrong-typed or missing field is written
@@ -495,6 +553,12 @@ async function main () {
       result = await catalogSave((await readStdin()).trim())
     } else if (mode === 'policies-save') {
       result = await policiesSave((await readStdin()).trim())
+    } else if (mode === 'team-owners-save') {
+      result = await teamOwnersSave((await readStdin()).trim())
+    } else if (mode === 'queue-mode-save') {
+      result = await queueModeSave((await readStdin()).trim())
+    } else if (mode === 'explicit-models-save') {
+      result = await explicitModelsSave((await readStdin()).trim())
     } else if (mode === 'mod-skills-config-save') {
       result = await modSkillsConfigSave((await readStdin()).trim())
     } else if (mode === 'mod-skills-config-read') {

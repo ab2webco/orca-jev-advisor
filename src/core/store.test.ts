@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getBoard, getCatalog, getConfig, getPolicies, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getTeamOwners, getQueueMode, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -341,4 +341,48 @@ test("getBoard: an entry keeps its projectName, and one written before projectNa
 test("getBoard: a non-string projectName is malformed like any other wrong-typed field", async () => {
   const host = fakeHost({ board: { entries: [{ ...BOARD_ENTRY, projectName: 42 }] } });
   assert.deepEqual(await getBoard(host), { entries: [] });
+});
+
+// 0.6.8 T1: the team repositories setting -- see src/core/team_owners.ts.
+test("getTeamOwners: nothing stored reads as an empty list, which changes no decision", async () => {
+  assert.deepEqual(await getTeamOwners(fakeHost()), []);
+});
+
+test("getTeamOwners: the stored lines come back normalized, invalid ones dropped", async () => {
+  const host = fakeHost({ teamOwners: ["Acme-Team", "", "not valid", "https://github.com/acme-tools"] });
+  assert.deepEqual(await getTeamOwners(host), ["acme-team", "acme-tools"]);
+});
+
+test("getTeamOwners: a stored value that is not an array reads as empty", async () => {
+  assert.deepEqual(await getTeamOwners(fakeHost({ teamOwners: { owners: ["acme-team"] } })), []);
+});
+
+// 0.6.8 T4: queue mode -- see src/core/queue_mode.ts.
+test("getQueueMode: nothing stored reads as false (ask now, the default)", async () => {
+  assert.equal(await getQueueMode(fakeHost()), false);
+});
+
+test("getQueueMode: enabled true returns true", async () => {
+  const host = fakeHost({ queueMode: { enabled: true } });
+  assert.equal(await getQueueMode(host), true);
+});
+
+test("getQueueMode: enabled false returns false", async () => {
+  const host = fakeHost({ queueMode: { enabled: false } });
+  assert.equal(await getQueueMode(host), false);
+});
+
+test("getQueueMode: a malformed value reads as false", async () => {
+  assert.equal(await getQueueMode(fakeHost({ queueMode: "yes" })), false);
+  assert.equal(await getQueueMode(fakeHost({ queueMode: { enabled: "yes" } })), false);
+});
+
+// 0.6.8 T7: "Models fixed by an agent definition" -- see src/core/explicit_models.ts.
+test("getExplicitModels: nothing stored reads as judge, the default", async () => {
+  assert.equal(await getExplicitModels(fakeHost()), "judge");
+});
+
+test("getExplicitModels: a stored keep reads as keep, anything malformed as judge", async () => {
+  assert.equal(await getExplicitModels(fakeHost({ explicitModels: { mode: "keep" } })), "keep");
+  assert.equal(await getExplicitModels(fakeHost({ explicitModels: "keep" })), "judge");
 });

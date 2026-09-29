@@ -293,6 +293,15 @@
       .itable tr.agg td { color: var(--muted-foreground, var(--fb-muted-foreground)); font-style: italic; }
 
       .recent-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+      /* 0.6.8 T5: "Waiting for you". Same margins as the status strip; the
+         command wraps anywhere, so a long one never widens a phone. */
+      .card.waiting { margin: 10px 12px 10px; border-color: var(--foreground, var(--fb-foreground)); }
+      .card.waiting #waiting-release { margin: 0; }
+      .waiting-list { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 8px; }
+      .waiting-list li { display: grid; gap: 3px; font-size: 12px; min-width: 0; }
+      .waiting-list .meta { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+      .waiting-list code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px;
+                           overflow-wrap: anywhere; white-space: pre-wrap; }
       .recent-list li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 12px; }
       .live-list { display: grid; gap: 6px; }
       .live-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
@@ -378,6 +387,18 @@
     </div>
 
     <div class="tab-panel" id="panel-gate" role="tabpanel" aria-labelledby="tab-gate">
+    <!--
+      0.6.8 T5. What queue mode set aside for a person (gate.waiting, read
+      from human-queue.jsonl by read-measurements.mjs). First in the tab:
+      it is the one thing on the board that waits on the reader. Hidden
+      when nothing is queued -- see renderWaiting.
+    -->
+    <section class="card waiting" id="card-waiting" style="display:none">
+      <h2 id="waiting-heading"></h2>
+      <ul class="waiting-list" id="waiting-body"></ul>
+      <p class="empty-line" id="waiting-release" data-i18n="waiting.release"></p>
+    </section>
+
     <nav class="windows" id="windows" data-i18n-aria="window.label">
       <button type="button" data-window="version"></button>
       <button type="button" data-window="day" data-i18n="window.day"></button>
@@ -545,6 +566,8 @@
           'activity.routerCost': '{{switches}} cambio(s) de modelo, un costo extra estimado de ${{amount}} a precio de lista.',
           'activity.routerNoEstimate': '{{switches}} cambio(s) de modelo, todavía sin estimación de ahorro.',
           'stats.recentHeading': 'Últimas decisiones del gate',
+          'waiting.heading': 'Esperándote ({{n}})',
+          'waiting.release': 'No se ejecutó nada de esto. Para soltar uno, dile al agente en esa sesión que lo corra de nuevo: en ese momento se te pregunta. Si no, queda aquí.',
           'stats.recentEmpty': 'Sin decisiones todavía.',
           'stats.recentCached': 'caché',
           'stats.recentLocalRule': 'regla local',
@@ -638,6 +661,10 @@
           'consumption.noContextData': 'Todavía no hay datos de contexto por paso principal.',
           'consumption.subagentSplit': 'Los subagentes usan el {{percent}}% del consumo; lo principal usa el resto.',
           'consumption.noSubagentData': 'Todavía no hay datos del reparto entre lo principal y los subagentes.',
+          'consumption.byAgent.main': 'Conversación principal: {{tokens}} tokens en {{steps}} pasos',
+          'consumption.byAgent.subagent': 'Subagentes: {{tokens}} tokens en {{steps}} pasos ({{percent}}%)',
+          'consumption.byAgent.mainNoTokens': 'Conversación principal: todavía sin cifra de tokens ({{steps}} pasos)',
+          'consumption.byAgent.subagentNoTokens': 'Subagentes: todavía sin cifra de tokens ({{steps}} pasos)',
           'consumption.session': 'Sesión',
           'consumption.weekly': 'Semanal',
           'consumption.resetsAt': 'Reinicia: {{when}}',
@@ -740,6 +767,8 @@
           'activity.routerCost': '{{switches}} model switch(es), an estimated ${{amount}} extra cost at list prices.',
           'activity.routerNoEstimate': '{{switches}} model switch(es), no saving estimate yet.',
           'stats.recentHeading': 'Latest gate decisions',
+          'waiting.heading': 'Waiting for you ({{n}})',
+          'waiting.release': 'None of this ran. To release one, tell the agent in that session to run it again: you are asked at that moment. Otherwise it stays here.',
           'stats.recentEmpty': 'No decisions yet.',
           'stats.recentCached': 'cache',
           'stats.recentLocalRule': 'local rule',
@@ -830,6 +859,10 @@
           'consumption.noContextData': 'No per-step context data yet.',
           'consumption.subagentSplit': 'Subagents use {{percent}}% of usage; the main agent uses the rest.',
           'consumption.noSubagentData': 'No main-vs-subagent split data yet.',
+          'consumption.byAgent.main': 'Main conversation: {{tokens}} tokens in {{steps}} steps',
+          'consumption.byAgent.subagent': 'Subagents: {{tokens}} tokens in {{steps}} steps ({{percent}}%)',
+          'consumption.byAgent.mainNoTokens': 'Main conversation: no token figure reported yet ({{steps}} steps)',
+          'consumption.byAgent.subagentNoTokens': 'Subagents: no token figure reported yet ({{steps}} steps)',
           'consumption.session': 'Session',
           'consumption.weekly': 'Weekly',
           'consumption.resetsAt': 'Resets: {{when}}',
@@ -1820,6 +1853,22 @@
        * functions), independent of which window this function picks to
        * display the raw per-model/context/subagent numbers.
        */
+      // 0.6.8 T6: the main conversation and its subagents counted apart, as
+      // real totals (src/core/consumption.ts's byAgent). A side with no
+      // reported figure says so; it never prints a zero it did not measure.
+      function consumptionByAgentLines (byAgent) {
+        var main = byAgent.main || { stepCount: 0, tokens: null }
+        var sub = byAgent.subagent || { stepCount: 0, tokens: null }
+        var total = (main.tokens || 0) + (sub.tokens || 0)
+        var percent = total > 0 && sub.tokens !== null ? String(Math.round((sub.tokens / total) * 1000) / 10) : '0'
+        return (main.tokens === null
+          ? line(t('consumption.byAgent.mainNoTokens', { steps: num(main.stepCount) }), 'empty-line')
+          : line(t('consumption.byAgent.main', { tokens: num(main.tokens), steps: num(main.stepCount) }))) +
+          (sub.tokens === null
+            ? line(t('consumption.byAgent.subagentNoTokens', { steps: num(sub.stepCount) }), 'empty-line')
+            : line(t('consumption.byAgent.subagent', { tokens: num(sub.tokens), steps: num(sub.stepCount), percent: percent })))
+      }
+
       function renderConsumption (summary) {
         if (!summary) { fill('consumption-body', 'consumption-empty', '', t('consumption.empty')); return }
         if (summary.ok === false) { fill('consumption-body', 'consumption-empty', '', t('consumption.unavailable')); return }
@@ -1851,7 +1900,7 @@
         parts.push(w.avgMainStepContextReread === null
           ? line(t('consumption.noContextData'), 'empty-line')
           : line(t('consumption.avgContext', { tokens: num(Math.round(w.avgMainStepContextReread)) })))
-        parts.push(w.subagentShare === null
+        parts.push(w.byAgent ? consumptionByAgentLines(w.byAgent) : w.subagentShare === null
           ? line(t('consumption.noSubagentData'), 'empty-line')
           : line(t('consumption.subagentSplit', { percent: String(Math.round(w.subagentShare * 1000) / 10) })))
 
@@ -2100,6 +2149,28 @@
 
       function show (id, visible) { el(id).style.display = visible ? '' : 'none' }
 
+      // 0.6.8 T5: the items queue mode set aside for a person. Shown only
+      // when there is at least one -- with queue mode off (the default) the
+      // list is always empty, and an empty card on every board would say
+      // nothing. `waitingTotal` can exceed the listed items (the reader
+      // lists at most 20); the heading counts all of them.
+      function renderWaiting (gate) {
+        var waiting = Array.isArray(gate.waiting) ? gate.waiting : []
+        var total = typeof gate.waitingTotal === 'number' ? gate.waitingTotal : waiting.length
+        show('card-waiting', waiting.length > 0)
+        if (waiting.length === 0) return
+        el('waiting-heading').textContent = t('waiting.heading', { n: String(total) })
+        el('waiting-body').innerHTML = waiting.map(function (item) {
+          return '<li>' +
+            '<span class="meta">' +
+              '<span class="tag working">' + esc(item.policyId || '') + '</span>' +
+              '<span class="tag">' + esc(projectLabel(item.project)) + '</span>' +
+              '<span class="when">' + esc(ago(item.at)) + '</span>' +
+            '</span>' +
+            '<code>' + esc(item.command || '') + '</code></li>'
+        }).join('')
+      }
+
       // Whether the board has anything to say beyond its empty state.
       var hasMeasurements = false
 
@@ -2131,6 +2202,7 @@
         // would open blank. card-projects (JEVADV-63) manages its own empty
         // state through renderActivityProjects, fed by its own storage key
         // (activityByProjectSummary), not by hasGate/hasSkills.
+        renderWaiting(gate)
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
         show('windows', hasGate)

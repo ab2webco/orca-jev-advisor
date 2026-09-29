@@ -274,3 +274,31 @@ test("subagentShareTrigger: over the threshold reports the real percent, e.g. 47
   assert.equal(trigger?.overThreshold, true);
   assert.equal(trigger?.subagentSharePercent, 47);
 });
+
+// 0.6.8 T6: subagent tokens counted apart from the main conversation, as
+// real totals, not only as a share.
+test("aggregateTurnUsage: byAgent counts main and subagent steps and tokens apart", () => {
+  const result = aggregateTurnUsage([
+    step({ agent: "main", input: 10, output: 5, cacheRead: 100, cacheWrite: 20 }),
+    step({ agent: "main", input: 1, output: 1, cacheRead: null, cacheWrite: null }),
+    step({ agent: "subagent", input: 7, output: 3, cacheRead: 40, cacheWrite: 0 }),
+  ], NOW);
+  assert.deepEqual(result.last24h.byAgent, {
+    main: { stepCount: 2, tokens: 137 },
+    subagent: { stepCount: 1, tokens: 50 },
+  });
+});
+
+test("aggregateTurnUsage: byAgent reads null tokens for a side with no reported figure, and zero steps when it has none", () => {
+  const result = aggregateTurnUsage([
+    step({ agent: "main", input: null, output: null, cacheRead: null, cacheWrite: null }),
+  ], NOW);
+  assert.deepEqual(result.last24h.byAgent, {
+    main: { stepCount: 1, tokens: null },
+    subagent: { stepCount: 0, tokens: null },
+  });
+  assert.deepEqual(aggregateTurnUsage([], NOW).last7d.byAgent, {
+    main: { stepCount: 0, tokens: null },
+    subagent: { stepCount: 0, tokens: null },
+  });
+});

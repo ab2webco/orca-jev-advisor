@@ -1,6 +1,6 @@
 // Typed façade over the plugin storage keys this plugin owns: `catalog`,
-// `policies`, `board`, `log`, `config`. Every getter validates the raw
-// value with a hand-written guard and returns either the validated,
+// `policies`, `board`, `log`, `config`, `teamOwners`. Every getter validates
+// the raw value with a hand-written guard and returns either the validated,
 // typed value or a documented default -- a corrupt or missing value NEVER
 // throws into the worker. This matters because plugin workers are lazy
 // (they fork per command/event, reap after 5 minutes idle, and die after
@@ -16,6 +16,10 @@
 import { isArrayOf, isNumber, isRecord, isString, isStringOrNull } from "../guards.ts";
 import { migratePolicyKind, withNormalizedPolicyScope } from "./decisions.ts";
 import type { PolicyKind, PolicyScope } from "./decisions.ts";
+import { parseTeamOwners } from "./team_owners.ts";
+import { parseQueueMode } from "./queue_mode.ts";
+import { parseExplicitModels } from "./explicit_models.ts";
+import type { ExplicitModelsMode } from "./explicit_models.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
 export interface StorageHost {
@@ -31,6 +35,9 @@ const STORAGE_KEY = {
   board: "board",
   log: "log",
   config: "config",
+  teamOwners: "teamOwners",
+  queueMode: "queueMode",
+  explicitModels: "explicitModels",
 } as const;
 
 async function readKey<T>(host: StorageHost, key: string, guard: (value: unknown) => value is T, fallback: T): Promise<T> {
@@ -227,6 +234,48 @@ export async function getPolicies(host: StorageHost): Promise<readonly PolicyRow
 
 export async function setPolicies(host: StorageHost, policies: readonly PolicyRow[]): Promise<void> {
   await host.set(STORAGE_KEY.policies, policies);
+}
+
+// ---------------------------------------------------------------------------
+// teamOwners (0.6.8 T1): the GitHub/GitLab owners whose repositories are the
+// team's own, one per line as typed in the config panel. Read through
+// team_owners.ts's parseTeamOwners -- the same reader the mirror and the
+// gate use -- so an invalid line is dropped here exactly as it is there.
+// Empty (the default) changes no decision anywhere.
+// ---------------------------------------------------------------------------
+
+export async function getTeamOwners(host: StorageHost): Promise<readonly string[]> {
+  try {
+    return parseTeamOwners(await host.get(STORAGE_KEY.teamOwners));
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// queueMode (0.6.8 T4): when a person must approve and nobody is watching,
+// queue the action and let the agent continue. Default: false (ask now).
+// ---------------------------------------------------------------------------
+
+export async function getQueueMode(host: StorageHost): Promise<boolean> {
+  try {
+    return parseQueueMode(await host.get(STORAGE_KEY.queueMode));
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// explicitModels (0.6.8 T7): whether the router may lower a subagent model
+// the spawn already fixed. Default: "judge" -- see src/core/explicit_models.ts.
+// ---------------------------------------------------------------------------
+
+export async function getExplicitModels(host: StorageHost): Promise<ExplicitModelsMode> {
+  try {
+    return parseExplicitModels(await host.get(STORAGE_KEY.explicitModels));
+  } catch {
+    return "judge";
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -29,7 +29,19 @@ export type ModelRouterKey =
   | "why.hysteresis"
   | "why.prices-unknown"
   | "why.unknown-savings"
-  | "why.pointer-prompt";
+  | "why.pointer-prompt"
+  | "agents.lead"
+  | "agents.group"
+  | "agents.why.explicit"
+  | "agents.why.lowered"
+  | "agents.why.raised"
+  | "agents.why.chosen"
+  | "agents.why.same"
+  | "agents.why.kept-unsure"
+  | "agents.why.kept-pointer"
+  | "agents.why.measuring"
+  | "agents.why.inherited"
+  | "agents.why.no-jev";
 
 export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
   es: {
@@ -59,6 +71,19 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.prices-unknown": "precios desconocidos",
     "why.unknown-savings": "ahorro aún sin medir",
     "why.pointer-prompt": "el mensaje remite a un documento",
+    // 0.6.8 T6: the subagents running now (subagent_status.ts).
+    "agents.lead": "agentes: {{groups}}",
+    "agents.group": "{{n}} en {{model}} ({{why}})",
+    "agents.why.explicit": "pedido explícito",
+    "agents.why.lowered": "Jev lo bajó",
+    "agents.why.raised": "Jev lo subió",
+    "agents.why.chosen": "lo eligió Jev",
+    "agents.why.same": "Jev coincide",
+    "agents.why.kept-unsure": "se mantiene: Jev no está seguro",
+    "agents.why.kept-pointer": "se mantiene: remite a un documento",
+    "agents.why.measuring": "heredado, midiendo",
+    "agents.why.inherited": "heredado",
+    "agents.why.no-jev": "heredado, sin respuesta de Jev",
   },
   en: {
     "status.active.effort": "model: {{model}} · {{effort}} effort (stage: {{stage}})",
@@ -87,5 +112,17 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.prices-unknown": "prices unknown",
     "why.unknown-savings": "saving not measured yet",
     "why.pointer-prompt": "the prompt points to a document",
+    "agents.lead": "agents: {{groups}}",
+    "agents.group": "{{n}} on {{model}} ({{why}})",
+    "agents.why.explicit": "explicit request",
+    "agents.why.lowered": "lowered by Jev",
+    "agents.why.raised": "raised by Jev",
+    "agents.why.chosen": "chosen by Jev",
+    "agents.why.same": "Jev agrees",
+    "agents.why.kept-unsure": "kept: Jev is unsure",
+    "agents.why.kept-pointer": "kept: points to a document",
+    "agents.why.measuring": "inherited, measuring",
+    "agents.why.inherited": "inherited",
+    "agents.why.no-jev": "inherited, no answer from Jev",
   },
 };

@@ -84,7 +84,7 @@
       label { display: block; font-size: 12px; margin: 10px 0 4px;
               color: var(--muted-foreground, var(--fb-muted-foreground)); }
       label:first-of-type { margin-top: 0; }
-      input, select {
+      input, select, textarea {
         font: inherit; width: 100%; padding: 7px 9px; border-radius: var(--radius-md);
         border: 1px solid var(--input, var(--fb-input)); background: transparent;
         color: var(--foreground, var(--fb-foreground));
@@ -93,7 +93,11 @@
                color: var(--foreground, var(--fb-foreground)); }
       select option { background-color: var(--background, var(--fb-background));
                       color: var(--foreground, var(--fb-foreground)); }
-      input:focus-visible, select:focus-visible {
+      /* One owner per line: a fixed-width face keeps the lines readable as a
+         list, and only the height is the person's to change. */
+      textarea { display: block; resize: vertical; min-height: 5.5em; line-height: 1.5;
+                 font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+      input:focus-visible, select:focus-visible, textarea:focus-visible {
         outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; border-color: transparent;
       }
       /* A read-only value, not an editable control -- see thresholds-section's
@@ -360,6 +364,37 @@
         </div>
         <p class="hint" data-i18n="policies.importHint"></p>
       </section>
+
+      <!--
+        0.6.8 T1. The owners whose repositories are the team's own
+        (src/core/team_owners.ts): the gate checks a command's remote
+        against them before asking a requires_human policy, so it sits here,
+        next to the policies it narrows. Saved by the Save button below to
+        `teamOwners`; the worker mirrors it to team-owners.json.
+      -->
+      <section id="team-owners-section">
+        <h2 data-i18n="teamOwners.heading"></h2>
+        <label for="team-owners" data-i18n="teamOwners.label"></label>
+        <textarea id="team-owners" rows="4" spellcheck="false" autocomplete="off" data-i18n-placeholder="teamOwners.placeholder"></textarea>
+        <p class="hint" data-i18n="teamOwners.hint"></p>
+      </section>
+
+      <!--
+        0.6.8 T4. What the gate does when a requires_human policy needs a
+        person (src/core/queue_mode.ts): ask now, or queue the action for the
+        board's "Waiting for you" list and let the agent carry on. Saved by
+        the Save button below to `queueMode` ({ enabled }); the worker
+        mirrors it to queue-mode.json.
+      -->
+      <section id="queue-mode-section">
+        <h2 data-i18n="queueMode.heading"></h2>
+        <label for="queue-mode" data-i18n="queueMode.label"></label>
+        <select id="queue-mode">
+          <option value="ask" data-i18n="queueMode.ask"></option>
+          <option value="queue" data-i18n="queueMode.queue"></option>
+        </select>
+        <p class="hint" data-i18n="queueMode.hint"></p>
+      </section>
       </div>
 
       <div class="tab-panel" id="panel-modskills" role="tabpanel" aria-labelledby="tab-modskills" hidden>
@@ -478,6 +513,24 @@
         <p class="hint" data-i18n="modelRouter.stewardHint"></p>
         <div id="model-router-rows"></div>
         <p class="hint" id="model-router-empty" style="display:none" data-i18n="modelRouter.empty"></p>
+      </section>
+
+      <!--
+        0.6.8 T7. What the router does with a subagent model the Agent call
+        or its agent definition already fixed (src/core/explicit_models.ts):
+        judge it like any other (the default; lowered only in active mode,
+        under the same guards) or keep it. Saved by the Save button below to
+        `explicitModels` ({ mode }); the worker mirrors it to
+        explicit-models.json for the hooks module.
+      -->
+      <section id="explicit-models-section">
+        <h2 data-i18n="explicitModels.heading"></h2>
+        <label for="explicit-models" data-i18n="explicitModels.label"></label>
+        <select id="explicit-models">
+          <option value="judge" data-i18n="explicitModels.judge"></option>
+          <option value="keep" data-i18n="explicitModels.keep"></option>
+        </select>
+        <p class="hint" data-i18n="explicitModels.hint"></p>
       </section>
       </div>
 
@@ -638,6 +691,20 @@
           'policies.seedNoticeDismiss': 'Descartar',
           'policies.seedNoticeDismissing': 'Descartando…',
           'policies.seedNoticeDismissed': 'Descartado. No se cambió ninguna política.',
+          'teamOwners.heading': 'Repositorios de tu equipo',
+          'teamOwners.label': 'Dueños en GitHub o GitLab (usuarios u organizaciones), uno por línea',
+          'teamOwners.placeholder': 'tu-organizacion',
+          'explicitModels.heading': 'Modelos fijados por un agente',
+          'explicitModels.label': 'Cuando la llamada o la definición de un agente fija su modelo',
+          'explicitModels.judge': 'Juzgarlos',
+          'explicitModels.keep': 'Mantenerlos',
+          'explicitModels.hint': 'Juzgarlos: con el enrutador en activo, Jev puede bajar ese modelo si la tarea es simple y está seguro. Nunca lo baja si duda, si la tarea es sensible o ya está fallando, y en el repositorio de un cliente nunca por debajo del modelo de la sesión. Mantenerlos: se usa siempre el modelo fijado.',
+          'queueMode.heading': 'Cuando una persona debe aprobar',
+          'queueMode.label': 'Qué hace el agente si una política pide a una persona',
+          'queueMode.ask': 'Preguntar ahora',
+          'queueMode.queue': 'Dejarlo en espera y seguir',
+          'queueMode.hint': 'En espera: la acción no se ejecuta, queda en «Esperándote» en el tablero y el agente sigue con lo demás. Para soltarla, dile al agente en su sesión que la corra de nuevo: en ese momento se te pregunta. Nunca se ejecuta sin ti.',
+          'teamOwners.hint': 'Subir una rama de trabajo o abrir un pull request en un repositorio de estos dueños no llega al cliente, así que no se consulta a las políticas que piden a una persona. Fusionar, subir a main, forzar un push y cualquier repositorio fuera de esta lista se siguen consultando. Vacío = todo se decide como hasta ahora.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
           'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
           'modSkills.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} prompts comparables. Faltan {{shortfall}}.',
@@ -713,6 +780,9 @@
           'save.whichConfig': 'La configuración (tamaño del log)',
           'save.whichCatalog': 'El catálogo de destinos',
           'save.whichPolicies': 'Las políticas',
+          'save.whichTeamOwners': 'Los repositorios del equipo',
+          'save.whichQueueMode': 'Qué hacer cuando una persona debe aprobar',
+          'save.whichExplicitModels': 'Los modelos fijados por un agente',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
           'save.invalidField': 'Hay un campo con un valor no válido; se cambió a su pestaña y quedó enfocado.',
           'common.timeout': 'Tiempo de espera agotado.',
@@ -928,6 +998,20 @@
           'policies.seedNoticeDismiss': 'Dismiss',
           'policies.seedNoticeDismissing': 'Dismissing…',
           'policies.seedNoticeDismissed': 'Dismissed. No policy was changed.',
+          'teamOwners.heading': 'Repositories your team owns',
+          'teamOwners.label': 'GitHub or GitLab owners (users or organizations), one per line',
+          'teamOwners.placeholder': 'your-organization',
+          'explicitModels.heading': 'Models fixed by an agent',
+          'explicitModels.label': 'When the Agent call or an agent definition fixes its model',
+          'explicitModels.judge': 'Judge them',
+          'explicitModels.keep': 'Keep them',
+          'explicitModels.hint': 'Judge them: with the router active, Jev may lower that model when the task is simple and it is sure. It never lowers it when unsure, when the work is sensitive or already failing, and in a client repository never below the session model. Keep them: the fixed model is always used.',
+          'queueMode.heading': 'When a person must approve',
+          'queueMode.label': 'What the agent does when a policy needs a person',
+          'queueMode.ask': 'Ask now',
+          'queueMode.queue': 'Queue it and carry on',
+          'queueMode.hint': 'Queued: the action does not run, it waits under “Waiting for you” on the board, and the agent carries on with the rest. To release it, tell the agent in its session to run it again: you are asked at that moment. It never runs without you.',
+          'teamOwners.hint': 'Pushing a work branch or opening a pull request in a repository these owners hold never reaches a client, so policies that need a person are not asked about it. Merging, pushing to main, force pushes and any repository outside this list are still asked. Empty = everything is decided as it is today.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
           'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
@@ -1003,6 +1087,9 @@
           'save.whichConfig': 'The configuration (log size)',
           'save.whichCatalog': 'The destination catalog',
           'save.whichPolicies': 'The policies',
+          'save.whichTeamOwners': "Your team's repositories",
+          'save.whichQueueMode': 'What to do when a person must approve',
+          'save.whichExplicitModels': 'Models fixed by an agent',
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
           'save.invalidField': 'A field has an invalid value; switched to its tab and focused it.',
           'common.timeout': 'Timed out.',
@@ -2418,6 +2505,52 @@
         return rows.filter(function (r) { return r.id.length > 0 && r.rule.length > 0 })
       }
 
+      // 0.6.8 T1: the team owners field. The panel only splits and trims;
+      // src/core/team_owners.ts's parseTeamOwners (run by the worker and by
+      // the gate) validates and normalizes, so there is one reading of what
+      // an owner is, not two.
+      var teamOwnersEl = el('team-owners')
+
+      function fillTeamOwners (stored) {
+        teamOwnersEl.value = Array.isArray(stored)
+          ? stored.filter(function (owner) { return typeof owner === 'string' }).join('\n')
+          : ''
+      }
+
+      // 0.6.8 T4: the queue mode select. Only a stored { enabled: true }
+      // reads as "queue"; anything else (never set, malformed) is "ask now",
+      // the same default src/core/queue_mode.ts's parseQueueMode applies.
+      var queueModeEl = el('queue-mode')
+
+      function fillQueueMode (stored) {
+        var enabled = stored !== null && typeof stored === 'object' && stored.enabled === true
+        queueModeEl.value = enabled ? 'queue' : 'ask'
+      }
+
+      function readQueueMode () {
+        return { enabled: queueModeEl.value === 'queue' }
+      }
+
+      // 0.6.8 T7: the explicit subagent models select. Only a stored
+      // { mode: 'keep' } keeps; anything else is "judge", the default
+      // src/core/explicit_models.ts's parseExplicitModels applies.
+      var explicitModelsEl = el('explicit-models')
+
+      function fillExplicitModels (stored) {
+        var keep = stored !== null && typeof stored === 'object' && stored.mode === 'keep'
+        explicitModelsEl.value = keep ? 'keep' : 'judge'
+      }
+
+      function readExplicitModels () {
+        return { mode: explicitModelsEl.value === 'keep' ? 'keep' : 'judge' }
+      }
+
+      function readTeamOwners () {
+        return teamOwnersEl.value.split(/\r?\n/)
+          .map(function (line) { return line.trim() })
+          .filter(function (line) { return line.length > 0 })
+      }
+
       var policyImportSaidEl = el('policy-import-said')
       var policyDiffsEl = el('policy-diffs')
 
@@ -3271,7 +3404,10 @@
         var namedWrites = [
           { label: t('save.whichConfig'), promise: write('config', config) },
           { label: t('save.whichCatalog'), promise: write('catalog', readCatalog()) },
-          { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) }
+          { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) },
+          { label: t('save.whichTeamOwners'), promise: write('teamOwners', readTeamOwners()) },
+          { label: t('save.whichQueueMode'), promise: write('queueMode', readQueueMode()) },
+          { label: t('save.whichExplicitModels'), promise: write('explicitModels', readExplicitModels()) }
         ]
         Promise.all(namedWrites.map(function (w) { return w.promise })).then(function (results) {
           var failedLabels = []
@@ -3317,7 +3453,10 @@
             read(CATALOG_PROPOSALS_STATUS_KEY, false),
             loadSecretStatus(),
             loadClaudeIntegrationStatus(),
-            read(MODEL_ROUTER_STATUS_KEY, false)
+            read(MODEL_ROUTER_STATUS_KEY, false),
+            read('teamOwners', false),
+            read('queueMode', false),
+            read('explicitModels', false)
           ])
         }).then(function (results) {
           currentConfig = results[0]
@@ -3331,6 +3470,9 @@
           renderPolicySeedNoticeAndDiffs(results[6])
           renderCatalogProposals(results[7])
           renderModelRouterRows(results[10])
+          fillTeamOwners(results[11])
+          fillQueueMode(results[12])
+          fillExplicitModels(results[13])
           // 0.6.2 E7: what storage holds may predate a mode set from a
           // terminal; ask the worker for a fresh read and redraw with it.
           refreshModelRouterStatus().then(function (fresh) { if (!modelRouterEdited) renderModelRouterRows(fresh) }).catch(function () {})

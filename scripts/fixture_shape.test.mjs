@@ -98,6 +98,10 @@ async function realMeasurementsSummary () {
       })
     }
     writeFileSync(join(cache, 'gate-decisions.jsonl'), gateRows.map((row) => `${JSON.stringify(row)}\n`).join(''))
+    // 0.6.8 T5: one queued item, so gate.waiting's own keys are compared too.
+    writeFileSync(join(cache, 'human-queue.jsonl'), `${JSON.stringify({
+      type: 'queued', id: 'q1', at: recentAt, key: 'k1', project: 'p', policyId: 'client_always_asks', command: 'gh pr merge 1',
+    })}\n`)
     writeFileSync(join(cache, 'ab-benchmark-results.jsonl'), `${JSON.stringify({
       id: 'a1', at: '2026-09-24T10:00:00.000Z', commandFamily: 'cd', destinationKind: null,
       jev: { verdict: 'allow', latencyMs: 200, inputTokens: 10, outputTokens: 2 },

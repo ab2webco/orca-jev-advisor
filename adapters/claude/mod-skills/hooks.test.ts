@@ -64,6 +64,8 @@ interface FakeHost {
   failMessages: boolean;
   /** When true, `$.process.run` rejects (a missing or broken binary). */
   failProcess: boolean;
+  /** `$.agent.list()` rows (0.6.8 T6); null makes the call reject, like a host without it. */
+  agents: { id: string; status: string }[] | null;
 }
 
 function makeFakeHost(): FakeHost {
@@ -79,6 +81,7 @@ function makeFakeHost(): FakeHost {
     messages: [],
     failMessages: false,
     failProcess: false,
+    agents: null,
   };
 }
 
@@ -169,6 +172,12 @@ function makeFakeEngine(host: FakeHost): unknown {
       },
     },
     tool: { list: async () => host.toolList },
+    agent: {
+      list: async () => {
+        if (host.agents === null) throw new Error("fake host: agent.list unavailable");
+        return host.agents;
+      },
+    },
     ui: { status: (text: string | undefined) => { host.statusLines.push(text); } },
   };
 }
@@ -1324,9 +1333,10 @@ test("router, measure, subagent: logs, changes nothing", async () => {
   assert.equal(routerDecisionLines(host)[0]?.applied, false);
 });
 
-test("router, active, subagent: an explicit model is never downgraded", async () => {
+test("router, active, subagent: an explicit model is never downgraded when the person keeps them", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const event = spawnEvent({ model: "sonnet" });
@@ -2052,4 +2062,146 @@ test("a tool roster over 255 asks stage 1 in batches that each stay within Jev's
   const record = lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH) as { decision: { reason: string }; wide: { ranked: { name: string }[] } | null };
   assert.match(record.decision.reason, /no single tool needed/);
   assert.deepEqual(record.wide?.ranked.map((r) => r.name), ["mcp__srv__tool_200", "mcp__srv__tool_3"]);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.8 T6: the subagents running now, in the status line -- the model each
+// one runs and why. Visibility only.
+// ---------------------------------------------------------------------------
+
+async function spawnAs(handlers: Map<string, Hook>, engine: unknown, event: Record<string, unknown>, agentId: string, resolvedModel?: string): Promise<void> {
+  const hook = handlers.get("agent.spawn");
+  assert.ok(hook, "agent.spawn was never registered");
+  await hook(engine, event, async (e: unknown) => ({ model: resolvedModel ?? String((e as { model?: string }).model ?? "claude-opus-5-5"), agentId }));
+}
+
+async function completeSubagent(handlers: Map<string, Hook>, engine: unknown, agentId: string): Promise<void> {
+  const hook = handlers.get("turn.complete");
+  assert.ok(hook, "turn.complete was never registered");
+  await hook(engine, { agentId, turnId: `sub-${agentId}`, reason: "answer", answer: "done" }, async (e: unknown) => e);
+}
+
+function lastStatus(host: FakeHost): string {
+  return String(host.statusLines[host.statusLines.length - 1] ?? "");
+}
+
+test("T6: a running subagent shows in the status line with its model and why", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  assert.match(lastStatus(host), /agents: 1 on Opus 5\.5 \(explicit request\)/);
+});
+
+test("T6: two subagents on the same model and reason read as one group", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-2", "claude-opus-5-5");
+  assert.match(lastStatus(host), /agents: 2 on Opus 5\.5 \(explicit request\)/);
+});
+
+test("T6: a subagent that finished leaves the status line", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  await completeSubagent(handlers, engine, "agent-1");
+  assert.doesNotMatch(lastStatus(host), /agents:/);
+});
+
+test("T6: a subagent the host no longer lists as running is dropped at the next spawn", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  host.agents = [{ id: "agent-1", status: "killed" }, { id: "agent-2", status: "running" }];
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-2", "claude-opus-5-5");
+  assert.match(lastStatus(host), /agents: 1 on Opus 5\.5/);
+});
+
+test("T6: with the router off a subagent still shows, on the model it inherited", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1", "claude-sonnet-5");
+  assert.match(lastStatus(host), /agents: 1 on Sonnet \(inherited\)/);
+});
+
+test("T6: a subagent the router chose a model for says so (active mode)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1");
+  assert.match(lastStatus(host), /agents: 1 on Haiku 4\.5 \(chosen by Jev\)/);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.8 T7: a model fixed by the Agent call or an agent definition is judged
+// (the default), lowered only in active mode and under the usual guards.
+// ---------------------------------------------------------------------------
+
+test("T7: active, judged by default -- a confident simple verdict lowers an explicit model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent({ model: "opus" }));
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  assert.match(lastStatus(host), /agents: 1 on Haiku 4\.5 \(lowered by Jev\)/);
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
+  assert.equal(routerDecisionLines(host)[0]?.reason, "explicit-lowered");
+});
+
+test("T7: measure mode never lowers an explicit model, it only logs what it would do", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  const event = spawnEvent({ model: "opus" });
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+});
+
+test("T7: a guard keeps the explicit model even when judged", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple", 0.5));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = spawnEvent({ model: "opus" });
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event);
+});
+
+test("T7: a model an agent definition fixes is kept when the person keeps them", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.files.set(`${CWD}/.claude/agents/reviewer.md`, "---\nname: reviewer\nmodel: opus\n---\nReview.\n");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const event = spawnEvent({ subagentType: "reviewer" });
+  assert.deepEqual(await spawnThrough(handlers, engine, event), event, "the definition's own model is left to apply");
+  assert.match(lastStatus(host), /\(explicit request\)/);
+});
+
+test("T7: a model an agent definition fixes is judged like an explicit one by default", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CWD}/.claude/agents/reviewer.md`, "---\nname: reviewer\nmodel: opus\n---\nReview.\n");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent({ subagentType: "reviewer" }));
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  assert.match(lastStatus(host), /\(lowered by Jev\)/);
 });

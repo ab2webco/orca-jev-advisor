@@ -418,3 +418,36 @@ test("commandFamily still resolves the most dangerous part across a newline or a
   assert.equal(commandFamily("ls\nrm -rf $HOME"), "rm -rf");
   assert.equal(commandFamily("pwd & git push --force origin main"), "git push");
 });
+
+// ---------------------------------------------------------------------------
+// teamInternal -- 0.6.8 T3. When the team owners are set and every segment
+// of a command stays inside the team (client_reach.ts), the requires_human
+// policies are not put to Jev for it. Whatever then decides keeps its own
+// stopReason; this field records that the set-aside happened, so it can be
+// counted.
+// ---------------------------------------------------------------------------
+
+test("teamInternal is recorded only when requires_human policies were set aside", () => {
+  const base = {
+    at: "2026-09-28T00:00:00.000Z",
+    project: null,
+    command: "git push -u origin feature/x",
+    source: "local-rule" as const,
+    verdict: "allow" as const,
+    latencyMs: null,
+    pluginVersion: "0.6.7",
+    stopReason: "local-allow" as const,
+  };
+  const skipped = buildGateDecisionRecord({ ...base, id: "ti-1", teamInternal: true });
+  assert.equal(skipped.teamInternal, true);
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(skipped)), [skipped]);
+  const ordinary = buildGateDecisionRecord({ ...base, id: "ti-2", teamInternal: false });
+  assert.equal(Object.prototype.hasOwnProperty.call(ordinary, "teamInternal"), false, "an ordinary record must be byte-for-byte what it was before");
+  const omitted = buildGateDecisionRecord({ ...base, id: "ti-3" });
+  assert.equal(Object.prototype.hasOwnProperty.call(omitted, "teamInternal"), false);
+});
+
+test("a record whose teamInternal is anything but true is malformed", () => {
+  const line = `${JSON.stringify({ type: "gate-decision", id: "ti-bad", at: "2026-09-28T00:00:00.000Z", project: null, commandFamily: "git push", source: "jev", verdict: "allow", latencyMs: 1, teamInternal: "yes" })}\n`;
+  assert.deepEqual(parseGateDecisionRecords(line), []);
+});

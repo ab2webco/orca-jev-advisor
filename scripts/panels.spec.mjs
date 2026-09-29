@@ -687,6 +687,118 @@ test('every policies.* key in one language catalog exists in the other', { skip:
   }
 })
 
+// 0.6.8 T1: "Repositories your team owns" -- the owners typed one per line
+// in the Policies tab, saved to `teamOwners` by the same Save button.
+test('the team owners field shows the stored owners one per line, and Save writes each line back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ teamOwners: ['acme-team', 'acme-tools'] })
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#team-owners'), 'acme-team\nacme-tools')
+    await page.fill('#team-owners', '  acme-team \n\n@acme-tools\nacme-labs  ')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    const written = await page.evaluate(() => window.__written.teamOwners)
+    // The panel only splits and trims; the worker's parseTeamOwners
+    // normalizes (drops the @, validates) before anything reaches the gate.
+    assert.deepEqual(written, ['acme-team', '@acme-tools', 'acme-labs'])
+    assert.deepEqual(errors, [], 'the panel threw while rendering or saving the team owners')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an install that never set team owners shows an empty field and saves an empty list', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#team-owners'), '')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.teamOwners), [])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// 0.6.8 T4: "When a person must approve: ask now | queue and continue",
+// saved to `queueMode` ({ enabled }) by the same Save button.
+test('the queue mode select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ queueMode: { enabled: true } })
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#queue-mode'), 'queue')
+    assert.ok((await page.textContent('#queue-mode-section')).length > 40, 'the section renders its heading, choices and hint')
+    await page.selectOption('#queue-mode', 'ask')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.queueMode), { enabled: false })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an install that never set the queue mode shows "ask now" and saves it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-policies')
+    assert.equal(await page.inputValue('#queue-mode'), 'ask')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.queueMode), { enabled: false })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// 0.6.8 T7: "Models fixed by an agent: judge them | keep them", in the
+// Models tab, saved to `explicitModels` ({ mode }) by the Save button.
+test('the explicit models select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ explicitModels: { mode: 'keep' } })
+  try {
+    await page.click('#tab-models')
+    assert.equal(await page.inputValue('#explicit-models'), 'keep')
+    assert.ok((await page.textContent('#explicit-models-section')).length > 40, 'the section renders its heading, choices and hint')
+    await page.selectOption('#explicit-models', 'judge')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.explicitModels), { mode: 'judge' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an install that never set it shows "judge them" and saves it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-models')
+    assert.equal(await page.inputValue('#explicit-models'), 'judge')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.explicitModels), { mode: 'judge' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every teamOwners.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('teamOwners.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('teamOwners.') === 0)
+    assert.ok(enKeys.length > 0, 'no teamOwners.* keys at all')
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
+  } finally {
+    await browser.close()
+  }
+})
+
 for (const colorScheme of ['light', 'dark']) {
   test(`the baseline notice reads as information, not as an error (${colorScheme})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
     // "The shipped baseline changed" is news, not a failure: nothing broke and
@@ -1581,6 +1693,62 @@ test('a machine where localStorage itself throws (Orca\'s sandboxed opaque-origi
 // row.
 // ---------------------------------------------------------------------------
 
+// 0.6.8 T5: "Waiting for you" -- what queue mode set aside for a person,
+// in the Gate tab, with how to release an item.
+test('the Gate tab lists what is waiting for a person: policy, project, command and when, with how to release it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
+  try {
+    assert.equal(await page.isVisible('#card-waiting'), true)
+    const rows = await page.$$eval('#waiting-body li', (items) => items.map((li) => li.textContent))
+    assert.equal(rows.length, 2)
+    assert.match(rows[0], /client_always_asks/)
+    assert.match(rows[0], /acme-app/)
+    assert.match(rows[0], /gh pr merge 42/)
+    assert.match(rows[0], /ago|min|h\b|d\b/)
+    const heading = await page.textContent('#card-waiting h2')
+    assert.match(heading, /2/)
+    assert.match(await page.textContent('#waiting-release'), /run it again/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('the waiting card stays hidden when nothing is queued', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.empty)
+  try {
+    assert.equal(await page.isVisible('#card-waiting'), false)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a long waiting command wraps inside a 320px board instead of widening it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready, 'en', 'light', { viewport: { width: 320, height: 900 } })
+  try {
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
+    assert.equal(overflow, 0)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('every waiting.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openBoardPanel(SCENARIOS.ready, 'es')
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('waiting.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('waiting.') === 0)
+    assert.ok(enKeys.length > 0, 'no waiting.* keys at all')
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('the calibration card\'s legend rows sum to asked, with no bucket left uncounted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
   try {
@@ -1708,13 +1876,16 @@ const POPULATED_CONSUMPTION = {
         { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
       ],
       avgMainStepContextReread: 162345,
-      subagentShare: 0.47
+      subagentShare: 0.47,
+      // 0.6.8 T6: the same split, as real totals.
+      byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } }
     },
     last7d: {
       stepCount: 300,
       byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
       avgMainStepContextReread: 150500,
-      subagentShare: 0.3
+      subagentShare: 0.3,
+      byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } }
     }
   },
   quota: {
@@ -1773,6 +1944,32 @@ const EMPTY_CONSUMPTION = {
   recommendations: { mcpServerCount: { count: 0 } },
   checkedAt: new Date().toISOString()
 }
+
+// 0.6.8 T6: subagent tokens counted apart from the main conversation.
+test('the Consumption tab counts the main conversation and the subagents apart, in tokens and steps', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Main conversation: 4,120,000 tokens in 30 steps/)
+    assert.match(text, /Subagents: 3,650,000 tokens in 12 steps \(47%\)/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a side that reported no token figure says so instead of printing a zero', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const usage = { ...POPULATED_CONSUMPTION.usage, last24h: { ...POPULATED_CONSUMPTION.usage.last24h, byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 0, tokens: null } } } }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, usage } })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Subagents: no token figure reported yet \(0 steps\)/)
+    assert.doesNotMatch(text, /Subagents: 0 tokens/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
 
 test('a populated consumptionSummary renders real per-model shares, quota bars, and every present overThreshold recommendation', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
@@ -1989,7 +2186,7 @@ test('every consumption.* key in one language catalog exists in the other, and t
 
 const BOARD_TABS = ['gate', 'activity', 'consumption', 'skills']
 const BOARD_TAB_SECTIONS = {
-  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'windows'],
+  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'card-waiting', 'windows'],
   activity: ['card-live', 'card-projects'],
   consumption: ['card-consumption'],
   skills: ['card-skills']

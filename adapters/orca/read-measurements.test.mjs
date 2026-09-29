@@ -692,3 +692,34 @@ test('modSkills.byProject: a `repo:<id>` row with no worktree to name it counts 
     [{ key: '(unknown)', count: 1 }, { key: 'app', count: 1 }]
   )
 })
+
+// 0.6.8 T5: the board's "Waiting for you" list, read from human-queue.jsonl
+// (src/core/human_queue.ts) -- only what is still waiting, newest first, and
+// only what the board shows: policy, project, command, when.
+function writeHumanQueue (home, lines) {
+  const path = join(home, '.cache', 'orca-supervisor', 'human-queue.jsonl')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, lines.map((line) => (typeof line === 'string' ? line : JSON.stringify(line)) + '\n').join(''), 'utf8')
+}
+
+test('gate.waiting: empty when nothing was ever queued', () => {
+  const result = run(makeHome())
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.gate.waiting, [])
+})
+
+test('gate.waiting: the items still waiting, newest first, without the ones already put to a person', () => {
+  const home = makeHome()
+  const recent = (minutes) => new Date(Date.now() - minutes * 60 * 1000).toISOString()
+  writeHumanQueue(home, [
+    { type: 'queued', id: 'a', at: recent(30), key: 'k1', project: 'acme-app', policyId: 'client_always_asks', command: 'gh pr merge 1' },
+    { type: 'queued', id: 'b', at: recent(10), key: 'k2', project: 'acme-site', policyId: 'production_is_human', command: 'npm publish' },
+    { type: 'queued', id: 'c', at: recent(20), key: 'k3', project: 'acme-app', policyId: 'client_always_asks', command: 'gh pr merge 3' },
+    { type: 'asked', key: 'k3', at: recent(5) },
+    '{not json',
+  ])
+  const result = run(home)
+  assert.deepEqual(result.gate.waiting.map((item) => item.id), ['b', 'a'])
+  assert.deepEqual(Object.keys(result.gate.waiting[0]).sort(), ['at', 'command', 'id', 'policyId', 'project'], 'the hashed key never leaves the reader')
+  assert.equal(result.gate.waiting[0].command, 'npm publish')
+})

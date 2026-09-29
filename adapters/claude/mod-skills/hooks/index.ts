@@ -144,6 +144,12 @@ import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '..
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
+import { subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
+import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
+import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
+import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
+import type { RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaBandOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
 import type { ActivityMessage, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
@@ -568,6 +574,68 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
     project,
   })
   await appendTurnUsage($, at, `${line}\n`)
+}
+
+/**
+ * 0.6.8 T7: the Models tab's "Models fixed by an agent definition", from
+ * the worker's explicit-models.json mirror. Missing or unreadable reads as
+ * "judge", the setting's default (parseExplicitModels).
+ */
+async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMode> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return parseExplicitModels(null)
+    return parseExplicitModels(await readJsonFile($, `${paths.configDir}/${EXPLICIT_MODELS_MIRROR_FILE}`))
+  } catch {
+    return parseExplicitModels(null)
+  }
+}
+
+/**
+ * 0.6.8 T7: the model the definition of `subagentType` fixes, read from the
+ * project's own `.claude/agents` first, then the account's (CLAUDE_CONFIG_DIR,
+ * else `~/.claude`). null when none fixes one. Fails open to null.
+ */
+async function readAgentDefinitionModel($: EngineInterface, subagentType: string, cwd: string): Promise<string | null> {
+  try {
+    const paths = await resolveHomePaths($)
+    const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+    const accountDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
+    const dirs = [`${cwd}/.claude/agents`, ...(accountDir === null ? [] : [`${accountDir}/agents`])]
+    const files: AgentDefinitionFile[] = []
+    for (const dir of dirs) {
+      if (!(await $.fs.exists(dir))) continue
+      for (const entry of await $.fs.list(dir)) {
+        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.md')) continue
+        try {
+          files.push({ file: entry.name, text: await $.fs.read(`${dir}/${entry.name}`) })
+        } catch {
+          // An unreadable definition fixes nothing.
+        }
+      }
+    }
+    return agentDefinitionModel(files, subagentType)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 0.6.8 T6: the status-line part for the subagents running now. First
+ * drops, through `$.agent.list()`, any subagent that ended without its
+ * turn.complete reaching this module (killed, failed): one the host lists
+ * as not running, or no longer lists at all -- never `keep`, the one just
+ * started. Fails open: no list, no pruning.
+ */
+async function runningSubagentsStatus($: EngineInterface, running: Map<string, RunningSubagent>, keep: string | null): Promise<string | null> {
+  try {
+    const listed = await $.agent.list()
+    const live = new Set(listed.filter((agent) => agent.status === 'running').map((agent) => agent.id))
+    for (const id of [...running.keys()]) if (id !== keep && !live.has(id)) running.delete(id)
+  } catch {
+    // No list: keep what spawn and turn.complete already said.
+  }
+  return subagentsStatusPart(await resolveLocale($), [...running.values()])
 }
 
 // ---------------------------------------------------------------------------
@@ -1018,32 +1086,57 @@ interface SubagentEffortTarget {
   readonly project: string | null
 }
 
-async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, next: Next<'agent.spawn'>, mode: RouterMode, options: PluginOptions, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null): Promise<AgentSpawnResult> {
-  if (mode === 'off' || e.fork) return next(e)
+async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, next: Next<'agent.spawn'>, mode: RouterMode, options: PluginOptions, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, runningSubagents: Map<string, RunningSubagent>): Promise<AgentSpawnResult> {
+  // 0.6.8 T6: every started subagent is remembered with the model it runs
+  // and why, for the status line -- in every mode, a fork and a failure
+  // included. Visibility only: this never changes what is spawned.
+  const explicitModelGiven = e.model !== undefined && e.model !== 'inherit'
+  const remember = (result: AgentSpawnResult, tiers: ResolvedTiers | null, why: SubagentWhy): void => {
+    if ('agentId' in result && result.agentId !== undefined) runningSubagents.set(result.agentId, { label: subagentModelLabel(result.model ?? e.parentModel, tiers), why })
+  }
+  if (mode === 'off' || e.fork) {
+    const result = await next(e)
+    remember(result, null, explicitModelGiven && !e.fork ? 'explicit' : 'inherited')
+    return result
+  }
   let input: AgentSpawnInput | Frozen<AgentSpawnInput> = e
   let pending: Omit<SubagentEffortTarget, 'logged'> | null = null
+  let labelTiers: ResolvedTiers | null = null
+  let why: SubagentWhy = explicitModelGiven ? 'explicit' : 'inherited'
   try {
+    // 0.6.8 T7: a model the agent definition fixes counts as fixed too; the
+    // spawn input only carries the Agent call's own.
+    const cwd = e.cwd ?? (await $.session.cwd())
+    const fixedModel = explicitModelGiven ? (e.model as string) : await readAgentDefinitionModel($, e.subagentType, cwd)
+    const modelFixed = fixedModel !== null
+    if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
     const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+    labelTiers = tiers
     const text = `${e.description}\n${e.prompt}`
-    const destination = await resolveSessionDestination($, e.cwd ?? (await $.session.cwd()))
+    const destination = await resolveSessionDestination($, cwd)
     const jev = await askTierJudgment($, options, text, null, band, destination.destinationKind)
     const decision = decideSubagent({
       tiers,
       jev,
       parentModel: e.parentModel,
-      explicitModel: e.model,
+      explicitModel: fixedModel ?? undefined,
       guards: { text, activity: null, confidence: jev?.confidence ?? null },
       band,
+      // 0.6.8 T7: a model the spawn already fixed is judged unless the
+      // person chose to keep them (the Models tab); only applied below in
+      // active mode, like every other router decision.
+      explicitModels: await readExplicitModels($),
+      destinationKind: destination.destinationKind,
     })
-    const explicitModelGiven = e.model !== undefined && e.model !== 'inherit'
     // A guard no longer makes the effort ineligible: it only stops it from
     // falling (0.6.2 F0, review finding 2).
     const guarded = decision.guard !== null
-    const effortEligible = mode === 'active' && !explicitModelGiven && decision.tier !== null
+    const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
     const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
     const applied = mode === 'active' && decision.changed
     pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, project }
+    why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (applied) input = { ...e, model: decision.model }
   } catch {
     input = e
@@ -1051,6 +1144,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
   }
   const result = await next(input)
   if (pending !== null && 'agentId' in result && result.agentId !== undefined) subagentEffortTarget.set(result.agentId, { ...pending, logged: false })
+  remember(result, labelTiers, why)
   return result
 }
 
@@ -1439,6 +1533,11 @@ export function register(on: On, options: PluginOptions): void {
   let routerStatusText: string | null = null
   // The context steward's part, set by its timer after a turn ends.
   let stewardStatusText: string | null = null
+  // 0.6.8 T6: the subagents running now (agent.spawn adds one, its own
+  // turn.complete removes it) and their status-line part.
+  const runningSubagents = new Map<string, RunningSubagent>()
+  let agentsStatusText: string | null = null
+  const statusLine = (): string | null => composeStatusLine([promptStatusText, routerStatusText, agentsStatusText, stewardStatusText])
   // The main turn running now (turn.start → turn.complete), so the steward
   // never compacts under a turn that started after the one it judged.
   let activeTurnId: string | null = null
@@ -1827,7 +1926,7 @@ export function register(on: On, options: PluginOptions): void {
 
     const statusParts = [skillOutcome.status, toolOutcome.status].filter((part): part is string => part !== null)
     promptStatusText = statusParts.length > 0 ? statusParts.join(' · ') : null
-    const line = composeStatusLine([promptStatusText, routerStatusText, stewardStatusText])
+    const line = statusLine()
     if (line !== null) $.ui.status(line)
 
     const extraContext = [skillOutcome.block, toolOutcome.block].filter((block): block is string => block !== null)
@@ -1848,7 +1947,7 @@ export function register(on: On, options: PluginOptions): void {
   on('turn.step', async function* ($, e, next) {
     const showRouterStatus = (text: string): void => {
       routerStatusText = text
-      $.ui.status(composeStatusLine([promptStatusText, routerStatusText, stewardStatusText]) ?? text)
+      $.ui.status(statusLine() ?? text)
     }
     // JEVADV-63: read from the closure's own orcaContextCache (plain data,
     // not `$`) -- never a fresh resolveOrcaContext call per step. null when
@@ -1858,7 +1957,18 @@ export function register(on: On, options: PluginOptions): void {
     return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project)
   })
 
-  on('agent.spawn', async ($, e, next) => routeSubagent($, e, next, routerMode, options, subagentEffortTarget, modSkillsProjectName(orcaContextCache)))
+  on('agent.spawn', async ($, e, next) => {
+    const result = await routeSubagent($, e, next, routerMode, options, subagentEffortTarget, modSkillsProjectName(orcaContextCache), runningSubagents)
+    if ('agentId' in result && result.agentId !== undefined) {
+      try {
+        agentsStatusText = await runningSubagentsStatus($, runningSubagents, result.agentId)
+        $.ui.status(statusLine() ?? undefined)
+      } catch {
+        // The status line is never a reason to fail a spawn.
+      }
+    }
+    return result
+  })
 
   // The context steward (stewardAfterTurn): a subagent's run raises no
   // turn.start, and its turn.complete carries an agentId, so both hooks see
@@ -1870,6 +1980,15 @@ export function register(on: On, options: PluginOptions): void {
   })
 
   on('turn.complete', async ($, e, next) => {
+    // 0.6.8 T6: a subagent's own answer ends it; the status line drops it.
+    if (e.agentId !== undefined && runningSubagents.delete(e.agentId)) {
+      try {
+        agentsStatusText = await runningSubagentsStatus($, runningSubagents, null)
+        $.ui.status(statusLine() ?? undefined)
+      } catch {
+        // The status line is never a reason to fail a turn.
+      }
+    }
     if (e.agentId === undefined) {
       activeTurnId = null
       if (e.reason === 'answer') {
@@ -1877,7 +1996,7 @@ export function register(on: On, options: PluginOptions): void {
           runningTurn: () => activeTurnId,
           show: (text) => {
             stewardStatusText = text
-            $.ui.status(composeStatusLine([promptStatusText, routerStatusText, stewardStatusText]) ?? undefined)
+            $.ui.status(statusLine() ?? undefined)
           },
         }
         try {
