@@ -15,7 +15,7 @@ import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
 
 /** Why a running subagent is on the model it is on. */
-export type SubagentWhy = "explicit" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev";
+export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev";
 
 export interface RunningSubagent {
   /** The model as a person reads it (`Opus 5.5`). */
@@ -40,6 +40,8 @@ export function subagentWhy(input: SubagentWhyInput): SubagentWhy {
       return "explicit";
     case "explicit-upgrade":
       return applied ? "raised" : "explicit";
+    case "explicit-lowered":
+      return applied ? "lowered" : "explicit";
     case "switch":
       return applied ? "chosen" : explicit ? "explicit" : "measuring";
     case "held-by-guard":
@@ -68,6 +70,7 @@ export function subagentModelLabel(model: string, tiers: ResolvedTiers | null): 
 
 const WHY_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
   explicit: "agents.why.explicit",
+  lowered: "agents.why.lowered",
   raised: "agents.why.raised",
   chosen: "agents.why.chosen",
   same: "agents.why.same",

@@ -753,6 +753,38 @@ test('an install that never set the queue mode shows "ask now" and saves it', { 
   }
 })
 
+// 0.6.7 T7: "Models fixed by an agent: judge them | keep them", in the
+// Models tab, saved to `explicitModels` ({ mode }) by the Save button.
+test('the explicit models select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ explicitModels: { mode: 'keep' } })
+  try {
+    await page.click('#tab-models')
+    assert.equal(await page.inputValue('#explicit-models'), 'keep')
+    assert.ok((await page.textContent('#explicit-models-section')).length > 40, 'the section renders its heading, choices and hint')
+    await page.selectOption('#explicit-models', 'judge')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.explicitModels), { mode: 'judge' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an install that never set it shows "judge them" and saves it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({})
+  try {
+    await page.click('#tab-models')
+    assert.equal(await page.inputValue('#explicit-models'), 'judge')
+    await page.click('#save-all')
+    await page.waitForTimeout(SETTLE_MS)
+    assert.deepEqual(await page.evaluate(() => window.__written.explicitModels), { mode: 'judge' })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('every teamOwners.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page } = await openPanel({})
   try {

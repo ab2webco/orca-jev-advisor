@@ -514,6 +514,24 @@
         <div id="model-router-rows"></div>
         <p class="hint" id="model-router-empty" style="display:none" data-i18n="modelRouter.empty"></p>
       </section>
+
+      <!--
+        0.6.7 T7. What the router does with a subagent model the Agent call
+        or its agent definition already fixed (src/core/explicit_models.ts):
+        judge it like any other (the default; lowered only in active mode,
+        under the same guards) or keep it. Saved by the Save button below to
+        `explicitModels` ({ mode }); the worker mirrors it to
+        explicit-models.json for the hooks module.
+      -->
+      <section id="explicit-models-section">
+        <h2 data-i18n="explicitModels.heading"></h2>
+        <label for="explicit-models" data-i18n="explicitModels.label"></label>
+        <select id="explicit-models">
+          <option value="judge" data-i18n="explicitModels.judge"></option>
+          <option value="keep" data-i18n="explicitModels.keep"></option>
+        </select>
+        <p class="hint" data-i18n="explicitModels.hint"></p>
+      </section>
       </div>
 
       <div class="tab-panel" id="panel-rules" role="tabpanel" aria-labelledby="tab-rules" hidden>
@@ -676,6 +694,11 @@
           'teamOwners.heading': 'Repositorios de tu equipo',
           'teamOwners.label': 'Dueños en GitHub o GitLab (usuarios u organizaciones), uno por línea',
           'teamOwners.placeholder': 'tu-organizacion',
+          'explicitModels.heading': 'Modelos fijados por un agente',
+          'explicitModels.label': 'Cuando la llamada o la definición de un agente fija su modelo',
+          'explicitModels.judge': 'Juzgarlos',
+          'explicitModels.keep': 'Mantenerlos',
+          'explicitModels.hint': 'Juzgarlos: con el enrutador en activo, Jev puede bajar ese modelo si la tarea es simple y está seguro. Nunca lo baja si duda, si la tarea es sensible o ya está fallando, y en el repositorio de un cliente nunca por debajo del modelo de la sesión. Mantenerlos: se usa siempre el modelo fijado.',
           'queueMode.heading': 'Cuando una persona debe aprobar',
           'queueMode.label': 'Qué hace el agente si una política pide a una persona',
           'queueMode.ask': 'Preguntar ahora',
@@ -759,6 +782,7 @@
           'save.whichPolicies': 'Las políticas',
           'save.whichTeamOwners': 'Los repositorios del equipo',
           'save.whichQueueMode': 'Qué hacer cuando una persona debe aprobar',
+          'save.whichExplicitModels': 'Los modelos fijados por un agente',
           'save.rejectedWhich': 'El host rechazó esto: {{which}}.',
           'save.invalidField': 'Hay un campo con un valor no válido; se cambió a su pestaña y quedó enfocado.',
           'common.timeout': 'Tiempo de espera agotado.',
@@ -977,6 +1001,11 @@
           'teamOwners.heading': 'Repositories your team owns',
           'teamOwners.label': 'GitHub or GitLab owners (users or organizations), one per line',
           'teamOwners.placeholder': 'your-organization',
+          'explicitModels.heading': 'Models fixed by an agent',
+          'explicitModels.label': 'When the Agent call or an agent definition fixes its model',
+          'explicitModels.judge': 'Judge them',
+          'explicitModels.keep': 'Keep them',
+          'explicitModels.hint': 'Judge them: with the router active, Jev may lower that model when the task is simple and it is sure. It never lowers it when unsure, when the work is sensitive or already failing, and in a client repository never below the session model. Keep them: the fixed model is always used.',
           'queueMode.heading': 'When a person must approve',
           'queueMode.label': 'What the agent does when a policy needs a person',
           'queueMode.ask': 'Ask now',
@@ -1060,6 +1089,7 @@
           'save.whichPolicies': 'The policies',
           'save.whichTeamOwners': "Your team's repositories",
           'save.whichQueueMode': 'What to do when a person must approve',
+          'save.whichExplicitModels': 'Models fixed by an agent',
           'save.rejectedWhich': 'The host rejected this: {{which}}.',
           'save.invalidField': 'A field has an invalid value; switched to its tab and focused it.',
           'common.timeout': 'Timed out.',
@@ -2501,6 +2531,20 @@
         return { enabled: queueModeEl.value === 'queue' }
       }
 
+      // 0.6.7 T7: the explicit subagent models select. Only a stored
+      // { mode: 'keep' } keeps; anything else is "judge", the default
+      // src/core/explicit_models.ts's parseExplicitModels applies.
+      var explicitModelsEl = el('explicit-models')
+
+      function fillExplicitModels (stored) {
+        var keep = stored !== null && typeof stored === 'object' && stored.mode === 'keep'
+        explicitModelsEl.value = keep ? 'keep' : 'judge'
+      }
+
+      function readExplicitModels () {
+        return { mode: explicitModelsEl.value === 'keep' ? 'keep' : 'judge' }
+      }
+
       function readTeamOwners () {
         return teamOwnersEl.value.split(/\r?\n/)
           .map(function (line) { return line.trim() })
@@ -3362,7 +3406,8 @@
           { label: t('save.whichCatalog'), promise: write('catalog', readCatalog()) },
           { label: t('save.whichPolicies'), promise: write('policies', readPolicies()) },
           { label: t('save.whichTeamOwners'), promise: write('teamOwners', readTeamOwners()) },
-          { label: t('save.whichQueueMode'), promise: write('queueMode', readQueueMode()) }
+          { label: t('save.whichQueueMode'), promise: write('queueMode', readQueueMode()) },
+          { label: t('save.whichExplicitModels'), promise: write('explicitModels', readExplicitModels()) }
         ]
         Promise.all(namedWrites.map(function (w) { return w.promise })).then(function (results) {
           var failedLabels = []
@@ -3410,7 +3455,8 @@
             loadClaudeIntegrationStatus(),
             read(MODEL_ROUTER_STATUS_KEY, false),
             read('teamOwners', false),
-            read('queueMode', false)
+            read('queueMode', false),
+            read('explicitModels', false)
           ])
         }).then(function (results) {
           currentConfig = results[0]
@@ -3426,6 +3472,7 @@
           renderModelRouterRows(results[10])
           fillTeamOwners(results[11])
           fillQueueMode(results[12])
+          fillExplicitModels(results[13])
           // 0.6.2 E7: what storage holds may predate a mode set from a
           // terminal; ask the worker for a fresh read and redraw with it.
           refreshModelRouterStatus().then(function (fresh) { if (!modelRouterEdited) renderModelRouterRows(fresh) }).catch(function () {})

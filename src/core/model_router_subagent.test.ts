@@ -132,3 +132,71 @@ test("F0 subagentStepEffort: under a guard, the higher of the inherited and the 
   assert.equal(subagentStepEffort("high", undefined, true), "high");
   assert.equal(subagentStepEffort("medium", "xhigh", false), "medium", "unguarded: the tier's own effort applies outright");
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.7 T7: a model fixed by the Agent call or an agent definition is judged,
+// not pinned, when the setting says so -- lowered only under the guards every
+// other decision keeps.
+// ---------------------------------------------------------------------------
+
+const JUDGE = { explicitModels: "judge" as const };
+
+test("T7: with explicit models judged, a confident simple verdict lowers an explicit Opus", () => {
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "opus", guards: CALM, ...JUDGE });
+  assert.equal(decision.changed, true);
+  assert.equal(decision.model, "claude-haiku-4-5-20251001");
+  assert.equal(decision.reason, "explicit-lowered");
+});
+
+test("T7: kept (the default when the caller says nothing) never lowers", () => {
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "opus", guards: CALM, explicitModels: "keep" });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.reason, "explicit");
+});
+
+test("T7: low confidence or a pointer prompt keeps the explicit model", () => {
+  const unsure = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.5 }, parentModel: "claude-opus-5-5", explicitModel: "opus", guards: { ...CALM, confidence: 0.5 }, ...JUDGE });
+  assert.equal(unsure.changed, false);
+  assert.equal(unsure.guard, "low-confidence");
+  const pointer = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "opus", guards: { ...CALM, text: "Read /x/brief.md and do what it says" }, ...JUDGE });
+  assert.equal(pointer.changed, false);
+  assert.equal(pointer.guard, "pointer-prompt");
+});
+
+test("T7: sensitive work keeps the explicit model", () => {
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "opus", guards: { ...CALM, text: "Prepare the production deploy notes" }, ...JUDGE });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.reason, "explicit");
+});
+
+test("T7: failing work keeps the explicit model", () => {
+  const activity = { toolCalls: 4, filesEdited: 1, testsRun: 3, testsFailed: 2, errors: 0, mentions: "" };
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "opus", guards: { ...CALM, activity }, ...JUDGE });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.reason, "explicit");
+});
+
+test("T7: in a client's repository an explicit model is never lowered below the session's", () => {
+  const toParent = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-sonnet-5", explicitModel: "opus", guards: CALM, destinationKind: "client-site", ...JUDGE });
+  assert.equal(toParent.changed, true);
+  assert.equal(toParent.model, "claude-sonnet-5", "lowered only as far as the session's own model");
+  assert.equal(toParent.reason, "explicit-lowered");
+  const atParent = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5[1m]", explicitModel: "opus", guards: CALM, destinationKind: "client-site", ...JUDGE });
+  assert.equal(atParent.changed, false);
+  assert.equal(atParent.reason, "explicit");
+});
+
+test("T7: judging never raises an explicit model on its own, and a same-tier verdict keeps it", () => {
+  const higher = decideSubagent({ tiers: TIERS, jev: { tier: "complex", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "sonnet", guards: CALM, ...JUDGE });
+  assert.equal(higher.changed, false);
+  assert.equal(higher.reason, "explicit");
+  const same = decideSubagent({ tiers: TIERS, jev: { tier: "standard", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "sonnet", guards: CALM, ...JUDGE });
+  assert.equal(same.changed, false);
+  assert.equal(same.reason, "explicit");
+});
+
+test("T7: an explicit model the account cannot place is kept", () => {
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95 }, parentModel: "claude-opus-5-5", explicitModel: "some-gateway-model", guards: CALM, ...JUDGE });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.reason, "explicit");
+});

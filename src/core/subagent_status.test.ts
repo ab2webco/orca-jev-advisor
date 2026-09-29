@@ -24,6 +24,8 @@ test("subagentWhy: a change only counts when it was applied (active mode)", () =
   assert.equal(subagentWhy({ decision: decision({ reason: "switch", changed: true }), applied: false, explicit: false }), "measuring");
   assert.equal(subagentWhy({ decision: decision({ reason: "explicit-upgrade", changed: true }), applied: true, explicit: true }), "raised");
   assert.equal(subagentWhy({ decision: decision({ reason: "explicit-upgrade", changed: true }), applied: false, explicit: true }), "explicit");
+  assert.equal(subagentWhy({ decision: decision({ reason: "explicit-lowered", changed: true }), applied: true, explicit: true }), "lowered");
+  assert.equal(subagentWhy({ decision: decision({ reason: "explicit-lowered", changed: true }), applied: false, explicit: true }), "explicit");
 });
 
 test("subagentWhy: a guard names what held the model", () => {
@@ -63,7 +65,7 @@ test("subagentsStatusPart: groups by model and reason, in the order they started
 });
 
 test("subagentsStatusPart: every reason has words in both languages", () => {
-  for (const why of ["explicit", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev"] as const) {
+  for (const why of ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev"] as const) {
     for (const locale of ["es", "en"] as const) {
       const text = subagentsStatusPart(locale, [{ label: "Opus 5.5", why }]);
       assert.ok(text !== null && !text.includes("agents.") && !text.includes("{{"), `${locale}/${why}: ${text}`);

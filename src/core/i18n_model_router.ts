@@ -33,6 +33,7 @@ export type ModelRouterKey =
   | "agents.lead"
   | "agents.group"
   | "agents.why.explicit"
+  | "agents.why.lowered"
   | "agents.why.raised"
   | "agents.why.chosen"
   | "agents.why.same"
@@ -74,6 +75,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.lead": "agentes: {{groups}}",
     "agents.group": "{{n}} en {{model}} ({{why}})",
     "agents.why.explicit": "pedido explícito",
+    "agents.why.lowered": "Jev lo bajó",
     "agents.why.raised": "Jev lo subió",
     "agents.why.chosen": "lo eligió Jev",
     "agents.why.same": "Jev coincide",
@@ -113,6 +115,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.lead": "agents: {{groups}}",
     "agents.group": "{{n}} on {{model}} ({{why}})",
     "agents.why.explicit": "explicit request",
+    "agents.why.lowered": "lowered by Jev",
     "agents.why.raised": "raised by Jev",
     "agents.why.chosen": "chosen by Jev",
     "agents.why.same": "Jev agrees",

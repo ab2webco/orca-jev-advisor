@@ -18,6 +18,8 @@ import { migratePolicyKind, withNormalizedPolicyScope } from "./decisions.ts";
 import type { PolicyKind, PolicyScope } from "./decisions.ts";
 import { parseTeamOwners } from "./team_owners.ts";
 import { parseQueueMode } from "./queue_mode.ts";
+import { parseExplicitModels } from "./explicit_models.ts";
+import type { ExplicitModelsMode } from "./explicit_models.ts";
 
 /** The subset of the host's `storage` capability this module needs. */
 export interface StorageHost {
@@ -35,6 +37,7 @@ const STORAGE_KEY = {
   config: "config",
   teamOwners: "teamOwners",
   queueMode: "queueMode",
+  explicitModels: "explicitModels",
 } as const;
 
 async function readKey<T>(host: StorageHost, key: string, guard: (value: unknown) => value is T, fallback: T): Promise<T> {
@@ -259,6 +262,19 @@ export async function getQueueMode(host: StorageHost): Promise<boolean> {
     return parseQueueMode(await host.get(STORAGE_KEY.queueMode));
   } catch {
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// explicitModels (0.6.7 T7): whether the router may lower a subagent model
+// the spawn already fixed. Default: "judge" -- see src/core/explicit_models.ts.
+// ---------------------------------------------------------------------------
+
+export async function getExplicitModels(host: StorageHost): Promise<ExplicitModelsMode> {
+  try {
+    return parseExplicitModels(await host.get(STORAGE_KEY.explicitModels));
+  } catch {
+    return "judge";
   }
 }
 

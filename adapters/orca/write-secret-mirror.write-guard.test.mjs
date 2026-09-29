@@ -221,3 +221,18 @@ test('queue-mode-save writes the normalized setting, and anything malformed as "
     rmSync(tempHome, { recursive: true, force: true })
   }
 })
+
+// 0.6.7 T7: the explicit models setting reaches the hooks through this script.
+test('explicit-models-save writes the normalized mode, and anything malformed as judge', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-explicit-models-'))
+  try {
+    const env = { ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor') }
+    const path = join(tempHome, '.config', 'orca-supervisor', 'explicit-models.json')
+    assert.equal(runMirrorAgainst(tempHome, 'explicit-models-save', JSON.stringify({ mode: 'keep', extra: 1 }), env).ok, true)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { mode: 'keep' })
+    assert.equal(runMirrorAgainst(tempHome, 'explicit-models-save', '{not json', env).ok, true)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), { mode: 'judge' })
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})

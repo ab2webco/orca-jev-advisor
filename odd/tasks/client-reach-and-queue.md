@@ -101,7 +101,17 @@ path back from the panel; next release if the queue proves itself).
   `claude plugin validate` caught a `$` passed to a closure, moved to a
   top-level function); GREEN: `npm test` 2417/2417, `npm run
   test:panels` 153/153; Consumption tab looked at 1440/768/390/320.
-- [ ] T7 explicit subagent models are judged, not pinned
+- [x] T7 explicit subagent models are judged, not pinned -- `decideSubagent`
+  takes `explicitModels` (judge|keep) and lowers a fixed model only with
+  no guard, no sensitive topic, no failing activity, and in a client site
+  never below the parent's model (`explicit-lowered`); applied only in
+  active mode. The Models tab select (`explicitModels`, mirrored to
+  `explicit-models.json`, default judge); the hooks also read the model an
+  agent definition fixes (`src/core/agent_definition.ts`, project then
+  account `.claude/agents`), so "keep them" keeps it too. RED seen
+  (decision, parser, store, mirror, worker, static panel and hook tests
+  failing first); GREEN: `npm test` 2447/2447, `npm run test:panels`
+  155/155; Models tab looked at 1440/768/390/320.
 - [ ] T8 README and release
 
 ## Acceptance criteria

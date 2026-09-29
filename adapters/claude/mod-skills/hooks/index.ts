@@ -145,6 +145,10 @@ import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
 import { subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
+import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
+import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
+import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
 import type { RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaBandOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
@@ -570,6 +574,50 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
     project,
   })
   await appendTurnUsage($, at, `${line}\n`)
+}
+
+/**
+ * 0.6.7 T7: the Models tab's "Models fixed by an agent definition", from
+ * the worker's explicit-models.json mirror. Missing or unreadable reads as
+ * "judge", the setting's default (parseExplicitModels).
+ */
+async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMode> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return parseExplicitModels(null)
+    return parseExplicitModels(await readJsonFile($, `${paths.configDir}/${EXPLICIT_MODELS_MIRROR_FILE}`))
+  } catch {
+    return parseExplicitModels(null)
+  }
+}
+
+/**
+ * 0.6.7 T7: the model the definition of `subagentType` fixes, read from the
+ * project's own `.claude/agents` first, then the account's (CLAUDE_CONFIG_DIR,
+ * else `~/.claude`). null when none fixes one. Fails open to null.
+ */
+async function readAgentDefinitionModel($: EngineInterface, subagentType: string, cwd: string): Promise<string | null> {
+  try {
+    const paths = await resolveHomePaths($)
+    const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+    const accountDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
+    const dirs = [`${cwd}/.claude/agents`, ...(accountDir === null ? [] : [`${accountDir}/agents`])]
+    const files: AgentDefinitionFile[] = []
+    for (const dir of dirs) {
+      if (!(await $.fs.exists(dir))) continue
+      for (const entry of await $.fs.list(dir)) {
+        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.md')) continue
+        try {
+          files.push({ file: entry.name, text: await $.fs.read(`${dir}/${entry.name}`) })
+        } catch {
+          // An unreadable definition fixes nothing.
+        }
+      }
+    }
+    return agentDefinitionModel(files, subagentType)
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -1056,28 +1104,39 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
   let labelTiers: ResolvedTiers | null = null
   let why: SubagentWhy = explicitModelGiven ? 'explicit' : 'inherited'
   try {
+    // 0.6.7 T7: a model the agent definition fixes counts as fixed too; the
+    // spawn input only carries the Agent call's own.
+    const cwd = e.cwd ?? (await $.session.cwd())
+    const fixedModel = explicitModelGiven ? (e.model as string) : await readAgentDefinitionModel($, e.subagentType, cwd)
+    const modelFixed = fixedModel !== null
+    if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
     const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
     labelTiers = tiers
     const text = `${e.description}\n${e.prompt}`
-    const destination = await resolveSessionDestination($, e.cwd ?? (await $.session.cwd()))
+    const destination = await resolveSessionDestination($, cwd)
     const jev = await askTierJudgment($, options, text, null, band, destination.destinationKind)
     const decision = decideSubagent({
       tiers,
       jev,
       parentModel: e.parentModel,
-      explicitModel: e.model,
+      explicitModel: fixedModel ?? undefined,
       guards: { text, activity: null, confidence: jev?.confidence ?? null },
       band,
+      // 0.6.7 T7: a model the spawn already fixed is judged unless the
+      // person chose to keep them (the Models tab); only applied below in
+      // active mode, like every other router decision.
+      explicitModels: await readExplicitModels($),
+      destinationKind: destination.destinationKind,
     })
     // A guard no longer makes the effort ineligible: it only stops it from
     // falling (0.6.2 F0, review finding 2).
     const guarded = decision.guard !== null
-    const effortEligible = mode === 'active' && !explicitModelGiven && decision.tier !== null
+    const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
     const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
     const applied = mode === 'active' && decision.changed
     pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, project }
-    why = subagentWhy({ decision, applied, explicit: explicitModelGiven })
+    why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (applied) input = { ...e, model: decision.model }
   } catch {
     input = e

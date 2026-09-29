@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getBoard, getCatalog, getConfig, getPolicies, getTeamOwners, getQueueMode, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getTeamOwners, getQueueMode, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -375,4 +375,14 @@ test("getQueueMode: enabled false returns false", async () => {
 test("getQueueMode: a malformed value reads as false", async () => {
   assert.equal(await getQueueMode(fakeHost({ queueMode: "yes" })), false);
   assert.equal(await getQueueMode(fakeHost({ queueMode: { enabled: "yes" } })), false);
+});
+
+// 0.6.7 T7: "Models fixed by an agent definition" -- see src/core/explicit_models.ts.
+test("getExplicitModels: nothing stored reads as judge, the default", async () => {
+  assert.equal(await getExplicitModels(fakeHost()), "judge");
+});
+
+test("getExplicitModels: a stored keep reads as keep, anything malformed as judge", async () => {
+  assert.equal(await getExplicitModels(fakeHost({ explicitModels: { mode: "keep" } })), "keep");
+  assert.equal(await getExplicitModels(fakeHost({ explicitModels: "keep" })), "judge");
 });
