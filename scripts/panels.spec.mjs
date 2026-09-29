@@ -1844,13 +1844,16 @@ const POPULATED_CONSUMPTION = {
         { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
       ],
       avgMainStepContextReread: 162345,
-      subagentShare: 0.47
+      subagentShare: 0.47,
+      // 0.6.7 T6: the same split, as real totals.
+      byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } }
     },
     last7d: {
       stepCount: 300,
       byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
       avgMainStepContextReread: 150500,
-      subagentShare: 0.3
+      subagentShare: 0.3,
+      byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } }
     }
   },
   quota: {
@@ -1909,6 +1912,32 @@ const EMPTY_CONSUMPTION = {
   recommendations: { mcpServerCount: { count: 0 } },
   checkedAt: new Date().toISOString()
 }
+
+// 0.6.7 T6: subagent tokens counted apart from the main conversation.
+test('the Consumption tab counts the main conversation and the subagents apart, in tokens and steps', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Main conversation: 4,120,000 tokens in 30 steps/)
+    assert.match(text, /Subagents: 3,650,000 tokens in 12 steps \(47%\)/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('a side that reported no token figure says so instead of printing a zero', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const usage = { ...POPULATED_CONSUMPTION.usage, last24h: { ...POPULATED_CONSUMPTION.usage.last24h, byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 0, tokens: null } } } }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, usage } })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Subagents: no token figure reported yet \(0 steps\)/)
+    assert.doesNotMatch(text, /Subagents: 0 tokens/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
 
 test('a populated consumptionSummary renders real per-model shares, quota bars, and every present overThreshold recommendation', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: POPULATED_CONSUMPTION })

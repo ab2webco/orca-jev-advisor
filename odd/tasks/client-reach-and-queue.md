@@ -91,7 +91,16 @@ path back from the panel; next release if the queue proves itself).
   nothing waits. RED seen (reader, fixture shape, 2 Playwright tests, tab
   map); GREEN: `npm test` 2401/2401, waiting + tab-map panel tests 6/6;
   Gate tab looked at 1440/768/390/320, light and dark.
-- [ ] T6 subagents in the status line and the board
+- [x] T6 subagents in the status line and the board -- the hooks keep
+  the running subagents (agent.spawn adds, their turn.complete or
+  `$.agent.list()` drops) and show `agents: 2 on Opus 5.5 (explicit
+  request)` grouped by model and reason (`src/core/subagent_status.ts`);
+  `byAgent` in the consumption fold counts main and subagent steps and
+  tokens apart, rendered in the Consumption tab. RED seen (module
+  missing, 5 hook tests, 2 fold tests, 2 Playwright tests; the real
+  `claude plugin validate` caught a `$` passed to a closure, moved to a
+  top-level function); GREEN: `npm test` 2417/2417, `npm run
+  test:panels` 153/153; Consumption tab looked at 1440/768/390/320.
 - [ ] T7 explicit subagent models are judged, not pinned
 - [ ] T8 README and release
 

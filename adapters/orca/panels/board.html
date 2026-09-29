@@ -661,6 +661,10 @@
           'consumption.noContextData': 'Todavía no hay datos de contexto por paso principal.',
           'consumption.subagentSplit': 'Los subagentes usan el {{percent}}% del consumo; lo principal usa el resto.',
           'consumption.noSubagentData': 'Todavía no hay datos del reparto entre lo principal y los subagentes.',
+          'consumption.byAgent.main': 'Conversación principal: {{tokens}} tokens en {{steps}} pasos',
+          'consumption.byAgent.subagent': 'Subagentes: {{tokens}} tokens en {{steps}} pasos ({{percent}}%)',
+          'consumption.byAgent.mainNoTokens': 'Conversación principal: todavía sin cifra de tokens ({{steps}} pasos)',
+          'consumption.byAgent.subagentNoTokens': 'Subagentes: todavía sin cifra de tokens ({{steps}} pasos)',
           'consumption.session': 'Sesión',
           'consumption.weekly': 'Semanal',
           'consumption.resetsAt': 'Reinicia: {{when}}',
@@ -855,6 +859,10 @@
           'consumption.noContextData': 'No per-step context data yet.',
           'consumption.subagentSplit': 'Subagents use {{percent}}% of usage; the main agent uses the rest.',
           'consumption.noSubagentData': 'No main-vs-subagent split data yet.',
+          'consumption.byAgent.main': 'Main conversation: {{tokens}} tokens in {{steps}} steps',
+          'consumption.byAgent.subagent': 'Subagents: {{tokens}} tokens in {{steps}} steps ({{percent}}%)',
+          'consumption.byAgent.mainNoTokens': 'Main conversation: no token figure reported yet ({{steps}} steps)',
+          'consumption.byAgent.subagentNoTokens': 'Subagents: no token figure reported yet ({{steps}} steps)',
           'consumption.session': 'Session',
           'consumption.weekly': 'Weekly',
           'consumption.resetsAt': 'Resets: {{when}}',
@@ -1845,6 +1853,22 @@
        * functions), independent of which window this function picks to
        * display the raw per-model/context/subagent numbers.
        */
+      // 0.6.7 T6: the main conversation and its subagents counted apart, as
+      // real totals (src/core/consumption.ts's byAgent). A side with no
+      // reported figure says so; it never prints a zero it did not measure.
+      function consumptionByAgentLines (byAgent) {
+        var main = byAgent.main || { stepCount: 0, tokens: null }
+        var sub = byAgent.subagent || { stepCount: 0, tokens: null }
+        var total = (main.tokens || 0) + (sub.tokens || 0)
+        var percent = total > 0 && sub.tokens !== null ? String(Math.round((sub.tokens / total) * 1000) / 10) : '0'
+        return (main.tokens === null
+          ? line(t('consumption.byAgent.mainNoTokens', { steps: num(main.stepCount) }), 'empty-line')
+          : line(t('consumption.byAgent.main', { tokens: num(main.tokens), steps: num(main.stepCount) }))) +
+          (sub.tokens === null
+            ? line(t('consumption.byAgent.subagentNoTokens', { steps: num(sub.stepCount) }), 'empty-line')
+            : line(t('consumption.byAgent.subagent', { tokens: num(sub.tokens), steps: num(sub.stepCount), percent: percent })))
+      }
+
       function renderConsumption (summary) {
         if (!summary) { fill('consumption-body', 'consumption-empty', '', t('consumption.empty')); return }
         if (summary.ok === false) { fill('consumption-body', 'consumption-empty', '', t('consumption.unavailable')); return }
@@ -1876,7 +1900,7 @@
         parts.push(w.avgMainStepContextReread === null
           ? line(t('consumption.noContextData'), 'empty-line')
           : line(t('consumption.avgContext', { tokens: num(Math.round(w.avgMainStepContextReread)) })))
-        parts.push(w.subagentShare === null
+        parts.push(w.byAgent ? consumptionByAgentLines(w.byAgent) : w.subagentShare === null
           ? line(t('consumption.noSubagentData'), 'empty-line')
           : line(t('consumption.subagentSplit', { percent: String(Math.round(w.subagentShare * 1000) / 10) })))
 

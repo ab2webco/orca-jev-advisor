@@ -659,12 +659,15 @@ const CONSUMPTION_READY = {
         ],
         avgMainStepContextReread: 162345,
         subagentShare: 0.47,
+        // 0.6.7 T6: the same split, as real totals.
+        byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } },
       },
       last7d: {
         stepCount: 300,
         byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
         avgMainStepContextReread: 150500,
         subagentShare: 0.3,
+        byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } },
       },
     },
     // `email` is what main.mjs's withAccountEmails joins on from `orca
