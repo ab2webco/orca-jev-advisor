@@ -35,7 +35,7 @@ test("classifyNode: 24 and newer is ok, older is too-old with the version seen, 
 test("nodeCandidatePaths: PATH entries first, then the well-known places, without duplicates", () => {
   const list = nodeCandidatePaths({
     platform: "darwin",
-    home: "/Users/dev",
+    home: "/home/dev",
     pathEnv: "/usr/local/bin:/opt/homebrew/bin:/usr/local/bin",
     override: undefined,
     managed: {},
@@ -43,7 +43,7 @@ test("nodeCandidatePaths: PATH entries first, then the well-known places, withou
   assert.equal(list[0], "/usr/local/bin/node");
   assert.equal(list[1], "/opt/homebrew/bin/node");
   assert.equal(list.filter((p) => p === "/usr/local/bin/node").length, 1);
-  for (const expected of ["/Users/dev/.volta/bin/node", "/Users/dev/.asdf/shims/node", "/usr/bin/node"]) {
+  for (const expected of ["/home/dev/.volta/bin/node", "/home/dev/.asdf/shims/node", "/usr/bin/node"]) {
     assert.ok(list.includes(expected), expected);
   }
   assert.ok(list.indexOf("/usr/bin/node") > list.indexOf("/opt/homebrew/bin/node"));
@@ -81,7 +81,7 @@ test("nodeCandidatePaths: nvm and fnm installs come highest version first", () =
 test("nodeCandidatePaths: an override list replaces every other source", () => {
   const list = nodeCandidatePaths({
     platform: "darwin",
-    home: "/Users/dev",
+    home: "/home/dev",
     pathEnv: "/usr/local/bin",
     override: "/tmp/a/node:/tmp/b/node",
     managed: {},
