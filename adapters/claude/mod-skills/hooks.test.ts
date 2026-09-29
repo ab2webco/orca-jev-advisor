@@ -66,6 +66,10 @@ interface FakeHost {
   failProcess: boolean;
   /** `$.agent.list()` rows (0.6.8 T6); null makes the call reject, like a host without it. */
   agents: { id: string; status: string }[] | null;
+  /** `$.session.usage().rateLimits`: the live figures Claude Code gives its status line (0.6.11 T6). */
+  rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[];
+  /** When true, `$.session.usage()` rejects. */
+  failUsage: boolean;
 }
 
 function makeFakeHost(): FakeHost {
@@ -82,6 +86,8 @@ function makeFakeHost(): FakeHost {
     failMessages: false,
     failProcess: false,
     agents: null,
+    rateLimits: [],
+    failUsage: false,
   };
 }
 
@@ -112,6 +118,10 @@ function makeFakeEngine(host: FakeHost): unknown {
   return {
     session: {
       cwd: async () => CWD,
+      usage: async () => {
+        if (host.failUsage) throw new Error("fake host: session.usage failed");
+        return { startedAt: 0, context: {}, rateLimits: host.rateLimits };
+      },
       messages: async () => {
         if (host.failMessages) throw new Error("fake host: session.messages failed");
         return host.messages;
@@ -1065,6 +1075,50 @@ test("router, measure (the default): decides and logs at session start, changes 
   for (const key of ["at", "confidence", "reason", "guard", "contextTokens", "switchCost", "stepSaving", "expectedSteps"]) assert.ok(key in decision, key);
   assert.equal(JSON.stringify(decision).includes("what time"), false, "no prompt text in the decision log");
   assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5 (stage: ask)");
+});
+
+test("router quota: the live 5-hour and 7-day figures set the band, and the record says live (0.6.11 T6)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.rateLimits = [
+    { kind: "five_hour", percentUsed: 96.5, resetsAt: "2026-09-25T13:00:00.000Z" },
+    { kind: "seven_day", percentUsed: 30, resetsAt: "2026-09-30T00:00:00.000Z" },
+  ];
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.quotaBand, "strong-economy");
+  assert.equal(decision?.quotaSource, "live");
+  const sent = host.fetchCalls.map((call) => call.body ?? "").join("\n");
+  assert.ok(sent.includes("strong-economy"), "Jev is told the live pressure");
+});
+
+test("router quota: with no live reading the fresh Orca mirror decides, and the record says mirror", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/quota.json`, JSON.stringify({ checkedAt: "2026-09-25T09:55:00.000Z", accounts: [{ id: "acct-1", status: "ok", sessionUsedPercent: 12, weeklyUsedPercent: 85, resetsAt: null }] }));
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.quotaBand, "economy");
+  assert.equal(decision?.quotaSource, "mirror");
+});
+
+test("router quota: a failing session.usage falls back to the mirror, and to none without one", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.failUsage = true;
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.quotaBand, "normal");
+  assert.equal(decision?.quotaSource, "none");
 });
 
 test("router decision record: carries the resolved project once orcaContextCache is warm (JEVADV-63)", async () => {

@@ -152,9 +152,9 @@ import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
 import type { RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
-import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaBandOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
-import type { ActivityMessage, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
-import type { DestinationKind, QuotaBand, SessionEffort, TierEffort, TierEffortMap, TurnActivity } from '../../../../src/core/model_router_decide.ts'
+import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
+import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
+import type { DestinationKind, QuotaBand, QuotaSource, SessionEffort, TierEffort, TierEffortMap, TurnActivity } from '../../../../src/core/model_router_decide.ts'
 import { resolveRouterDestination } from '../../../../src/core/model_router_destination.ts'
 import type { RouterDestination } from '../../../../src/core/model_router_destination.ts'
 import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_router_subagent.ts'
@@ -710,7 +710,22 @@ async function readVaultSettings($: EngineInterface): Promise<unknown> {
   return vaultDir === null ? null : readJsonFile($, `${vaultDir}/settings.json`)
 }
 
-async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; tierEffort: TierEffortMap }> {
+/**
+ * The 5-hour and 7-day windows Claude Code hands its status line, live for
+ * this session's account (`$.session.usage().rateLimits`). Empty when the
+ * session has no reading yet (before its first API response, off a
+ * subscription) or the call fails: the router then falls back to the mirror.
+ */
+async function readLiveRateLimits($: EngineInterface): Promise<readonly LiveRateLimit[]> {
+  try {
+    const usage = await $.session.usage()
+    return usage.rateLimits.map((window) => ({ kind: window.kind, percentUsed: window.percentUsed, ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }) }))
+  } catch {
+    return []
+  }
+}
+
+async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; quotaSource: QuotaSource; tierEffort: TierEffortMap }> {
   const paths = await resolveHomePaths($)
   const vaultSettings = await readVaultSettings($)
   const vaultEnv = vaultSettings === null ? {} : parseVaultEnv(vaultSettings)
@@ -734,7 +749,8 @@ async function resolveRouterAccount($: EngineInterface, account: string): Promis
   const quotaFile = paths ? parseQuota(await readJsonFile($, `${paths.configDir}/quota.json`)) : { accounts: [], checkedAt: null }
   const quota = quotaFile.accounts.find((row) => row.id === account) ?? null
   const tiers = resolveAccountTiers({ env: { ...processEnv, ...vaultEnv }, catalog, quota })
-  return { tiers, band: quotaBandOf(quota, quotaFile.checkedAt, await $.clock.now()), tierEffort: routerEffortFromSettings(vaultSettings) }
+  const pressure = quotaPressureOf({ live: await readLiveRateLimits($), mirror: quota, mirrorCheckedAt: quotaFile.checkedAt, nowMs: await $.clock.now() })
+  return { tiers, band: pressure.band, quotaSource: pressure.source, tierEffort: routerEffortFromSettings(vaultSettings) }
 }
 
 /**
@@ -949,7 +965,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
 
   const promptText = lastPromptText(messages)
   const account = await resolveAccountId($)
-  const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+  const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
   const destination = await resolveSessionDestination($, await $.session.cwd())
   const jev = await askTierJudgment($, options, promptText, null, band, destination.destinationKind)
   const decision = decideStart({
@@ -963,7 +979,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   })
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey }
   const next: RouterSticky = decision.changed
@@ -986,7 +1002,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
  */
 async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', sticky: RouterSticky, text: string, activity: TurnActivity | null, originKind: string | null, project: string | null): Promise<RoutedStep> {
   const account = await resolveAccountId($)
-  const { tiers, band } = await resolveRouterAccount($, account)
+  const { tiers, band, quotaSource } = await resolveRouterAccount($, account)
   const decision = decideEngineTurn({
     tiers,
     currentModel: sticky.model,
@@ -997,7 +1013,7 @@ async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mod
   })
   if (decision === null) return { input: stickyStepInput(e, sticky, mode), status: null }
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
   const next: RouterSticky = { ...sticky, model: decision.model, effort: decision.effort, rewrite: false, pendingLower: null }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
   return { input: stickyStepInput(e, next, mode), status: null }
@@ -1007,7 +1023,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   const promptText = lastPromptText(messages)
   const activity = summarizePreviousTurn(messages)
   const account = await resolveAccountId($)
-  const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+  const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
   const destination = await resolveSessionDestination($, await $.session.cwd())
   const jev = await askTierJudgment($, options, promptText, activity, band, destination.destinationKind)
   const stageInput: StageDecisionInput = {
@@ -1032,7 +1048,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
@@ -1112,6 +1128,7 @@ interface SubagentEffortTarget {
   readonly decision: SubagentDecision
   readonly applied: boolean
   readonly quotaBand: QuotaBand
+  readonly quotaSource: QuotaSource
   readonly project: string | null
 }
 
@@ -1140,7 +1157,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const modelFixed = fixedModel !== null
     if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
-    const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+    const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
     labelTiers = tiers
     const text = `${e.description}\n${e.prompt}`
     const destination = await resolveSessionDestination($, cwd)
@@ -1164,7 +1181,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
     const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
     const applied = mode === 'active' && decision.changed
-    pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, project }
+    pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
     why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (applied) input = { ...e, model: decision.model }
   } catch {
@@ -1236,6 +1253,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           decision: { ...target.decision, effort: null },
           applied: target.applied,
           quotaBand: target.quotaBand,
+          quotaSource: target.quotaSource,
           effort: loggedEffort,
           project: target.project,
         })
