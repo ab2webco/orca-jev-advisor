@@ -1802,9 +1802,10 @@ test('the model router section renders one row per target, with its current mode
   try {
     await page.click('#tab-models')
     const rows = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll('#model-router-rows select')).map((select) => ({
-        target: select.getAttribute('data-model-router-target'),
-        value: select.value
+      const modes = ['off', 'measure', 'active']
+      return Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((group) => ({
+        target: group.getAttribute('data-model-router-target'),
+        value: modes[Array.from(group.querySelectorAll('button')).findIndex((b) => b.className === 'active')]
       }))
     })
     assert.deepEqual(rows, [
@@ -1835,8 +1836,12 @@ test('changing a row\'s mode and clicking its save button sends a modelRouterCon
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_TWO_TARGETS })
   try {
     await page.click('#tab-models')
-    await page.selectOption('#model-router-rows select[data-model-router-target="home"]', 'active')
-    await page.click('#model-router-rows .checkbox-row button')
+    // Click the third button (active mode) for the home target
+    await page.evaluate(() => {
+      const group = document.querySelector('#model-router-rows .mode-buttons[data-model-router-target="home"]')
+      group.querySelectorAll('button')[2].click() // click 'active' button
+    })
+    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) button[type="button"]:not(.active)')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
     assert.equal(typeof request.id, 'string')
@@ -2608,12 +2613,15 @@ test('steward: each account shows the context steward mode and threshold next to
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
   try {
     await page.click('#tab-models')
-    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('[data-steward-target]')).map((row) => ({
-      target: row.getAttribute('data-steward-target'),
-      mode: row.querySelector('select').value,
-      threshold: row.querySelector('input[type=number]').value,
-      text: row.innerText
-    })))
+    const rows = await page.evaluate(() => {
+      const modes = ['off', 'measure', 'active']
+      return Array.from(document.querySelectorAll('[data-steward-target]')).map((row) => ({
+        target: row.getAttribute('data-steward-target'),
+        mode: modes[Array.from(row.querySelector('.mode-buttons').querySelectorAll('button')).findIndex((b) => b.className === 'active')],
+        threshold: row.querySelector('input[type=number]').value,
+        text: row.innerText
+      }))
+    })
     assert.deepEqual(rows.map((r) => [r.target, r.mode, r.threshold]), [['home', 'measure', '120'], ['11112222-3333-4444-5555-666677778888', 'active', '150']])
     assert.match(rows[0].text, /Context steward/)
     const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)

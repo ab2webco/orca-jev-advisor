@@ -198,6 +198,13 @@
       /* 0.6.2 E7: an account's email needs the whole line on a phone. */
       .router-row { flex-wrap: wrap; }
       .router-row select { flex: 1 1 10em; width: auto; min-width: 0; }
+      .mode-buttons { display: flex; gap: 4px; flex: 1 1 10em; }
+      .mode-buttons button { flex: 1; padding: 6px 8px; font-size: 12px; border: 1px solid var(--border, var(--fb-border));
+        background: var(--background, var(--fb-background)); color: var(--foreground, var(--fb-foreground));
+        cursor: pointer; border-radius: 4px; transition: all 0.12s; }
+      .mode-buttons button:hover { background: var(--muted-foreground, var(--fb-muted-foreground)); opacity: 0.5; }
+      .mode-buttons button.active { background: var(--accent, var(--fb-accent)); color: var(--accent-foreground, var(--fb-accent-foreground));
+        border-color: var(--accent, var(--fb-accent)); font-weight: 500; }
       @media (max-width: 480px) { .router-row .router-target { flex-basis: 100%; } }
       /* 0.6.2: per account, tier → the model it resolves to → its effort. */
       .router-effort { margin: 8px 0 14px; }
@@ -2825,15 +2832,22 @@
           label.textContent = modelRouterTargetLabel(target)
           text.appendChild(label)
 
-          var select = elMake('select')
-          select.setAttribute('data-model-router-target', target.target)
-          select.addEventListener('change', function () { modelRouterEdited = true })
+          // Mode buttons instead of select
+          var buttonGroup = elMake('div', 'mode-buttons')
+          buttonGroup.setAttribute('data-model-router-target', target.target)
+          var selectedMode = target.mode
           ;['off', 'measure', 'active'].forEach(function (mode) {
-            var opt = elMake('option')
-            opt.value = mode
-            opt.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
-            if (mode === target.mode) opt.selected = true
-            select.appendChild(opt)
+            var btn = elMake('button')
+            btn.type = 'button'
+            btn.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
+            if (mode === selectedMode) btn.className = 'active'
+            btn.addEventListener('click', function () {
+              selectedMode = mode
+              Array.from(buttonGroup.querySelectorAll('button')).forEach(function (b) { b.className = '' })
+              btn.className = 'active'
+              modelRouterEdited = true
+            })
+            buttonGroup.appendChild(btn)
           })
 
           var saveBtn = elMake('button')
@@ -2843,12 +2857,12 @@
           var saidEl = elMake('span', 'said')
 
           saveBtn.addEventListener('click', function () {
-            saveModelRouterChange(target.target, target.mode, function (row) { return row.mode }, { mode: select.value }, saidEl)
+            saveModelRouterChange(target.target, target.mode, function (row) { return row.mode }, { mode: selectedMode }, saidEl)
           })
           if (notice && notice.target === target.target) said(saidEl, notice.text)
 
           row.appendChild(text)
-          row.appendChild(select)
+          row.appendChild(buttonGroup)
           row.appendChild(saveBtn)
           row.appendChild(saidEl)
           host.appendChild(row)
@@ -2868,15 +2882,21 @@
         label.textContent = t('modelRouter.stewardLabel')
         text.appendChild(label)
 
-        var select = elMake('select')
-        select.setAttribute('aria-label', t('modelRouter.stewardLabel'))
-        select.addEventListener('change', function () { modelRouterEdited = true })
+        var selectedMode = target.steward.mode
+        var buttonGroup = elMake('div', 'mode-buttons')
+        buttonGroup.setAttribute('aria-label', t('modelRouter.stewardLabel'))
         ;['off', 'measure', 'active'].forEach(function (mode) {
-          var opt = elMake('option')
-          opt.value = mode
-          opt.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
-          if (mode === target.steward.mode) opt.selected = true
-          select.appendChild(opt)
+          var btn = elMake('button')
+          btn.type = 'button'
+          btn.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
+          if (mode === selectedMode) btn.className = 'active'
+          btn.addEventListener('click', function () {
+            selectedMode = mode
+            Array.from(buttonGroup.querySelectorAll('button')).forEach(function (b) { b.className = '' })
+            btn.className = 'active'
+            modelRouterEdited = true
+          })
+          buttonGroup.appendChild(btn)
         })
 
         var input = elMake('input')
@@ -2900,7 +2920,7 @@
             said(saidEl, t('modelRouter.stewardRange'), true)
             return
           }
-          saveModelRouterChange(target.target, JSON.stringify(target.steward), function (row) { return JSON.stringify(row.steward) }, { steward: { mode: select.value, threshold: thousands * 1000 } }, saidEl)
+          saveModelRouterChange(target.target, JSON.stringify(target.steward), function (row) { return JSON.stringify(row.steward) }, { steward: { mode: selectedMode, threshold: thousands * 1000 } }, saidEl)
         })
 
         row.appendChild(text)
@@ -2908,7 +2928,7 @@
         var threshold = elMake('span', 'steward-threshold')
         threshold.appendChild(input)
         threshold.appendChild(unit)
-        row.appendChild(select)
+        row.appendChild(buttonGroup)
         row.appendChild(threshold)
         row.appendChild(saveBtn)
         row.appendChild(saidEl)
