@@ -406,6 +406,13 @@ interface RuleContext {
  * be there to answer. See someSegmentMatches' own doc comment
  * (src/core/git_discard.ts) for exactly how the two scan passes decide this.
  */
+// A global option with its value, joined (`--context=prod`, `-chdir=infra`)
+// or as the next word (`--context prod`, `-n web`).
+const KUBECTL_DELETE_SHAPE = /\bkubectl(\s+--?[\w-]+(=\S+|\s+(?!-)\S+)?)*?\s+(delete|drain)\b/
+function terraformShape (verb: string): RegExp {
+  return new RegExp(`\\b(terraform|tofu)(\\s+-[\\w-]+(=\\S+)?)*\\s+${verb}\\b`)
+}
+
 function segmentRule(pattern: { test(segment: string): boolean }): (ctx: RuleContext) => RuleOutcome {
   return (ctx) => someSegmentMatches(ctx.command, pattern)
 }
@@ -600,9 +607,12 @@ const NEVER_SILENTLY: readonly {
   // ambiguous interpreter code -- see git_discard.ts's SQL_EXEC_FLAGS -- so
   // it keeps denying outright, never softening to 'code'/advice.
   { evaluate: segmentRule(/\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
-  { evaluate: segmentRule(/kubectl\s+(delete|drain)\b/), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
-  { evaluate: segmentRule(/\b(terraform|tofu)\s+apply\b/), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
-  { evaluate: segmentRule(/\b(terraform|tofu)\s+destroy\b/), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
+  // The tools' own global options may come before the verb (`kubectl
+  // --context prod delete`, `-n web`, `terraform -chdir=infra apply`): the
+  // same command as the plain spelling (0.6.13 T3), as git's are for a push.
+  { evaluate: segmentRule(KUBECTL_DELETE_SHAPE), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
+  { evaluate: segmentRule(terraformShape('apply')), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
+  { evaluate: segmentRule(terraformShape('destroy')), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
   // curlPipeShell (see curlPipeShellRule's own doc comment above): a real
   // curl/wget piping into a real shell, in command position on both sides,
   // never a mention (a quoted grep/echo argument) or data (a heredoc body

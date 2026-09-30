@@ -238,6 +238,33 @@ for (const [command, rule] of N04_REFUSALS) {
   })
 }
 
+// 0.6.13 T3: kubectl's and terraform's own global options before the verb
+// (the 0.6.12 QA rows H-k8s-ctx-delete, H-tf-chdir) are the same command as
+// the plain spelling the rule already refuses, as git's are for a push.
+const KUBECTL_RULE = /deletes something that is running and serving right now/
+const TF_APPLY_RULE = /creates or changes real infrastructure/
+const TF_DESTROY_RULE = /destroys real infrastructure/
+const GLOBAL_OPTION_REFUSALS = [
+  ['kubectl --context prod delete ns x', KUBECTL_RULE],
+  ['kubectl -n web delete pod x', KUBECTL_RULE],
+  ['kubectl --namespace=web --context prod drain node-1', KUBECTL_RULE],
+  ['terraform -chdir=infra apply', TF_APPLY_RULE],
+  ['tofu -chdir=infra apply -auto-approve', TF_APPLY_RULE],
+  ['terraform -chdir=infra destroy', TF_DESTROY_RULE],
+]
+
+for (const [command, rule] of GLOBAL_OPTION_REFUSALS) {
+  test(`0.6.13 T3: ${JSON.stringify(command)} is refused like its plain spelling, and so is its retry`, () => {
+    assertRefusedTwice(command, rule)
+  })
+}
+
+test('0.6.13 T3: kubectl and terraform verbs that change nothing stay unrefused', () => {
+  for (const command of ['kubectl --context prod get pods', 'kubectl -n web describe pod delete-me', 'terraform -chdir=infra plan', "grep -rn 'terraform -chdir=infra apply' docs/"]) {
+    assertNotRefused(command)
+  }
+})
+
 test('0.6.13 T3: the same text as data stays data', () => {
   for (const command of ["grep -rn 'echo ~ | xargs rm -rf' docs/", 'echo "find ~ -delete"', "git commit -m 'never git push --mirror'", "find ~ -name '*.tmp' -delete"]) {
     assertNotRefused(command)
