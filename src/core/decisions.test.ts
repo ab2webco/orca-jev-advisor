@@ -847,6 +847,7 @@ test("buildPolicyQuestions: a requires_human rule is asked as needs_person, on e
   assert.equal(person.criteria["policy_3"], "Deploying to production is decided by a person.");
   assert.match(person.instructions, /itself does what the rule reserves for a person/);
   assert.match(person.instructions, /says happens without asking/, "what the rule itself lets run is not doing it");
+  assert.match(person.instructions, /one nothing here shows is not met/, "a merge is not someone else's PR unless something shows it is");
   assert.equal("needs_person" in buildPolicyQuestions([T2_POLICIES[0] as Policy]), false);
 });
 
@@ -868,4 +869,9 @@ test("interpretDestinationPolicy: needs_person below its gate, or naming a rule 
 
 test("GATE_DECISION_RULES_VERSION: 6 since requires_human is judged on effect, so a cached ask on topic is judged again", () => {
   assert.equal(GATE_DECISION_RULES_VERSION, 6);
+});
+
+test("interpretDestinationPolicy: needs_person asks only above the measured band (0.78 for an unrelated merge, 0.96 for a reserved action)", () => {
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.8)), null);
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.95))?.outcome, "ask");
 });
