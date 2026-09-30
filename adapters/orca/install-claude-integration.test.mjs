@@ -977,11 +977,23 @@ function runRouterAsync (args, home, extraEnv) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+// The installer appends a line to ORCA_TEST_BEFORE_RENAME_SIGNAL at each write
+// attempt, after its temp file and before its re-read; a test edits inside that
+// window by waiting on it, not on fixed sleeps a slow runner outran.
+async function waitForAttempts (signal, count) {
+  for (let waited = 0; waited < 10_000; waited += 10) {
+    if (existsSync(signal) && readFileSync(signal, 'utf8').split('\n').filter(Boolean).length >= count) return
+    await sleep(10)
+  }
+  throw new Error(`the installer never reached write attempt ${count}`)
+}
+
 test('finding 6: an edit made while the router mode is being written survives (re-read, then merge again)', async () => {
   const home = makeHome()
   writeSettings(home, { model: 'opus' })
-  const pending = runRouterAsync(['router-mode-set', 'home', 'active'], home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
-  await sleep(250)
+  const signal = join(home, 'before-rename.signal')
+  const pending = runRouterAsync(['router-mode-set', 'home', 'active'], home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700', ORCA_TEST_BEFORE_RENAME_SIGNAL: signal })
+  await waitForAttempts(signal, 1)
   writeSettings(home, { model: 'opus', permissions: { allow: ['Bash(ls)'] } })
   const result = await pending
   assert.equal(result.ok, true)
@@ -993,10 +1005,11 @@ test('finding 6: an edit made while the router mode is being written survives (r
 test('finding 6: a file that keeps changing under the writer is reported as a failure, never clobbered', async () => {
   const home = makeHome()
   writeSettings(home, { model: 'opus' })
-  const pending = runRouterAsync(['router-mode-set', 'home', 'active'], home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800' })
-  await sleep(300)
+  const signal = join(home, 'before-rename.signal')
+  const pending = runRouterAsync(['router-mode-set', 'home', 'active'], home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800', ORCA_TEST_BEFORE_RENAME_SIGNAL: signal })
+  await waitForAttempts(signal, 1)
   writeSettings(home, { model: 'opus', edit: 1 })
-  await sleep(1000)
+  await waitForAttempts(signal, 2)
   writeSettings(home, { model: 'opus', edit: 2 })
   const result = await pending
   assert.equal(result.ok, false)
@@ -1130,8 +1143,9 @@ function runAsync (mode, home, extraEnv) {
 test('T2c: an edit made while install runs survives, and the hooks are still installed', async () => {
   const home = makeHome()
   writeSettings(home, { model: 'opus' })
-  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
-  await sleep(250)
+  const signal = join(home, 'before-rename.signal')
+  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700', ORCA_TEST_BEFORE_RENAME_SIGNAL: signal })
+  await waitForAttempts(signal, 1)
   writeSettings(home, { model: 'opus', permissions: { allow: ['Bash(ls)'] } })
   const result = await pending
   assert.equal(result.ok, true)
@@ -1144,10 +1158,14 @@ test('T2c: an edit made while install runs survives, and the hooks are still ins
 test('T2c: a settings.json that keeps changing under install is reported as a failed target, never clobbered', async () => {
   const home = makeHome()
   writeSettings(home, { model: 'opus' })
-  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800' })
-  await sleep(300)
+  // Each edit lands inside an attempt's window (after its temp file, before
+  // its re-read), signalled by the installer rather than guessed by the
+  // clock: a slow runner starting node late raced the old fixed sleeps.
+  const signal = join(home, 'before-rename.signal')
+  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800', ORCA_TEST_BEFORE_RENAME_SIGNAL: signal })
+  await waitForAttempts(signal, 1)
   writeSettings(home, { model: 'opus', edit: 1 })
-  await sleep(1000)
+  await waitForAttempts(signal, 2)
   writeSettings(home, { model: 'opus', edit: 2 })
   const result = await pending
   assert.equal(result.targets[0].ok, false)
@@ -1159,8 +1177,9 @@ test('T2c: an edit made while uninstall runs survives, and our hooks are gone', 
   const home = makeHome()
   writeSettings(home, { model: 'opus' })
   run('install', home)
-  const pending = runAsync('uninstall', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
-  await sleep(250)
+  const signal = join(home, 'before-rename.signal')
+  const pending = runAsync('uninstall', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700', ORCA_TEST_BEFORE_RENAME_SIGNAL: signal })
+  await waitForAttempts(signal, 1)
   const during = readSettings(home)
   writeSettings(home, { ...during, permissions: { allow: ['Bash(ls)'] } })
   const result = await pending
