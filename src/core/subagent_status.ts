@@ -1,7 +1,8 @@
-// 0.6.8 T6: the subagents running now, in the status line -- which model
-// each one runs and why that model (`agentes: 2 en Opus 5.5 (pedido
-// explícito)`). Visibility only: nothing here decides anything; it reads
-// what the router (model_router_subagent.ts) already decided at spawn.
+// 0.6.8 T6: the subagents running now -- which model each one runs and why
+// that model. Visibility only: nothing here decides anything; it reads what
+// the router (model_router_subagent.ts) already decided at spawn. 0.6.14:
+// the status line only counts them (`agentes: 4`); each one's row is drawn
+// above the prompt (subagent_band.ts).
 //
 // Pure: the hooks module keeps the running set (agent.spawn adds, the
 // subagent's own turn.complete or `$.agent.list()` removes) and passes it in.
@@ -9,7 +10,6 @@
 import { translate } from "./i18n.ts";
 import type { Locale } from "./i18n.ts";
 import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
-import type { ModelRouterKey } from "./i18n_model_router.ts";
 import { baseModelId, tierOfModel } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
@@ -137,32 +137,13 @@ export function subagentModelLabel(model: string, tiers: ResolvedTiers | null): 
   return ALIAS_FAMILY[alias] ?? (family !== undefined ? (ALIAS_FAMILY[family] as string) : model);
 }
 
-const WHY_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
-  explicit: "agents.why.explicit",
-  lowered: "agents.why.lowered",
-  raised: "agents.why.raised",
-  chosen: "agents.why.chosen",
-  same: "agents.why.same",
-  "kept-unsure": "agents.why.kept-unsure",
-  "kept-pointer": "agents.why.kept-pointer",
-  measuring: "agents.why.measuring",
-  inherited: "agents.why.inherited",
-  "no-jev": "agents.why.no-jev",
-  unknown: "agents.why.unknown",
-};
-
-/** One status-line part for every subagent running now, grouped by model and reason in the order they started; null when none runs. */
-export function subagentsStatusPart(locale: Locale, running: readonly Pick<RunningSubagent, "label" | "why">[]): string | null {
+/**
+ * The status-line part for the subagents running now: how many (0.6.14 T2).
+ * Which one runs what, and why, is the band's (subagent_band.ts): grouped
+ * by model on one line, the person could not tell the agents apart. null
+ * when none runs.
+ */
+export function subagentsStatusPart(locale: Locale, running: readonly unknown[]): string | null {
   if (running.length === 0) return null;
-  const groups: { label: string; why: SubagentWhy; count: number }[] = [];
-  for (const agent of running) {
-    const label = agent.label ?? translate(MODEL_ROUTER_CATALOG, locale, "agents.model.unknown");
-    const group = groups.find((g) => g.label === label && g.why === agent.why);
-    if (group !== undefined) group.count += 1;
-    else groups.push({ label, why: agent.why, count: 1 });
-  }
-  const parts = groups.map((g) =>
-    translate(MODEL_ROUTER_CATALOG, locale, "agents.group", { n: String(g.count), model: g.label, why: translate(MODEL_ROUTER_CATALOG, locale, WHY_KEY[g.why]) }),
-  );
-  return translate(MODEL_ROUTER_CATALOG, locale, "agents.lead", { groups: parts.join(", ") });
+  return translate(MODEL_ROUTER_CATALOG, locale, "agents.count", { n: String(running.length) });
 }

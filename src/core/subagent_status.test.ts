@@ -55,14 +55,17 @@ test("subagentsStatusPart: nothing running shows nothing", () => {
   assert.equal(subagentsStatusPart("es", []), null);
 });
 
-test("subagentsStatusPart: groups by model and reason, in the order they started", () => {
+// 0.6.14 T2: the line only counts them; which agent runs which model, and
+// why, is each agent's own row in the band (subagent_band.test.ts), since
+// grouped by model the person could not tell the agents apart.
+test("subagentsStatusPart: counts the agents running now", () => {
   const running = [
     { label: "Opus 5.5", why: "explicit" as const },
     { label: "Sonnet 5.5", why: "chosen" as const },
     { label: "Opus 5.5", why: "explicit" as const },
   ];
-  assert.equal(subagentsStatusPart("es", running), "agentes: 2 en Opus 5.5 (pedido explícito), 1 en Sonnet 5.5 (lo eligió Jev)");
-  assert.equal(subagentsStatusPart("en", running), "agents: 2 on Opus 5.5 (explicit request), 1 on Sonnet 5.5 (chosen by Jev)");
+  assert.equal(subagentsStatusPart("es", running), "agentes: 3");
+  assert.equal(subagentsStatusPart("en", running), "agents: 3");
 });
 
 test("subagentsStatusPart: every reason has words in both languages", () => {
@@ -121,8 +124,8 @@ test("parseRunningSubagents: reads back what was stored, drops what is malformed
   assert.deepEqual(parseRunningSubagents({ agents: [{ id: "x" }, null, 3, { ...stored[0], why: "nonsense" }] }), []);
 });
 
-test("subagentsStatusPart: an agent with no record counts, saying why nothing is known", () => {
+test("subagentsStatusPart: an agent with no record counts", () => {
   const running = [agent("a-1"), agent("a-2", { label: null, effort: null, why: "unknown" })];
-  assert.equal(subagentsStatusPart("es", running), "agentes: 1 en Opus 5.5 (pedido explícito), 1 en modelo desconocido (sin datos: empezó antes de recargar el plugin)");
-  assert.equal(subagentsStatusPart("en", running), "agents: 1 on Opus 5.5 (explicit request), 1 on unknown model (no data: started before the plugin reloaded)");
+  assert.equal(subagentsStatusPart("es", running), "agentes: 2");
+  assert.equal(subagentsStatusPart("en", running), "agents: 2");
 });

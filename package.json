@@ -11,6 +11,7 @@
     "test": "node --test --experimental-strip-types",
     "shots": "node scripts/screenshot-panels.mjs --quick",
     "shots:all": "node scripts/screenshot-panels.mjs",
+    "shots:band": "node scripts/screenshot-band.mjs",
     "preflight": "npm run test && npm run shots",
     "check": "npm run preflight && npm run test:panels",
     "self-check": "node src/supervisor.ts --self-check",

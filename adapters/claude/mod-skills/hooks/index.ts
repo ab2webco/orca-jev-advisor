@@ -151,6 +151,7 @@ import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
 import type { ListedAgent, RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
 import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
@@ -2092,6 +2093,29 @@ export function register(on: On, options: PluginOptions): void {
       }
     }
     return result
+  })
+
+  // 0.6.14 T2: one row per running subagent, above the prompt -- what it
+  // is, what it is doing, its model, its effort and why. Drawn from the copy
+  // in `$.state` (reading it subscribes this band, so every write of the
+  // running set redraws it) against `$.agent.list()`, so the count is the
+  // host's. Passes while nothing runs, while a survey holds the band, and
+  // whenever a plugin beneath already drew one: never a second band over it.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const beneath = await next(e)
+    if (beneath.type !== 'engine') return beneath
+    try {
+      const stored = parseRunningSubagents((await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'runningSubagents' })).value)
+      const { shown } = reconcileRunning(stored, await listAgents($), null)
+      const band = subagentBand(await resolveLocale($), shown, e.props.bodyColumns)
+      if (band === null) return beneath
+      const { Box, Text } = $.ui.resolve(e)
+      const rows = band.rows.map((row) => Text({ wrap: 'truncate-end', children: row.why.length > 0 ? [row.text, Text({ dimColor: true, children: row.why })] : row.text }))
+      return Box({ flexDirection: 'column', children: [Text({ bold: true, wrap: 'truncate-end', children: band.heading }), ...rows] })
+    } catch {
+      return beneath
+    }
   })
 
   // The context steward (stewardAfterTurn): a subagent's run raises no

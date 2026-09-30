@@ -195,7 +195,14 @@ function makeFakeEngine(host: FakeHost): unknown {
         return host.agents;
       },
     },
-    ui: { status: (text: string | undefined) => { host.statusLines.push(text); } },
+    ui: {
+      status: (text: string | undefined) => { host.statusLines.push(text); },
+      // The terminal's element table (0.6.14 T2): each constructor makes the plain-data element the engine would.
+      resolve: () => ({
+        Box: (props: Record<string, unknown>) => ({ type: "Box", props }),
+        Text: (props: Record<string, unknown>) => ({ type: "Text", props }),
+      }),
+    },
   };
 }
 
@@ -2222,10 +2229,12 @@ test("T6: a running subagent shows in the status line with its model and why", a
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
-  assert.match(lastStatus(host), /agents: 1 on Opus 5\.5 \(explicit request\)/);
+  // 0.6.14 T2: the line counts; the model and why are the agent's row in the band.
+  assert.match(lastStatus(host), /agents: 1$/);
+  assert.match((await bandText(handlers, engine)), /Opus 5\.5 .*explicit request$/m);
 });
 
-test("T6: two subagents on the same model and reason read as one group", async () => {
+test("T6: two subagents on the same model and reason are counted, each on its own row (0.6.14 T2)", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   // Kept, so the explicit model stays what it was asked for (0.6.8 T7).
@@ -2234,7 +2243,8 @@ test("T6: two subagents on the same model and reason read as one group", async (
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
   await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-2", "claude-opus-5-5");
-  assert.match(lastStatus(host), /agents: 2 on Opus 5\.5 \(explicit request\)/);
+  assert.match(lastStatus(host), /agents: 2$/);
+  assert.equal(((await bandText(handlers, engine))).match(/Opus 5\.5 .*explicit request$/gm)?.length, 2);
 });
 
 test("T6: a subagent that finished leaves the status line", async () => {
@@ -2257,7 +2267,8 @@ test("T6: a subagent the host no longer lists as running is dropped at the next 
   await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
   host.agents = [{ id: "agent-1", status: "killed" }, { id: "agent-2", status: "running" }];
   await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-2", "claude-opus-5-5");
-  assert.match(lastStatus(host), /agents: 1 on Opus 5\.5/);
+  assert.match(lastStatus(host), /agents: 1$/);
+  assert.equal(((await bandText(handlers, engine))).match(/Opus 5\.5/g)?.length, 1);
 });
 
 test("T6: with the router off a subagent still shows, on the model it inherited", async () => {
@@ -2265,7 +2276,8 @@ test("T6: with the router off a subagent still shows, on the model it inherited"
   seedRouterAccount(host);
   const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
   await spawnAs(handlers, engine, spawnEvent(), "agent-1", "claude-sonnet-5-5");
-  assert.match(lastStatus(host), /agents: 1 on Sonnet \(inherited\)/);
+  assert.match(lastStatus(host), /agents: 1$/);
+  assert.match((await bandText(handlers, engine)), /Sonnet .*inherited$/m);
 });
 
 test("T6: a subagent the router chose a model for says so (active mode)", async () => {
@@ -2274,7 +2286,8 @@ test("T6: a subagent the router chose a model for says so (active mode)", async 
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnAs(handlers, engine, spawnEvent(), "agent-1");
-  assert.match(lastStatus(host), /agents: 1 on Haiku 4\.5 \(chosen by Jev\)/);
+  assert.match(lastStatus(host), /agents: 1$/);
+  assert.match((await bandText(handlers, engine)), /Haiku 4\.5 .*chosen by Jev$/m);
 });
 
 // ---------------------------------------------------------------------------
@@ -2348,10 +2361,11 @@ test("0.6.14 T1: after a plugin reload the running set is still there, and an ag
   ];
   await spawnAs(second.handlers, second.engine, spawnEvent({ model: "sonnet", subagentType: "acme-backend-developer", description: "Watching CI checks on PR 867" }), "agent-2", "claude-sonnet-5-5");
   assert.deepEqual(storedSubagents(host).map((a) => a.id), ["agent-1", "agent-2"], "the record made before the reload is kept");
-  assert.equal(
-    lastStatus(host).replace(/^jev · /, ""),
-    "agents: 1 on unknown model (no data: started before the plugin reloaded), 1 on Opus 5.5 (explicit request), 1 on Sonnet 5.5 (explicit request)",
-  );
+  assert.match(lastStatus(host), /(^|· )agents: 3$/);
+  const rows = (await bandText(second.handlers, second.engine)).split("\n");
+  assert.match(rows[1] ?? "", /Reading playwright\.config\.ts +\? +\? +no data: started before the plugin reloaded$/);
+  assert.match(rows[2] ?? "", /Adding Definition of Done to spec\.md +Opus 5\.5 .*explicit request$/);
+  assert.match(rows[3] ?? "", /Watching CI checks on PR 867 +Sonnet 5\.5 .*explicit request$/);
 });
 
 test("0.6.14 T1: a reload shows the running set at session start, before any new spawn", async () => {
@@ -2366,7 +2380,135 @@ test("0.6.14 T1: a reload shows the running set at session start, before any new
   const start = second.handlers.get("session.start");
   assert.ok(start, "session.start was never registered");
   await start(second.engine, { source: "startup" }, async (e: unknown) => e);
-  assert.equal(lastStatus(host).replace(/^jev · /, ""), "agents: 1 on Opus 5.5 (explicit request)");
+  assert.match(lastStatus(host), /(^|· )agents: 1$/);
+  assert.match(await bandText(second.handlers, second.engine), /List files +Opus 5\.5 .*explicit request$/m);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.14 T2: one row per running subagent in the band above the prompt
+// (ui.render, AbovePrompt); the status line only counts them.
+// ---------------------------------------------------------------------------
+
+interface FakeElement {
+  type: string;
+  props: Record<string, unknown>;
+}
+
+const ENGINE_DRAWING = { type: "engine", ref: 0 };
+
+function abovePromptEvent(columns: number, hasSurvey = false): Record<string, unknown> {
+  return {
+    component: "AbovePrompt",
+    surface: "terminal",
+    requestId: "above-prompt",
+    props: { hasSurvey, isWorking: true, maxRows: 20, bodyColumns: columns, scroll: { offset: 0, bodyRows: 19 }, view: {} },
+  };
+}
+
+/** Runs the band's render hook; `beneath` is what the plugins beneath (or the engine) drew. */
+async function renderBand(handlers: Map<string, Hook>, engine: unknown, columns = 200, options: { hasSurvey?: boolean; beneath?: unknown } = {}): Promise<unknown> {
+  const hook = handlers.get("ui.render");
+  assert.ok(hook, "ui.render was never registered");
+  return hook(engine, abovePromptEvent(columns, options.hasSurvey), async () => options.beneath ?? ENGINE_DRAWING);
+}
+
+/** The band's lines at 200 columns, one string. */
+async function bandText(handlers: Map<string, Hook>, engine: unknown): Promise<string> {
+  return bandLines(await renderBand(handlers, engine, 200)).join("\n");
+}
+
+/** A drawn tree as the lines a terminal shows: each Text child of the column Box, its nested Texts joined. */
+function bandLines(tree: unknown): string[] {
+  const text = (node: unknown): string => {
+    if (typeof node === "string") return node;
+    const children = (node as FakeElement).props.children;
+    return (Array.isArray(children) ? children : [children]).map(text).join("");
+  };
+  const root = tree as FakeElement;
+  assert.equal(root.type, "Box", `a band is a column Box, got ${JSON.stringify(tree)}`);
+  return (root.props.children as unknown[]).map(text);
+}
+
+test("0.6.14 T2: the owner's four agents, each on its own row with its own model, effort and reason", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("standard"), tierAnswer("simple"));
+  const first = loadHooksWith(host, { routerMode: "active" });
+  // One agent started before the reload, when nothing recorded it.
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const keep = (): void => host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  void first;
+  keep();
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus", subagentType: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" }), "agent-1", "claude-opus-5-5");
+  host.files.delete(`${CONFIG_DIR}/explicit-models.json`);
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus", subagentType: "general-purpose", description: "Creating a worktree for verify-report generation" }), "agent-2");
+  keep();
+  await spawnAs(handlers, engine, spawnEvent({ model: "sonnet", subagentType: "acme-backend-developer", description: "Watching CI checks on PR 867" }), "agent-3", "claude-sonnet-5-5");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "xhigh" }));
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-2", turnId: "sub-2", index: 0, model: "claude-sonnet-5-5", effort: "medium" }));
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-3", turnId: "sub-3", index: 0, model: "claude-sonnet-5-5", effort: "high" }));
+  host.agents = [
+    { id: "agent-0", status: "running", type: "acme-frontend-developer", description: "Reading playwright.config.ts" },
+    { id: "agent-1", status: "running", type: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" },
+    { id: "agent-2", status: "running", type: "general-purpose", description: "Creating a worktree for verify-report generation" },
+    { id: "agent-3", status: "running", type: "acme-backend-developer", description: "Watching CI checks on PR 867" },
+  ];
+  const lines = bandLines(await renderBand(handlers, engine, 200));
+  assert.equal(lines[0], "Running agents: 4");
+  assert.equal(lines.length, 5);
+  assert.match(lines[1] ?? "", /^frontend-developer +Reading playwright\.config\.ts +\? +\? +no data: started before the plugin reloaded$/);
+  assert.match(lines[2] ?? "", /^frontend-developer +Adding Definition of Done to spec\.md +Opus 5\.5 +extra high +explicit request$/);
+  assert.match(lines[3] ?? "", /^general-purpose +Creating a worktree for verify-report generation +Sonnet 5\.5 +medium +lowered by Jev$/);
+  assert.match(lines[4] ?? "", /^backend-developer +Watching CI checks on PR 867 +Sonnet 5\.5 +high +explicit request$/);
+});
+
+test("0.6.14 T2: the status line only counts the running agents, the count the host lists", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [
+    { id: "agent-0", status: "running", type: "general-purpose", description: "Started before the reload" },
+    { id: "agent-1", status: "running", type: "general-purpose", description: "List files" },
+  ];
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  assert.match(lastStatus(host), /(^|· )agents: 2$/);
+});
+
+test("0.6.14 T2: the band passes while nothing runs, and after the last agent ends", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  assert.deepEqual(await renderBand(handlers, engine), ENGINE_DRAWING);
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  assert.equal(bandLines(await renderBand(handlers, engine))[0], "Running agents: 1");
+  await completeSubagent(handlers, engine, "agent-1");
+  assert.deepEqual(await renderBand(handlers, engine), ENGINE_DRAWING);
+});
+
+test("0.6.14 T2: the band yields to a survey and never replaces another plugin's band", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  assert.deepEqual(await renderBand(handlers, engine, 120, { hasSurvey: true }), ENGINE_DRAWING);
+  const other = { type: "Text", props: { children: "another plugin's band" } };
+  assert.deepEqual(await renderBand(handlers, engine, 120, { beneath: other }), other);
+});
+
+test("0.6.14 T2: the band is sized to the band's own width", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus", description: "A description long enough that forty columns cannot hold it whole" }), "agent-1", "claude-opus-5-5");
+  for (const columns of [200, 120, 80, 40]) {
+    for (const line of bandLines(await renderBand(handlers, engine, columns))) assert.ok(line.length <= columns, `${columns}: ${line}`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -2381,7 +2523,7 @@ test("T7: active, judged by default -- a confident simple verdict lowers an expl
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent({ model: "opus" }));
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
-  assert.match(lastStatus(host), /agents: 1 on Haiku 4\.5 \(lowered by Jev\)/);
+  assert.match((await bandText(handlers, engine)), /Haiku 4\.5 .*lowered by Jev$/m);
   await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
   assert.equal(routerDecisionLines(host)[0]?.reason, "explicit-lowered");
 });
@@ -2413,7 +2555,7 @@ test("T7: a model an agent definition fixes is kept when the person keeps them",
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const event = spawnEvent({ subagentType: "reviewer" });
   assert.deepEqual(await spawnThrough(handlers, engine, event), event, "the definition's own model is left to apply");
-  assert.match(lastStatus(host), /\(explicit request\)/);
+  assert.match((await bandText(handlers, engine)), /explicit request$/m);
 });
 
 test("T7: a model an agent definition fixes is judged like an explicit one by default", async () => {
@@ -2424,5 +2566,5 @@ test("T7: a model an agent definition fixes is judged like an explicit one by de
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await spawnThrough(handlers, engine, spawnEvent({ subagentType: "reviewer" }));
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
-  assert.match(lastStatus(host), /\(lowered by Jev\)/);
+  assert.match((await bandText(handlers, engine)), /lowered by Jev$/m);
 });
