@@ -12,7 +12,7 @@ agent_definition, work_kind, the spawn path of the mod hook).
 | Check | Scenarios | Pass | Fail | Notes |
 |---|---|---|---|---|
 | `npm test` (lead) | 1 | 1 (2896/2896) | 0 | privacy test exit code 0 |
-| `npm run test:panels` (lead) | 1 | pending | 0 | |
+| `npm run test:panels` (lead) | 1 | 1 (168/168) | 0 | |
 | T2 work kind, held-out real spawns (writer) | 200 runs | see below | | live Jev, 300 calls in all, 0 errors |
 | T5 cache probe (writer) | 32 switches + 32 controls | 0 misses | | 95% bound 10.9%; $0.98 |
 | Screenshots, Models tab work-kind row | 10 images | looked at | | 1440/768/390/320, both themes, two in Spanish |
@@ -58,4 +58,30 @@ repository.
 
 ## Live check after the release
 
-Pending: filled in after the release.
+Released as v0.6.16 at a192df6 (#22, CI green in 22 min). The dev copy
+`orca-jev-advisor-dev` was pulled to a192df6, and the five installed
+`orca-jev-mod-skills` copies (the default config dir and four Orca accounts)
+match it file by file (53 files each, none differ, `work_kind.ts` present).
+A real Claude Code session (Sonnet 5.5, a second Orca account whose router
+is in active mode, work-kind switch at its default, measure) was opened in
+`SCR/feat-app` and told to launch two subagents in one message and report.
+Results from the session transcript and the router and turn-usage rows,
+joined by the session id (T1):
+
+| # | Subagent | Router decision | Work kind (measure) | Effort |
+|---|---|---|---|---|
+| 1 | `Report recent commits` (git log and status, no edits) | simple, applied: Haiku 4.5 | `execute`, confidence 1, source jev; keywords none | none sent (Haiku takes no effort): hold `none-sent` |
+| 2 | `Add a helper to math.js` (created one file) | standard, not changed | `implement`, confidence 1, source jev; keywords `implement` | medium, unchanged: hold `not-read-work` |
+
+Both decision rows carry `sessionId`, `turnId` and `agentId`; the main
+session's start row carries `sessionId` and `turnId`. The main steps log
+`phase` (READ, DELEGATE, ANSWER), `execRun` and `holdEffort` (medium: the
+would-be rule acts only from high/xhigh), with the effort sent unchanged
+(medium, source `default`). Both subagents did their work (two commits
+reported; `src/math.js` with `clamp` created, then removed by the lead).
+graft, loaded by that session, wrote `.gitignore`/`.ignore` and a `graft/`
+cache in the scratch repository; nothing else changed.
+
+Not seen live: a cap that actually lowers an effort (an execute/read run on
+Sonnet 5 at xhigh, or on Opus 5.5 at high, with the switch active). It is
+covered by the hook tests; the measure rows are the data for turning it on.
