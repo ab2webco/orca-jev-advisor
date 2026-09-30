@@ -1,0 +1,63 @@
+#!/bin/sh
+# Blocks a push that would send private data: an email outside the allowed
+# domains, an absolute home path under /Users, or a term from the owner's local
+# ~/.config/orca-supervisor/private-terms.txt. It judges every tracked file at
+# each pushed commit, the files each pushed commit changes, and each pushed
+# commit's message, by running scripts/private-data.test.mjs on them.
+#
+# Git passes the remote name as $1 and one line per pushed ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+# An error of the guard's own blocks the push; it never allows silently.
+# Installed with `npm run prepare` (core.hooksPath = .githooks, this repo only).
+set -eu
+
+remote="$1"
+hook_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+check="$hook_dir/../scripts/private-data.test.mjs"
+
+finished=no
+trap 'if [ "$finished" = no ]; then echo "pre-push: the private-data check could not run; push blocked" >&2; fi' EXIT
+
+tips=""
+commits=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_sha" in
+    *[!0]*) ;;
+    *) continue ;; # deleting a remote ref sends no content
+  esac
+  case "$remote_sha" in
+    *[!0]*)
+      if git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+        new=$(git rev-list "$remote_sha..$local_sha")
+      else
+        new=$(git rev-list "$local_sha" --not --remotes="$remote")
+      fi
+      ;;
+    *) new=$(git rev-list "$local_sha" --not --remotes="$remote") ;;
+  esac
+  tips="$tips $local_sha"
+  commits="$commits $new"
+done
+
+if [ -z "$tips" ]; then
+  finished=yes
+  exit 0
+fi
+
+if [ ! -f "${HOME}/.config/orca-supervisor/private-terms.txt" ]; then
+  echo "pre-push: no ~/.config/orca-supervisor/private-terms.txt, so the private-term check is skipped"
+fi
+
+# A test runner above us (NODE_TEST_CONTEXT) would make `node --test` report
+# to it and exit 0 whatever it found; the verdict must be this run's own.
+unset NODE_TEST_CONTEXT
+if report=$(PRIVATE_DATA_TIPS="$tips" PRIVATE_DATA_COMMITS="$commits" node --test "$check" 2>&1); then
+  finished=yes
+  echo "pre-push: private-data check passed"
+  exit 0
+fi
+
+printf '%s\n' "$report" >&2
+finished=yes
+echo "pre-push: private data (or an error of the check) found in what this push sends; push blocked" >&2
+exit 1
