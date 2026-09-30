@@ -210,7 +210,7 @@ function buildViolationQuestion(rules: readonly [string, string][]): ChoiceQuest
       "Which of these team prohibitions would running this action break? A prohibition is broken only when the action itself does what the rule forbids, " +
       "in the repository and on the branch the context says it acts on. Sharing a topic, a tool or a repository with the rule is not breaking it. " +
       "Writing on a branch means changing its checkout: creating, editing, copying, moving or deleting any file there, tracked or new, or changing its history " +
-      "(commit, merge, rebase, reset, cherry-pick, revert, amend). Tagging, fetching, reading, and switching to or creating another branch do not write on it. " +
+      "(commit, merge, rebase, reset, cherry-pick, revert, amend), or pushing commits to it on a remote, from any checkout. Tagging, fetching, reading, and switching to or creating another branch do not write on it. " +
       "Answer none when the action breaks none of them.",
     criteria: Object.fromEntries([...rules, [NO_VIOLATION, "Running the action breaks none of these prohibitions."]]),
   };
@@ -689,8 +689,11 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  * Bumped to 4 for 0.6.13 T2: a prohibition is judged on violation, not on
  * topic. A v3 'deny' cached for a tag on main (topic) or an 'allow' cached
  * for a new file on main (topic missed) must be judged again.
+ *
+ * Bumped to 5 in the same release: pushing commits to a branch now counts as
+ * writing on it, so an 'allow' cached for a push to main is judged again.
  */
-export const GATE_DECISION_RULES_VERSION = 4;
+export const GATE_DECISION_RULES_VERSION = 5;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {

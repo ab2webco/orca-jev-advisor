@@ -731,6 +731,7 @@ test("buildPolicyQuestions: prohibitions are asked as a violation, the rest as c
   assert.equal(violation.criteria["policy_2"], "Never write directly on main or develop, not even a one-line fix.");
   assert.match(violation.instructions, /break/);
   assert.match(violation.instructions, /Tagging, fetching/, "what writing on a branch means is stated, not left to the topic");
+  assert.match(violation.instructions, /pushing commits to it/, "a push to a branch writes its history, whatever the checkout's own branch");
   const coverage = questions["coverage"] as { criteria: Record<string, string> };
   assert.deepEqual(Object.keys(coverage.criteria), ["policy_1", "policy_3", "no_policy"], "coverage no longer lists a prohibition");
 });
