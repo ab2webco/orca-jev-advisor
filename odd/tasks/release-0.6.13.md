@@ -198,7 +198,13 @@ F-10..F-14, the rest of the backlog.
   and the default sleep clears its timer on abort (a sleep that ignores the signal, like the
   mod's `$.clock.sleep`, runs out as before); and the hook writes its verdict with
   `writeSync` and exits when main() returns, like agent-model.ts.
-- [ ] T6 README, QA, release, live check
+- [ ] T6 README, QA, release, live check. Done so far: QA in odd/qa/qa-0.6.13.md (replay
+  243/244, new rows 36/38, 42/42 push/tag/new-file probes, 16 request bodies clean, tail
+  1375 -> 6 ms); the release history moved from the README to CHANGELOG.md, newest first;
+  versions 0.6.13. Two defects found by the QA and fixed on the branch: a push to main was
+  not "writing on main" in T2's question (afff863, rules version 5), and `kubectl`/
+  `terraform` with a global option before the verb were advice although the plain spelling
+  is a local refusal (ecfabb7; this reverses the plan's "stay advice" for those two).
 
 ## Acceptance criteria
 - Every new behaviour is a regression test observed failing before its fix.
