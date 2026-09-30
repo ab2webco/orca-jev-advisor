@@ -106,6 +106,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
+import { recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -602,11 +603,9 @@ const NEVER_SILENTLY: readonly {
   { evaluate: segmentRule(/git\s+push\b.*(?:(?:--force(?!-with-lease|-if-includes)\b|-f\b)|(?:^|\s)\+\S)/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
   { evaluate: pushProtectedRule, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
-  // filesystem root. Segment-scoped (odd/tasks, the advise-model release):
-  // a phrase inside a grep pattern, a quoted argument or a heredoc body is
-  // data, not a command -- the same mention-vs-command treatment forcePush/
-  // pushProtected/resetClean already had.
-  { evaluate: segmentRule(/rm\s+-rf?\s+(\/|~|\$HOME)(\s|$)/), why: 'rule.rmRf', denyToggle: 'denyRmRf' },
+  // filesystem root, in every flag and path spelling (0.6.12 F-01), read
+  // segment by segment so a mention stays data -- see deny_rule_shapes.ts.
+  { evaluate: (ctx) => recursiveRmOfRootOrHomeOutcome(ctx.command, ctx.cwd, homedir()), why: 'rule.rmRf', denyToggle: 'denyRmRf' },
   { evaluate: resetCleanRule, why: 'rule.resetClean', denyToggle: 'denyResetClean' },
   // Irrecoverable without a backup nobody can assume exists. `DROP TABLE`
   // inside a `psql -c`/`mysql -e` argument is unambiguous SQL execution, not

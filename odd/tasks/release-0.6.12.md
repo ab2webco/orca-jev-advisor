@@ -36,7 +36,13 @@ Authorized by the owner 2026-09-30: "Sí, arranca la 0.6.12" (scope F-01..F-05).
 Out of scope: F-06 redaction of unregistered paths, F-08..F-14.
 
 ## Checklist
-- [ ] T1 rm recursive+force spellings
+- [x] T1 rm recursive+force spellings. Proof: `adapters/claude/gate-deny-spellings.test.mjs`
+  RED 21/24 failing, GREEN 24/24; `src/core/deny_rule_shapes.test.ts` 4/4; `npm test`
+  2611/2611. Probe replay (working-tree hook, feat-app cwd): H-rm-fr (+retry),
+  split/long flags, `-Rf ~`, `${HOME}`, `(rm -rf ~)`, `cd / && rm -rf *`,
+  `pushd ~ && rm -rf .`, the home directory by absolute path, all `REFUSED`. Decision: recursive
+  is required, force is not (the old rule matched `-r` alone too); the home directory's
+  absolute path and `.`/`*` after a `cd`/`pushd` into `/` or home count as the rule.
 - [ ] T2 force push spellings
 - [ ] T3 protected push through global options, prefixes, continuations
 - [ ] T4 curl/wget to shell or interpreter
