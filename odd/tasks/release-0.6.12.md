@@ -86,7 +86,13 @@ Out of scope: F-06 redaction of unregistered paths, F-08..F-14.
   commandFamily cases that encoded the defect (`cd d && git status` was `cd`, now `git`;
   `cd src && ls` now `ls`) and three Part 4 cache-key contexts in `gate-bash.test.mjs`
   whose primary facts are now the target repository's (sentence unchanged).
-- [ ] T6 README, QA rerun in odd/qa/qa-0.6.12.md, release, live check
+- [x] T6 README, QA rerun in odd/qa/qa-0.6.12.md, release, live check. Proof: README
+  section and deny-tier rows (c3f9d71); QA replay 236/244, 98 former FAILs fixed, the 8
+  others explained in qa-0.6.12.md, false-positive probes 16/16; PR #15 CI green, merged
+  a8e2d16, release v0.6.12; live session in feat-app: 4/4 `REFUSED`, 3/3 harmless ran,
+  demo-app untouched. Acceptance gap, decided and recorded: E13/G02 (`cp` of a new file into
+  a main checkout) are attributed to the right repository but Jev allows them, as it does
+  inside that repository (N-01, 0.6.13); N-02..N-04 also carried to 0.6.13.
 
 ## Acceptance criteria
 - Every 0.6.11 QA row in F-01..F-05/F-07 that failed is a regression test that
