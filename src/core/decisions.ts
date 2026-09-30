@@ -180,12 +180,18 @@ export function buildPolicyQuestions(policies: readonly Policy[], names: JevName
   // a tag on main is about "never write on main" without breaking it. The
   // neutral keys stay the policy's position in the FULL list, so both
   // questions map back through policyForCoverageChoice.
+  // 0.6.15 T2: a requires_human rule is asked on effect the same way
+  // (buildNeedsPersonQuestion); coverage keeps only the permits.
   const keyed = policies.map((policy, index) => ({ policy, key: jevPolicyKey(index) }));
-  const covered = keyed.filter(({ policy }) => migratePolicyKind(policy.kind) !== "prohibits");
-  const prohibited = keyed.filter(({ policy }) => migratePolicyKind(policy.kind) === "prohibits");
+  const ofKind = (kind: PolicyKind): [string, string][] =>
+    keyed.filter(({ policy }) => migratePolicyKind(policy.kind) === kind).map(({ policy, key }): [string, string] => [key, redactRuleForJev(policy.rule, names)]);
+  const permitted = ofKind("permits");
+  const reserved = ofKind("requires_human");
+  const prohibited = ofKind("prohibits");
   return {
-    ...(covered.length > 0 ? buildCoverageQuestions(covered.map(({ policy, key }): [string, string] => [key, redactRuleForJev(policy.rule, names)])) : {}),
-    ...(prohibited.length > 0 ? { [VIOLATION]: buildViolationQuestion(prohibited.map(({ policy, key }): [string, string] => [key, redactRuleForJev(policy.rule, names)])) } : {}),
+    ...(permitted.length > 0 ? buildCoverageQuestions(permitted) : {}),
+    ...(reserved.length > 0 ? { [NEEDS_PERSON]: buildNeedsPersonQuestion(reserved) } : {}),
+    ...(prohibited.length > 0 ? { [VIOLATION]: buildViolationQuestion(prohibited) } : {}),
   };
 }
 
@@ -216,7 +222,30 @@ function buildViolationQuestion(rules: readonly [string, string][]): ChoiceQuest
   };
 }
 
-/** The coverage and same_kind questions, over the permits and requires_human policies. */
+const NEEDS_PERSON = "needs_person";
+const NOTHING_RESERVED = "none";
+// Measured on a labelled corpus against live Jev (odd/tasks/release-0.6.15.md T2).
+const NEEDS_PERSON_GATE = 0.7;
+
+/**
+ * Which rule reserving an action for a person the action does, or none
+ * (0.6.15 T2, JEVADV-84, N-05). Asked like buildViolationQuestion: on the
+ * effect, not the topic. `infrastructure_changes` says planning and reading
+ * cluster state run without asking, and Jev, asked which rule an action was
+ * ABOUT, still asked about `terraform plan` and `kubectl get pods`.
+ */
+function buildNeedsPersonQuestion(rules: readonly [string, string][]): ChoiceQuestion {
+  return {
+    type: "choice",
+    instructions:
+      "Which of these team rules, each reserving an action for a person, would running this action do? An action does one only when it itself does what the rule reserves for a person, " +
+      "in the repository and on the branch the context says it acts on. Sharing a topic, a tool or a repository with the rule is not doing it, and neither is anything the rule itself says happens without asking " +
+      "(planning, previewing, reading, listing, describing, a dry run). Answer none when the action does none of them.",
+    criteria: Object.fromEntries([...rules, [NOTHING_RESERVED, "Running the action does nothing these rules reserve for a person."]]),
+  };
+}
+
+/** The coverage and same_kind questions, over the permits policies (0.6.15 T2: the requires_human ones are asked in needs_person). */
 function buildCoverageQuestions(rules: readonly [string, string][]): Record<string, Question> {
   const criteria: Record<string, string> = Object.fromEntries([
     ...rules,
@@ -341,6 +370,17 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
     }
   }
 
+  // 0.6.15 T2: a requires_human rule asks only when Jev says the action does
+  // what it reserves for a person; checked before coverage, so a rule that
+  // permits the action never overrides one that reserves it.
+  const reserved = getChoiceAnswer(answers, NEEDS_PERSON);
+  if (reserved !== null && reserved.choice !== NOTHING_RESERVED && reserved.confidence >= NEEDS_PERSON_GATE) {
+    const asks = policyForCoverageChoice(policies, reserved.choice);
+    if (asks !== undefined && migratePolicyKind(asks.kind) === "requires_human") {
+      return { action, outcome: "ask", source: "policy", policyId: asks.id, rationale: [{ key: "policy.needsHuman", params: { policyId: asks.id, rule: asks.rule } }], isPolicyGap: false };
+    }
+  }
+
   const coverage = getChoiceAnswer(answers, "coverage");
   const match = getNoulAnswer(answers, "same_kind");
   if (coverage === null || match === null) return null;
@@ -358,7 +398,9 @@ export function interpretDestinationPolicy(action: string, policies: readonly Po
     case "permits":
       return { action, outcome: "act", source: "policy", policyId, rationale: [{ key: "policy.allowed", params: { policyId, rule: policy.rule } }], isPolicyGap: false };
     case "requires_human":
-      return { action, outcome: "ask", source: "policy", policyId, rationale: [{ key: "policy.needsHuman", params: { policyId, rule: policy.rule } }], isPolicyGap: false };
+      // 0.6.15 T2: coverage is a topic, not an effect -- only the needs_person
+      // answer above asks a person for a requires_human rule.
+      return null;
     case "prohibits":
       // 0.6.13 T2: coverage is a topic, not a violation -- only the violation
       // answer above can stop an action for a prohibition.
@@ -692,8 +734,11 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  *
  * Bumped to 5 in the same release: pushing commits to a branch now counts as
  * writing on it, so an 'allow' cached for a push to main is judged again.
+ *
+ * Bumped to 6 for 0.6.15 T2: a requires_human rule is judged on effect, so
+ * an 'ask' cached for `terraform plan` (topic) is judged again.
  */
-export const GATE_DECISION_RULES_VERSION = 5;
+export const GATE_DECISION_RULES_VERSION = 6;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
