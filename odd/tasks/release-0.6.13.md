@@ -198,7 +198,9 @@ F-10..F-14, the rest of the backlog.
   and the default sleep clears its timer on abort (a sleep that ignores the signal, like the
   mod's `$.clock.sleep`, runs out as before); and the hook writes its verdict with
   `writeSync` and exits when main() returns, like agent-model.ts.
-- [ ] T6 README, QA, release, live check. Done so far: QA in odd/qa/qa-0.6.13.md (replay
+- [x] T6 README, QA, release, live check. Released v0.6.13 (aa16d3a, PR #16); live check 8/9 as
+  expected, the 9th advice on the safe side; N-09 (a false refusal from T5) found after the
+  release (odd/qa/qa-0.6.13.md). Also: QA in odd/qa/qa-0.6.13.md (replay
   243/244, new rows 36/38, 42/42 push/tag/new-file probes, 16 request bodies clean, tail
   1375 -> 6 ms); the release history moved from the README to CHANGELOG.md, newest first;
   versions 0.6.13. Two defects found by the QA and fixed on the branch: a push to main was
