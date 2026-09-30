@@ -2587,3 +2587,54 @@ test("T7: a model an agent definition fixes is judged like an explicit one by de
   assert.equal(seen.model, "claude-haiku-4-5-20251001");
   assert.match((await bandText(handlers, engine)), /lowered by Jev$/m);
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.15 T4c (odd/research/effort-per-task.md §4): measure-only effort
+// logging on each turn-usage line. Nothing about the effort sent changes.
+// ---------------------------------------------------------------------------
+
+function turnUsageLines(host: FakeHost): Record<string, unknown>[] {
+  return (host.files.get(TURN_USAGE_PATH) ?? "").split("\n").filter((line) => line.length > 0).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+test("0.6.15 T4c: a main step logs the effort's source; the first step after an effort change logs its uncached share", async () => {
+  const host = makeFakeHost();
+  host.env.set("CLAUDE_CODE_EFFORT_LEVEL", "high");
+  const { handlers, engine } = loadHooks(host);
+  const first = await stepThrough(handlers, engine, turnStepEvent({ model: "claude-opus-5-5", effort: "high" }));
+  assert.equal(first.effort, "high", "the effort sent is unchanged");
+  await stepThrough(handlers, engine, turnStepEvent({ model: "claude-opus-5-5", effort: "medium", index: 1 }));
+  const [one, two] = turnUsageLines(host);
+  assert.equal(one?.effortSource, "env");
+  assert.equal(one?.effortChanged, false);
+  assert.equal(one?.uncachedShare, undefined, "no uncached share without a change");
+  assert.equal(two?.effortSource, "default", "medium is Opus 5.5's own default in Claude Code");
+  assert.equal(two?.effortChanged, true);
+  assert.equal(two?.uncachedShare, 0.057);
+  assert.equal(one?.modelFixed, null, "the main loop's model is the session's own");
+});
+
+test("0.6.15 T4c: a subagent step logs the router's effort, the source, and whether its model was fixed", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent());
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
+  const line = turnUsageLines(host).at(-1);
+  assert.deepEqual([line?.effort, line?.effortSource, line?.routerEffort, line?.modelFixed], ["medium", "plugin", "medium", false]);
+});
+
+test("0.6.15 T4c: a fixed-model subagent whose definition sets the effort logs it as frontmatter", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.files.set(`${CWD}/.claude/agents/reviewer.md`, "---\nname: reviewer\nmodel: opus\neffort: high\n---\nReview.\n");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ subagentType: "reviewer" }), "agent-1", "claude-opus-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  assert.equal(step.effort, "high");
+  const line = turnUsageLines(host).at(-1);
+  assert.deepEqual([line?.effortSource, line?.modelFixed], ["frontmatter", true]);
+});

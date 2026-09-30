@@ -147,7 +147,9 @@ import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
 import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
-import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import { agentDefinitionEffort, agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedShare } from '../../../../src/core/effort_source.ts'
+import type { EffortSource } from '../../../../src/core/effort_source.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
 import type { ListedAgent, RunningSubagent, SubagentEffortSource, SubagentWhy } from '../../../../src/core/subagent_status.ts'
@@ -587,7 +589,7 @@ async function appendTurnUsage($: EngineInterface, atIso: string, line: string):
 }
 
 /** Builds and appends this step's usage line. Never touches `e` beyond reading it, and never throws (appendTurnUsage already swallows its own errors; a `$.clock.now()` rejection here is the only other failure mode, left to the caller's own try/catch). `project`: JEVADV-63, the session's own resolved project name (or null when not yet known this session) -- read from the caller's cached OrcaContext, never re-resolved here. */
-async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: TurnStepResult, project: string | null): Promise<void> {
+async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: TurnStepResult, project: string | null, effortLog: Record<string, unknown> = {}): Promise<void> {
   const at = new Date(await $.clock.now()).toISOString()
   const account = await resolveAccountId($)
   const line = JSON.stringify({
@@ -602,6 +604,7 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
     stopReason: r.stopReason,
     account,
     project,
+    ...effortLog,
   })
   await appendTurnUsage($, at, `${line}\n`)
 }
@@ -628,26 +631,68 @@ async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMod
  */
 async function readAgentDefinitionModel($: EngineInterface, subagentType: string, cwd: string): Promise<string | null> {
   try {
-    const paths = await resolveHomePaths($)
-    const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
-    const accountDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
-    const dirs = [`${cwd}/.claude/agents`, ...(accountDir === null ? [] : [`${accountDir}/agents`])]
-    const files: AgentDefinitionFile[] = []
-    for (const dir of dirs) {
-      if (!(await $.fs.exists(dir))) continue
-      for (const entry of await $.fs.list(dir)) {
-        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.md')) continue
-        try {
-          files.push({ file: entry.name, text: await $.fs.read(`${dir}/${entry.name}`) })
-        } catch {
-          // An unreadable definition fixes nothing.
-        }
-      }
-    }
-    return agentDefinitionModel(files, subagentType)
+    return agentDefinitionModel(await readAgentDefinitionFiles($, cwd), subagentType)
   } catch {
     return null
   }
+}
+
+/** The agent definitions a subagent type may come from: the project's own `.claude/agents` first, then the account's. */
+async function readAgentDefinitionFiles($: EngineInterface, cwd: string): Promise<AgentDefinitionFile[]> {
+  const paths = await resolveHomePaths($)
+  const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+  const accountDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
+  const dirs = [`${cwd}/.claude/agents`, ...(accountDir === null ? [] : [`${accountDir}/agents`])]
+  const files: AgentDefinitionFile[] = []
+  for (const dir of dirs) {
+    if (!(await $.fs.exists(dir))) continue
+    for (const entry of await $.fs.list(dir)) {
+      if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.md')) continue
+      try {
+        files.push({ file: entry.name, text: await $.fs.read(`${dir}/${entry.name}`) })
+      } catch {
+        // An unreadable definition fixes nothing.
+      }
+    }
+  }
+  return files
+}
+
+/** One loop's (the main one's, or a subagent's) effort as its steps were sent, for the measure-only effort log. */
+interface EffortLoop {
+  readonly lastSent: SessionEffort | null
+  readonly frontmatter: SessionEffort | null
+  readonly settings: SessionEffort | null
+}
+
+function effortLevel(value: unknown): SessionEffort | null {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' ? value : null
+}
+
+/**
+ * 0.6.15 T4c (odd/research/effort-per-task.md §4): measure only. What the
+ * turn-usage line adds about the effort: where the effort sent came from
+ * (src/core/effort_source.ts), the effort the router would choose, whether a
+ * subagent's model was fixed, and, on the first step after the effort
+ * changed, how much of the prompt missed the cache. The definition and the
+ * settings are read at a loop's first step and when its effort changes.
+ * Never changes the step.
+ */
+async function effortLogFields($: EngineInterface, e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult, loops: Map<string, EffortLoop>, running: Map<string, RunningSubagent>, targets: Map<string, SubagentEffortTarget>): Promise<Record<string, unknown>> {
+  const key = e.agentId ?? 'main'
+  const sent = input.effort ?? null
+  const loop = loops.get(key)
+  const changed = loop !== undefined && loop.lastSent !== sent
+  const agent = e.agentId === undefined ? undefined : running.get(e.agentId)
+  const fresh = loop === undefined || changed
+  const frontmatter = !fresh ? (loop?.frontmatter ?? null) : agent === undefined ? null : effortLevel(agentDefinitionEffort(await readAgentDefinitionFiles($, await $.session.cwd()), agent.type))
+  const settings = !fresh ? (loop?.settings ?? null) : settingsEffortFor(await readVaultSettings($), e.model)
+  loops.set(key, { lastSent: sent, frontmatter, settings })
+  const source: EffortSource = effortSourceOf({ carried: e.effort ?? null, sent, env: effortLevel(await $.env.get('CLAUDE_CODE_EFFORT_LEVEL')), frontmatter, settings, modelDefault: claudeCodeDefaultEffort(e.model) })
+  const sticky = e.agentId === undefined ? (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value : undefined
+  const routerEffort = e.agentId === undefined ? (sticky?.effort ?? null) : (targets.get(e.agentId)?.effort ?? null)
+  const share = changed ? uncachedShare({ input: r.usage?.input_tokens ?? null, cacheRead: r.usage?.cache_read_input_tokens ?? null, cacheWrite: r.usage?.cache_creation_input_tokens ?? null }) : undefined
+  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }) }
 }
 
 /**
@@ -1278,7 +1323,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
  * pre-computed target (a guard can hold a higher inherited value than the
  * tier's own target, which spawn time never sees).
  */
-async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource) => Promise<void>): StreamHookBody<TurnStepChunk, TurnStepResult> {
+async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource) => Promise<void>, effortLog: (e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult) => Promise<Record<string, unknown>>): StreamHookBody<TurnStepChunk, TurnStepResult> {
   let input: TurnStepInput | Frozen<TurnStepInput> = e
   if (mode !== 'off' && e.agentId === undefined) {
     let held: RouterSticky | undefined
@@ -1340,8 +1385,14 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     }
   }
   const r = yield* next(input)
+  let effortFields: Record<string, unknown> = {}
   try {
-    await recordTurnUsage($, input, r, project)
+    effortFields = await effortLog(e, input, r)
+  } catch {
+    // Measure-only: a lost field never affects the step or its usage line.
+  }
+  try {
+    await recordTurnUsage($, input, r, project, effortFields)
   } catch {
     // Recording is best-effort and must never affect the turn.
   }
@@ -1667,6 +1718,8 @@ export function register(on: On, options: PluginOptions): void {
   // fits inside one process, unlike `routerSticky`, which must survive a
   // hot reload across a session that can run for hours.
   const subagentEffortTarget = new Map<string, SubagentEffortTarget>()
+  // 0.6.15 T4c: each loop's last sent effort, for the measure-only effort log.
+  const effortLoops = new Map<string, EffortLoop>()
 
   // Cached per session/process, as the feature document asks for the
   // inventory: re-scanning the filesystem on every prompt would defeat
@@ -2131,7 +2184,7 @@ export function register(on: On, options: PluginOptions): void {
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
     const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort, source)
-    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort)
+    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, (step, input, r) => effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget))
   })
 
   on('agent.spawn', async ($, e, next) => {
