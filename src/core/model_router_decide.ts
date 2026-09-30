@@ -19,6 +19,7 @@ import type { Answer, JsonValue, Question } from "./jev.ts";
 import { baseModelId, collapseTier, modelRank, ROUTER_TIERS, tierOfModel } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
+import type { WorkKindRecord } from "./work_kind.ts";
 
 export type RouterEffort = "low" | "medium" | "high" | "xhigh";
 
@@ -437,6 +438,8 @@ export interface RouterDecisionRecord {
   readonly sessionId: string | null;
   readonly turnId: string | null;
   readonly agentId: string | null;
+  /** 0.6.16 T2: a subagent's work kind (src/core/work_kind.ts); null on every other point and when the switch is off. */
+  readonly workKind: WorkKindRecord | null;
 }
 
 export interface RouterDecisionRecordInput {
@@ -457,6 +460,7 @@ export interface RouterDecisionRecordInput {
   readonly sessionId?: string | null;
   readonly turnId?: string | null;
   readonly agentId?: string | null;
+  readonly workKind?: WorkKindRecord | null;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -484,5 +488,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     sessionId: input.sessionId ?? null,
     turnId: input.turnId ?? null,
     agentId: input.agentId ?? null,
+    workKind: input.workKind ?? null,
   };
 }

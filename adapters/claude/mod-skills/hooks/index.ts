@@ -137,10 +137,12 @@ import type { ModHomePaths } from './runtime.ts'
 import { parseQuota } from '../../../../src/core/consumption.ts'
 import { parseModelsMirror } from '../../../../src/core/model_mirror.ts'
 import { contextWindowOfModel, parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
-import type { ResolvedTiers } from '../../../../src/core/model_router_accounts.ts'
+import type { ResolvedTiers, RouterTier } from '../../../../src/core/model_router_accounts.ts'
 import { buildTierQuestions, buildTierState, decideStart, interpretTier, routerDecisionFileName, routerDecisionRecord, toRouterEffort } from '../../../../src/core/model_router_decide.ts'
 import type { RouterDecision, TierJudgment } from '../../../../src/core/model_router_decide.ts'
-import { parseRouterMode, routerEffortFromSettings } from '../../../../src/core/model_router_mode.ts'
+import { parseRouterMode, routerEffortFromSettings, routerEffortPersonTiers, workKindModeFromSettings } from '../../../../src/core/model_router_mode.ts'
+import { interpretWorkKind, keywordWorkKind, kindStepEffort, readWorkTierEffort, withWorkKindQuestion } from '../../../../src/core/work_kind.ts'
+import type { WorkKindJudgment, WorkKindMode, WorkKindRecord } from '../../../../src/core/work_kind.ts'
 import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '../../../../src/core/model_router_effort.ts'
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
@@ -836,7 +838,7 @@ async function readLiveRateLimits($: EngineInterface): Promise<readonly LiveRate
   }
 }
 
-async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; quotaSource: QuotaSource; tierEffort: TierEffortMap }> {
+async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; quotaSource: QuotaSource; tierEffort: TierEffortMap; personTiers: ReadonlySet<RouterTier>; workKindMode: WorkKindMode }> {
   const paths = await resolveHomePaths($)
   const vaultSettings = await readVaultSettings($)
   const vaultEnv = vaultSettings === null ? {} : parseVaultEnv(vaultSettings)
@@ -861,7 +863,7 @@ async function resolveRouterAccount($: EngineInterface, account: string): Promis
   const quota = quotaFile.accounts.find((row) => row.id === account) ?? null
   const tiers = resolveAccountTiers({ env: { ...processEnv, ...vaultEnv }, catalog, quota })
   const pressure = quotaPressureOf({ live: await readLiveRateLimits($), mirror: quota, mirrorCheckedAt: quotaFile.checkedAt, nowMs: await $.clock.now() })
-  return { tiers, band: pressure.band, quotaSource: pressure.source, tierEffort: routerEffortFromSettings(vaultSettings) }
+  return { tiers, band: pressure.band, quotaSource: pressure.source, tierEffort: routerEffortFromSettings(vaultSettings), personTiers: routerEffortPersonTiers(vaultSettings), workKindMode: workKindModeFromSettings(vaultSettings) }
 }
 
 /**
@@ -927,14 +929,20 @@ async function resolveSessionDestination($: EngineInterface, cwd: string): Promi
 
 /** Jev's tier judgment for this turn's prompt, or null on any failure (no key, timeout, malformed answer). */
 async function askTierJudgment($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null): Promise<TierJudgment | null> {
+  return (await askTierAndKind($, options, promptText, activity, band, destinationKind, false)).tier
+}
+
+/** The tier judgment and, 0.6.16 T2, at a spawn (`withKind`) the work kind: both from the one Jev call; nulls on any failure. */
+async function askTierAndKind($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null, withKind: boolean): Promise<{ tier: TierJudgment | null; kind: WorkKindJudgment | null }> {
   try {
     const apiKey = await resolveApiKey($, options)
-    if (apiKey === null) return null
+    if (apiKey === null) return { tier: null, kind: null }
     const state = buildTierState({ promptText, activity, destinationKind, quotaBand: band })
-    const response = await callJev(apiKey, state, buildTierQuestions(), { budgetMs: ROUTER_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
-    return interpretTier(response.answers)
+    const questions = withKind ? withWorkKindQuestion(buildTierQuestions()) : buildTierQuestions()
+    const response = await callJev(apiKey, state, questions, { budgetMs: ROUTER_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
+    return { tier: interpretTier(response.answers), kind: withKind ? interpretWorkKind(response.answers) : null }
   } catch {
-    return null
+    return { tier: null, kind: null }
   }
 }
 
@@ -1235,6 +1243,12 @@ interface SubagentEffortTarget {
   readonly guarded: boolean
   /** 0.6.16 T3: the effort the agent's definition declares, a floor the step never goes below; null when it declares none. */
   readonly declared: SessionEffort | null
+  /** 0.6.16 T2: the work kind (Jev's, else the keywords'), the keywords' own as a cross-check, the switch, and what its guards read; kept in memory only, never logged as text. */
+  readonly workKindMode: WorkKindMode
+  readonly kind: WorkKindJudgment | null
+  readonly keywordKind: WorkKindJudgment['kind'] | null
+  readonly text: string
+  readonly destinationKind: DestinationKind | null
   readonly effortEligible: boolean
   readonly logged: boolean
   readonly account: string
@@ -1277,11 +1291,15 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const modelFixed = fixedModel !== null
     if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
-    const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
+    const { tiers, band, quotaSource, tierEffort, personTiers, workKindMode } = await resolveRouterAccount($, account)
     labelTiers = tiers
     const text = `${e.description}\n${e.prompt}`
     const destination = await resolveSessionDestination($, cwd)
-    const jev = await askTierJudgment($, options, text, null, band, destination.destinationKind)
+    // 0.6.16 T2: the work kind is one more question in this same call.
+    const judged = await askTierAndKind($, options, text, null, band, destination.destinationKind, workKindMode !== 'off')
+    const jev = judged.tier
+    const keywordKind = workKindMode === 'off' ? null : keywordWorkKind(e.description)
+    const kind: WorkKindJudgment | null = workKindMode === 'off' ? null : (judged.kind ?? (keywordKind === null ? null : { kind: keywordKind, confidence: null, source: 'keywords' }))
     const decision = decideSubagent({
       tiers,
       jev,
@@ -1299,9 +1317,10 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     // falling (0.6.2 F0, review finding 2).
     const guarded = decision.guard !== null
     const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
-    const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
+    // 0.6.16 T1: the router's own low only on confident read or execute work, with the switch active.
+    const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
     const applied = mode === 'active' && decision.changed
-    pending = { effort: targetEffort, guarded, declared: definition.effort, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
+    pending = { effort: targetEffort, guarded, declared: definition.effort, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
     why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (mode === 'measure' && decision.changed) wouldUse = subagentModelLabel(decision.model, tiers)
     if (applied) input = { ...e, model: decision.model }
@@ -1353,13 +1372,23 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     // null: no effort decision applies here (this record's own honest
     // "not eligible" state) -- not the effort the step happens to carry.
     let loggedEffort: SessionEffort | null = null
+    let workKind: WorkKindRecord | null = null
     try {
-      if (target?.effortEligible) {
-        const sent = subagentStepEffort(target.effort, e.effort, target.guarded, target.declared)
-        loggedEffort = sent ?? null
-        const { effort: _dropped, ...rest } = e
-        void _dropped
-        input = sent === undefined ? rest : { ...rest, effort: sent }
+      if (target !== undefined) {
+        const tiered = target.effortEligible ? subagentStepEffort(target.effort, e.effort, target.guarded, target.declared) : e.effort
+        // 0.6.16 T2: the work kind's effort, set from the step it would send; the same on every step of the run.
+        const outcome = kindStepEffort({ kind: target.kind, model: e.model, effort: tiered, declared: target.declared, guard: target.decision.guard, text: target.text, destinationKind: target.destinationKind })
+        const kindActs = target.workKindMode === 'active' && outcome.hold === null
+        const sent = kindActs ? outcome.effort : tiered
+        if (target.workKindMode !== 'off') {
+          workKind = { mode: target.workKindMode, kind: target.kind?.kind ?? null, confidence: target.kind?.confidence ?? null, source: target.kind?.source ?? null, keywords: target.keywordKind, effort: outcome.hold === null ? (outcome.effort ?? null) : null, hold: outcome.hold, applied: kindActs && sent !== tiered }
+        }
+        if (target.effortEligible || kindActs) {
+          loggedEffort = sent ?? null
+          const { effort: _dropped, ...rest } = e
+          void _dropped
+          input = sent === undefined ? rest : { ...rest, effort: sent }
+        }
       }
     } catch {
       input = e
@@ -1380,6 +1409,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           sessionId: await readSessionId($),
           turnId: e.turnId,
           agentId: e.agentId,
+          workKind,
         })
         await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
       } catch {

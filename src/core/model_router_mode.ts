@@ -16,10 +16,13 @@
 // ---------------------------------------------------------------------------
 
 import { ROUTER_TIERS } from "./model_router_accounts.ts";
+import type { RouterTier } from "./model_router_accounts.ts";
 import { EFFORT_LEVELS, TIER_EFFORT } from "./model_router_decide.ts";
 import type { TierEffort, TierEffortMap } from "./model_router_decide.ts";
 import { MAX_STEWARD_THRESHOLD, MIN_STEWARD_THRESHOLD, STEWARD_MODES, STEWARD_SOFT_MODES, parseStewardMode, parseStewardSoftMode, parseStewardThreshold } from "./context_steward.ts";
 import type { StewardMode, StewardSoftMode } from "./context_steward.ts";
+import { parseWorkKindMode } from "./work_kind.ts";
+import type { WorkKindMode } from "./work_kind.ts";
 
 export type RouterMode = "off" | "measure" | "active";
 
@@ -286,4 +289,43 @@ export function planStewardWrite(raw: string | null, steward: StewardSettingsWri
   if (raw === null) return { kind: "write", text: `${JSON.stringify(next, null, 2)}\n` };
   const text = JSON.stringify(next, null, detectIndent(raw));
   return { kind: "write", text: raw.endsWith("\n") ? `${text}\n` : text };
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.16 T2: the work kind at subagent spawn (src/core/work_kind.ts) has its
+// own switch, per account, in the same router options (`workKindMode`).
+// ---------------------------------------------------------------------------
+
+export function workKindModeFromSettings(settings: unknown): WorkKindMode {
+  return parseWorkKindMode(routerOption(settings, "workKindMode"));
+}
+
+/** What writing `mode` into a settings.json whose text is `raw` (null: no file yet) should do: the same contract as planRouterModeWrite. */
+export function planWorkKindWrite(raw: string | null, mode: WorkKindMode): RouterModeWritePlan {
+  let parsed: unknown = {};
+  if (raw !== null) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { kind: "refuse", reason: "unparseable" };
+    }
+    if (!isObject(parsed)) return { kind: "refuse", reason: "not-an-object" };
+  }
+  const base = isObject(parsed) ? parsed : {};
+  const configs = isObject(base.pluginConfigs) ? base.pluginConfigs : {};
+  const own = isObject(configs[ROUTER_SETTINGS_KEY]) ? (configs[ROUTER_SETTINGS_KEY] as Record<string, unknown>) : {};
+  const options = isObject(own.options) ? own.options : {};
+  if (options.workKindMode === mode) return { kind: "unchanged" };
+  const next = { ...base, pluginConfigs: { ...configs, [ROUTER_SETTINGS_KEY]: { ...own, options: { ...options, workKindMode: mode } } } };
+  if (raw === null) return { kind: "write", text: `${JSON.stringify(next, null, 2)}\n` };
+  const text = JSON.stringify(next, null, detectIndent(raw));
+  return { kind: "write", text: raw.endsWith("\n") ? `${text}\n` : text };
+}
+
+/** 0.6.16 T1: the tiers whose effort the person stored (a valid `routerEffort` value), as opposed to the defaults. */
+export function routerEffortPersonTiers(settings: unknown): ReadonlySet<RouterTier> {
+  const stored = routerOption(settings, "routerEffort");
+  const tiers = new Set<RouterTier>();
+  if (isObject(stored)) for (const tier of ROUTER_TIERS) if (isTierEffort(stored[tier])) tiers.add(tier);
+  return tiers;
 }

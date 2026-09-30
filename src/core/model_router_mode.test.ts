@@ -212,3 +212,37 @@ test("steward soft tier: read from stewardSoftMode, written when given, kept whe
   if (set.kind === "write") assert.equal(stewardFromSettings(JSON.parse(set.text)).softMode, "measure");
   assert.equal(planStewardWrite(raw, { mode: "active", threshold: 120_000, softMode: "active" }).kind, "unchanged");
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.16 T2: the work-kind switch (`workKindMode`), and which tiers' effort
+// the person set themselves.
+// ---------------------------------------------------------------------------
+
+import { planWorkKindWrite, routerEffortPersonTiers, workKindModeFromSettings } from "./model_router_mode.ts";
+
+test("0.6.16 T2 workKindModeFromSettings: measure by default; the installed plugin's option wins", () => {
+  assert.equal(workKindModeFromSettings(null), "measure");
+  assert.equal(workKindModeFromSettings({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { workKindMode: "active" } } } }), "active");
+  assert.equal(workKindModeFromSettings({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { workKindMode: "loud" } } } }), "measure");
+});
+
+test("0.6.16 T2 planWorkKindWrite: next to the router mode, every other key kept; the same value is no write; a broken file is refused", () => {
+  const raw = `${JSON.stringify({ model: "opus", pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active" } } } }, null, 4)}\n`;
+  const plan = planWorkKindWrite(raw, "active");
+  assert.equal(plan.kind, "write");
+  if (plan.kind !== "write") return;
+  assert.ok(plan.text.endsWith("\n"));
+  assert.ok(plan.text.includes('    "model"'));
+  assert.deepEqual(JSON.parse(plan.text), { model: "opus", pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: "active", workKindMode: "active" } } } });
+  assert.equal(planWorkKindWrite(plan.text, "active").kind, "unchanged");
+  assert.deepEqual(planWorkKindWrite("{ not json", "off"), { kind: "refuse", reason: "unparseable" });
+  assert.deepEqual(planWorkKindWrite("[]", "off"), { kind: "refuse", reason: "not-an-object" });
+  const created = planWorkKindWrite(null, "off");
+  assert.equal(created.kind, "write");
+  if (created.kind === "write") assert.deepEqual(JSON.parse(created.text), { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { workKindMode: "off" } } } });
+});
+
+test("0.6.16 T1/T2 routerEffortPersonTiers: the tiers whose effort the person stored", () => {
+  assert.deepEqual([...routerEffortPersonTiers(null)], []);
+  assert.deepEqual([...routerEffortPersonTiers({ pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { simple: "high", complex: "ultra" } } } } })], ["simple"]);
+});

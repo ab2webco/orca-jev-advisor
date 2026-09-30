@@ -2045,11 +2045,12 @@ async function attendModelRouterStatusRefresh (orca, storageHost, options = {}) 
 
 /** Attends one pending "set this target's router mode" request from the
  *  panel, if any -- or, 0.6.2 E3, its per-tier effort (`effort`, an
- *  object the installer validates before anything is written). */
+ *  object the installer validates before anything is written), or, 0.6.16
+ *  T2, its work-kind switch (`workKind`). */
 async function attendModelRouterConfigRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(MODEL_ROUTER_CONFIG_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string' ||
-      typeof request.target !== 'string' || (typeof request.mode !== 'string' && !isRecord(request.effort) && !isRecord(request.steward))) return
+      typeof request.target !== 'string' || (typeof request.mode !== 'string' && typeof request.workKind !== 'string' && !isRecord(request.effort) && !isRecord(request.steward))) return
 
   await storageHost.delete(MODEL_ROUTER_CONFIG_REQUEST_KEY).catch((error) =>
     orca.log(`model router config request cleanup failed: ${error.message}`))
@@ -2065,9 +2066,11 @@ async function attendModelRouterConfigRequest (orca, storageHost, options = {}) 
   const runScript = options.runScript ?? runClaudeIntegrationScript
   const result = isRecord(request.steward)
     ? await runScript('steward-set', [request.target, JSON.stringify(request.steward)])
-    : isRecord(request.effort)
-      ? await runScript('router-effort-set', [request.target, JSON.stringify(request.effort)])
-      : await runScript('router-mode-set', [request.target, request.mode])
+    : typeof request.workKind === 'string'
+      ? await runScript('work-kind-set', [request.target, request.workKind])
+      : isRecord(request.effort)
+        ? await runScript('router-effort-set', [request.target, JSON.stringify(request.effort)])
+        : await runScript('router-mode-set', [request.target, request.mode])
   if (!result.ok) {
     orca.log(`model router config script (set) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }

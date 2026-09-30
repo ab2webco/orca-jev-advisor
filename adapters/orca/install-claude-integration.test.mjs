@@ -1122,6 +1122,29 @@ test('steward-set: an unknown mode, a threshold out of range or a bad shape is r
   assert.equal(noTarget.reason, 'unknown-target')
 })
 
+// 0.6.16 T2: the work kind at subagent spawn has its own switch per target.
+test('router-mode-status: each target reports its work-kind switch, measure by default', () => {
+  const home = makeHome()
+  writeSettings(home, { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { workKindMode: 'active' } } } })
+  assert.equal(runRouter(['router-mode-status'], home).targets[0].workKind, 'active')
+  assert.equal(runRouter(['router-mode-status'], makeHome()).targets[0].workKind, 'measure')
+})
+
+test('work-kind-set: writes the switch next to the router mode, keeping every other key; an unknown mode or target is rejected', () => {
+  const home = makeHome()
+  writeSettings(home, { env: { SOME_OTHER_VAR: '1' }, pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerMode: 'active' } } } })
+  const result = runRouter(['work-kind-set', 'home', 'active'], home)
+  assert.equal(result.ok, true)
+  assert.equal(result.workKind, 'active')
+  const settings = readSettings(home)
+  assert.equal(settings.env.SOME_OTHER_VAR, '1')
+  assert.deepEqual(settings.pluginConfigs[ROUTER_SETTINGS_KEY].options, { routerMode: 'active', workKindMode: 'active' })
+  assert.equal(runRouter(['work-kind-set', 'home', 'active'], home).unchanged, true, 'the same value is no write')
+  const bad = runRouter(['work-kind-set', 'home', 'loud'], home)
+  assert.deepEqual([bad.ok, bad.reason], [false, 'unknown-work-kind'])
+  assert.equal(runRouter(['work-kind-set', 'account:nope', 'off'], home).reason, 'unknown-target')
+})
+
 // 0.6.11 T2c (M6): install and uninstall write settings.json through the same
 // guarded write as router-mode/steward, so an edit made while they run is
 // merged again instead of lost.

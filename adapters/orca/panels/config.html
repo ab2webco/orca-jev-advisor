@@ -530,6 +530,7 @@
       <section id="model-router-section">
         <h2 data-i18n="modelRouter.heading"></h2>
         <p class="hint" data-i18n="modelRouter.explanation"></p>
+        <p class="hint" data-i18n="modelRouter.workKindHint"></p>
         <p class="hint" data-i18n="modelRouter.stewardHint"></p>
         <div id="model-router-rows"></div>
         <p class="hint" id="model-router-empty" style="display:none" data-i18n="modelRouter.empty"></p>
@@ -761,6 +762,9 @@
           'modelRouter.effortNone': 'no usa esfuerzo',
           'modelRouter.effortSave': 'Guardar esfuerzo',
           'modelRouter.stewardHint': 'Guardián de contexto: al terminar cada turno por encima del umbral, Jev juzga si una tarea acaba de cerrarse. En modo activo compacta la sesión conservando el plan y el trabajo pendiente, y ante un tema nuevo sugiere /clear. Modo medir: solo registra lo que haría. Releer el contexto es la mayor parte del costo de una sesión larga. Al llegar a 600 mil tokens (o al 80% de la ventana del modelo principal, si es menor) compacta siempre. Desde 400 mil compacta salvo que Jev esté seguro de que la tarea sigue a medias; ese tramo tiene su propio interruptor y empieza en medir.',
+          'modelRouter.workKindHint': 'Esfuerzo según el tipo de trabajo: al lanzar un subagente, Jev también juzga qué hará (ejecutar, leer, revisar, implementar o diseñar). En modo activo, los que solo ejecutan o leen van como mucho en alto en Sonnet 5 (nunca muy alto) y en medio en Opus 5.5 y Sonnet 5.5; revisar, implementar y diseñar no cambian. Nunca baja el esfuerzo que fija la definición del agente ni tu máximo, ni con temas sensibles o en el sitio de un cliente. Modo medir: solo registra lo que enviaría.',
+          'modelRouter.workKindLabel': 'Tipo de trabajo (subagentes)',
+          'modelRouter.workKindSave': 'Guardar tipo de trabajo',
           'modelRouter.stewardLabel': 'Guardián de contexto',
           'modelRouter.stewardSoft': 'Tramo de 400k',
           'modelRouter.stewardThreshold': 'Umbral',
@@ -1074,6 +1078,9 @@
           'modelRouter.effortNone': 'takes no effort',
           'modelRouter.effortSave': 'Save effort',
           'modelRouter.stewardHint': 'Context steward: at the end of each turn above the threshold, Jev judges whether a task just closed. In active mode it compacts the session, keeping the plan and the pending work, and on a new topic it suggests /clear. Measure mode only logs what it would do. Re-reading the context is most of what a long session costs. At 600 thousand tokens (or 80% of the main model\'s window, if smaller) it always compacts. From 400 thousand it compacts unless Jev is sure the task is still half done; that tier has its own switch and starts in measure.',
+          'modelRouter.workKindHint': 'Effort by work kind: when a subagent is spawned, Jev also judges what it will do (execute, read, review, implement or design). In active mode, runs that only execute or read go at high at most on Sonnet 5 (never extra high) and at medium on Opus 5.5 and Sonnet 5.5; review, implement and design are unchanged. It never goes below the effort an agent definition sets or your own max, nor on sensitive topics or in a client\'s site. Measure mode only logs what it would send.',
+          'modelRouter.workKindLabel': 'Work kind (subagents)',
+          'modelRouter.workKindSave': 'Save work kind',
           'modelRouter.stewardLabel': 'Context steward',
           'modelRouter.stewardSoft': '400k tier',
           'modelRouter.stewardThreshold': 'Threshold',
@@ -1891,6 +1898,7 @@
         var requestId = 'model-router-config-' + Date.now() + '-' + Math.random().toString(36).slice(2)
         var request = { id: requestId, at: new Date().toISOString(), target: targetId }
         if (change.steward) request.steward = change.steward
+        else if (change.workKind) request.workKind = change.workKind
         else if (change.effort) request.effort = change.effort
         else request.mode = change.mode
         signalPanelOpen()
@@ -2928,9 +2936,47 @@
           row.appendChild(saveBtn)
           row.appendChild(saidEl)
           host.appendChild(row)
+          host.appendChild(renderModelRouterWorkKind(target))
           if (target.effort && target.tiers) host.appendChild(renderModelRouterEffort(target))
           if (target.steward) host.appendChild(renderModelRouterSteward(target))
         })
+      }
+
+      /** 0.6.16 T2: the work kind at subagent spawn, per target: its own
+       *  off/measure/active switch (work-kind-set), measure when the row
+       *  carries none (an installer older than the switch). */
+      function renderModelRouterWorkKind (target) {
+        var shown = target.workKind === 'off' || target.workKind === 'active' ? target.workKind : 'measure'
+        var row = elMake('div', 'checkbox-row router-row work-kind-row')
+        row.setAttribute('data-work-kind-target', target.target)
+        var text = elMake('div', 'checkbox-text router-target')
+        var label = elMake('span', 'checkbox-label')
+        label.textContent = t('modelRouter.workKindLabel')
+        text.appendChild(label)
+        var group = elMake('div', 'mode-buttons')
+        group.setAttribute('role', 'group')
+        group.setAttribute('aria-label', t('modelRouter.workKindLabel'))
+        ;['off', 'measure', 'active'].forEach(function (mode) {
+          var btn = elMake('button')
+          btn.type = 'button'
+          btn.setAttribute('data-value', mode)
+          btn.textContent = t(MODEL_ROUTER_MODE_KEYS[mode])
+          group.appendChild(btn)
+        })
+        setPressedValue(group, shown)
+        wireButtonGroup(group, function () { modelRouterEdited = true })
+        var saveBtn = elMake('button', 'model-router-work-kind-save')
+        saveBtn.type = 'button'
+        saveBtn.textContent = t('modelRouter.workKindSave')
+        var saidEl = elMake('span', 'said')
+        saveBtn.addEventListener('click', function () {
+          saveModelRouterChange(target.target, shown, function (row) { return row.workKind === 'off' || row.workKind === 'active' ? row.workKind : 'measure' }, { workKind: pressedValue(group, shown) }, saidEl)
+        })
+        row.appendChild(text)
+        row.appendChild(group)
+        row.appendChild(saveBtn)
+        row.appendChild(saidEl)
+        return row
       }
 
       /** The context steward, per target: off/measure/active and the

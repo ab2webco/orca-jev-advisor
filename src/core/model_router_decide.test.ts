@@ -235,7 +235,7 @@ test("decision log: hourly file name, like turn-usage", () => {
 test("decision log record: exactly the spec's fields, no prompt text", () => {
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: { ...CALM, text: "secret prompt words" } });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal", project: null });
-  assert.deepEqual(Object.keys(record).sort(), ["account", "agentId", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "project", "proposed", "quotaBand", "quotaSource", "reason", "sessionId", "stepSaving", "switchCost", "tier", "turnId"].sort());
+  assert.deepEqual(Object.keys(record).sort(), ["account", "agentId", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "project", "proposed", "quotaBand", "quotaSource", "reason", "sessionId", "stepSaving", "switchCost", "tier", "turnId", "workKind"].sort());
   assert.equal(record.proposed, "claude-haiku-4-5-20251001");
   assert.equal(record.contextTokens, null);
   assert.equal(record.origin, null, "no origin given -- defaults to null");
@@ -250,6 +250,14 @@ test("0.6.16 T1: a decision row carries the session, turn and agent it was made 
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "subagent", decision, applied: false, quotaBand: "normal", sessionId: "s-1", turnId: "t-1", agentId: "a-1" });
   assert.deepEqual([record.sessionId, record.turnId, record.agentId], ["s-1", "t-1", "a-1"]);
+  assert.equal(record.workKind, null, "no work kind given -- null");
+});
+
+test("0.6.16 T2: a subagent row carries the work kind, its source, the keywords' cross-check and the effort it sends or would send", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const workKind = { mode: "measure", kind: "read", confidence: 0.9, source: "jev", keywords: "read", effort: "medium", hold: null, applied: false } as const;
+  const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "subagent", decision, applied: false, quotaBand: "normal", workKind });
+  assert.deepEqual(record.workKind, workKind);
 });
 
 test("decision log record: project is carried through verbatim (JEVADV-63)", () => {

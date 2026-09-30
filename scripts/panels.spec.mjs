@@ -2818,6 +2818,43 @@ test('steward: a threshold out of range is refused in place and nothing is sent'
   }
 })
 
+// 0.6.16 T2: the work kind at subagent spawn has its own switch per account,
+// next to the router mode, measure by default.
+test('0.6.16 T2: each account shows the work-kind switch, measure by default, and saving sends only it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target, at) => (at === 1 ? { ...target, workKind: 'active' } : target)) }
+  const { browser, page } = await openPanel({ modelRouterStatus: status })
+  try {
+    await page.click('#tab-models')
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('[data-work-kind-target]')).map((row) => {
+      const pressed = Array.from(row.querySelectorAll('.mode-buttons button')).find((b) => b.getAttribute('aria-pressed') === 'true')
+      return { target: row.getAttribute('data-work-kind-target'), pressed: pressed ? pressed.getAttribute('data-value') : null, text: row.innerText }
+    }))
+    assert.deepEqual(rows.map((r) => [r.target, r.pressed]), [['home', 'measure'], ['11112222-3333-4444-5555-666677778888', 'active']])
+    assert.match(rows[0].text, /work kind/i)
+    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    assert.match(hint, /Sonnet 5/)
+    await page.click('[data-work-kind-target="home"] button[data-value="active"]')
+    await page.click('[data-work-kind-target="home"] .model-router-work-kind-save')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.deepEqual([request.target, request.workKind, request.mode, request.effort, request.steward], ['home', 'active', undefined, undefined, undefined])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.16 T2: the work-kind switch reads in Spanish', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT }, 'es')
+  try {
+    await page.click('#tab-models')
+    const text = await page.evaluate(() => document.querySelector('[data-work-kind-target="home"]').innerText)
+    assert.match(text, /tipo de trabajo/i)
+    assert.match(text, /Medir/)
+  } finally {
+    await browser.close()
+  }
+})
+
 test('0.6.2: the catalog names its source once, not on every card', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page } = await openPanel(SCENARIOS.ready)
   try {
