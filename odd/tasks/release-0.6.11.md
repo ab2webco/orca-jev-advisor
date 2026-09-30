@@ -66,7 +66,7 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
   - Status line: `(etapa: X)` removed from plain decisions (it was Jev's tier for the
     prompt, redundant with the model shown); kept models still say `(Jev: X)`.
 - [x] T6 live quota from `$.session.usage().rateLimits` (five_hour, seven_day: percentUsed, resetsAt), tighter-of-two band, `quotaSource` in the decision record; live figure dropped once its resetsAt passes, mirror fills a missing window while <= 30 min old (de5d377, 65402bf, 12de4d6; npm test 2575/2575; no panel touched)
-- [ ] T7 README, release 0.6.11, live check on this machine (README and version done; npm test 2583/2583)
+- [x] T7 README, release v0.6.11 (2744599), live check: install on home + 4 Orca accounts with absolute paths, hooks-check 3/3 ok, gate from another repository refuses `rm -rf ~` and allows `ls`
 
 ## Acceptance criteria
 - A measurement log never stops recording, whatever its history size.
