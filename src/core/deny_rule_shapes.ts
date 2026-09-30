@@ -124,3 +124,19 @@ export function recursiveRmOfRootOrHomeOutcome(command: string, cwd: string, hom
   }
   return severity;
 }
+
+// git's own global options that take their value as the next word.
+const GIT_GLOBAL_OPTIONS_WITH_VALUE = "-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix";
+const GIT_GLOBAL_OPTIONS_BEFORE_PUSH = new RegExp(`(^|[\\s(\`'"/])git((?:\\s+(?:(?:${GIT_GLOBAL_OPTIONS_WITH_VALUE})\\s+\\S+|-\\S*))+)(?=\\s+push\\b)`, "g");
+
+/** `git -C dir --no-pager -c k=v push ...` read as `git push ...`: global options never change what a push does. */
+export function withoutGitGlobalOptionsBeforePush(view: string): string {
+  return view.replace(GIT_GLOBAL_OPTIONS_BEFORE_PUSH, "$1git");
+}
+
+// `--force` (never `--force-with-lease`/`--force-if-includes`), a short
+// cluster holding `f` (`-f`, `-fu`, `-uf`, `-qf`), or a `+refspec`.
+const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includes)\b|-[a-zA-Z0-9]*f[a-zA-Z0-9]*\b)|(?:^|\s)\+\S)/;
+
+/** True when `view` runs a force push, in any flag spelling and through any git global option. */
+export const FORCE_PUSH_SHAPE = { test: (view: string): boolean => FORCE_PUSH.test(withoutGitGlobalOptionsBeforePush(view)) };

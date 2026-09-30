@@ -126,3 +126,42 @@ test('F-01: an rm spelling inside a grep pattern, a quoted argument, an echo or 
     assertNotRefused(command)
   }
 })
+
+const FORCE_RULE = /force push: rewrites the remote/
+
+// F-02: clustered short flags and git global options before `push`
+// (H-force-cluster-*, H-force-gitC, I-push-*).
+const FORCE_PUSH_SPELLINGS = [
+  'git push -fu origin x',
+  'git push -uf origin x',
+  'git push -qf origin x',
+  'git push -fq origin x',
+  'git -C /tmp push --force origin x',
+  'git -C . push --force origin x',
+  'git -c push.default=current push --force origin x',
+  'git --no-pager push --force origin x',
+  'git --git-dir=.git push --force origin x',
+  'git --work-tree=. push -f origin x',
+  'git -C /tmp --no-pager push -fu origin x',
+  '/usr/bin/git -C . push -uf origin x',
+  'cd /tmp && git -C . push -vf origin x',
+]
+
+for (const command of FORCE_PUSH_SPELLINGS) {
+  test(`F-02: ${command} is refused by the force-push rule, and so is its retry`, () => {
+    assertRefusedTwice(command, FORCE_RULE)
+  })
+}
+
+test('F-02: a lease-guarded force push and ordinary push flags are not the force-push rule', () => {
+  const home = makeHome()
+  for (const command of ['git push --force-with-lease origin x', 'git -C . push --force-if-includes --force-with-lease origin x', 'git push -u origin x', 'git --no-pager push --follow-tags origin x', 'git -C . push -uq origin x']) {
+    assertNotRefused(command, { home })
+  }
+})
+
+test('F-02: a force-push spelling inside a grep pattern, a quoted argument or an echo stays data', () => {
+  for (const command of ['grep -rn "git push -fu" docs/', 'echo "git -C /tmp push --force origin x"', "git commit -m 'document git --no-pager push -uf'"]) {
+    assertNotRefused(command)
+  }
+})

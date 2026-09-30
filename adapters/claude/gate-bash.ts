@@ -106,7 +106,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
+import { FORCE_PUSH_SHAPE, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -599,8 +599,9 @@ const NEVER_SILENTLY: readonly {
   // `-if-includes`: a `--force-with-lease` rebase against your OWN,
   // non-shared branch is normal rebase flow (pushProtectedRule below still
   // catches one aimed at a shared branch), and plain `--force`/`-f`/a
-  // `+refspec` are unaffected.
-  { evaluate: segmentRule(/git\s+push\b.*(?:(?:--force(?!-with-lease|-if-includes)\b|-f\b)|(?:^|\s)\+\S)/), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
+  // `+refspec` are unaffected. 0.6.12 F-02: clustered flags (`-fu`) and git
+  // global options before `push` (`-C dir`, `--no-pager`) -- FORCE_PUSH_SHAPE.
+  { evaluate: segmentRule(FORCE_PUSH_SHAPE), why: 'rule.forcePush', denyToggle: 'denyForcePush' },
   { evaluate: pushProtectedRule, why: 'rule.pushProtected', denyToggle: 'denyPushProtected' },
   // Irrecoverable, and beyond any repo: the whole home directory or the
   // filesystem root, in every flag and path spelling (0.6.12 F-01), read

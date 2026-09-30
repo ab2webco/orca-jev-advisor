@@ -1,7 +1,8 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { recursiveRmOfRootOrHomeOutcome } from "./deny_rule_shapes.ts";
+import { FORCE_PUSH_SHAPE, recursiveRmOfRootOrHomeOutcome, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
+import { someSegmentMatches } from "./git_discard.ts";
 
 const HOME = "/home/dev";
 const PROJECT = "/home/dev/Projects/app";
@@ -32,4 +33,23 @@ test("rm: a mention stays data, and interpreter code stays advice", () => {
   assert.equal(recursiveRmOfRootOrHomeOutcome('grep -rn "rm -fr /" src/', PROJECT, HOME), null);
   assert.equal(recursiveRmOfRootOrHomeOutcome('echo "rm -r -f /"', PROJECT, HOME), null);
   assert.equal(recursiveRmOfRootOrHomeOutcome(`python3 -c "import os; os.system('rm -fr ~')"`, PROJECT, HOME), "code");
+});
+
+test("force push: clusters and git global options before push are a command-position deny", () => {
+  for (const command of ["git push -fu origin x", "git push -uf origin x", "git push -qf origin x", "git -C /tmp push --force origin x", "git -c push.default=current push -f origin x", "git --no-pager push --force origin x", "git --git-dir=.git --work-tree=. push -f", "git push origin +x", "sudo git -C . push -fu origin x"]) {
+    assert.equal(someSegmentMatches(command, FORCE_PUSH_SHAPE), "deny", command);
+  }
+});
+
+test("force push: lease-guarded and ordinary pushes, and mentions, are not the rule", () => {
+  for (const command of ["git push --force-with-lease origin x", "git -C . push --force-if-includes origin x", "git push -u origin x", "git --no-pager push --follow-tags", 'grep -n "git push -fu" docs/', "git -C . commit -m 'git push -f later'"]) {
+    assert.equal(someSegmentMatches(command, FORCE_PUSH_SHAPE), null, command);
+  }
+  assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git -C . push -fu')"`, FORCE_PUSH_SHAPE), "code");
+});
+
+test("git global options are dropped only before push", () => {
+  assert.equal(withoutGitGlobalOptionsBeforePush("git -C /tmp --no-pager -c a=b push -f"), "git push -f");
+  assert.equal(withoutGitGlobalOptionsBeforePush("/usr/bin/git -C . push"), "/usr/bin/git push");
+  assert.equal(withoutGitGlobalOptionsBeforePush("git -C /tmp commit -m x"), "git -C /tmp commit -m x");
 });

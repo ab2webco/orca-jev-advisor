@@ -43,7 +43,11 @@ Out of scope: F-06 redaction of unregistered paths, F-08..F-14.
   `pushd ~ && rm -rf .`, the home directory by absolute path, all `REFUSED`. Decision: recursive
   is required, force is not (the old rule matched `-r` alone too); the home directory's
   absolute path and `.`/`*` after a `cd`/`pushd` into `/` or home count as the rule.
-- [ ] T2 force push spellings
+- [x] T2 force push spellings. Proof: F-02 cases in `gate-deny-spellings.test.mjs`
+  RED 12/15 failing, GREEN 15/15 (file 39/39); `deny_rule_shapes.test.ts` 7/7; `npm test`
+  2629/2629. Probe replay: `-fu` (+retry), `-qf`, `-uf`, `git -C /tmp`, `git -C .`,
+  `git -c k=v`, `git --no-pager` before `push --force` all `REFUSED`. Git global
+  options are dropped before `push` (FORCE_PUSH_SHAPE), so T3 reuses the same step.
 - [ ] T3 protected push through global options, prefixes, continuations
 - [ ] T4 curl/wget to shell or interpreter
 - [ ] T5 target repository and branch attribution
