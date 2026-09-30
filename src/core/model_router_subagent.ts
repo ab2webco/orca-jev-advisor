@@ -150,14 +150,18 @@ const EFFORT_RANK: Readonly<Record<TierEffort, number>> = { low: 0, medium: 1, h
  * `guardedEffort`: a guard blocks a lowering, never a raise -- 0.6.3 F0). A
  * person's own `max` or numeric budget is never touched either way, the
  * same floor `isPersonEffort` (model_router_decide.ts) protects elsewhere in
- * the router -- it is intent, not something inherited.
+ * the router -- it is intent, not something inherited. 0.6.16 T3: neither is
+ * the effort an agent definition declares (`declared`): the result never
+ * falls below it.
  */
-export function subagentStepEffort(target: TierEffort | null, current: SessionEffort | undefined, guarded = false): SessionEffort | undefined {
+export function subagentStepEffort(target: TierEffort | null, current: SessionEffort | undefined, guarded = false, declared: SessionEffort | null = null): SessionEffort | undefined {
   if (current === "max" || typeof current === "number") return current;
-  if (current === undefined) return target ?? undefined;
+  // 0.6.16 T3: a definition that declares `max` or a numeric budget is intent
+  // the router has no rank to compare against: the step goes as it is.
+  if (declared === "max" || typeof declared === "number") return current;
   if (target === null) return undefined;
-  // 0.6.2 F0: under a guard the effort may rise to the tier's, never fall.
-  if (guarded) return EFFORT_RANK[target] > EFFORT_RANK[current] ? target : current;
-  // Unguarded: the tier's own effort applies outright, both directions.
-  return target;
+  const tiered: TierEffort = current === undefined || !guarded ? target : EFFORT_RANK[target] > EFFORT_RANK[current] ? target : current;
+  // 0.6.16 T3: the definition's declared level is a floor -- raised above,
+  // never lowered below.
+  return declared !== null && EFFORT_RANK[declared] > EFFORT_RANK[tiered] ? declared : tiered;
 }

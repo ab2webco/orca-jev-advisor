@@ -147,7 +147,7 @@ import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
 import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
-import { agentDefinitionEffort, agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import { agentDefinitionEffort, agentDefinitionModel, declaredEffort } from '../../../../src/core/agent_definition.ts'
 import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedShare } from '../../../../src/core/effort_source.ts'
 import type { EffortSource } from '../../../../src/core/effort_source.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
@@ -632,13 +632,15 @@ async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMod
 /**
  * 0.6.8 T7: the model the definition of `subagentType` fixes, read from the
  * project's own `.claude/agents` first, then the account's (CLAUDE_CONFIG_DIR,
- * else `~/.claude`). null when none fixes one. Fails open to null.
+ * else `~/.claude`). null when none fixes one. 0.6.16 T3: with the effort it
+ * declares, from the same lookup. Fails open to nulls.
  */
-async function readAgentDefinitionModel($: EngineInterface, subagentType: string, cwd: string): Promise<string | null> {
+async function readAgentDefinition($: EngineInterface, subagentType: string, cwd: string): Promise<{ model: string | null; effort: SessionEffort | null }> {
   try {
-    return agentDefinitionModel(await readAgentDefinitionFiles($, cwd), subagentType)
+    const files = await readAgentDefinitionFiles($, cwd)
+    return { model: agentDefinitionModel(files, subagentType), effort: declaredEffort(agentDefinitionEffort(files, subagentType)) }
   } catch {
-    return null
+    return { model: null, effort: null }
   }
 }
 
@@ -1231,6 +1233,8 @@ async function recordRouterStats($: EngineInterface, e: Frozen<TurnStepInput>, r
 interface SubagentEffortTarget {
   readonly effort: TierEffort | null
   readonly guarded: boolean
+  /** 0.6.16 T3: the effort the agent's definition declares, a floor the step never goes below; null when it declares none. */
+  readonly declared: SessionEffort | null
   readonly effortEligible: boolean
   readonly logged: boolean
   readonly account: string
@@ -1268,7 +1272,8 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     // 0.6.8 T7: a model the agent definition fixes counts as fixed too; the
     // spawn input only carries the Agent call's own.
     const cwd = e.cwd ?? (await $.session.cwd())
-    const fixedModel = explicitModelGiven ? (e.model as string) : await readAgentDefinitionModel($, e.subagentType, cwd)
+    const definition = await readAgentDefinition($, e.subagentType, cwd)
+    const fixedModel = explicitModelGiven ? (e.model as string) : definition.model
     const modelFixed = fixedModel !== null
     if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
@@ -1296,7 +1301,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
     const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
     const applied = mode === 'active' && decision.changed
-    pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
+    pending = { effort: targetEffort, guarded, declared: definition.effort, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
     why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (mode === 'measure' && decision.changed) wouldUse = subagentModelLabel(decision.model, tiers)
     if (applied) input = { ...e, model: decision.model }
@@ -1350,7 +1355,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     let loggedEffort: SessionEffort | null = null
     try {
       if (target?.effortEligible) {
-        const sent = subagentStepEffort(target.effort, e.effort, target.guarded)
+        const sent = subagentStepEffort(target.effort, e.effort, target.guarded, target.declared)
         loggedEffort = sent ?? null
         const { effort: _dropped, ...rest } = e
         void _dropped
@@ -1387,7 +1392,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     // 0.6.14 T1: the effort this subagent step is actually sent with, for its row.
     try {
       // 0.6.15 T4b: with its source, read off this step: what the engine put on it against what is sent.
-      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null))
+      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null, subagentEffortTarget.get(e.agentId)?.declared ?? null))
     } catch {
       // Visibility only: never a reason to hold the step.
     }

@@ -2631,6 +2631,35 @@ test("T7: a model an agent definition fixes is judged like an explicit one by de
 });
 
 // ---------------------------------------------------------------------------
+// 0.6.16 T3: an agent definition's declared effort is a floor.
+// ---------------------------------------------------------------------------
+
+test("0.6.16 T3: a definition that declares high keeps high when the tier asks for medium, and the band says it is the definition's", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CWD}/.claude/agents/checker.md`, "---\nname: checker\neffort: high\n---\nCheck.\n");
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ subagentType: "checker", parentModel: "claude-sonnet-5-5" }), "agent-1", "claude-sonnet-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "high" }));
+  assert.equal(step.effort, "high", "the tier's medium never lowers a declared high");
+  assert.equal(storedSubagents(host)[0]?.effortSource, "frontmatter");
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high");
+});
+
+test("0.6.16 T3: the router may still raise a declared effort", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CWD}/.claude/agents/checker.md`, "---\nname: checker\neffort: medium\n---\nCheck.\n");
+  host.fetchQueue.push(tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ subagentType: "checker" }), "agent-1", "claude-opus-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "medium" }));
+  assert.equal(step.effort, "high");
+  assert.equal(storedSubagents(host)[0]?.effortSource, "jev");
+});
+
+// ---------------------------------------------------------------------------
 // 0.6.15 T4c (odd/research/effort-per-task.md §4): measure-only effort
 // logging on each turn-usage line. Nothing about the effort sent changes.
 // ---------------------------------------------------------------------------

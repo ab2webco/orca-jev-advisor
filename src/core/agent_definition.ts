@@ -8,6 +8,8 @@
 //
 // Pure: the caller lists and reads the files.
 
+import type { SessionEffort } from "./model_router_decide.ts";
+
 export interface AgentDefinition {
   readonly name: string | null;
   readonly model: string | null;
@@ -67,4 +69,11 @@ export function agentDefinitionEffort(files: readonly AgentDefinitionFile[], sub
     if (name === subagentType) return definition.effort ?? null;
   }
   return null;
+}
+
+/** 0.6.16 T3: a definition's frontmatter `effort` as an effort the router can hold to: a level, a whole-number budget, or null for anything else. */
+export function declaredEffort(value: string | null): SessionEffort | null {
+  if (value === null) return null;
+  if (value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") return value;
+  return /^\d+$/.test(value) ? Number(value) : null;
 }

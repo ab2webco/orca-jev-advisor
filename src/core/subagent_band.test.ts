@@ -138,3 +138,9 @@ test("subagentBand: the effort names its source, and is ? until the agent's firs
   assert.match(oneEn ?? "", /Opus 5\.5 +high \(inherited\) /);
   assert.match(twoEn ?? "", /Sonnet 5\.5 +medium \(Jev\) /);
 });
+
+test("0.6.16 T3 subagentBand: an effort the agent's definition declares reads as the definition's", () => {
+  const agents: RunningSubagent[] = [{ id: "a-1", type: "reviewer", description: "One", label: "Opus 5.5", effort: "high", effortSource: "frontmatter", why: "inherited", wouldUse: null }];
+  assert.match(lines(200, "es", agents)[1] ?? "", /Opus 5\.5 +alto \(definición\) /);
+  assert.match(lines(200, "en", agents)[1] ?? "", /Opus 5\.5 +high \(definition\) /);
+});

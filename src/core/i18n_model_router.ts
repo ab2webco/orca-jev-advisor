@@ -37,6 +37,7 @@ export type ModelRouterKey =
   | "agents.effort.withSource"
   | "agents.effort.source.inherited"
   | "agents.effort.source.jev"
+  | "agents.effort.source.frontmatter"
   | "agents.row.wouldUse"
   | "agents.row.wouldUse.short"
   | "agents.why.explicit"
@@ -100,6 +101,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.effort.withSource": "{{level}} ({{source}})",
     "agents.effort.source.inherited": "heredado",
     "agents.effort.source.jev": "Jev",
+    "agents.effort.source.frontmatter": "definición",
     "agents.row.wouldUse": "{{why}} · mediría: {{model}}",
     "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "pedido explícito",
@@ -161,6 +163,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.effort.withSource": "{{level}} ({{source}})",
     "agents.effort.source.inherited": "inherited",
     "agents.effort.source.jev": "Jev",
+    "agents.effort.source.frontmatter": "definition",
     "agents.row.wouldUse": "{{why}} · would use: {{model}}",
     "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "explicit request",

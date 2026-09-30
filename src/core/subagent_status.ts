@@ -16,15 +16,18 @@ import type { SubagentDecision } from "./model_router_subagent.ts";
 import type { SessionEffort } from "./model_router_decide.ts";
 
 /** Where a subagent's effort came from (see RunningSubagent.effortSource). */
-export type SubagentEffortSource = "inherited" | "jev" | "not-sent";
-const EFFORT_SOURCES: readonly SubagentEffortSource[] = ["inherited", "jev", "not-sent"];
+export type SubagentEffortSource = "inherited" | "jev" | "frontmatter" | "not-sent";
+const EFFORT_SOURCES: readonly SubagentEffortSource[] = ["inherited", "jev", "frontmatter", "not-sent"];
 
 /**
  * The source of the effort a subagent step is sent with: what the engine put
- * on the step (`carried`) against what the plugin sends (`sent`).
+ * on the step (`carried`) against what the plugin sends (`sent`). 0.6.16 T3:
+ * the level the agent's definition declares (`declared`) is named as such
+ * when that is what is sent, lifted to it or carried as it was.
  */
-export function subagentEffortSource(carried: SessionEffort | null, sent: SessionEffort | null): SubagentEffortSource {
+export function subagentEffortSource(carried: SessionEffort | null, sent: SessionEffort | null, declared: SessionEffort | null = null): SubagentEffortSource {
   if (sent === null) return "not-sent";
+  if (declared !== null && sent === declared) return "frontmatter";
   return carried === sent ? "inherited" : "jev";
 }
 
@@ -51,8 +54,9 @@ export interface RunningSubagent {
   readonly effort: SessionEffort | null;
   /**
    * 0.6.15 T4b: where that effort came from, read off the step it sent:
-   * `inherited` the level the engine resolved for it (the session, its model
-   * settings or its definition), `jev` the one the router set, `not-sent` no
+   * `inherited` the level the engine resolved for it (the session or its model
+   * settings), `frontmatter` the one its definition declares (0.6.16 T3),
+   * `jev` the one the router set, `not-sent` no
    * effort at all; null before its first step. Absent on a row stored
    * before 0.6.15.
    */

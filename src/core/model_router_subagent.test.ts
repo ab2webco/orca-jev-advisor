@@ -134,6 +134,29 @@ test("F0 subagentStepEffort: under a guard, the higher of the inherited and the 
 });
 
 // ---------------------------------------------------------------------------
+// 0.6.16 T3: an agent definition's declared effort is a floor: the router may
+// raise it, never lower it.
+// ---------------------------------------------------------------------------
+
+test("0.6.16 T3 subagentStepEffort: never below the definition's declared effort, guarded or not", () => {
+  assert.equal(subagentStepEffort("medium", "high", false, "high"), "high", "an unguarded tier no longer lowers it");
+  assert.equal(subagentStepEffort("xhigh", "high", false, "high"), "xhigh", "a raise still passes");
+  assert.equal(subagentStepEffort("medium", "xhigh", false, "high"), "high", "lowered at most to the declared level");
+  assert.equal(subagentStepEffort("medium", undefined, false, "high"), "high");
+  assert.equal(subagentStepEffort("low", "medium", true, "high"), "high", "a floor above what the step carries lifts it");
+});
+
+test("0.6.16 T3 subagentStepEffort: a declared numeric budget or max, like the person's own, leaves the step as it is", () => {
+  assert.equal(subagentStepEffort("medium", "high", false, 12000), "high");
+  assert.equal(subagentStepEffort("medium", 12000, false, "high"), 12000);
+  assert.equal(subagentStepEffort("medium", "high", false, "max"), "high");
+});
+
+test("0.6.16 T3 subagentStepEffort: a tier whose model takes no effort still sends none", () => {
+  assert.equal(subagentStepEffort(null, "high", false, "high"), undefined);
+});
+
+// ---------------------------------------------------------------------------
 // 0.6.8 T7: a model fixed by the Agent call or an agent definition is judged,
 // not pinned, when the setting says so -- lowered only under the guards every
 // other decision keeps.
