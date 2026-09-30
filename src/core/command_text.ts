@@ -108,13 +108,120 @@ function bracketBody(text: string, from: number, open: string): string {
 /** perl and ruby run a backtick string as a shell command; python has none and node's is a template. */
 const BACKTICK_RUNNERS = /(^|[\s|;&(])(?:\S*\/)?(?:perl|ruby)\b/;
 
-/** The command lines a program body runs through a shell or as a program (see the note above). */
+// 0.6.14 T3 (N-09, qa-0.6.13): the calls above were found by their text, so
+// one spelled inside a string literal -- a document the program writes,
+// quoting `os.system('git push --force ...')` -- read as a call, and the
+// write was refused as a force push. A pattern anchored at the start of a
+// statement would not do: `x = os.system(...)` is a call too. So the body is
+// first read the way its own language reads it: every string literal's text
+// and every comment is blanked out (same length, newlines kept), and a call
+// counts only where its name sits in what is left, the code. Its arguments
+// are then read from the original text at the same place. Per language:
+//   python  # comments; '…' "…" '''…''' """…""" with any r/b/u/f prefix
+//           (an f-string's {…} is not read as code: a known gap);
+//   node    // and /* */ comments; '…' "…"; `…` whose ${…} IS code again;
+//   perl, ruby  # comments; '…' "…"; a backtick string is a command, so it
+//           stays code, as does qx/%x.
+// ---------------------------------------------------------------------------
+
+type ProgramLanguage = "python" | "node" | "perl" | "ruby";
+
+function programLanguage(openerLine: string): ProgramLanguage {
+  const match = /(^|[\s|;&(])(?:\S*\/)?(python[\d.]*|node|perl|ruby)\b/.exec(openerLine);
+  const name = match?.[2] ?? "python";
+  return name.startsWith("python") ? "python" : (name as ProgramLanguage);
+}
+
+/** `text` with every string literal's contents and every comment blanked in `language`, so only code is left to match. */
+function codeOnly(text: string, language: ProgramLanguage): string {
+  const out = text.split("");
+  const blank = (from: number, to: number): void => {
+    for (let i = from; i < to && i < out.length; i += 1) if (out[i] !== "\n") out[i] = " ";
+  };
+  /** Scans code from `at`; stops at an unmatched `}` when `inTemplate` (a JS `${…}`), returning where. */
+  const scanCode = (start: number, inTemplate: boolean): number => {
+    let at = start;
+    let depth = 0;
+    while (at < text.length) {
+      const char = text[at] ?? "";
+      const nextChar = text[at + 1] ?? "";
+      if (inTemplate && char === "{") depth += 1;
+      if (inTemplate && char === "}") {
+        if (depth === 0) return at;
+        depth -= 1;
+      }
+      if (language === "node" && char === "/" && nextChar === "/") {
+        const end = text.indexOf("\n", at);
+        blank(at, end === -1 ? text.length : end);
+        at = end === -1 ? text.length : end;
+        continue;
+      }
+      if (language === "node" && char === "/" && nextChar === "*") {
+        const end = text.indexOf("*/", at + 2);
+        blank(at, end === -1 ? text.length : end + 2);
+        at = end === -1 ? text.length : end + 2;
+        continue;
+      }
+      // perl's `$#array` is its last index, not a comment.
+      if (language !== "node" && char === "#" && !(language === "perl" && text[at - 1] === "$")) {
+        const end = text.indexOf("\n", at);
+        blank(at, end === -1 ? text.length : end);
+        at = end === -1 ? text.length : end;
+        continue;
+      }
+      if (language === "node" && char === "`") {
+        at = scanTemplate(at + 1);
+        continue;
+      }
+      if (char === "'" || char === '"') {
+        const triple = language === "python" && text.startsWith(char.repeat(3), at);
+        const quote = triple ? char.repeat(3) : char;
+        let end = at + quote.length;
+        while (end < text.length && !text.startsWith(quote, end)) {
+          // A lone quote string ends at its line in python and node; a triple one never does.
+          if (!triple && text[end] === "\n" && (language === "python" || language === "node")) break;
+          end += text[end] === "\\" ? 2 : 1;
+        }
+        blank(at + quote.length, end);
+        at = end + quote.length;
+        continue;
+      }
+      at += 1;
+    }
+    return at;
+  };
+  /** A JS template from just after its opening backtick: text blanked, each `${…}` scanned as code. Returns past the closing backtick. */
+  const scanTemplate = (start: number): number => {
+    let at = start;
+    let from = start;
+    while (at < text.length && text[at] !== "`") {
+      if (text[at] === "\\") {
+        at += 2;
+        continue;
+      }
+      if (text[at] === "$" && text[at + 1] === "{") {
+        blank(from, at);
+        at = scanCode(at + 2, true) + 1;
+        from = at;
+        continue;
+      }
+      at += 1;
+    }
+    blank(from, at);
+    return at + 1;
+  };
+  scanCode(0, false);
+  return out.join("");
+}
+
+/** The command lines a program body runs through a shell or as a program (see the notes above). */
 function commandsRunByProgram(body: string, openerLine: string): string[] {
   const out: string[] = [];
   const add = (line: string): void => {
     if (line.length > 0) out.push(line);
   };
-  for (const match of body.matchAll(RUNS_COMMAND_CALL)) {
+  const code = codeOnly(body, programLanguage(openerLine));
+  for (const match of code.matchAll(RUNS_COMMAND_CALL)) {
     const after = (match.index ?? 0) + match[0].length;
     // `system("git", "push")`, `run(["git", "push"])`: every string argument, in order.
     // `system "git push"` (perl, ruby): the one string right after the name.
@@ -122,8 +229,11 @@ function commandsRunByProgram(body: string, openerLine: string): string[] {
     add(strings.filter((part) => part.length > 0).join(" "));
   }
   if (BACKTICK_RUNNERS.test(openerLine)) {
-    for (const match of body.matchAll(QUOTED_COMMAND)) add(bracketBody(body, (match.index ?? 0) + match[0].length, match[1] ?? "(").trim());
-    for (const match of body.matchAll(/`([^`]*)`/g)) add((match[1] ?? "").trim());
+    for (const match of code.matchAll(QUOTED_COMMAND)) add(bracketBody(body, (match.index ?? 0) + match[0].length, match[1] ?? "(").trim());
+    for (const match of code.matchAll(/`([^`]*)`/g)) {
+      const at = (match.index ?? 0) + 1;
+      add(body.slice(at, at + (match[1] ?? "").length).trim());
+    }
   }
   return out;
 }
