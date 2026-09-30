@@ -37,10 +37,10 @@ test("a leading env assignment isolated by its own separator still never reaches
 });
 
 test("export NAME=value; is skipped like a bare assignment, leaving the family of the first real command", () => {
-  // `cd` is not stripped or specially treated -- same "existing rules"
-  // commandFamily already documents for `cd src && ls` above: the
-  // fallback is the first segment's own program name, whatever it is.
-  assert.equal(commandFamily("export PATH=/usr/bin; cd d && git status"), "cd");
+  // 0.6.12 T5 (F-05): a leading `cd` is where the command runs, not what it
+  // runs, so the family is the first real command after it (it used to be
+  // `cd` here, which filed every `cd x && git commit` under `cd`).
+  assert.equal(commandFamily("export PATH=/usr/bin; cd d && git status"), "git");
 });
 
 test("no classified family carries a fragment of the command's own text", () => {
@@ -60,7 +60,7 @@ test("a compound command is named after its most dangerous part, not its first w
   // to surface -- and read this way, `cd` was 57% of a real log.
   assert.equal(commandFamily("cd /home/x/Projects/app && rm -rf dist"), "rm -rf");
   assert.equal(commandFamily("npm ci; git push --force origin main"), "git push");
-  assert.equal(commandFamily("cd src && ls"), "cd");
+  assert.equal(commandFamily("cd src && ls"), "ls");
 });
 
 test("shapes that only exist across a pipe survive the split", () => {
@@ -450,4 +450,16 @@ test("teamInternal is recorded only when requires_human policies were set aside"
 test("a record whose teamInternal is anything but true is malformed", () => {
   const line = `${JSON.stringify({ type: "gate-decision", id: "ti-bad", at: "2026-09-28T00:00:00.000Z", project: null, commandFamily: "git push", source: "jev", verdict: "allow", latencyMs: 1, teamInternal: "yes" })}\n`;
   assert.deepEqual(parseGateDecisionRecords(line), []);
+});
+
+// 0.6.12 T5 (F-05): a `cd` or a git global option in front of the command is
+// never the family -- `cd x && git commit` was logged as `cd`.
+test("the family is named after what runs, past cd, subshells, bash -c and git global options", () => {
+  assert.equal(commandFamily("cd ../demo-app && git commit -m x"), "git");
+  assert.equal(commandFamily("git -C ../demo-app push origin main"), "git push");
+  assert.equal(commandFamily("cd x && git --no-pager -C . push -f"), "git push");
+  assert.equal(commandFamily("(cd x && terraform apply)"), "terraform");
+  assert.equal(commandFamily("bash -c 'cd x && rm -rf dist'"), "rm -rf");
+  assert.equal(commandFamily("pushd x >/dev/null && npm run build && popd"), "package script");
+  assert.equal(commandFamily("cd x"), "cd");
 });

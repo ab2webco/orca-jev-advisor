@@ -441,6 +441,39 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   `~/.config/orca`, so an install run without Orca's own
   `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
 
+## What changed in 0.6.12
+
+The 0.6.11 live QA (`odd/qa/qa-0.6.11.md`) found commands that a local rule or
+a team policy must refuse, passing or getting only advice. An advice lets an
+identical retry through, so each of these is now a refusal:
+
+- **A recursive delete of the root or home directory in any spelling:**
+  `rm -fr /`, `rm -r -f /`, `rm --recursive --force /`, `rm -Rf ~`,
+  `rm -rf ~/`, `${HOME}`, the home directory's absolute path, `(rm -rf ~)`,
+  and `cd / && rm -rf *`.
+- **A force push in any spelling:** `git push -fu`, `-uf`, and git's global
+  options before `push` (`git -C <dir> push --force`, `git --no-pager push
+  --force`, `git -c k=v push --force`).
+- **A push to a protected branch** through `git -C <dir>`, an `env` prefix,
+  or a backslash-newline continuation (`git push \` + newline + `origin
+  main`).
+- **Remote code fed to a shell or an interpreter:** through `tee`,
+  `/bin/bash`, `env bash`, `bash <(curl …)`, `bash -c "$(curl …)"`,
+  `eval "$(curl …)"`, and `| python3`/`perl`/`ruby`/`node`.
+- **A command is judged where it acts, not where the session is.**
+  `cd other-repo && git commit`, `git -C other-repo commit` and
+  `bash -c 'cd other-repo && …'` are judged in `other-repo` and its branch:
+  a write to `main` from a session on a feature branch is refused by a
+  policy such as `never_write_to_main`, and a commit to a feature branch
+  from a session on `main` is no longer refused. The recorded project and
+  command family follow the target too (`cd x && git commit` is family
+  `git` in `x`'s project, not `cd` in the session's).
+
+Ordinary work keeps passing: `rm -rf node_modules`, `git push -u origin
+feature`, `--force-with-lease` on your own branch, `curl … | jq`, `curl … |
+python3 -m json.tool`, and the same phrases inside `grep`, `echo`, a commit
+message or a heredoc body.
+
 ## What changed in 0.6.11
 
 - **The skill and tool measurement log no longer goes silent.** Claude
@@ -459,8 +492,10 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   checkout used to write the plugin's path as relative, so the gate only
   ran inside that checkout. It is now stored as an absolute path; press
   Set up once after updating to rewrite it.
-- **No repository, branch or path name reaches Jev in clear.** See
-  "Names" under "What leaves your machine".
+- **The repository, branch and path names the plugin knows about reach
+  Jev as placeholders.** See "Names" under "What leaves your machine". A
+  path it never registered (a directory named only inside a command) still
+  goes in clear.
 - **The router reads your usage live.** It uses the tighter of the 5-hour
   and 7-day windows from Claude Code itself instead of only the Orca
   mirror, and each decision records the source.
@@ -798,15 +833,18 @@ such as `2>&1`, `&>` or `>|` is part of its command, not a separator:
 
 | Rule | Scope | Why |
 |------|-------|-----|
-| Force push (`--force`/`-f`, or a leading `+refspec`) | segment, mention vs command | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). A `+refspec` (`git push origin +main`) is a force push too — git's own forced-update syntax, scoped to one ref. `--force-with-lease`/`--force-if-includes` never match this rule at all — they don't qualify for the local allow below either, so they take the ordinary Jev path — and a `--force-with-lease` aimed at a protected branch is still caught by the row right below. |
+| Force push (`--force`/`-f`, a short-flag cluster holding `f` such as `-fu`, or a leading `+refspec`; git's global options before `push`, such as `-C <dir>`, `-c k=v` or `--no-pager`, are ignored when matching) | segment, mention vs command | The pattern spans arbitrary text after `git push`, so whole-string matching let it reach across a separator into an unrelated segment (e.g. `git push origin --delete x && git branch -f main origin/main` was wrongly denied as a force push). A `+refspec` (`git push origin +main`) is a force push too — git's own forced-update syntax, scoped to one ref. `--force-with-lease`/`--force-if-includes` never match this rule at all — they don't qualify for the local allow below either, so they take the ordinary Jev path — and a `--force-with-lease` aimed at a protected branch is still caught by the row right below. |
 | Push to a protected branch (`main`/`master`/`production`) | segment, mention vs command, narrowed to a real shared remote | Same spanning-quantifier reason, plus the narrowing described further down: a push whose remote resolves to a local, non-shared repository isn't a shared-branch push at all. |
-| `rm -rf /` (or `~`/`$HOME`) | segment, mention vs command | Naming this phrase in a `grep` pattern, a quoted argument or a heredoc body is not running it — see "Three severities" below. |
+| A recursive `rm` of `/`, `/*`, `~`, `~/`, `$HOME`/`${HOME}` or the home directory's absolute path, in any flag spelling (`-rf`, `-fr`, `-r -f`, `-Rf`, `--recursive --force`), also in a subshell and for `.`/`*` after a `cd`/`pushd` into `/` or home | segment, mention vs command | Naming this phrase in a `grep` pattern, a quoted argument or a heredoc body is not running it — see "Three severities" below. |
 | Discarding uncommitted work (`git checkout`/`git restore`/`git reset --hard`/`git clean -f`) | command, with a segment-level fallback | This check already segments the command on its own and extracts `$(...)`/backtick substitutions, `bash -c`/`eval`/`su -c`/`script -c` bodies, `ssh`'s remote command and `watch`'s command first; pre-splitting again would break that extraction. `git reset --hard`/`git clean -f` used to be their own, separate, quote-blind regex — folded in here so all four subcommands get the same tokenizer and command-position discipline. The rule also reads each segment through the same mention-vs-command scan the rows above and below use, so a reset or clean spelled out through a non-shell interpreter (`python3 -c "...os.system('git reset --hard')..."`) is still caught even though the tokenizer only understands shell syntax. |
 | `DROP`/`TRUNCATE TABLE`/`DATABASE`/`SCHEMA` | segment, mention vs command (a SQL client's own execute flag still denies) | `DROP TABLE` inside a `psql -c`/`mysql -e` argument is unambiguous SQL execution, not ambiguous interpreter code, so it keeps denying outright there — see "Three severities" below. |
 | `kubectl delete`/`drain` | segment, mention vs command | Same reasoning as `rm -rf` above: a mention in a script or a search pattern goes to Jev instead of stopping locally. |
 | `terraform`/`tofu apply` | segment, mention vs command | Same reasoning. |
 | `terraform`/`tofu destroy` | segment, mention vs command | Same reasoning. |
-| `curl \| bash`/`sh`/`zsh` | command (mandatory, spans the pipe) | This rule matches ACROSS a pipe by design — the whole point is catching a curl piped into a shell. Segment scope would silently disable it. |
+| `curl`/`wget` output fed to a shell or to an interpreter reading its program from stdin: `\| bash`, `\| tee f \| bash`, `\| /bin/bash`, `\| env bash`, `bash <(curl …)`, `bash -c "$(curl …)"`, `eval "$(curl …)"`, `\| python3`/`perl`/`ruby`/`node` (an interpreter given its own program, such as `python3 -m json.tool`, only reads data and is not this rule) | command (mandatory, spans the pipe) | This rule matches ACROSS a pipe by design — the whole point is catching a curl piped into a shell. Segment scope would silently disable it. |
+
+A backslash-newline continuation is joined before any rule runs, so
+`git push \` on one line and `origin main` on the next is one command.
 
 A quoted separator (for example `git commit -m "build && test"`) never
 splits a segment: the text inside the quotes stays part of one segment,
