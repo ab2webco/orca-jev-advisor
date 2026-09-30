@@ -16,14 +16,13 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
-## What changed in 0.6.13
+## What changed in 0.6.14
 
-Fewer false stops (a branch named `fix/main-menu` pushes again; a quoted
-command in a commit message or a heredoc written to a file is data), team
-prohibitions judged on what an action does rather than its topic, new local
-refusals for `xargs rm -rf ~`, `find ~ -delete`, `git push --mirror` and
-`kubectl`/`terraform` with global options, no private path sent to Jev, and
-a gate that returns 6 ms after deciding instead of 1.4 s.
+Every running agent gets its own row above the prompt, with what it is
+doing, its model, its effort and why, and an agent started before a plugin
+reload is no longer dropped from the list. A call quoted inside a string in
+a Python or Node heredoc is no longer judged as a call, and the Models tab
+explains an empty catalog on a new install.
 
 Every release is in [CHANGELOG.md](CHANGELOG.md).
 
