@@ -65,7 +65,7 @@ interface FakeHost {
   /** When true, `$.process.run` rejects (a missing or broken binary). */
   failProcess: boolean;
   /** `$.agent.list()` rows (0.6.8 T6); null makes the call reject, like a host without it. */
-  agents: { id: string; status: string }[] | null;
+  agents: { id: string; status: string; type?: string; description?: string }[] | null;
   /** `$.session.usage().rateLimits`: the live figures Claude Code gives its status line (0.6.11 T6). */
   rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[];
   /** When true, `$.session.usage()` rejects. */
@@ -2275,6 +2275,98 @@ test("T6: a subagent the router chose a model for says so (active mode)", async 
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnAs(handlers, engine, spawnEvent(), "agent-1");
   assert.match(lastStatus(host), /agents: 1 on Haiku 4\.5 \(chosen by Jev\)/);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.14 T1: each running subagent is kept with its type, description,
+// model, effort and why, in `$.state` (it survives a plugin reload); one the
+// host runs that nothing recorded still counts, as "no data".
+// ---------------------------------------------------------------------------
+
+interface StoredSubagent {
+  id: string;
+  type: string;
+  description: string;
+  label: string | null;
+  effort: string | number | null;
+  why: string;
+  wouldUse: string | null;
+}
+
+function storedSubagents(host: FakeHost): StoredSubagent[] {
+  const value = host.state.get("runningSubagents") as { agents: StoredSubagent[] } | undefined;
+  return value?.agents ?? [];
+}
+
+test("0.6.14 T1: a started subagent is stored with its type, description, model and why", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus", subagentType: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" }), "agent-1", "claude-opus-5-5");
+  assert.deepEqual(storedSubagents(host), [
+    { id: "agent-1", type: "acme-frontend-developer", description: "Adding Definition of Done to spec.md", label: "Opus 5.5", effort: null, why: "explicit", wouldUse: null },
+  ]);
+});
+
+test("0.6.14 T1: the effort a subagent's step is sent is stored with it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnThrough(handlers, engine, spawnEvent());
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
+  assert.equal(storedSubagents(host)[0]?.effort, "medium", "what turn.step sent, not what it carried");
+});
+
+test("0.6.14 T1: measure mode stores the model it would use", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1", "claude-opus-5-5");
+  const [stored] = storedSubagents(host);
+  assert.equal(stored?.label, "Opus 5.5");
+  assert.equal(stored?.why, "measuring");
+  assert.equal(stored?.wouldUse, "Haiku 4.5");
+});
+
+test("0.6.14 T1: after a plugin reload the running set is still there, and an agent nothing recorded still counts", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"), tierAnswer("simple"));
+  const first = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(first.handlers, first.engine, spawnEvent({ model: "opus", subagentType: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" }), "agent-1", "claude-opus-5-5");
+  // A reload: register runs again, the module's own variables start over, `$.state` stays.
+  const second = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [
+    { id: "agent-0", status: "running", type: "acme-frontend-developer", description: "Reading playwright.config.ts" },
+    { id: "agent-1", status: "running", type: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" },
+    { id: "agent-2", status: "running", type: "acme-backend-developer", description: "Watching CI checks on PR 867" },
+  ];
+  await spawnAs(second.handlers, second.engine, spawnEvent({ model: "sonnet", subagentType: "acme-backend-developer", description: "Watching CI checks on PR 867" }), "agent-2", "claude-sonnet-5-5");
+  assert.deepEqual(storedSubagents(host).map((a) => a.id), ["agent-1", "agent-2"], "the record made before the reload is kept");
+  assert.equal(
+    lastStatus(host).replace(/^jev · /, ""),
+    "agents: 1 on unknown model (no data: started before the plugin reloaded), 1 on Opus 5.5 (explicit request), 1 on Sonnet 5.5 (explicit request)",
+  );
+});
+
+test("0.6.14 T1: a reload shows the running set at session start, before any new spawn", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  host.fetchQueue.push(tierAnswer("simple"));
+  const first = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(first.handlers, first.engine, spawnEvent({ model: "opus" }), "agent-1", "claude-opus-5-5");
+  const second = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [{ id: "agent-1", status: "running", type: "general-purpose", description: "List files" }];
+  const start = second.handlers.get("session.start");
+  assert.ok(start, "session.start was never registered");
+  await start(second.engine, { source: "startup" }, async (e: unknown) => e);
+  assert.equal(lastStatus(host).replace(/^jev · /, ""), "agents: 1 on Opus 5.5 (explicit request)");
 });
 
 // ---------------------------------------------------------------------------

@@ -24,7 +24,7 @@ rest, only the two small items are included (T3, T4); JEVADV-83, 84, 86 and
   empezó antes de recargar el plugin" (es/en), never dropped from the count.
 - T2 The rows. A render hook on the `AbovePrompt` band draws, only while at
   least one subagent runs: a heading with the count, then one row per agent
-  in start order: type (a prefix shared by every row, such as `cineco-`,
+  in start order: type (a prefix shared by every row, such as `acme-`,
   dropped), description (truncated to fit), model, effort, reason. Sized to
   `bodyColumns`; narrow widths drop the columns in this order: effort,
   reason text shortened, description truncated harder. It yields to a
@@ -48,7 +48,7 @@ Out of scope, 0.6.15: JEVADV-83 (command position), 84 (requires_human on
 effect), 86 (N-06..N-08), 87 (steward thresholds).
 
 ## Checklist
-- [ ] T1 per-agent data and reload survival
+- [x] T1 per-agent data and reload survival. RED: 5 new hook tests failed (hooks.test.ts 98/103); the 5 new core tests failed as one file that could not load (reconcileRunning, parseRunningSubagents missing). GREEN: hooks.test.ts 103/103, subagent_status.test.ts 13/13. Nothing on screen yet (the line keeps its 0.6.8 shape, with unknown agents counted as "no data"). Also: the plan named a private project prefix; replaced by `acme-` (scripts/private-data.test.mjs failed on it before any change).
 - [ ] T2 AbovePrompt rows
 - [ ] T3 N-09 string literals in interpreter heredocs are data
 - [ ] T4 JEVADV-85 empty-catalog hint

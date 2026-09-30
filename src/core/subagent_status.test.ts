@@ -4,7 +4,8 @@ import test from "node:test";
 import type { ModelEntry } from "./model_catalog.ts";
 import { resolveAccountTiers } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
-import { subagentModelLabel, subagentWhy, subagentsStatusPart } from "./subagent_status.ts";
+import { parseRunningSubagents, reconcileRunning, subagentModelLabel, subagentWhy, subagentsStatusPart } from "./subagent_status.ts";
+import type { RunningSubagent } from "./subagent_status.ts";
 
 function entry(id: string, rank: number): ModelEntry {
   return { id, provider: "anthropic", label: id, rank, agentModel: id, source: "", available: true };
@@ -71,4 +72,57 @@ test("subagentsStatusPart: every reason has words in both languages", () => {
       assert.ok(text !== null && !text.includes("agents.") && !text.includes("{{"), `${locale}/${why}: ${text}`);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.14 T1: each running subagent carries what it is, what it does, its
+// model, its effort and why; the set survives a plugin reload and an agent
+// the host runs that nothing recorded still counts.
+// ---------------------------------------------------------------------------
+
+function agent(id: string, overrides: Partial<RunningSubagent> = {}): RunningSubagent {
+  return { id, type: "acme-frontend-developer", description: `task ${id}`, label: "Opus 5.5", effort: "high", why: "explicit", wouldUse: null, ...overrides };
+}
+
+test("reconcileRunning: a recorded agent the host no longer runs is dropped, the one just started is kept", () => {
+  const recorded = [agent("a-1"), agent("a-2"), agent("a-3")];
+  const listed = [
+    { id: "a-1", type: "acme-frontend-developer", description: "task a-1", status: "running" },
+    { id: "a-2", type: "acme-frontend-developer", description: "task a-2", status: "completed" },
+  ];
+  const { kept, shown } = reconcileRunning(recorded, listed, "a-3");
+  assert.deepEqual(kept.map((a) => a.id), ["a-1", "a-3"]);
+  assert.deepEqual(shown.map((a) => a.id), ["a-1", "a-3"]);
+});
+
+test("reconcileRunning: an agent the host runs with no record gets a row of its own, never dropped from the count", () => {
+  const recorded = [agent("a-2")];
+  const listed = [
+    { id: "a-1", type: "acme-frontend-developer", description: "Reading playwright.config.ts", status: "running" },
+    { id: "a-2", type: "acme-frontend-developer", description: "task a-2", status: "running" },
+  ];
+  const { kept, shown } = reconcileRunning(recorded, listed, null);
+  assert.deepEqual(kept.map((a) => a.id), ["a-2"], "an unknown agent is shown, not recorded");
+  assert.equal(shown.length, 2);
+  assert.deepEqual(shown[0], { id: "a-1", type: "acme-frontend-developer", description: "Reading playwright.config.ts", label: null, effort: null, why: "unknown", wouldUse: null });
+});
+
+test("reconcileRunning: with no host list, what spawn recorded stands", () => {
+  const recorded = [agent("a-1"), agent("a-2")];
+  const { kept, shown } = reconcileRunning(recorded, null, null);
+  assert.deepEqual(kept, recorded);
+  assert.deepEqual(shown, recorded);
+});
+
+test("parseRunningSubagents: reads back what was stored, drops what is malformed", () => {
+  const stored = [agent("a-1", { effort: null, why: "lowered", wouldUse: "Haiku 4.5" }), agent("a-2", { label: null, effort: 4096 })];
+  assert.deepEqual(parseRunningSubagents({ agents: JSON.parse(JSON.stringify(stored)) }), stored);
+  assert.deepEqual(parseRunningSubagents(undefined), []);
+  assert.deepEqual(parseRunningSubagents({ agents: [{ id: "x" }, null, 3, { ...stored[0], why: "nonsense" }] }), []);
+});
+
+test("subagentsStatusPart: an agent with no record counts, saying why nothing is known", () => {
+  const running = [agent("a-1"), agent("a-2", { label: null, effort: null, why: "unknown" })];
+  assert.equal(subagentsStatusPart("es", running), "agentes: 1 en Opus 5.5 (pedido explícito), 1 en modelo desconocido (sin datos: empezó antes de recargar el plugin)");
+  assert.equal(subagentsStatusPart("en", running), "agents: 1 on Opus 5.5 (explicit request), 1 on unknown model (no data: started before the plugin reloaded)");
 });

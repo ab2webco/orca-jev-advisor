@@ -42,7 +42,9 @@ export type ModelRouterKey =
   | "agents.why.kept-pointer"
   | "agents.why.measuring"
   | "agents.why.inherited"
-  | "agents.why.no-jev";
+  | "agents.why.no-jev"
+  | "agents.why.unknown"
+  | "agents.model.unknown";
 
 export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
   es: {
@@ -86,6 +88,9 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.measuring": "heredado, midiendo",
     "agents.why.inherited": "heredado",
     "agents.why.no-jev": "heredado, sin respuesta de Jev",
+    // 0.6.14 T1: an agent the host runs that no spawn recorded.
+    "agents.why.unknown": "sin datos: empezó antes de recargar el plugin",
+    "agents.model.unknown": "modelo desconocido",
   },
   en: {
     "status.active.effort": "model: {{model}} · {{effort}} effort",
@@ -127,5 +132,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.measuring": "inherited, measuring",
     "agents.why.inherited": "inherited",
     "agents.why.no-jev": "inherited, no answer from Jev",
+    "agents.why.unknown": "no data: started before the plugin reloaded",
+    "agents.model.unknown": "unknown model",
   },
 };
