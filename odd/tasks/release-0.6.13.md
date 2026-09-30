@@ -154,7 +154,28 @@ F-10..F-14, the rest of the backlog.
   other test make it a cleanup for Jev. Root or home printed by `echo`/`printf` through a
   real pipe into `xargs ... rm -r` is the rule. `--mirror` joined forcePush (it overwrites
   and deletes every remote ref).
-- [ ] T4 unregistered paths redacted
+- [x] T4 unregistered paths redacted. Proof: `jev_pseudonyms.test.ts` 4 new and
+  `decisions.test.ts` 1 new (the request-building seam, `buildActionGateState`, the object
+  `callJev` sends): RED 4/5 (a URL and a registered path's remainder already held), GREEN
+  5/5; `npm test` 2751/2751. Live check on the recorded request bodies: a preload in the
+  scratchpad wraps `fetch` in the hook process and writes every Jev request body; 64 requests
+  from the T1 probes, the T2 corpus and 8 path probes (a `cp` into another checkout by
+  absolute path, `cat ~/Projects/...`, a file under `~/Library/Application\ Support`, `cd`
+  and `git -C` into a scratch repository, `rm -rf` and `du` of home paths, `/tmp`/`/var`
+  paths): 0 bodies hold a `/Users/`, `/home/` or `/Volumes/` path or the account name. Seen
+  in a body: `cp /etc/hosts <path-1>/hosts-t4.txt`, `cat <path-2> > <path-3>`, `du -sh ~`,
+  `cp /tmp/a.txt /var/tmp/b.txt`. Decisions: done once in `JevNames.redactText`, after the
+  registered names, so every text that already went through it (command, context,
+  cross-repository sentence, destination label, policy rules, the skill and tool request)
+  gets it; a path word starts at the start, whitespace, a quote, `=`, `(`, `,` or `>`
+  (never after `:`, so a URL stays, nor after a placeholder), keeps `\ `-escaped characters,
+  and drops a trailing `.`/`,`/`:`. In clear: `/`, a path under `etc usr bin sbin var tmp
+  dev System Library private opt lib lib64 proc sys boot run Applications cores nix`, and a
+  single-component path (`/data`, an awk `/error/` pattern); `/Users/<name>` or
+  `/home/<name>` alone reads `~`; `~`, `$HOME`, `${HOME}` alone stay; everything else
+  (under home, `~/...`, `$HOME/...`, another volume, `/mnt/x/y`) is a `<path-N>`, the same
+  value the same placeholder in one request. Not covered: relative paths, Windows paths, and
+  skill/tool candidate descriptions (plugin text, not the person's).
 - [ ] T5 interpreter heredocs and gate tail
 - [ ] T6 README, QA, release, live check
 

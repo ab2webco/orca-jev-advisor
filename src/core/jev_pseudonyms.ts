@@ -48,6 +48,39 @@ const TOKEN_CHAR = "A-Za-z0-9_.\\-";
 // A derived catalog label (worktree_catalog.ts): `repo` or `repo (dir)`.
 const DERIVED_LABEL = /^(\S+)(?: \((\S+)\))?$/;
 
+// 0.6.13 T4 (F-06): a path the gate never registered reached Jev in clear --
+// a `cp` into another checkout, a file under the home directory, anything on
+// another volume. redactText now also swaps every absolute or home-relative
+// path for a `<path-N>` placeholder, unless it is a system location whose name
+// carries the risk (`/`, `/etc`, `/usr`, `/tmp`, `/dev`, `/System`, ...). The
+// home directory itself reads `~`. A single-component path (`/data`, or an
+// awk `/error/` pattern) names nobody and stays as written.
+const SYSTEM_TOP_LEVEL: ReadonlySet<string> = new Set([
+  "etc", "usr", "bin", "sbin", "var", "tmp", "dev", "System", "Library", "private", "opt", "lib", "lib64", "proc", "sys", "boot", "run", "Applications", "cores", "nix",
+]);
+/** Where home directories live: `/Users/<name>`, `/home/<name>`. */
+const HOME_PARENTS: ReadonlySet<string> = new Set(["Users", "home"]);
+// A path word ends at whitespace, a quote or a shell operator. It starts at
+// the beginning, after whitespace, a quote, `=`, `(`, `,` or a redirection
+// `>` -- never after a placeholder (`<path-1>/build` is already redacted),
+// and never after `:` (a URL's `//host/...`).
+// A backslash-escaped character (`Application\ Support`) stays inside the word.
+const PATH_WORD = /(?<![^\s'"=(,>])(?<!<(?:repo|branch|path)-\d+>)(?:~|\$HOME|\$\{HOME\}|(?=\/))(?:[^\s'"`;|&<>()\\]|\\.)*/g;
+
+/** How a path word reads for Jev: in clear, `~`, or a placeholder (null). */
+function pathInClear(word: string): string | null {
+  const home = /^(?:~|\$HOME|\$\{HOME\})(.*)$/.exec(word);
+  if (home !== null) {
+    const rest = home[1] ?? "";
+    if (rest.length > 0 && !rest.startsWith("/")) return word;
+    return rest === "" || rest === "/" ? word : null;
+  }
+  const parts = word.split("/").filter((part) => part.length > 0);
+  if (parts.length === 0 || SYSTEM_TOP_LEVEL.has(parts[0] ?? "")) return word;
+  if (HOME_PARENTS.has(parts[0] ?? "") && parts.length === 2) return "~";
+  return parts.length === 1 ? word : null;
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -81,7 +114,12 @@ export function createJevPseudonyms(): JevNames {
       const pattern = new RegExp(`(?<![${TOKEN_CHAR}])${escapeRegExp(value)}(?![A-Za-z0-9_\\-])`, "g");
       result = result.replace(pattern, placeholder);
     }
-    return result;
+    return result.replace(PATH_WORD, (word) => {
+      // A sentence's own full stop or comma is not part of the path.
+      const trailing = /[.,:]+$/.exec(word)?.[0] ?? "";
+      const path = word.slice(0, word.length - trailing.length);
+      return (pathInClear(path) ?? name("path", path)) + trailing;
+    });
   };
 
   const destinationDescription = (label: string): string => {

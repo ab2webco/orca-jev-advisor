@@ -673,6 +673,18 @@ test("buildActionGateState: data text reaches Jev as a placeholder, the command 
   assert.equal(script.proposed_command, "node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'");
 });
 
+// 0.6.13 T4 (F-06): the request the gate sends Jev carries no home or volume
+// path in clear, registered or not -- in the command and in the context.
+test("buildActionGateState: an unregistered home or volume path never reaches Jev in clear", () => {
+  const home = ["", "Users", "dev"].join("/");
+  const names = createJevPseudonyms();
+  const context = `repository ${names.name("repo", "demo-app")}, branch main, clean The command acts on files in the repository at ${names.name("path", "/Volumes/Data/qa/demo-app")} on branch main.`;
+  const state = buildActionGateState(`cp ${home}/Projects/client-x/secrets.env /Volumes/Data/qa/demo-app/.env && cat /etc/hosts`, `${context} Log at ${home}/Library/Logs/x.log`, undefined, undefined, names);
+  const text = JSON.stringify(state);
+  assert.ok(!text.includes(home) && !text.includes("/Volumes/"), `a home or volume path reached the request: ${text}`);
+  assert.equal(state.proposed_command, "cp <path-2> <path-1>/.env && cat /etc/hosts");
+});
+
 // ===========================================================================
 // 0.6.11 T3: policy text and advisor.decide pass through the same redaction
 // as prompts and commands. A policy id is text the developer wrote (it can
