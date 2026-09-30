@@ -2827,3 +2827,56 @@ test("0.6.15 T4c: a fixed-model subagent whose definition sets the effort logs i
   assert.deepEqual([line?.effortSource, line?.modelFixed], ["frontmatter", true]);
 });
 
+// ---------------------------------------------------------------------------
+// 0.6.16 T4: main-session phase and the would-be hold effort, measure only.
+// ---------------------------------------------------------------------------
+
+function toolStep(index: number, tools: { name: string; input: Record<string, unknown> }[], stopReason = "tool_use"): Record<string, unknown> {
+  return turnStepResult({ index, toolUses: tools, stopReason, usage: { model: "claude-opus-5-5", input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 100 } });
+}
+
+async function toolCallThrough(handlers: Map<string, Hook>, engine: unknown, tool: string, input: Record<string, unknown>, outcome: Record<string, unknown>): Promise<void> {
+  const hook = handlers.get("tool.call");
+  assert.ok(hook);
+  await hook(engine, { tool, input, tool_use_id: "toolu_x" }, async () => outcome);
+}
+
+test("0.6.16 T4: each main step logs its phase, the previous one, the EXEC run and what the hold rule would send; nothing sent changes", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const read = { name: "Grep", input: { pattern: "x" } };
+  for (let index = 0; index < 7; index += 1) {
+    const sent = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-9", index, model: "claude-opus-5-5", effort: "high" }), toolStep(index, [read]));
+    assert.equal(sent.effort, "high", "the effort sent never changes");
+  }
+  const rows = turnUsageLines(host);
+  assert.deepEqual(rows.map((row) => row.phase), ["READ", "READ", "READ", "READ", "READ", "READ", "READ"]);
+  assert.deepEqual(rows.map((row) => row.prevPhase), [null, "READ", "READ", "READ", "READ", "READ", "READ"]);
+  assert.deepEqual(rows.map((row) => row.execRun), [0, 1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(rows.map((row) => row.holdEffort), ["high", "high", "high", "high", "high", "medium", "medium"]);
+  assert.equal(rows[0]?.perTurnEffort, undefined, "the hook cannot see perTurnEffort, so it is not invented");
+});
+
+test("0.6.16 T4: a failed tool in the run and a new turn raise the would-be effort back", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const run = { name: "Bash", input: { command: "npm test" } };
+  for (let index = 0; index < 6; index += 1) {
+    await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index, model: "claude-opus-5-5", effort: "xhigh" }), toolStep(index, [run]));
+    if (index === 3) await toolCallThrough(handlers, engine, "Bash", run.input, { result: {}, text: "tests 4\n✖ one failing", ref: 1 });
+  }
+  await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, model: "claude-opus-5-5", effort: "xhigh" }), toolStep(0, [], "end_turn"));
+  const rows = turnUsageLines(host);
+  assert.deepEqual(rows.map((row) => row.holdEffort), ["xhigh", "xhigh", "xhigh", "xhigh", "xhigh", "xhigh", "xhigh"]);
+  assert.deepEqual([rows.at(-1)?.phase, rows.at(-1)?.prevPhase, rows.at(-1)?.execRun], ["ANSWER", null, 0]);
+});
+
+test("0.6.16 T4: the first step after an effort change also logs the effort before it and the prompt size", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent({ model: "claude-opus-5-5", effort: "high" }), toolStep(0, []));
+  await stepThrough(handlers, engine, turnStepEvent({ model: "claude-opus-5-5", effort: "medium", index: 1 }), toolStep(1, []));
+  const [one, two] = turnUsageLines(host);
+  assert.equal(one?.prevEffort, undefined);
+  assert.deepEqual([two?.effortChanged, two?.prevEffort, two?.promptTokens, two?.uncachedShare], [true, "high", 40_110, 0.003]);
+});

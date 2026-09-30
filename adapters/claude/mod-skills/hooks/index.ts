@@ -141,6 +141,8 @@ import type { ResolvedTiers, RouterTier } from '../../../../src/core/model_route
 import { buildTierQuestions, buildTierState, decideStart, interpretTier, routerDecisionFileName, routerDecisionRecord, toRouterEffort } from '../../../../src/core/model_router_decide.ts'
 import type { RouterDecision, TierJudgment } from '../../../../src/core/model_router_decide.ts'
 import { parseRouterMode, routerEffortFromSettings, routerEffortPersonTiers, workKindModeFromSettings } from '../../../../src/core/model_router_mode.ts'
+import { holdEffort, stepPhase, toolFailed, withLastFailed, withStep } from '../../../../src/core/step_phase.ts'
+import type { PhaseTurn } from '../../../../src/core/step_phase.ts'
 import { interpretWorkKind, keywordWorkKind, kindStepEffort, readWorkTierEffort, withWorkKindQuestion } from '../../../../src/core/work_kind.ts'
 import type { WorkKindJudgment, WorkKindMode, WorkKindRecord } from '../../../../src/core/work_kind.ts'
 import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '../../../../src/core/model_router_effort.ts'
@@ -701,7 +703,31 @@ async function effortLogFields($: EngineInterface, e: Frozen<TurnStepInput>, inp
   const sticky = e.agentId === undefined ? (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value : undefined
   const routerEffort = e.agentId === undefined ? (sticky?.effort ?? null) : (targets.get(e.agentId)?.effort ?? null)
   const share = changed ? uncachedShare({ input: r.usage?.input_tokens ?? null, cacheRead: r.usage?.cache_read_input_tokens ?? null, cacheWrite: r.usage?.cache_creation_input_tokens ?? null }) : undefined
-  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }) }
+  // 0.6.16 T4: with the effort before the change and the prompt's size, so a miss can be weighed.
+  const change = !changed ? {} : { prevEffort: loop?.lastSent ?? null, promptTokens: (r.usage?.input_tokens ?? 0) + (r.usage?.cache_read_input_tokens ?? 0) + (r.usage?.cache_creation_input_tokens ?? 0) }
+  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }), ...change }
+}
+
+/** The main loop's turn so far, for the measure-only phase log (0.6.16 T4); a subagent's steps are not held. */
+interface PhaseHolder {
+  turn: PhaseTurn | null
+}
+
+/**
+ * 0.6.16 T4 (odd/research/phase-effort.md §6 B): measure only. A main step's
+ * phase (src/core/step_phase.ts), the previous step's, the EXEC run it
+ * follows and the effort the would-be hold rule sends. The hook cannot see
+ * Claude Code's `perTurnEffort`, so it is not logged; the row's
+ * `sessionId`/`turnId`/`index` and usage join it to the transcript, which
+ * carries it. Never changes the step.
+ */
+function phaseLogFields(e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult, holder: PhaseHolder): Record<string, unknown> {
+  if (e.agentId !== undefined) return {}
+  const turn: PhaseTurn = holder.turn !== null && holder.turn.turnId === e.turnId ? holder.turn : { turnId: e.turnId, steps: [] }
+  const hold = holdEffort(turn, input.effort ?? null, input.model)
+  const phase = stepPhase(r.toolUses, r.stopReason)
+  holder.turn = withStep(turn, phase)
+  return { phase, prevPhase: turn.steps.at(-1)?.phase ?? null, execRun: hold.execRun, holdEffort: hold.effort }
 }
 
 /**
@@ -1763,6 +1789,8 @@ export function register(on: On, options: PluginOptions): void {
   const subagentEffortTarget = new Map<string, SubagentEffortTarget>()
   // 0.6.15 T4c: each loop's last sent effort, for the measure-only effort log.
   const effortLoops = new Map<string, EffortLoop>()
+  // 0.6.16 T4: the main loop's turn so far, for the measure-only phase log.
+  const phaseHolder: PhaseHolder = { turn: null }
 
   // Cached per session/process, as the feature document asks for the
   // inventory: re-scanning the filesystem on every prompt would defeat
@@ -2227,7 +2255,7 @@ export function register(on: On, options: PluginOptions): void {
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
     const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort, source)
-    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, (step, input, r) => effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget))
+    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, async (step, input, r) => ({ ...(await effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget)), ...phaseLogFields(step, input, r, phaseHolder) }))
   })
 
   on('agent.spawn', async ($, e, next) => {
@@ -2341,7 +2369,16 @@ export function register(on: On, options: PluginOptions): void {
         // Measurement is best-effort and must never block or fail a call.
       }
     }
-    return next(e)
+    const result = await next(e)
+    // 0.6.16 T4: a failed main-loop call marks its step for the measure-only hold rule.
+    if (e.agentId === undefined && phaseHolder.turn !== null) {
+      try {
+        if (toolFailed(e.tool, e.input, result)) phaseHolder.turn = withLastFailed(phaseHolder.turn)
+      } catch {
+        // Measure-only: never a reason to touch the call.
+      }
+    }
+    return result
   })
 }
 
