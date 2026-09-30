@@ -2,6 +2,32 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.16
+
+- **Effort by work kind at subagent spawn.** The Jev call that picks a
+  subagent's tier also names its work kind (execute, read, review, implement,
+  design) with a confidence. In active mode an execute or read run goes at
+  high at most on Sonnet 5 (never extra high) and at medium on Opus 5.5 and
+  Sonnet 5.5; review, implement and design are unchanged. It is a ceiling,
+  never a raise, and it holds for a sensitive topic, a client's site, a
+  pointer prompt, a person's `max` or numeric effort, and a confidence under
+  0.7. Its own switch (off / measure / active) is in the Models tab, per
+  account, default measure; each subagent decision row logs the kind, its
+  source, the keywords' kind as a cross-check and the effort it would send.
+  Evaluated on 200 held-out real spawns: 0.66 precision, 7% of the flagged
+  runs edited (keywords: 0.53, 29%).
+- **No router `low` on work that may edit.** The simple tier's default effort
+  is medium; `low` is sent only when a person set it for the tier, or on a
+  subagent whose work kind is execute or read with the switch active.
+- **An agent definition's declared effort is a floor.** The router may raise
+  it, never lower it; `max` or a numeric budget is left as it is.
+- **Router decisions join their steps.** Decision rows carry `sessionId`,
+  `turnId` and `agentId`; main-session step rows log the step's phase, the
+  run of execute steps it follows and the effort a hold rule would send.
+  Nothing sent in the main session changes.
+- **Cache probe.** 0 of 32 mid-turn effort changes through the hook missed
+  the cache (95% bound 10.9%); see odd/research/phase-effort.md.
+
 ## 0.6.15
 
 - **The gate reads only what runs.** A command's words in command position,

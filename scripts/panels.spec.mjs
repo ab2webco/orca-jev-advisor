@@ -2674,7 +2674,7 @@ const TIERS_ANTHROPIC = {
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true }
 }
-const EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const EFFORT_DEFAULTS = { simple: 'medium', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const MODEL_ROUTER_STATUS_EFFORT = {
   targets: [
     { target: 'home', mode: 'measure', effort: EFFORT_DEFAULTS, tiers: TIERS_ANTHROPIC, steward: { mode: 'measure', threshold: 120000 } },
@@ -2813,6 +2813,45 @@ test('steward: a threshold out of range is refused in place and nothing is sent'
     assert.equal(written, null)
     const said = await page.evaluate(() => document.querySelector('[data-steward-target="home"] .said').innerText)
     assert.match(said, /10/)
+  } finally {
+    await browser.close()
+  }
+})
+
+// 0.6.16 T2: the work kind at subagent spawn has its own switch per account,
+// next to the router mode, measure by default.
+test('0.6.16 T2: each account shows its work-kind switch, and saving sends only it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target, at) => ({ ...target, workKind: at === 1 ? 'active' : 'measure' })) }
+  const { browser, page } = await openPanel({ modelRouterStatus: status })
+  try {
+    await page.click('#tab-models')
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('[data-work-kind-target]')).map((row) => {
+      const pressed = Array.from(row.querySelectorAll('.mode-buttons button')).find((b) => b.getAttribute('aria-pressed') === 'true')
+      return { target: row.getAttribute('data-work-kind-target'), pressed: pressed ? pressed.getAttribute('data-value') : null, text: row.innerText }
+    }))
+    assert.deepEqual(rows.map((r) => [r.target, r.pressed]), [['home', 'measure'], ['11112222-3333-4444-5555-666677778888', 'active']])
+    assert.match(rows[0].text, /work kind/i)
+    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    assert.match(hint, /Sonnet 5/)
+    await page.click('[data-work-kind-target="home"] button[data-value="active"]')
+    await page.click('[data-work-kind-target="home"] .model-router-work-kind-save')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.deepEqual([request.target, request.workKind, request.mode, request.effort, request.steward], ['home', 'active', undefined, undefined, undefined])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.16 T2: the work-kind switch reads in Spanish', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target) => ({ ...target, workKind: 'measure' })) }
+  const { browser, page } = await openPanel({ modelRouterStatus: status }, 'es')
+  try {
+    await page.click('#tab-models')
+    const text = await page.evaluate(() => document.querySelector('[data-work-kind-target="home"]').innerText)
+    assert.match(text, /tipo de trabajo/i)
+    assert.match(text, /Medir/)
+    assert.equal(await page.locator('[data-work-kind-target]').count(), 2)
   } finally {
     await browser.close()
   }

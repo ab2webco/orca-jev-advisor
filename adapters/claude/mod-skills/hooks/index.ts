@@ -137,17 +137,21 @@ import type { ModHomePaths } from './runtime.ts'
 import { parseQuota } from '../../../../src/core/consumption.ts'
 import { parseModelsMirror } from '../../../../src/core/model_mirror.ts'
 import { contextWindowOfModel, parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
-import type { ResolvedTiers } from '../../../../src/core/model_router_accounts.ts'
+import type { ResolvedTiers, RouterTier } from '../../../../src/core/model_router_accounts.ts'
 import { buildTierQuestions, buildTierState, decideStart, interpretTier, routerDecisionFileName, routerDecisionRecord, toRouterEffort } from '../../../../src/core/model_router_decide.ts'
 import type { RouterDecision, TierJudgment } from '../../../../src/core/model_router_decide.ts'
-import { parseRouterMode, routerEffortFromSettings } from '../../../../src/core/model_router_mode.ts'
+import { parseRouterMode, routerEffortFromSettings, routerEffortPersonTiers, workKindModeFromSettings } from '../../../../src/core/model_router_mode.ts'
+import { holdEffort, stepPhase, toolFailed, withLastFailed, withStep } from '../../../../src/core/step_phase.ts'
+import type { PhaseTurn } from '../../../../src/core/step_phase.ts'
+import { interpretWorkKind, keywordWorkKind, kindStepEffort, readWorkTierEffort, withWorkKindQuestion } from '../../../../src/core/work_kind.ts'
+import type { WorkKindJudgment, WorkKindMode, WorkKindRecord } from '../../../../src/core/work_kind.ts'
 import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '../../../../src/core/model_router_effort.ts'
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
 import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
-import { agentDefinitionEffort, agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import { agentDefinitionEffort, agentDefinitionModel, declaredEffort } from '../../../../src/core/agent_definition.ts'
 import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedShare } from '../../../../src/core/effort_source.ts'
 import type { EffortSource } from '../../../../src/core/effort_source.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
@@ -595,6 +599,11 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
   const line = JSON.stringify({
     at,
     agent: e.agentId === undefined ? 'main' : 'subagent',
+    // 0.6.16 T1: the ids a router decision row carries, so the two join.
+    sessionId: await readSessionId($),
+    turnId: e.turnId,
+    index: e.index,
+    agentId: e.agentId ?? null,
     model: r.usage?.model ?? e.model,
     effort: e.effort ?? null,
     input: r.usage?.input_tokens ?? null,
@@ -627,13 +636,15 @@ async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMod
 /**
  * 0.6.8 T7: the model the definition of `subagentType` fixes, read from the
  * project's own `.claude/agents` first, then the account's (CLAUDE_CONFIG_DIR,
- * else `~/.claude`). null when none fixes one. Fails open to null.
+ * else `~/.claude`). null when none fixes one. 0.6.16 T3: with the effort it
+ * declares, from the same lookup. Fails open to nulls.
  */
-async function readAgentDefinitionModel($: EngineInterface, subagentType: string, cwd: string): Promise<string | null> {
+async function readAgentDefinition($: EngineInterface, subagentType: string, cwd: string): Promise<{ model: string | null; effort: SessionEffort | null }> {
   try {
-    return agentDefinitionModel(await readAgentDefinitionFiles($, cwd), subagentType)
+    const files = await readAgentDefinitionFiles($, cwd)
+    return { model: agentDefinitionModel(files, subagentType), effort: declaredEffort(agentDefinitionEffort(files, subagentType)) }
   } catch {
-    return null
+    return { model: null, effort: null }
   }
 }
 
@@ -692,7 +703,31 @@ async function effortLogFields($: EngineInterface, e: Frozen<TurnStepInput>, inp
   const sticky = e.agentId === undefined ? (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value : undefined
   const routerEffort = e.agentId === undefined ? (sticky?.effort ?? null) : (targets.get(e.agentId)?.effort ?? null)
   const share = changed ? uncachedShare({ input: r.usage?.input_tokens ?? null, cacheRead: r.usage?.cache_read_input_tokens ?? null, cacheWrite: r.usage?.cache_creation_input_tokens ?? null }) : undefined
-  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }) }
+  // 0.6.16 T4: with the effort before the change and the prompt's size, so a miss can be weighed.
+  const change = !changed ? {} : { prevEffort: loop?.lastSent ?? null, promptTokens: (r.usage?.input_tokens ?? 0) + (r.usage?.cache_read_input_tokens ?? 0) + (r.usage?.cache_creation_input_tokens ?? 0) }
+  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }), ...change }
+}
+
+/** The main loop's turn so far, for the measure-only phase log (0.6.16 T4); a subagent's steps are not held. */
+interface PhaseHolder {
+  turn: PhaseTurn | null
+}
+
+/**
+ * 0.6.16 T4 (odd/research/phase-effort.md §6 B): measure only. A main step's
+ * phase (src/core/step_phase.ts), the previous step's, the EXEC run it
+ * follows and the effort the would-be hold rule sends. The hook cannot see
+ * Claude Code's `perTurnEffort`, so it is not logged; the row's
+ * `sessionId`/`turnId`/`index` and usage join it to the transcript, which
+ * carries it. Never changes the step.
+ */
+function phaseLogFields(e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult, holder: PhaseHolder): Record<string, unknown> {
+  if (e.agentId !== undefined) return {}
+  const turn: PhaseTurn = holder.turn !== null && holder.turn.turnId === e.turnId ? holder.turn : { turnId: e.turnId, steps: [] }
+  const hold = holdEffort(turn, input.effort ?? null, input.model)
+  const phase = stepPhase(r.toolUses, r.stopReason)
+  holder.turn = withStep(turn, phase)
+  return { phase, prevPhase: turn.steps.at(-1)?.phase ?? null, execRun: hold.execRun, holdEffort: hold.effort }
 }
 
 /**
@@ -829,7 +864,7 @@ async function readLiveRateLimits($: EngineInterface): Promise<readonly LiveRate
   }
 }
 
-async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; quotaSource: QuotaSource; tierEffort: TierEffortMap }> {
+async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; quotaSource: QuotaSource; tierEffort: TierEffortMap; personTiers: ReadonlySet<RouterTier>; workKindMode: WorkKindMode }> {
   const paths = await resolveHomePaths($)
   const vaultSettings = await readVaultSettings($)
   const vaultEnv = vaultSettings === null ? {} : parseVaultEnv(vaultSettings)
@@ -854,7 +889,7 @@ async function resolveRouterAccount($: EngineInterface, account: string): Promis
   const quota = quotaFile.accounts.find((row) => row.id === account) ?? null
   const tiers = resolveAccountTiers({ env: { ...processEnv, ...vaultEnv }, catalog, quota })
   const pressure = quotaPressureOf({ live: await readLiveRateLimits($), mirror: quota, mirrorCheckedAt: quotaFile.checkedAt, nowMs: await $.clock.now() })
-  return { tiers, band: pressure.band, quotaSource: pressure.source, tierEffort: routerEffortFromSettings(vaultSettings) }
+  return { tiers, band: pressure.band, quotaSource: pressure.source, tierEffort: routerEffortFromSettings(vaultSettings), personTiers: routerEffortPersonTiers(vaultSettings), workKindMode: workKindModeFromSettings(vaultSettings) }
 }
 
 /**
@@ -920,14 +955,20 @@ async function resolveSessionDestination($: EngineInterface, cwd: string): Promi
 
 /** Jev's tier judgment for this turn's prompt, or null on any failure (no key, timeout, malformed answer). */
 async function askTierJudgment($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null): Promise<TierJudgment | null> {
+  return (await askTierAndKind($, options, promptText, activity, band, destinationKind, false)).tier
+}
+
+/** The tier judgment and, 0.6.16 T2, at a spawn (`withKind`) the work kind: both from the one Jev call; nulls on any failure. */
+async function askTierAndKind($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null, withKind: boolean): Promise<{ tier: TierJudgment | null; kind: WorkKindJudgment | null }> {
   try {
     const apiKey = await resolveApiKey($, options)
-    if (apiKey === null) return null
+    if (apiKey === null) return { tier: null, kind: null }
     const state = buildTierState({ promptText, activity, destinationKind, quotaBand: band })
-    const response = await callJev(apiKey, state, buildTierQuestions(), { budgetMs: ROUTER_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
-    return interpretTier(response.answers)
+    const questions = withKind ? withWorkKindQuestion(buildTierQuestions()) : buildTierQuestions()
+    const response = await callJev(apiKey, state, questions, { budgetMs: ROUTER_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
+    return { tier: interpretTier(response.answers), kind: withKind ? interpretWorkKind(response.answers) : null }
   } catch {
-    return null
+    return { tier: null, kind: null }
   }
 }
 
@@ -1083,7 +1124,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   })
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey }
   const next: RouterSticky = decision.changed
@@ -1117,7 +1158,7 @@ async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mod
   })
   if (decision === null) return { input: stickyStepInput(e, sticky, mode), status: null }
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId }))}\n`)
   const next: RouterSticky = { ...sticky, model: decision.model, effort: decision.effort, rewrite: false, pendingLower: null }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
   return { input: stickyStepInput(e, next, mode), status: null }
@@ -1152,7 +1193,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
@@ -1226,6 +1267,14 @@ async function recordRouterStats($: EngineInterface, e: Frozen<TurnStepInput>, r
 interface SubagentEffortTarget {
   readonly effort: TierEffort | null
   readonly guarded: boolean
+  /** 0.6.16 T3: the effort the agent's definition declares, a floor the step never goes below; null when it declares none. */
+  readonly declared: SessionEffort | null
+  /** 0.6.16 T2: the work kind (Jev's, else the keywords'), the keywords' own as a cross-check, the switch, and what its guards read; kept in memory only, never logged as text. */
+  readonly workKindMode: WorkKindMode
+  readonly kind: WorkKindJudgment | null
+  readonly keywordKind: WorkKindJudgment['kind'] | null
+  readonly text: string
+  readonly destinationKind: DestinationKind | null
   readonly effortEligible: boolean
   readonly logged: boolean
   readonly account: string
@@ -1263,15 +1312,20 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     // 0.6.8 T7: a model the agent definition fixes counts as fixed too; the
     // spawn input only carries the Agent call's own.
     const cwd = e.cwd ?? (await $.session.cwd())
-    const fixedModel = explicitModelGiven ? (e.model as string) : await readAgentDefinitionModel($, e.subagentType, cwd)
+    const definition = await readAgentDefinition($, e.subagentType, cwd)
+    const fixedModel = explicitModelGiven ? (e.model as string) : definition.model
     const modelFixed = fixedModel !== null
     if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
-    const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
+    const { tiers, band, quotaSource, tierEffort, personTiers, workKindMode } = await resolveRouterAccount($, account)
     labelTiers = tiers
     const text = `${e.description}\n${e.prompt}`
     const destination = await resolveSessionDestination($, cwd)
-    const jev = await askTierJudgment($, options, text, null, band, destination.destinationKind)
+    // 0.6.16 T2: the work kind is one more question in this same call.
+    const judged = await askTierAndKind($, options, text, null, band, destination.destinationKind, workKindMode !== 'off')
+    const jev = judged.tier
+    const keywordKind = workKindMode === 'off' ? null : keywordWorkKind(e.description)
+    const kind: WorkKindJudgment | null = workKindMode === 'off' ? null : (judged.kind ?? (keywordKind === null ? null : { kind: keywordKind, confidence: null, source: 'keywords' }))
     const decision = decideSubagent({
       tiers,
       jev,
@@ -1289,9 +1343,10 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     // falling (0.6.2 F0, review finding 2).
     const guarded = decision.guard !== null
     const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
-    const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
+    // 0.6.16 T1: the router's own low only on confident read or execute work, with the switch active.
+    const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
     const applied = mode === 'active' && decision.changed
-    pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
+    pending = { effort: targetEffort, guarded, declared: definition.effort, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
     why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (mode === 'measure' && decision.changed) wouldUse = subagentModelLabel(decision.model, tiers)
     if (applied) input = { ...e, model: decision.model }
@@ -1343,13 +1398,23 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     // null: no effort decision applies here (this record's own honest
     // "not eligible" state) -- not the effort the step happens to carry.
     let loggedEffort: SessionEffort | null = null
+    let workKind: WorkKindRecord | null = null
     try {
-      if (target?.effortEligible) {
-        const sent = subagentStepEffort(target.effort, e.effort, target.guarded)
-        loggedEffort = sent ?? null
-        const { effort: _dropped, ...rest } = e
-        void _dropped
-        input = sent === undefined ? rest : { ...rest, effort: sent }
+      if (target !== undefined) {
+        const tiered = target.effortEligible ? subagentStepEffort(target.effort, e.effort, target.guarded, target.declared) : e.effort
+        // 0.6.16 T2: the work kind's effort, set from the step it would send; the same on every step of the run.
+        const outcome = kindStepEffort({ kind: target.kind, model: e.model, effort: tiered, declared: target.declared, guard: target.decision.guard, text: target.text, destinationKind: target.destinationKind })
+        const kindActs = target.workKindMode === 'active' && outcome.hold === null
+        const sent = kindActs ? outcome.effort : tiered
+        if (target.workKindMode !== 'off') {
+          workKind = { mode: target.workKindMode, kind: target.kind?.kind ?? null, confidence: target.kind?.confidence ?? null, source: target.kind?.source ?? null, keywords: target.keywordKind, effort: outcome.hold === null ? (outcome.effort ?? null) : null, hold: outcome.hold, applied: kindActs && sent !== tiered }
+        }
+        if (target.effortEligible || kindActs) {
+          loggedEffort = sent ?? null
+          const { effort: _dropped, ...rest } = e
+          void _dropped
+          input = sent === undefined ? rest : { ...rest, effort: sent }
+        }
       }
     } catch {
       input = e
@@ -1367,6 +1432,10 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           quotaSource: target.quotaSource,
           effort: loggedEffort,
           project: target.project,
+          sessionId: await readSessionId($),
+          turnId: e.turnId,
+          agentId: e.agentId,
+          workKind,
         })
         await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
       } catch {
@@ -1379,7 +1448,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     // 0.6.14 T1: the effort this subagent step is actually sent with, for its row.
     try {
       // 0.6.15 T4b: with its source, read off this step: what the engine put on it against what is sent.
-      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null))
+      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null, subagentEffortTarget.get(e.agentId)?.declared ?? null))
     } catch {
       // Visibility only: never a reason to hold the step.
     }
@@ -1474,7 +1543,7 @@ async function stewardModels($: EngineInterface): Promise<{ readonly mainModel: 
   return { mainModel: own, currentModel: own }
 }
 
-async function stewardSessionId($: EngineInterface): Promise<string | null> {
+async function readSessionId($: EngineInterface): Promise<string | null> {
   try {
     return await $.session.id()
   } catch {
@@ -1565,7 +1634,7 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       personTurns: state.personTurns,
       locale: await resolveLocale($),
       verdict: jev?.verdict ?? null,
-      sessionId: await stewardSessionId($),
+      sessionId: await readSessionId($),
       mainWindow,
       currentModel: models.currentModel,
       wouldFire,
@@ -1720,6 +1789,8 @@ export function register(on: On, options: PluginOptions): void {
   const subagentEffortTarget = new Map<string, SubagentEffortTarget>()
   // 0.6.15 T4c: each loop's last sent effort, for the measure-only effort log.
   const effortLoops = new Map<string, EffortLoop>()
+  // 0.6.16 T4: the main loop's turn so far, for the measure-only phase log.
+  const phaseHolder: PhaseHolder = { turn: null }
 
   // Cached per session/process, as the feature document asks for the
   // inventory: re-scanning the filesystem on every prompt would defeat
@@ -2184,7 +2255,7 @@ export function register(on: On, options: PluginOptions): void {
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
     const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort, source)
-    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, (step, input, r) => effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget))
+    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, async (step, input, r) => ({ ...(await effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget)), ...phaseLogFields(step, input, r, phaseHolder) }))
   })
 
   on('agent.spawn', async ($, e, next) => {
@@ -2298,7 +2369,16 @@ export function register(on: On, options: PluginOptions): void {
         // Measurement is best-effort and must never block or fail a call.
       }
     }
-    return next(e)
+    const result = await next(e)
+    // 0.6.16 T4: a failed main-loop call marks its step for the measure-only hold rule.
+    if (e.agentId === undefined && phaseHolder.turn !== null) {
+      try {
+        if (toolFailed(e.tool, e.input, result)) phaseHolder.turn = withLastFailed(phaseHolder.turn)
+      } catch {
+        // Measure-only: never a reason to touch the call.
+      }
+    }
+    return result
   })
 }
 

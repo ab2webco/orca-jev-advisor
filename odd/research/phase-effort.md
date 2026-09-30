@@ -177,3 +177,49 @@ Confidence: phase distributions and run lengths high; the subagent xhigh
 saving moderate (rests on effort-per-task.md's ×2.31); the main-session case
 hinges on the unverified per-message cache behaviour; quality effects
 unmeasured throughout.
+
+## Addendum 2026-09-30: cache probe of a mid-turn effort change (0.6.16 T5)
+
+**Result: 0 of 32 mid-turn effort switches missed the cache (95% upper
+bound 10.9%, exact two-sided; rule of three 9.4%), and the hook's effort
+rewrite takes the per-message path.**
+
+Set-up. One headless Claude Code 2.1.286 session (`claude -p`) on Opus 5.5,
+on the owner's second Orca account, in a throwaway repository under
+/Volumes/Data/jev-live-check (`SCR`). User settings were not loaded
+(`--setting-sources project`), so no other plugin or hook ran; the debug log
+shows only the probe plugin loaded. The probe was a throwaway `--plugin-dir`
+plugin outside the repository whose `turn.step` hook rewrites the main
+loop's effort exactly as the router does (`next({ ...e, effort })`), on a
+fixed plan: steps 0-1 high, then two medium, two high, and so on, so every
+even step from 2 on follows a switch and every odd step from 1 on is a
+same-effort control. The session effort was `--effort high`; the prompt had
+the model make 64 single `echo` tool calls, one per response, in one turn
+(65 steps). Context 35-36k tokens per step (a 600-line neutral padding in the
+appended system prompt kept it above 20k), cache writes and reads within
+seconds of each other.
+
+| Steps | n | Missed (>50% of the prompt uncached) | Uncached share, mean / max |
+|---|---|---|---|
+| After a switch (high↔medium) | 32 | 0 | 0.31% / 0.99% |
+| Same-effort control | 32 | 0 | 0.58% / 9.4% (the first control, right after the session's first cache write) |
+
+Path. Every one of the 65 transcript steps records `effort` equal to what
+the hook sent and `perTurnEffort` equal to `effort` (`high` or `medium`,
+switching every two steps): the rewrite goes out as a per-message effort,
+not a top-level one, and the prompt cache survives it. A smoke run of 7
+steps before it (3 switches) showed the same.
+
+Cost: $0.72 for the probe session and $0.26 for the smoke run, $0.98 in
+all (Claude Code's own `total_cost_usd`, API-equivalent).
+
+What it settles and what it does not. The docs' per-message path is the one
+a hook's rewrite takes on Opus 5.5, and 0/32 misses rules out the 29%
+turn-boundary rate of §4 for mid-turn switches. It does not establish the
+≤2% go bar: with 32 switches the bound is 10.9%, and a ≤2% bound at 95%
+needs about 150 clean switches. It covers one model (Opus 5.5), switches
+seconds apart at 35k context, and a headless session; Sonnet 5 (no
+per-message effort) and Sonnet 5.5 with `between_tools` were not probed.
+Nothing in 0.6.16 acts on the main session; the next step is a longer probe
+(or the T4 rows, whose `effortChanged` steps carry `uncachedShare`,
+`prevEffort` and `promptTokens`) before any hold rule is switched on.

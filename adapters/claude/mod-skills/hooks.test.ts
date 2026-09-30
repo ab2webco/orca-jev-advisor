@@ -118,6 +118,7 @@ function makeFakeEngine(host: FakeHost): unknown {
   return {
     session: {
       cwd: async () => CWD,
+      id: async () => "session-1",
       usage: async () => {
         if (host.failUsage) throw new Error("fake host: session.usage failed");
         return { startedAt: 0, context: {}, rateLimits: host.rateLimits };
@@ -1299,6 +1300,47 @@ test("router, active: the person switching model mid-session wins -- the router 
   host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
   const manual = turnStepEvent({ index: 1, model: "claude-sonnet-5-5", effort: "medium" });
   assert.deepEqual(await stepThrough(handlers, engine, manual), manual);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.16 T1: decision rows join their steps by id; the router's own low is
+// never sent on work that may edit.
+// ---------------------------------------------------------------------------
+
+test("0.6.16 T1: a main decision row carries the session and turn, and the steps carry the same ids", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "add a --json flag to the export command", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, turnId: "turn-7" }));
+  const [decision] = routerDecisionLines(host);
+  assert.deepEqual([decision?.sessionId, decision?.turnId, decision?.agentId], ["session-1", "turn-7", null]);
+  const step = turnUsageLines(host).at(-1);
+  assert.deepEqual([step?.sessionId, step?.turnId, step?.index, step?.agentId], ["session-1", "turn-7", 0, null]);
+});
+
+test("0.6.16 T1: a subagent decision row carries its agent and its own turn", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnThrough(handlers, engine, spawnEvent());
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  const [decision] = routerDecisionLines(host);
+  assert.deepEqual([decision?.point, decision?.sessionId, decision?.turnId, decision?.agentId], ["subagent", "session-1", "sub-1", "agent-1"]);
+  assert.deepEqual([turnUsageLines(host).at(-1)?.agentId, turnUsageLines(host).at(-1)?.turnId], ["agent-1", "sub-1"]);
+});
+
+test("0.6.16 T1 (hook, active): simple work held on the session's Opus runs at medium, not the router's old low", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "rename userId to accountId", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple", 0.5));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent({ index: 0, model: "claude-opus-5-5", effort: "low" }));
+  assert.equal(seen.model, "claude-opus-5-5");
+  assert.equal(seen.effort, "medium");
 });
 
 // ---------------------------------------------------------------------------
@@ -2589,6 +2631,152 @@ test("T7: a model an agent definition fixes is judged like an explicit one by de
 });
 
 // ---------------------------------------------------------------------------
+// 0.6.16 T2: the work kind at spawn, asked in the same Jev call as the tier.
+// ---------------------------------------------------------------------------
+
+function tierKindAnswer(tier: string, kind: string, kindConfidence = 0.9): unknown {
+  return jevResponse({
+    tier: { type: "choice", choice: tier, probabilities: { [tier]: 0.9 }, confidence: 0.9 },
+    kind: { type: "choice", choice: kind, probabilities: { [kind]: kindConfidence }, confidence: kindConfidence },
+  });
+}
+
+function seedWorkKind(host: FakeHost, mode: string, routerEffort?: Record<string, string>): void {
+  host.files.set(`${ACCOUNT_DIR}/settings.json`, JSON.stringify({ env: {}, pluginConfigs: { "orca-jev-mod-skills@skills-dir": { options: { workKindMode: mode, ...(routerEffort === undefined ? {} : { routerEffort }) } } } }));
+}
+
+const READ_SPAWN = { description: "Find the router's log writer", prompt: "Find where the router writes its decision log and report the file and function.", model: "sonnet" };
+
+test("0.6.16 T2 (active): a read run on Sonnet 5 is capped at high, set at its first step and kept", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedWorkKind(host, "active");
+  host.fetchQueue.push(tierKindAnswer("standard", "read"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnAs(handlers, engine, spawnEvent(READ_SPAWN), "agent-1", "claude-sonnet-5");
+  const questions = (JSON.parse(host.fetchCalls.at(-1)?.body ?? "{}") as { questions: Record<string, unknown> }).questions;
+  assert.deepEqual(Object.keys(questions).sort(), ["kind", "tier"], "one call, both questions");
+  const first = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(first.effort, "high");
+  const later = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 1, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(later.effort, "high");
+  assert.equal(host.fetchCalls.length, 1);
+  const kind = routerDecisionLines(host).at(-1)?.workKind as Record<string, unknown>;
+  assert.deepEqual(kind, { mode: "active", kind: "read", confidence: 0.9, source: "jev", keywords: "read", effort: "high", hold: null, applied: true });
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high");
+});
+
+test("0.6.16 T2 (measure, the default): the kind and the effort it would send are logged, nothing sent changes", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierKindAnswer("complex", "execute", 0.8));
+  const { handlers, engine } = loadHooks(host);
+  await spawnAs(handlers, engine, spawnEvent({ description: "Run the test suite", prompt: "Run npm test and report the failures." }), "agent-1", "claude-opus-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  assert.equal(step.effort, "high");
+  const kind = routerDecisionLines(host).at(-1)?.workKind as Record<string, unknown>;
+  assert.deepEqual(kind, { mode: "measure", kind: "execute", confidence: 0.8, source: "jev", keywords: "execute", effort: "medium", hold: null, applied: false });
+});
+
+test("0.6.16 T2 (off): the spawn asks only for the tier and logs no kind", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedWorkKind(host, "off");
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnAs(handlers, engine, spawnEvent(READ_SPAWN), "agent-1", "claude-sonnet-5");
+  const questions = (JSON.parse(host.fetchCalls.at(-1)?.body ?? "{}") as { questions: Record<string, unknown> }).questions;
+  assert.deepEqual(Object.keys(questions), ["tier"]);
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(step.effort, "xhigh");
+  assert.equal(routerDecisionLines(host).at(-1)?.workKind, null);
+});
+
+test("0.6.16 T2 (active): with no answer from Jev the keywords name the kind, logged, and never act", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedWorkKind(host, "active");
+  const { handlers, engine } = loadHooks(host);
+  await spawnAs(handlers, engine, spawnEvent(READ_SPAWN), "agent-1", "claude-sonnet-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(step.effort, "xhigh");
+  const kind = routerDecisionLines(host).at(-1)?.workKind as Record<string, unknown>;
+  assert.deepEqual([kind.kind, kind.source, kind.confidence, kind.hold, kind.applied], ["read", "keywords", null, "unsure", false]);
+});
+
+test("0.6.16 T2 (active): review work, a sensitive topic and a client's site keep the effort", async () => {
+  for (const [answer, spawn, hold] of [
+    [tierKindAnswer("standard", "review"), READ_SPAWN, "not-read-work"],
+    [tierKindAnswer("standard", "read"), { ...READ_SPAWN, prompt: "Read the production deploy logs and report errors." }, "sensitive"],
+  ] as const) {
+    const host = makeFakeHost();
+    seedRouterAccount(host);
+    seedWorkKind(host, "active");
+    host.fetchQueue.push(answer);
+    const { handlers, engine } = loadHooks(host);
+    await spawnAs(handlers, engine, spawnEvent(spawn), "agent-1", "claude-sonnet-5");
+    const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+    assert.equal(step.effort, "xhigh", hold);
+    assert.equal((routerDecisionLines(host).at(-1)?.workKind as Record<string, unknown>).hold, hold);
+  }
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedWorkKind(host, "active");
+  seedCatalog(host, "client-site");
+  host.fetchQueue.push(tierKindAnswer("standard", "read"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnAs(handlers, engine, spawnEvent(READ_SPAWN), "agent-1", "claude-sonnet-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5", effort: "xhigh" }));
+  assert.equal(step.effort, "xhigh");
+  assert.equal((routerDecisionLines(host).at(-1)?.workKind as Record<string, unknown>).hold, "client-site");
+});
+
+test("0.6.16 T1/T2 (active): on read work the simple tier's own low comes back, unless the person set simple themselves", async () => {
+  const noHaiku = SEED_MODELS.map((model) => (model.id.startsWith("claude-haiku") ? { ...model, available: false } : model));
+  for (const [routerEffort, workKind, expected] of [[undefined, "active", "low"], [{ simple: "medium" }, "active", "medium"], [undefined, "measure", "medium"]] as const) {
+    const host = makeFakeHost();
+    seedRouterAccount(host);
+    host.files.set(`${CONFIG_DIR}/models-catalog.json`, JSON.stringify({ active: false, ready: false, models: noHaiku }));
+    seedWorkKind(host, workKind, routerEffort);
+    host.fetchQueue.push(tierKindAnswer("simple", "read"));
+    const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+    const seen = await spawnThrough(handlers, engine, spawnEvent({ description: READ_SPAWN.description, prompt: READ_SPAWN.prompt }));
+    assert.equal(seen.model, "claude-sonnet-5-5");
+    const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "high" }));
+    assert.equal(step.effort, expected, `${JSON.stringify(routerEffort)} ${workKind}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.16 T3: an agent definition's declared effort is a floor.
+// ---------------------------------------------------------------------------
+
+test("0.6.16 T3: a definition that declares high keeps high when the tier asks for medium, and the band says it is the definition's", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CWD}/.claude/agents/checker.md`, "---\nname: checker\neffort: high\n---\nCheck.\n");
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ subagentType: "checker", parentModel: "claude-sonnet-5-5" }), "agent-1", "claude-sonnet-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "high" }));
+  assert.equal(step.effort, "high", "the tier's medium never lowers a declared high");
+  assert.equal(storedSubagents(host)[0]?.effortSource, "frontmatter");
+  assert.equal(routerDecisionLines(host).at(-1)?.effort, "high");
+});
+
+test("0.6.16 T3: the router may still raise a declared effort", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CWD}/.claude/agents/checker.md`, "---\nname: checker\neffort: medium\n---\nCheck.\n");
+  host.fetchQueue.push(tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ subagentType: "checker" }), "agent-1", "claude-opus-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "medium" }));
+  assert.equal(step.effort, "high");
+  assert.equal(storedSubagents(host)[0]?.effortSource, "jev");
+});
+
+// ---------------------------------------------------------------------------
 // 0.6.15 T4c (odd/research/effort-per-task.md §4): measure-only effort
 // logging on each turn-usage line. Nothing about the effort sent changes.
 // ---------------------------------------------------------------------------
@@ -2637,4 +2825,58 @@ test("0.6.15 T4c: a fixed-model subagent whose definition sets the effort logs i
   assert.equal(step.effort, "high");
   const line = turnUsageLines(host).at(-1);
   assert.deepEqual([line?.effortSource, line?.modelFixed], ["frontmatter", true]);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.16 T4: main-session phase and the would-be hold effort, measure only.
+// ---------------------------------------------------------------------------
+
+function toolStep(index: number, tools: { name: string; input: Record<string, unknown> }[], stopReason = "tool_use"): Record<string, unknown> {
+  return turnStepResult({ index, toolUses: tools, stopReason, usage: { model: "claude-opus-5-5", input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 100 } });
+}
+
+async function toolCallThrough(handlers: Map<string, Hook>, engine: unknown, tool: string, input: Record<string, unknown>, outcome: Record<string, unknown>): Promise<void> {
+  const hook = handlers.get("tool.call");
+  assert.ok(hook);
+  await hook(engine, { tool, input, tool_use_id: "toolu_x" }, async () => outcome);
+}
+
+test("0.6.16 T4: each main step logs its phase, the previous one, the EXEC run and what the hold rule would send; nothing sent changes", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const read = { name: "Grep", input: { pattern: "x" } };
+  for (let index = 0; index < 7; index += 1) {
+    const sent = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-9", index, model: "claude-opus-5-5", effort: "high" }), toolStep(index, [read]));
+    assert.equal(sent.effort, "high", "the effort sent never changes");
+  }
+  const rows = turnUsageLines(host);
+  assert.deepEqual(rows.map((row) => row.phase), ["READ", "READ", "READ", "READ", "READ", "READ", "READ"]);
+  assert.deepEqual(rows.map((row) => row.prevPhase), [null, "READ", "READ", "READ", "READ", "READ", "READ"]);
+  assert.deepEqual(rows.map((row) => row.execRun), [0, 1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(rows.map((row) => row.holdEffort), ["high", "high", "high", "high", "high", "medium", "medium"]);
+  assert.equal(rows[0]?.perTurnEffort, undefined, "the hook cannot see perTurnEffort, so it is not invented");
+});
+
+test("0.6.16 T4: a failed tool in the run and a new turn raise the would-be effort back", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  const run = { name: "Bash", input: { command: "npm test" } };
+  for (let index = 0; index < 6; index += 1) {
+    await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index, model: "claude-opus-5-5", effort: "xhigh" }), toolStep(index, [run]));
+    if (index === 3) await toolCallThrough(handlers, engine, "Bash", run.input, { result: {}, text: "tests 4\n✖ one failing", ref: 1 });
+  }
+  await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-2", index: 0, model: "claude-opus-5-5", effort: "xhigh" }), toolStep(0, [], "end_turn"));
+  const rows = turnUsageLines(host);
+  assert.deepEqual(rows.map((row) => row.holdEffort), ["xhigh", "xhigh", "xhigh", "xhigh", "xhigh", "xhigh", "xhigh"]);
+  assert.deepEqual([rows.at(-1)?.phase, rows.at(-1)?.prevPhase, rows.at(-1)?.execRun], ["ANSWER", null, 0]);
+});
+
+test("0.6.16 T4: the first step after an effort change also logs the effort before it and the prompt size", async () => {
+  const host = makeFakeHost();
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent({ model: "claude-opus-5-5", effort: "high" }), toolStep(0, []));
+  await stepThrough(handlers, engine, turnStepEvent({ model: "claude-opus-5-5", effort: "medium", index: 1 }), toolStep(1, []));
+  const [one, two] = turnUsageLines(host);
+  assert.equal(one?.prevEffort, undefined);
+  assert.deepEqual([two?.effortChanged, two?.prevEffort, two?.promptTokens, two?.uncachedShare], [true, "high", 40_110, 0.003]);
 });

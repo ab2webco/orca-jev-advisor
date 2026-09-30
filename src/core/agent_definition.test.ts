@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { agentDefinitionModel, parseAgentDefinition } from "./agent_definition.ts";
+import { agentDefinitionModel, declaredEffort, parseAgentDefinition } from "./agent_definition.ts";
 
 const REVIEWER = "---\nname: reviewer\ndescription: Reviews a diff\nmodel: opus\ntools: Read, Grep\n---\n\nYou review diffs.\n";
 
@@ -29,4 +29,12 @@ test("agentDefinitionModel: the model the matching definition fixes, by name or 
 test("agentDefinitionModel: inherit, or no model at all, fixes nothing", () => {
   assert.equal(agentDefinitionModel([{ file: "a.md", text: "---\nname: a\nmodel: inherit\n---\n" }], "a"), null);
   assert.equal(agentDefinitionModel([{ file: "b.md", text: "---\nname: b\n---\n" }], "b"), null);
+});
+
+test("0.6.16 T3 declaredEffort: a level, a numeric budget, or nothing", () => {
+  assert.equal(declaredEffort("high"), "high");
+  assert.equal(declaredEffort("max"), "max");
+  assert.equal(declaredEffort("12000"), 12000);
+  assert.equal(declaredEffort("ultra"), null);
+  assert.equal(declaredEffort(null), null);
 });

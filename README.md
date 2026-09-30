@@ -16,14 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
-## What changed in 0.6.15
+## What changed in 0.6.16
 
-The gate reads only what runs, so a quoted command in a script's argument,
-a loop's list or a heredoc no longer stops anything; `requires_human`
-policies are judged on what the action does (`terraform plan` passes); SQL
-fed on stdin is refused like `psql -c`. The context steward now acts on
-1M-token sessions (600k, and a 400k tier in measure mode), and the agents
-band shows each agent's real effort and where it comes from.
+Subagents get the effort their work needs: the spawn's Jev judgment also
+names the work kind, and runs that only execute or read go at high at most
+on Sonnet 5 and at medium on Opus 5.5 and Sonnet 5.5. It has its own switch
+in the Models tab and starts in measure. The router no longer sends `low` on
+its own (the simple tier defaults to medium), an agent definition's declared
+effort is a floor, and router decisions join their steps by session and turn.
 
 Every release is in [CHANGELOG.md](CHANGELOG.md).
 

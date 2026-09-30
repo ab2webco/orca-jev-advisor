@@ -135,8 +135,17 @@ test("tier answer: a tier plus confidence; anything else is a failure (null), ne
 // Session start (§6.3), guards applied after Jev
 // ---------------------------------------------------------------------------
 
-test("tier effort: low, medium, high, xhigh", () => {
-  assert.deepEqual(TIER_EFFORT, { simple: "low", standard: "medium", complex: "high", frontier: "xhigh" });
+test("tier effort (0.6.16 T1): the router's own table never asks for low -- simple work may edit", () => {
+  assert.deepEqual(TIER_EFFORT, { simple: "medium", standard: "medium", complex: "high", frontier: "xhigh" });
+});
+
+test("0.6.16 T1: a simple judgment held on the session's own Opus sends medium by default, and the person's own low when they set it", () => {
+  const unsure = { ...CALM, confidence: 0.5 };
+  const byDefault = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.5 }, configuredModel: "claude-opus-5-5", configuredEffort: null, guards: unsure });
+  assert.equal(byDefault.guard, "low-confidence");
+  assert.equal(byDefault.effort, "medium");
+  const own = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.5 }, configuredModel: "claude-opus-5-5", configuredEffort: null, guards: unsure, tierEffort: { ...TIER_EFFORT, simple: "low" } });
+  assert.equal(own.effort, "low");
 });
 
 test("start: Jev failure changes nothing", () => {
@@ -226,14 +235,29 @@ test("decision log: hourly file name, like turn-usage", () => {
 test("decision log record: exactly the spec's fields, no prompt text", () => {
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: { ...CALM, text: "secret prompt words" } });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal", project: null });
-  assert.deepEqual(Object.keys(record).sort(), ["account", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "project", "proposed", "quotaBand", "quotaSource", "reason", "stepSaving", "switchCost", "tier"].sort());
+  assert.deepEqual(Object.keys(record).sort(), ["account", "agentId", "applied", "at", "confidence", "contextTokens", "current", "effort", "expectedSteps", "guard", "origin", "point", "project", "proposed", "quotaBand", "quotaSource", "reason", "sessionId", "stepSaving", "switchCost", "tier", "turnId", "workKind"].sort());
   assert.equal(record.proposed, "claude-haiku-4-5-20251001");
   assert.equal(record.contextTokens, null);
   assert.equal(record.origin, null, "no origin given -- defaults to null");
   assert.equal(record.effort, null, "no effort given -- defaults to null");
   assert.equal(record.project, null, "no project given -- defaults to null");
   assert.equal(record.quotaSource, null, "no quota source given -- defaults to null");
+  assert.deepEqual([record.sessionId, record.turnId, record.agentId], [null, null, null], "no ids given -- null, never guessed");
   assert.equal(JSON.stringify(record).includes("prompt words"), false);
+});
+
+test("0.6.16 T1: a decision row carries the session, turn and agent it was made for, so it joins its steps without a time window", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "subagent", decision, applied: false, quotaBand: "normal", sessionId: "s-1", turnId: "t-1", agentId: "a-1" });
+  assert.deepEqual([record.sessionId, record.turnId, record.agentId], ["s-1", "t-1", "a-1"]);
+  assert.equal(record.workKind, null, "no work kind given -- null");
+});
+
+test("0.6.16 T2: a subagent row carries the work kind, its source, the keywords' cross-check and the effort it sends or would send", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const workKind = { mode: "measure", kind: "read", confidence: 0.9, source: "jev", keywords: "read", effort: "medium", hold: null, applied: false } as const;
+  const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "subagent", decision, applied: false, quotaBand: "normal", workKind });
+  assert.deepEqual(record.workKind, workKind);
 });
 
 test("decision log record: project is carried through verbatim (JEVADV-63)", () => {

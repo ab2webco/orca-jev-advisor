@@ -4,7 +4,7 @@ import test from "node:test";
 import type { ModelEntry } from "./model_catalog.ts";
 import { resolveAccountTiers } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
-import { parseRunningSubagents, reconcileRunning, subagentModelLabel, subagentWhy, subagentsStatusPart } from "./subagent_status.ts";
+import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from "./subagent_status.ts";
 import type { RunningSubagent } from "./subagent_status.ts";
 
 function entry(id: string, rank: number): ModelEntry {
@@ -128,4 +128,17 @@ test("subagentsStatusPart: an agent with no record counts", () => {
   const running = [agent("a-1"), agent("a-2", { label: null, effort: null, why: "unknown" })];
   assert.equal(subagentsStatusPart("es", running), "agentes: 2");
   assert.equal(subagentsStatusPart("en", running), "agents: 2");
+});
+
+test("0.6.16 T3 subagentEffortSource: the definition's declared effort, when that is what is sent", () => {
+  assert.equal(subagentEffortSource("high", "high", "high"), "frontmatter");
+  assert.equal(subagentEffortSource("medium", "high", "high"), "frontmatter", "lifted to the declared floor");
+  assert.equal(subagentEffortSource("high", "xhigh", "high"), "jev", "raised above it by the router");
+  assert.equal(subagentEffortSource("high", "high", null), "inherited");
+  assert.equal(subagentEffortSource("high", null, "high"), "not-sent");
+});
+
+test("0.6.16 T3 parseRunningSubagents: a stored frontmatter source reads back", () => {
+  const [agent] = parseRunningSubagents({ agents: [{ id: "a-1", type: "reviewer", description: "d", label: "Opus 5.5", effort: "high", effortSource: "frontmatter", why: "inherited", wouldUse: null }] });
+  assert.equal(agent?.effortSource, "frontmatter");
 });

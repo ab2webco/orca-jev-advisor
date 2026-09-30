@@ -705,7 +705,7 @@ const CONSUMPTION_READY = {
  * applied switch, and a real dollar estimate -- so both new UI pieces show
  * their populated state, not the honest-but-uninteresting empty one.
  */
-const ROUTER_EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const ROUTER_EFFORT_DEFAULTS = { simple: 'medium', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const ROUTER_TIERS_ANTHROPIC = {
   simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
   standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },
@@ -719,9 +719,9 @@ const ROUTER_READY = {
     // install-claude-integration.mjs's router-mode-status publishes them.
     targets: [
       // The context steward's per-target settings (odd/tasks/jev-context-steward.md).
-      { target: 'home', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'measure', threshold: 120000 } },
-      { target: 'cccccccc-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'active', threshold: 150000, softMode: 'active' } },
-      { target: 'bbbbbbbb-0000-4000-8000-000000000002', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'off', threshold: 120000 } },
+      { target: 'home', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'measure', threshold: 120000 }, workKind: 'measure' },
+      { target: 'cccccccc-0000-4000-8000-000000000003', mode: 'active', email: 'owner@example.com', effort: { ...ROUTER_EFFORT_DEFAULTS, complex: 'xhigh' }, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'active', threshold: 150000, softMode: 'active' }, workKind: 'active' },
+      { target: 'bbbbbbbb-0000-4000-8000-000000000002', mode: 'measure', effort: ROUTER_EFFORT_DEFAULTS, tiers: ROUTER_TIERS_ANTHROPIC, steward: { mode: 'off', threshold: 120000 }, workKind: 'measure' },
     ],
     checkedAt: iso,
   },
