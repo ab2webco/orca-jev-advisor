@@ -721,15 +721,21 @@ test('an install that never set team owners shows an empty field and saves an em
   }
 })
 
+// A button group is the panel's replacement for a native select: the pressed button is the value.
+async function pressedValues (page, groupSelector) {
+  return page.evaluate((sel) => Array.from(document.querySelector(sel).querySelectorAll('button')).filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.value), groupSelector)
+}
+
 // 0.6.8 T4: "When a person must approve: ask now | queue and continue",
 // saved to `queueMode` ({ enabled }) by the same Save button.
 test('the queue mode select shows the stored choice and Save writes it back', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ queueMode: { enabled: true } })
   try {
     await page.click('#tab-policies')
-    assert.equal(await page.inputValue('#queue-mode'), 'queue')
+    assert.deepEqual(await pressedValues(page, '#queue-mode'), ['queue'])
     assert.ok((await page.textContent('#queue-mode-section')).length > 40, 'the section renders its heading, choices and hint')
-    await page.selectOption('#queue-mode', 'ask')
+    await page.click('#queue-mode button[data-value="ask"]')
+    assert.deepEqual(await pressedValues(page, '#queue-mode'), ['ask'])
     await page.click('#save-all')
     await page.waitForTimeout(SETTLE_MS)
     assert.deepEqual(await page.evaluate(() => window.__written.queueMode), { enabled: false })
@@ -743,7 +749,7 @@ test('an install that never set the queue mode shows "ask now" and saves it', { 
   const { browser, page, errors } = await openPanel({})
   try {
     await page.click('#tab-policies')
-    assert.equal(await page.inputValue('#queue-mode'), 'ask')
+    assert.deepEqual(await pressedValues(page, '#queue-mode'), ['ask'])
     await page.click('#save-all')
     await page.waitForTimeout(SETTLE_MS)
     assert.deepEqual(await page.evaluate(() => window.__written.queueMode), { enabled: false })
@@ -759,9 +765,10 @@ test('the explicit models select shows the stored choice and Save writes it back
   const { browser, page, errors } = await openPanel({ explicitModels: { mode: 'keep' } })
   try {
     await page.click('#tab-models')
-    assert.equal(await page.inputValue('#explicit-models'), 'keep')
+    assert.deepEqual(await pressedValues(page, '#explicit-models'), ['keep'])
     assert.ok((await page.textContent('#explicit-models-section')).length > 40, 'the section renders its heading, choices and hint')
-    await page.selectOption('#explicit-models', 'judge')
+    await page.click('#explicit-models button[data-value="judge"]')
+    assert.deepEqual(await pressedValues(page, '#explicit-models'), ['judge'])
     await page.click('#save-all')
     await page.waitForTimeout(SETTLE_MS)
     assert.deepEqual(await page.evaluate(() => window.__written.explicitModels), { mode: 'judge' })
@@ -775,7 +782,7 @@ test('an install that never set it shows "judge them" and saves it', { skip: chr
   const { browser, page, errors } = await openPanel({})
   try {
     await page.click('#tab-models')
-    assert.equal(await page.inputValue('#explicit-models'), 'judge')
+    assert.deepEqual(await pressedValues(page, '#explicit-models'), ['judge'])
     await page.click('#save-all')
     await page.waitForTimeout(SETTLE_MS)
     assert.deepEqual(await page.evaluate(() => window.__written.explicitModels), { mode: 'judge' })
@@ -2649,8 +2656,8 @@ test('0.6.2: each account shows tier → the model it resolves to → its effort
   try {
     await page.click('#tab-models')
     const table = await page.evaluate(() => Array.from(document.querySelectorAll('[data-model-router-effort-table="11112222-3333-4444-5555-666677778888"] tbody tr')).map((tr) => {
-      const select = tr.querySelector('select')
-      return { cells: Array.from(tr.cells).slice(0, 2).map((cell) => cell.innerText.trim()), effort: select ? select.value : null }
+      const pressed = tr.querySelector('.mode-buttons button[aria-pressed="true"]')
+      return { cells: Array.from(tr.cells).slice(0, 2).map((cell) => cell.innerText.trim()), effort: pressed ? pressed.dataset.value : null }
     }))
     assert.deepEqual(table, [
       { cells: ['Ask', 'Haiku 4.5'], effort: null },
@@ -2658,8 +2665,14 @@ test('0.6.2: each account shows tier → the model it resolves to → its effort
       { cells: ['Analyse', 'Opus 5.5'], effort: 'xhigh' },
       { cells: ['Deep reasoning', 'Opus 5.5'], effort: 'xhigh' }
     ])
-    const options = await page.evaluate(() => Array.from(document.querySelector('select[data-model-router-effort="home:complex"]').options).map((o) => o.value))
-    assert.deepEqual(options, ['low', 'medium', 'high', 'xhigh', 'max'])
+    const group = 'div[data-model-router-effort="home:complex"]'
+    const values = await page.evaluate((sel) => Array.from(document.querySelector(sel).querySelectorAll('button')).map((b) => b.dataset.value), group)
+    assert.deepEqual(values, ['low', 'medium', 'high', 'xhigh', 'max'])
+    assert.equal(await page.getAttribute(group, 'role'), 'group')
+    assert.ok((await page.getAttribute(group, 'aria-label')).length > 0, 'the group has an accessible name')
+    await page.click(group + ' button[data-value="max"]')
+    assert.deepEqual(await pressedValues(page, group), ['max'])
+    assert.equal(await page.locator('select[data-model-router-effort]').count(), 0, 'no native select is left')
   } finally {
     await browser.close()
   }
@@ -2669,7 +2682,7 @@ test('0.6.2: saving an account\'s effort table sends that target\'s whole per-ti
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT })
   try {
     await page.click('#tab-models')
-    await page.selectOption('select[data-model-router-effort="home:complex"]', 'xhigh')
+    await page.click('div[data-model-router-effort="home:complex"] button[data-value="xhigh"]')
     await page.click('button[data-model-router-effort-save="home"]')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)

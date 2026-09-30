@@ -202,6 +202,9 @@
       .mode-buttons button { flex: 1; padding: 6px 8px; font-size: 12px; border: 1px solid var(--border, var(--fb-border));
         background: var(--background, var(--fb-background)); color: var(--foreground, var(--fb-foreground));
         cursor: pointer; border-radius: 4px; }
+      /* Five effort levels in a table cell wrap instead of overflowing a phone. */
+      .mode-buttons.effort-buttons { flex-wrap: wrap; flex-basis: auto; }
+      .mode-buttons.effort-buttons button { flex: 1 1 auto; }
       .mode-buttons button:hover { border-color: var(--foreground, var(--fb-foreground)); }
       /* Inverted, not --accent: in the light theme --accent is a near-white grey that reads as disabled. */
       .mode-buttons button.active { background: var(--foreground, var(--fb-foreground)); color: var(--background, var(--fb-background));
@@ -214,7 +217,6 @@
         color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .router-effort td { padding: 4px 8px 4px 0; border-top: 1px solid var(--border, var(--fb-border));
         color: var(--foreground, var(--fb-foreground)); overflow-wrap: anywhere; }
-      .router-effort td select { width: auto; min-width: 8em; }
       .router-effort .actions { margin-top: 8px; }
       /* The context steward: mode, threshold in thousands of tokens, save. */
       .steward-row { align-items: center; margin-bottom: 14px; }
@@ -396,11 +398,11 @@
       -->
       <section id="queue-mode-section">
         <h2 data-i18n="queueMode.heading"></h2>
-        <label for="queue-mode" data-i18n="queueMode.label"></label>
-        <select id="queue-mode">
-          <option value="ask" data-i18n="queueMode.ask"></option>
-          <option value="queue" data-i18n="queueMode.queue"></option>
-        </select>
+        <label id="queue-mode-label" data-i18n="queueMode.label"></label>
+        <div id="queue-mode" class="mode-buttons" role="group" aria-labelledby="queue-mode-label">
+          <button type="button" data-value="ask" data-i18n="queueMode.ask"></button>
+          <button type="button" data-value="queue" data-i18n="queueMode.queue"></button>
+        </div>
         <p class="hint" data-i18n="queueMode.hint"></p>
       </section>
       </div>
@@ -533,11 +535,11 @@
       -->
       <section id="explicit-models-section">
         <h2 data-i18n="explicitModels.heading"></h2>
-        <label for="explicit-models" data-i18n="explicitModels.label"></label>
-        <select id="explicit-models">
-          <option value="judge" data-i18n="explicitModels.judge"></option>
-          <option value="keep" data-i18n="explicitModels.keep"></option>
-        </select>
+        <label id="explicit-models-label" data-i18n="explicitModels.label"></label>
+        <div id="explicit-models" class="mode-buttons" role="group" aria-labelledby="explicit-models-label">
+          <button type="button" data-value="judge" data-i18n="explicitModels.judge"></button>
+          <button type="button" data-value="keep" data-i18n="explicitModels.keep"></button>
+        </div>
         <p class="hint" data-i18n="explicitModels.hint"></p>
       </section>
       </div>
@@ -2547,29 +2549,55 @@
       // 0.6.8 T4: the queue mode select. Only a stored { enabled: true }
       // reads as "queue"; anything else (never set, malformed) is "ask now",
       // the same default src/core/queue_mode.ts's parseQueueMode applies.
+      // Native select popups do not open reliably in Orca's Electron panel, so choices are button groups.
+      function pressModeButton (button, pressed) {
+        button.className = pressed ? 'active' : ''
+        button.setAttribute('aria-pressed', pressed ? 'true' : 'false')
+      }
+
+      function setPressedValue (group, value) {
+        Array.from(group.querySelectorAll('button')).forEach(function (b) { pressModeButton(b, b.getAttribute('data-value') === value) })
+      }
+
+      function pressedValue (group, fallback) {
+        var on = group.querySelector('button[aria-pressed="true"]')
+        return on ? on.getAttribute('data-value') : fallback
+      }
+
+      function wireButtonGroup (group, onChange) {
+        Array.from(group.querySelectorAll('button')).forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            setPressedValue(group, btn.getAttribute('data-value'))
+            if (onChange) onChange()
+          })
+        })
+      }
+
       var queueModeEl = el('queue-mode')
+      wireButtonGroup(queueModeEl)
 
       function fillQueueMode (stored) {
         var enabled = stored !== null && typeof stored === 'object' && stored.enabled === true
-        queueModeEl.value = enabled ? 'queue' : 'ask'
+        setPressedValue(queueModeEl, enabled ? 'queue' : 'ask')
       }
 
       function readQueueMode () {
-        return { enabled: queueModeEl.value === 'queue' }
+        return { enabled: pressedValue(queueModeEl, 'ask') === 'queue' }
       }
 
       // 0.6.8 T7: the explicit subagent models select. Only a stored
       // { mode: 'keep' } keeps; anything else is "judge", the default
       // src/core/explicit_models.ts's parseExplicitModels applies.
       var explicitModelsEl = el('explicit-models')
+      wireButtonGroup(explicitModelsEl)
 
       function fillExplicitModels (stored) {
         var keep = stored !== null && typeof stored === 'object' && stored.mode === 'keep'
-        explicitModelsEl.value = keep ? 'keep' : 'judge'
+        setPressedValue(explicitModelsEl, keep ? 'keep' : 'judge')
       }
 
       function readExplicitModels () {
-        return { mode: explicitModelsEl.value === 'keep' ? 'keep' : 'judge' }
+        return { mode: pressedValue(explicitModelsEl, 'judge') === 'keep' ? 'keep' : 'judge' }
       }
 
       function readTeamOwners () {
@@ -2832,11 +2860,6 @@
 
       var MODEL_ROUTER_MODE_KEYS = { off: 'modelRouter.modeOff', measure: 'modelRouter.modeMeasure', active: 'modelRouter.modeActive' }
 
-      function pressModeButton (button, pressed) {
-        button.className = pressed ? 'active' : ''
-        button.setAttribute('aria-pressed', pressed ? 'true' : 'false')
-      }
-
       /** Set once the person changes a router select; the on-open refresh
        *  then leaves the rows alone instead of discarding the choice. */
       var modelRouterEdited = false
@@ -2979,7 +3002,7 @@
         head.appendChild(headRow)
         table.appendChild(head)
         var body = elMake('tbody')
-        var selects = {}
+        var groups = {}
         MODEL_ROUTER_TIERS.forEach(function (tier) {
           var model = target.tiers[tier] || {}
           var tr = elMake('tr')
@@ -2990,19 +3013,21 @@
           modelCell.setAttribute('title', model.modelId || '')
           var effortCell = elMake('td')
           if (model.supportsEffort) {
-            var select = elMake('select')
-            select.setAttribute('data-model-router-effort', target.target + ':' + tier)
-            select.addEventListener('change', function () { modelRouterEdited = true })
-            select.setAttribute('aria-label', t('modelRouter.tier.' + tier) + ' · ' + t('modelRouter.effortLevel'))
+            var group = elMake('div', 'mode-buttons effort-buttons')
+            group.setAttribute('role', 'group')
+            group.setAttribute('data-model-router-effort', target.target + ':' + tier)
+            group.setAttribute('aria-label', t('modelRouter.tier.' + tier) + ' · ' + t('modelRouter.effortLevel'))
             MODEL_ROUTER_EFFORTS.forEach(function (effort) {
-              var opt = elMake('option')
-              opt.value = effort
-              opt.textContent = t('modelRouter.effort.' + effort)
-              if (effort === target.effort[tier]) opt.selected = true
-              select.appendChild(opt)
+              var btn = elMake('button')
+              btn.type = 'button'
+              btn.setAttribute('data-value', effort)
+              btn.textContent = t('modelRouter.effort.' + effort)
+              group.appendChild(btn)
             })
-            selects[tier] = select
-            effortCell.appendChild(select)
+            setPressedValue(group, target.effort[tier])
+            wireButtonGroup(group, function () { modelRouterEdited = true })
+            groups[tier] = group
+            effortCell.appendChild(group)
           } else {
             effortCell.textContent = t('modelRouter.effortNone')
           }
@@ -3022,7 +3047,7 @@
         var saidEl = elMake('span', 'said')
         saveBtn.addEventListener('click', function () {
           var effort = {}
-          MODEL_ROUTER_TIERS.forEach(function (tier) { effort[tier] = selects[tier] ? selects[tier].value : target.effort[tier] })
+          MODEL_ROUTER_TIERS.forEach(function (tier) { effort[tier] = groups[tier] ? pressedValue(groups[tier], target.effort[tier]) : target.effort[tier] })
           saveModelRouterChange(target.target, JSON.stringify(target.effort), function (row) { return JSON.stringify(row.effort) }, { effort: effort }, saidEl)
         })
         actions.appendChild(saveBtn)
