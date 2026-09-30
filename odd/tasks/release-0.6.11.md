@@ -52,20 +52,21 @@ Out of scope: trimming tool results; gate bypasses A3–A8 (JEVADV-63..68).
     legitimately differ, so it cannot say a hold was right or wrong. 3 days of data.
     No figure supports a change, so the floor stays 0.7. Revisit once decisions record
     the session and whether the person reversed the model.
-- [x] T5 effort before model (0c2832a, 8f503a8; npm test 2588/2588; no panel touched)
-  - Rule: a one-step upgrade with no guard, a model that takes effort, and an effort
-    below what the work asks (capped at high) first raises the effort; the model changes
-    on a later turn when the need shows again with effort at its ceiling. No new state:
-    the next turn's own judgment is the streak. Multi-step, guard, person's max/budget,
-    no-effort models (Haiku) unchanged. Downgrades unchanged: they already need 2 turns
-    plus break-even, and an effort-first step would add a second cache rewrite.
+- [x] T5 effort before model: dropped, reverted (0c2832a implemented it, reverted by the
+  commit after it; router tests 218/218)
+  - Premise false: jev-060-router.md §2.3 measured that an effort change rewrites the
+    cache too (each effort level keeps its own cache past a shared ~12k tokens). Effort
+    first would cost one rewrite and, when the model still has to move, a second, and
+    it delays a quality upgrade by a turn.
   - Record: of 9 stage upgrades, 7 were Haiku to Opus (two steps), 1 Haiku to Sonnet (Haiku
     takes no effort): only 1 (Sonnet to Opus) was eligible, 1 of 25 applied stage model
-    changes; whether its effort was below the ceiling is not recorded.
+    changes. No figure supports the change, so upgrades keep changing the model at once.
+  - Kept from the same work (8f503a8): the status line no longer prints `(etapa: X)` on
+    plain decisions (redundant with the model shown); kept models still say `(Jev: X)`.
   - Status line: `(etapa: X)` removed from plain decisions (it was Jev's tier for the
     prompt, redundant with the model shown); kept models still say `(Jev: X)`.
 - [x] T6 live quota from `$.session.usage().rateLimits` (five_hour, seven_day: percentUsed, resetsAt), tighter-of-two band, `quotaSource` in the decision record; live figure dropped once its resetsAt passes, mirror fills a missing window while <= 30 min old (de5d377, 65402bf, 12de4d6; npm test 2575/2575; no panel touched)
-- [ ] T7 README, release 0.6.11, live check on this machine
+- [ ] T7 README, release 0.6.11, live check on this machine (README and version done; npm test 2583/2583)
 
 ## Acceptance criteria
 - A measurement log never stops recording, whatever its history size.

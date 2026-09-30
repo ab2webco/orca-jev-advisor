@@ -186,10 +186,14 @@ refusal. That is one machine's own replay, not a guarantee about yours.
     before and after, whether it was applied, the reason and guard, and,
     for a downgrade, the context size, rewrite cost, per-step saving and
     expected steps. Never the prompt text.
-  - **Near the weekly limit.** From 95% of the weekly quota, standard
-    work may drop to the simple tier, but only right after a turn that
-    edited no files and had no failing tool or test. Between 80% and 94%
-    no tier moves; a downgrade just needs one agreeing turn instead of two.
+  - **Near a usage limit.** The router reads the 5-hour and 7-day usage
+    live from Claude Code and uses whichever is closer to its limit (the
+    Orca quota mirror fills a missing window while it is at most 30
+    minutes old). From 95%, standard work may drop to the simple tier, but
+    only right after a turn that edited no files and had no failing tool
+    or test. Between 80% and 94% no tier moves; a downgrade just needs one
+    agreeing turn instead of two. Each decision records where its figure
+    came from (`live`, `live+mirror`, `mirror` or `none`).
   - **The model does not know it was switched.** After a switch, if you
     ask the model which model it is, it may still name the session's
     configured model: its system prompt names that one and the router
@@ -437,6 +441,40 @@ refusal. That is one machine's own replay, not a guarantee about yours.
   `~/.config/orca`, so an install run without Orca's own
   `ORCA_USER_DATA_PATH` found no accounts to install the hooks into.
 
+## What changed in 0.6.11
+
+- **The skill and tool measurement log no longer goes silent.** Claude
+  Code's hook filesystem rejects files over 4 MiB, so the single log
+  stopped recording at 4,194,231 bytes. Records now go to one file per UTC
+  hour; the daily count, the readiness check and the panel read the old
+  file and every hourly one together.
+- **Set up is one step, and the doctor checks what it installed.** The
+  hooks run with an absolute path to a Node 24 or newer found at install
+  time, so they work in any shell. The panel says so when no such Node
+  exists. The doctor runs every installed hook exactly as written. An Orca
+  account added after Set up gets the hooks without pressing it again.
+  Install and uninstall write `settings.json` only through the guarded
+  write, and never delete a skills-mod copy they did not install.
+- **The hooks run from any repository.** Set up from a development
+  checkout used to write the plugin's path as relative, so the gate only
+  ran inside that checkout. It is now stored as an absolute path; press
+  Set up once after updating to rewrite it.
+- **No repository, branch or path name reaches Jev in clear.** See
+  "Names" under "What leaves your machine".
+- **The router reads your usage live.** It uses the tighter of the 5-hour
+  and 7-day windows from Claude Code itself instead of only the Orca
+  mirror, and each decision records the source.
+- **The status line is shorter.** A plain decision no longer prints its
+  `(etapa: …)` label, which only repeated the model shown.
+- **Every Models and Policies choice opens on the first click.** Per-tier
+  effort, *When a person must approve* and *Models fixed by an agent* are
+  button groups instead of dropdowns, which Orca's panel could leave
+  unresponsive while it refreshed.
+- **Measured and left as they were:** the router's 70% confidence floor
+  (no figure in three days of decisions says another value holds better),
+  and upgrades still change the model at once rather than raising effort
+  first, because an effort change rewrites the prompt cache too.
+
 ## What changed in 0.6.10
 
 - **The standard tier now uses Sonnet 5.5.** All four models (Haiku 4.5,
@@ -641,6 +679,19 @@ all-lowercase, a single Capitalized word, or a camel/PascalCase compound of
 them — for the whole value to be waved through; one genuinely secret-shaped
 segment mixed among otherwise ordinary ones is still masked, since a single
 word-like neighbour can never vouch for it.
+
+**Names (0.6.11):** the repository, branch and path names this plugin knows
+about (the session's own repository and branch, the destination catalog's
+entries, a policy's names) reach Jev as stable placeholders (`<repo-1>`,
+`<branch-1>`, `<path-1>`), in the command, in the context and in skill and
+tool decisions alike. The same name is the same placeholder within one
+request, so "the command acts on `<path-2>`, not the session's `<path-1>`"
+still reads as a different repository. `main`, `master` and `production`
+stay in clear: they identify nobody and are exactly what the risk question
+weighs. Inside free text a repository name is replaced from four characters
+and a branch or path from three; measured on 1,275 recorded prompts, every
+replacement that hit an ordinary word came from a repository name shorter
+than four. The local cache key and logs keep the real names.
 
 This masking runs only on the copy sent to Jev. The local rules that refuse
 a force push, a recursive delete or a dropped table always judge the real,
