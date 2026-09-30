@@ -24,7 +24,7 @@ local rule is meant to refuse.
 | Installer and doctor | 4 | 3 | 0 | 1 |
 | Hourly logs | 3 | 2 | 0 | 1 |
 | `npm test` | 1 | 1 (2583/2583) | 0 | 0 |
-| Panel | 9 | 6 | 0 | 3 |
+| Panel | 9 | 7 | 0 | 2 |
 | Plane JEVADV-63..68 still reproducing | 6 | 0 | 3 | 3 |
 
 ## Findings, most severe first
@@ -59,7 +59,7 @@ low = cosmetic. Code locations are suspected, not fixed.
 ## Not verified
 
 - The panel inside Orca itself (only headless renders with the fixture host). Of 16 screenshots, 6 were looked at: Models 1440 light, Models 320 dark, Policies 1440 light, 768 light, 390 dark, 320 dark; the other 10 were only overflow-measured.
-- `npm run test:panels`: still running with no output after 30 minutes when the run stopped.
+- (resolved after the run) `npm run test:panels`: 163/163 pass, 0 fail, about 18.6 minutes.
 - Router: `quotaSource` `live+mirror`, `mirror`, `none`; the 70% floor; the tighter-window choice.
 - Installer: uninstall (out of scope), an account added after Set up, the panel message with no Node 24.
 - Hourly logs: the panel's combined read of legacy and hourly files.
