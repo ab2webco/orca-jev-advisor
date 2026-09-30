@@ -193,6 +193,23 @@ test("text that runs, or that a script may run, keeps its text for Jev", () => {
   }
 });
 
+// 0.6.13 T2: the one shipped prohibition that reads a message's text
+// (no_ai_attribution) must still see an attribution line; the rest of the
+// text stays a placeholder.
+test("an AI attribution line in data text is carried in the placeholder, nothing else is", () => {
+  const trailer = phrase("Co-Authored-By:", "Claude", "<assistant@example.com>");
+  const run = phrase("git", "push", "--force", "origin", "main");
+  assert.equal(
+    withDataTextAsPlaceholders(`git commit -m "feat: x (${run})\n\n${trailer}"`),
+    `git commit -m ‹text with the line: ${trailer}›`,
+  );
+  const generated = phrase("Generated", "with", "Claude", "Code");
+  assert.equal(
+    withDataTextAsPlaceholders(`gh pr create --title t --body-file - <<'EOF'\nAdds x.\n\n${generated}\nEOF`),
+    `gh pr create --title ${PLACEHOLDER} --body-file - <<'EOF'\n‹text with the line: ${generated}›\nEOF`,
+  );
+});
+
 test("a real command next to data text keeps its own text", () => {
   const run = phrase("git", "push", "origin", "main");
   assert.equal(

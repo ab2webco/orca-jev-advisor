@@ -52,6 +52,11 @@ function answers(choice: string, confidence: number, match: number): Record<stri
   return { coverage: coverageAnswer(choice, confidence), same_kind: matchAnswer(match) };
 }
 
+/** 0.6.13 T2: the `violation` answer -- which prohibition the action breaks, or `none`. */
+function violationAnswer(choice: string, confidence: number): Record<string, Answer> {
+  return { violation: { type: "choice", choice, probabilities: { [choice]: confidence }, confidence } };
+}
+
 // --- helpers shared by decideAction / decideGateAction tests ---------------
 
 function noulAnswer(value: number): NoulAnswer {
@@ -67,11 +72,12 @@ function riskAnswers(reversible: number, external: number, consequence: number):
 }
 
 function combinedAnswers(
-  policy: { choice: string; confidence: number; match: number } | null,
+  policy: { choice: string; confidence: number; match: number; violation?: string } | null,
   risk: { reversible: number; external: number; consequence: number },
 ): Record<string, Answer> {
   return {
     ...(policy ? answers(policy.choice, policy.confidence, policy.match) : {}),
+    ...(policy?.violation !== undefined ? violationAnswer(policy.violation, policy.confidence) : {}),
     ...riskAnswers(risk.reversible, risk.external, risk.consequence),
   };
 }
@@ -106,7 +112,7 @@ test("requires_human + no match -> falls through (null)", () => {
 });
 
 test("prohibits + match -> do_not", () => {
-  const decision = interpretDestinationPolicy(ACTION, policies("prohibits"), answers("rule", 0.9, 0.95));
+  const decision = interpretDestinationPolicy(ACTION, policies("prohibits"), { ...answers("rule", 0.9, 0.95), ...violationAnswer("rule", 0.9) });
   assert.notEqual(decision, null);
   assert.equal(decision?.outcome, "do_not");
   assert.equal(decision?.source, "policy");
@@ -429,7 +435,7 @@ test("decideGateAction: a permits policy leaves an already-safe command alone", 
 
 test("decideGateAction: a prohibits policy match turns what would otherwise be a safe allow into a hard stop -- deny, never a human ask", () => {
   const prohibits: Policy = { id: "rule", rule: "a forbidding rule", kind: "prohibits" };
-  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9, violation: "rule" }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
 
   const withoutPolicy = decideGateAction({ action: ACTION, policies: [], answers: safe });
   assert.equal(withoutPolicy.verdict, "allow");
@@ -484,7 +490,7 @@ test("decideGateAction: noDestinationMatched appends a fallback reason only when
 // a caller to key off.
 test("decideGateAction: a policy stop carries the policy's id on the result, not just inside the rationale text", () => {
   const prohibits: Policy = { id: "client_always_asks", rule: "a forbidding rule", kind: "prohibits" };
-  const safe = combinedAnswers({ choice: "client_always_asks", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const safe = combinedAnswers({ choice: "client_always_asks", confidence: 0.9, match: 0.9, violation: "client_always_asks" }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
   const result = decideGateAction({ action: ACTION, policies: [prohibits], answers: safe });
   assert.equal(result.policyId, "client_always_asks");
 });
@@ -500,7 +506,7 @@ test("decideGateAction: noDestinationMatched is NOT added when a policy resolved
   // Only a policy that STOPS resolves the decision now; a permissive one
   // falls through to risk, so this is checked with a prohibiting rule.
   const prohibits: Policy = { id: "rule", rule: "a forbidding rule", kind: "prohibits" };
-  const match = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const match = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9, violation: "rule" }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
   const result = decideGateAction({ action: ACTION, policies: [prohibits], answers: match, noDestinationMatched: true });
   assert.equal(
     result.reasons.some((r) => r.key === "reason.noDestinationMatched"),
@@ -553,7 +559,7 @@ test("decideGateAction: localAllowQualifies still asks when a policy resolves to
 
 test("decideGateAction: localAllowQualifies still hard-stops when a policy resolves to prohibits, same as without localAllowQualifies -- Option D never softens a real prohibition", () => {
   const policies: Policy[] = [{ id: "never_write_to_main", rule: "Never write directly on main.", kind: "prohibits" }];
-  const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
+  const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.9, match: 0.9, violation: "never_write_to_main" }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
 
   const result = decideGateAction({ action: ACTION, policies, answers: covered, localAllowQualifies: true });
   assert.equal(result.verdict, "deny");
@@ -566,7 +572,7 @@ test("decideGateAction: localAllowQualifies still hard-stops when a policy resol
 // this fix (a human was asked for a policy that names nobody to ask).
 test("decideGateAction: a commit covered by never_write_to_main denies -- the replay's own B38 shape", () => {
   const neverWriteToMain: Policy = { id: "never_write_to_main", rule: "Never write directly on main or develop, not even a one-line fix.", kind: "prohibits" };
-  const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.95, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const covered = combinedAnswers({ choice: "never_write_to_main", confidence: 0.95, match: 0.9, violation: "never_write_to_main" }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
   const result = decideGateAction({ action: "git add + git commit on main", policies: [neverWriteToMain], answers: covered });
   assert.equal(result.verdict, "deny");
   assert.equal(result.policyId, "never_write_to_main");
@@ -687,6 +693,64 @@ test("buildPolicyQuestions: Jev sees neutral keys and redacted rules, never a po
   assert.deepEqual(Object.keys(criteria), ["policy_1", "policy_2", "no_policy"]);
   assert.equal(criteria["policy_1"], "Deploying <repo-1> needs a person; the token is TOKEN=[REDACTED]");
   assert.equal(criteria["policy_2"], "Running the tests is always fine.");
+});
+
+// ===========================================================================
+// 0.6.13 T2 (JEVADV-13, N-01/N-02): a `prohibits` policy is judged on
+// violation, not topic. Jev is asked which prohibition the action BREAKS (a
+// choice over the prohibitions only, or `none`); the coverage question keeps
+// only the permits and requires_human policies. A prohibition that the
+// action merely shares a subject with (a tag on main and "never write on
+// main") no longer stops it.
+// ===========================================================================
+
+const T2_POLICIES: Policy[] = [
+  { id: "tests_are_fine", rule: "Running the tests is always fine.", kind: "permits" },
+  { id: "never_write_to_main", rule: "Never write directly on main or develop, not even a one-line fix.", kind: "prohibits" },
+  { id: "prod_needs_a_human", rule: "Deploying to production is decided by a person.", kind: "requires_human" },
+];
+
+test("buildPolicyQuestions: prohibitions are asked as a violation, the rest as coverage", () => {
+  const questions = buildPolicyQuestions(T2_POLICIES);
+  const violation = questions["violation"] as { type: string; instructions: string; criteria: Record<string, string> } | undefined;
+  assert.ok(violation !== undefined, "a violation question is asked when a prohibition is in scope");
+  assert.equal(violation.type, "choice");
+  assert.deepEqual(Object.keys(violation.criteria), ["policy_2", "none"]);
+  assert.equal(violation.criteria["policy_2"], "Never write directly on main or develop, not even a one-line fix.");
+  assert.match(violation.instructions, /break/);
+  assert.match(violation.instructions, /Tagging, fetching/, "what writing on a branch means is stated, not left to the topic");
+  const coverage = questions["coverage"] as { criteria: Record<string, string> };
+  assert.deepEqual(Object.keys(coverage.criteria), ["policy_1", "policy_3", "no_policy"], "coverage no longer lists a prohibition");
+});
+
+test("buildPolicyQuestions: no violation question without a prohibition, no coverage question with prohibitions only", () => {
+  assert.equal("violation" in buildPolicyQuestions([T2_POLICIES[0] as Policy]), false);
+  const onlyProhibits = buildPolicyQuestions([T2_POLICIES[1] as Policy]);
+  assert.deepEqual(Object.keys(onlyProhibits), ["violation"]);
+});
+
+test("interpretDestinationPolicy: a violation answer naming a prohibition is do_not, with the real id", () => {
+  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("no_policy", 0.9, 0.1), ...violationAnswer("policy_2", 0.9) });
+  assert.equal(decision?.outcome, "do_not");
+  assert.equal(decision?.policyId, "never_write_to_main");
+});
+
+test("interpretDestinationPolicy: a prohibition the action only shares a topic with does not stop it (N-02)", () => {
+  // `git tag v1` on main: the old coverage question picked never_write_to_main
+  // with a high same_kind score; the violation question answers none.
+  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("policy_2", 0.95, 0.9), ...violationAnswer("none", 0.9) });
+  assert.equal(decision, null);
+});
+
+test("interpretDestinationPolicy: a violation below the gate, or naming a non-prohibition, does not stop it", () => {
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, violationAnswer("policy_2", 0.6)), null);
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, violationAnswer("policy_1", 0.95)), null);
+});
+
+test("interpretDestinationPolicy: a violation wins over a requires_human coverage -- a refusal, not a question", () => {
+  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("policy_3", 0.95, 0.9), ...violationAnswer("policy_2", 0.9) });
+  assert.equal(decision?.outcome, "do_not");
+  assert.equal(decision?.policyId, "never_write_to_main");
 });
 
 test("interpretDestinationPolicy: a neutral key Jev answers resolves to the real policy, and the decision names the real id", () => {

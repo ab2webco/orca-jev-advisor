@@ -130,6 +130,22 @@ function mapHeredocBodies(command: string, replace: (heredoc: Heredoc) => readon
 /** What Jev reads in place of text that is data. */
 export const DATA_TEXT_PLACEHOLDER = "‹text›";
 
+/**
+ * A line that attributes the text to an AI: a co-author trailer, a "Generated
+ * with" line, a robot emoji. The shipped `no_ai_attribution` prohibition is
+ * judged on exactly these lines of a commit, PR or issue text (0.6.13 T2
+ * measured it: with the text hidden it could no longer stop one), so they
+ * stay readable inside the placeholder; nothing else of the text does.
+ */
+const AI_ATTRIBUTION_LINE = /co-authored-by:|generated with|\u{1F916}/iu;
+
+/** The placeholder for `text`, carrying its AI attribution lines when it has any. */
+function dataPlaceholder(text: string): string {
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => AI_ATTRIBUTION_LINE.test(line));
+  if (lines.length === 0) return DATA_TEXT_PLACEHOLDER;
+  return `‹text with the line${lines.length > 1 ? "s" : ""}: ${lines.join("; ")}›`;
+}
+
 /** Words that run the next word as the program: `sudo git ...`, `env A=1 gh ...`. */
 const COMMAND_PREFIXES: ReadonlySet<string> = new Set(["sudo", "env", "command", "nohup", "time", "exec"]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -290,13 +306,13 @@ function withTextFlagValuesAsPlaceholders(command: string): string {
       if (word === undefined) continue;
       if (flags.text.has(word.raw)) {
         const value = segment[index + 1];
-        if (value !== undefined && !mayRun(value.raw)) replacements.push({ start: value.start, end: value.end, text: DATA_TEXT_PLACEHOLDER });
+        if (value !== undefined && !mayRun(value.raw)) replacements.push({ start: value.start, end: value.end, text: dataPlaceholder(tokenize(value.raw)[0] ?? value.raw) });
         index += 1;
         continue;
       }
       const assigned = [...flags.text].find((flag) => flag.startsWith("--") && word.raw.startsWith(`${flag}=`));
       if (assigned !== undefined && !mayRun(word.raw.slice(assigned.length + 1))) {
-        replacements.push({ start: word.start + assigned.length + 1, end: word.end, text: DATA_TEXT_PLACEHOLDER });
+        replacements.push({ start: word.start + assigned.length + 1, end: word.end, text: dataPlaceholder(tokenize(word.raw.slice(assigned.length + 1))[0] ?? "") });
       }
     }
   }
@@ -319,7 +335,7 @@ export function withDataTextAsPlaceholders(command: string): string {
   const bodies: (readonly string[])[] = [];
   const masked = mapHeredocBodies(command, (heredoc) => {
     if (heredoc.body.length === 0) return heredoc.terminator;
-    bodies.push(heredocBodyIsData(heredoc.openerLine, heredoc.openerIndex) ? [DATA_TEXT_PLACEHOLDER] : heredoc.body);
+    bodies.push(heredocBodyIsData(heredoc.openerLine, heredoc.openerIndex) ? [dataPlaceholder(heredoc.body.join("\n"))] : heredoc.body);
     return [`\u0000${bodies.length - 1}\u0000`, ...heredoc.terminator];
   });
   const flagged = withTextFlagValuesAsPlaceholders(masked);
