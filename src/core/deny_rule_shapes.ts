@@ -8,7 +8,7 @@
 // that scan lets it read, so it inherits that design unchanged.
 import { resolve } from "node:path";
 import { afterHome, gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
-import { someSegmentMatches, splitOnCommandSeparatorsDetailed } from "./git_discard.ts";
+import { someSegmentMatches, splitOnCommandSeparatorsDetailed, tokenize } from "./git_discard.ts";
 import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
 import type { ImplicitPushDestination } from "./push_remote.ts";
 import type { SegmentMatchSeverity } from "./git_discard.ts";
@@ -178,6 +178,8 @@ export const FORCE_PUSH_SHAPE = { test: (view: string): boolean => FORCE_PUSH.te
 
 /** One `git push` read from a view: its remote and refspecs, and the flags that change what they mean. */
 interface PushInvocation {
+  /** The remote named (`origin`, a URL, `--repo`), or null when git picks its default. */
+  readonly remote: string | null;
   readonly refspecs: readonly string[];
   /** `--delete`/`-d`: every refspec names a remote branch to delete. */
   readonly deletes: boolean;
@@ -224,7 +226,7 @@ function pushInvocations(view: string): readonly PushInvocation[] {
       }
       positionals.push(word);
     }
-    out.push({ refspecs: repo !== null ? positionals : positionals.slice(1), deletes, allBranches, noImplicit });
+    out.push({ remote: repo ?? positionals[0] ?? null, refspecs: repo !== null ? positionals : positionals.slice(1), deletes, allBranches, noImplicit });
   }
   return out;
 }
@@ -299,6 +301,47 @@ export function protectedPushOutcome(
   return severity;
 }
 
+/** Where one push sends commits: its remote (null: git's default), the branch it updates there, and whether that remote is on this machine. */
+export interface PushTarget {
+  readonly remote: string | null;
+  readonly branch: string;
+  readonly remoteIsLocal: boolean;
+}
+
+const RUNS_A_PUSH = { test: (view: string): boolean => pushInvocations(view).length > 0 };
+
+/**
+ * 0.6.15 T3 (N-06): every push the command runs in command position, read
+ * the way protectedPushOutcome reads it -- the destination after `:`, a
+ * deleted branch, where git sends a push that names none, the remote read in
+ * the directory the push runs in -- so the context Jev reads can name it. A
+ * push to main of a local bare remote was left to Jev from the command text
+ * alone and scored near its gate (0.67 and 0.75 against 0.7).
+ */
+export function pushTargets(
+  command: string,
+  cwd: string,
+  home: string,
+  remoteIsLocal: (push: string, dir: string) => boolean,
+  implicitDestination: (dir: string, head: boolean) => ImplicitPushDestination,
+): readonly PushTarget[] {
+  const out: PushTarget[] = [];
+  for (const { segment, dir } of locateCommandSegments(command, cwd, home)) {
+    if (someSegmentMatches(segment, RUNS_A_PUSH) !== "deny") continue;
+    const pushDir = gitInvocation(segment, dir, resolve(home))?.dir ?? dir;
+    const local = remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir);
+    for (const push of pushInvocations(segment)) {
+      if (implicitPush(push)) {
+        const destination = implicitDestination(pushDir, push.refspecs.length > 0);
+        if (destination.kind === "branch") out.push({ remote: push.remote, branch: destination.name, remoteIsLocal: local });
+        continue;
+      }
+      for (const refspec of push.refspecs) out.push({ remote: push.remote, branch: refspecDestination(refspec, push.deletes), remoteIsLocal: local });
+    }
+  }
+  return out;
+}
+
 // Words that run the command after them, with their own options and
 // `NAME=value` assignments: `sudo -E`, `env A=1`, `/usr/bin/env`.
 const RUNNER_PREFIX = String.raw`(?:(?:(?:\S*/)?(?:sudo|doas|env|command|exec|nohup|time)|timeout(?:\s+-\S+)*\s+\d\S*)\s+(?:-\S+\s+|[A-Za-z_]\w*=\S*\s+)*)*`;
@@ -363,4 +406,37 @@ export function curlToShellOutcome(command: string): SegmentMatchSeverity {
   const marked = someSegmentMatches(withDownloadsMarked(command), RUNS_DOWNLOAD);
   if (marked === "deny") return "deny";
   return strongerSeverity(marked, someSegmentMatches(command, CURL_PIPE_SHELL_SPANNING));
+}
+
+// `DROP`/`TRUNCATE` of a table, database or schema; an SQL comment between
+// the words (a block comment, or `--` to the end of the line) does not hide it.
+export const DROP_TABLE_SHAPE = /\b(DROP|TRUNCATE)(?:\s|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$))+(TABLE|DATABASE|SCHEMA)\b/i;
+const SQL_CLIENT_STAGE = new RegExp(String.raw`^${RUNNER_PREFIX}(?:\S*/)?(?:psql|mysql|mariadb|sqlite3)(?:\s|$)`);
+const PRINTERS: ReadonlySet<string> = new Set(["echo", "printf"]);
+
+/**
+ * The dropTable rule's outcome. A statement a SQL client runs from its own
+ * flag (`psql -c`, `mysql -e`, sqlite3's statement) is read by
+ * someSegmentMatches, as before. 0.6.15 T3 (N-07): so is SQL fed to the
+ * client on stdin -- printed into it through a real pipe (`echo "DROP …" |
+ * psql`), or given as its here-string (`psql <<< "DROP …"`); a heredoc read by
+ * a SQL client keeps its body in view (command_text.ts), so its lines are
+ * read here directly. The same text printed anywhere else stays data.
+ */
+export function droppedTableOutcome(command: string): SegmentMatchSeverity {
+  const direct = someSegmentMatches(command, DROP_TABLE_SHAPE);
+  if (direct === "deny") return "deny";
+  const { segments, joiners } = splitOnCommandSeparatorsDetailed(command);
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i] ?? "";
+    if (someSegmentMatches(segment, SQL_CLIENT_STAGE) !== "deny") continue;
+    const words = tokenize(segment);
+    const at = words.findIndex((word) => word.startsWith("<<<"));
+    const hereString = at === -1 ? "" : words[at] === "<<<" ? (words[at + 1] ?? "") : (words[at] ?? "").slice(3);
+    if (DROP_TABLE_SHAPE.test(hereString)) return "deny";
+    if (joiners[i] !== "|") continue;
+    const printed = tokenize(segments[i - 1] ?? "");
+    if (PRINTERS.has((printed[0] ?? "").split("/").pop() ?? "") && DROP_TABLE_SHAPE.test(printed.slice(1).join(" "))) return "deny";
+  }
+  return direct;
 }

@@ -77,7 +77,8 @@ function programLanguage(openerLine: string): ProgramLanguage {
  */
 function bodyStaysVisible(heredoc: Heredoc): boolean {
   if (heredoc.nested) return !heredocBodyIsData(heredoc.openerLine, heredoc.openerIndex);
-  return SHELL_READERS.test(heredoc.openerLine);
+  // 0.6.15 T3 (N-07): a SQL client runs its heredoc as it runs `psql -c`.
+  return SHELL_READERS.test(heredoc.openerLine) || SQL_READERS.test(heredoc.openerLine);
 }
 
 /** One heredoc as mapHeredocBodies hands it to its caller. */

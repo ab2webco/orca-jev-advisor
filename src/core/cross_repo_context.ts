@@ -24,7 +24,8 @@
 // Pure: no I/O, no locale -- both stay English/generic like repoContext().
 import type { MatchableDestination } from "./destination_match.ts";
 import type { MatchedDestinationForCwd } from "./linked_worktree.ts";
-import { IDENTITY_NAMES } from "./jev_pseudonyms.ts";
+import type { PushTarget } from "./deny_rule_shapes.ts";
+import { CLEAR_BRANCH_NAMES, IDENTITY_NAMES } from "./jev_pseudonyms.ts";
 import type { JevNames } from "./jev_pseudonyms.ts";
 
 export interface RepoLocation {
@@ -137,4 +138,25 @@ export function pickStricterDestination<D extends MatchableDestination & { reado
     }
   }
   return best;
+}
+
+/** Remote names every repository uses; any other can name a client, so it goes through `names`. */
+const CLEAR_REMOTE_NAMES: readonly string[] = ["origin", "upstream"];
+
+/**
+ * 0.6.15 T3 (N-06): the branch and remote each push updates, as
+ * deny_rule_shapes.ts pushTargets read them, in the context both the policy
+ * and the risk questions read. Without it Jev judged `git push origin main`
+ * from a feature checkout by the checkout's branch and the command text, and
+ * a local bare remote's push to main scored at its gate. Null when the
+ * command pushes nothing.
+ */
+export function buildPushDestinationSentence(targets: readonly PushTarget[], names: JevNames = IDENTITY_NAMES): string | null {
+  const sentences = targets.map((target) => {
+    const remote = target.remote === null ? "its default remote" : `remote ${CLEAR_REMOTE_NAMES.includes(target.remote) ? target.remote : names.name("repo", target.remote)}`;
+    const where = target.remoteIsLocal ? "a repository on this machine" : "a repository on another machine";
+    const shared = CLEAR_BRANCH_NAMES.includes(target.branch) ? `; ${target.branch} is a shared branch there, whatever branch the checkout is on` : "";
+    return `The command pushes commits to branch ${names.name("branch", target.branch)} of ${remote}, ${where}${shared}.`;
+  });
+  return sentences.length === 0 ? null : [...new Set(sentences)].join(" ");
 }

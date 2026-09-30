@@ -165,6 +165,32 @@ const CONTENT_VALUE_FLAGS = new Set([
   "--notes", "--description", "--message", "--header", "-H", "--input",
 ]);
 
+/**
+ * 0.6.15 T3 (N-08, qa-0.6.13): tools whose arguments name a resource --
+ * a volume, a container, a pod, a release, a service, a database -- not a
+ * file. Which one is the question: a deny cached for `docker volume rm
+ * prod_pgdata` answered `docker volume rm dev_pgdata`. Their bare-word
+ * arguments stay literal; an explicit path still folds by tree, and so does
+ * a value that may be a secret: one after a credential flag, or one holding
+ * `=`, `:` or `@` (`-e KEY=value`, `user:pass`).
+ */
+const RESOURCE_PROGRAMS = new Set([
+  "docker", "podman", "kubectl", "helm", "systemctl", "brew", "flyctl", "fly", "heroku", "supabase", "vercel",
+  "aws", "gcloud", "az", "dropdb", "createdb", "redis-cli",
+]);
+
+/** Flags of the resource tools that only pick where they act -- kept with their value, which is never a secret. */
+const ENVIRONMENT_FLAGS = new Set([
+  "--context", "--kube-context", "--namespace", "-n", "--cluster", "--profile", "--project", "--region",
+  "--app", "-a", "--env", "--environment", "--resource-group", "-g", "--subscription", "--host", "-h", "--db", "-d",
+]);
+
+/** Flags whose value can be a credential: it folds, whatever it looks like. */
+const SECRET_VALUE_FLAGS = new Set([
+  "-p", "--password", "--token", "--secret", "--build-arg", "-e", "-u", "--user", "--username", "-H", "--header",
+  "--auth", "--api-key", "--key", "--access-token", "--client-secret", "--password-stdin",
+]);
+
 /** `git push -o <option>`: a push option is free text for the server and can carry a token. */
 const PUSH_OPTION_FLAGS = new Set(["-o", "--push-option"]);
 
@@ -394,6 +420,7 @@ export function commandShape(command: string, context: ShapeContext): string | n
         if (IDENTITY_PROGRAMS.has(programName) && (flagName === "-R" || flagName === "--repo") && REPO_SLUG.test(inlineValue)) {
           classes.push(inlineValue);
         }
+        if (RESOURCE_PROGRAMS.has(programName) && ENVIRONMENT_FLAGS.has(flagName) && inlineValue.length > 0) classes.push(`${flagName}=${inlineValue}`);
         previous = flagName;
         continue;
       }
@@ -402,6 +429,16 @@ export function commandShape(command: string, context: ShapeContext): string | n
       const isContent =
         previous !== undefined &&
         ((IDENTITY_PROGRAMS.has(programName) && CONTENT_VALUE_FLAGS.has(previous)) || (programName === "git" && PUSH_OPTION_FLAGS.has(previous)));
+      if (RESOURCE_PROGRAMS.has(programName)) {
+        // A verb, a resource name and an environment flag's value stay
+        // literal; a path, and anything that may be a secret, fold.
+        const flagValue = previous !== undefined && previous.startsWith("-");
+        const keeps = !isExplicitPath(token) && !/[=:@]/.test(token) && !(flagValue && SECRET_VALUE_FLAGS.has(previous ?? ""));
+        if (!flagValue && verbs.length < MAX_VERBS && SUBCOMMAND_PROGRAMS.has(programName) && !looksLikePath(token)) verbs.push(token);
+        previous = token;
+        classes.push(keeps ? token : classifyArgument(token, context.cwd, context.home, treeRoot));
+        continue;
+      }
       const literal = isContent ? null : identityLiteral(token, { program: programName, verbs, previous, targetsSoFar });
       previous = token;
       if (literal !== null) {
