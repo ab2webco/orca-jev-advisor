@@ -15,6 +15,19 @@ import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
 import type { SessionEffort } from "./model_router_decide.ts";
 
+/** Where a subagent's effort came from (see RunningSubagent.effortSource). */
+export type SubagentEffortSource = "inherited" | "jev" | "not-sent";
+const EFFORT_SOURCES: readonly SubagentEffortSource[] = ["inherited", "jev", "not-sent"];
+
+/**
+ * The source of the effort a subagent step is sent with: what the engine put
+ * on the step (`carried`) against what the plugin sends (`sent`).
+ */
+export function subagentEffortSource(carried: SessionEffort | null, sent: SessionEffort | null): SubagentEffortSource {
+  if (sent === null) return "not-sent";
+  return carried === sent ? "inherited" : "jev";
+}
+
 /** Why a running subagent is on the model it is on. */
 /** Why a running subagent is on the model it is on; `unknown` when nothing recorded it (0.6.14 T1: it started before the plugin loaded). */
 export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "unknown";
@@ -36,6 +49,14 @@ export interface RunningSubagent {
   readonly label: string | null;
   /** The effort its last step was sent with; null when none was sent (or none seen yet). */
   readonly effort: SessionEffort | null;
+  /**
+   * 0.6.15 T4b: where that effort came from, read off the step it sent:
+   * `inherited` the level the engine resolved for it (the session, its model
+   * settings or its definition), `jev` the one the router set, `not-sent` no
+   * effort at all; null before its first step. Absent on a row stored
+   * before 0.6.15.
+   */
+  readonly effortSource?: SubagentEffortSource | null;
   readonly why: SubagentWhy;
   /** Measure mode: the model the router would have given it, when that is another one. */
   readonly wouldUse: string | null;
@@ -81,7 +102,10 @@ function parseOne(value: unknown): RunningSubagent | null {
   if (v.effort !== null && !isEffort(v.effort)) return null;
   if (!WHYS.includes(v.why as SubagentWhy)) return null;
   if (v.wouldUse !== null && typeof v.wouldUse !== "string") return null;
-  return { id: v.id, type: v.type, description: v.description, label: v.label, effort: v.effort, why: v.why as SubagentWhy, wouldUse: v.wouldUse };
+  const base = { id: v.id, type: v.type, description: v.description, label: v.label, effort: v.effort, why: v.why as SubagentWhy, wouldUse: v.wouldUse };
+  if (v.effortSource === undefined) return base;
+  if (v.effortSource !== null && !EFFORT_SOURCES.includes(v.effortSource as SubagentEffortSource)) return null;
+  return { ...base, effortSource: v.effortSource as SubagentEffortSource | null };
 }
 
 /** The running set as `$.state` keeps it (`{ agents }`); anything malformed is dropped, never thrown. */

@@ -145,12 +145,12 @@ import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '..
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
-import { parseRunningSubagents, reconcileRunning, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
+import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
 import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
-import type { ListedAgent, RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import type { ListedAgent, RunningSubagent, SubagentEffortSource, SubagentWhy } from '../../../../src/core/subagent_status.ts'
 import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
@@ -717,12 +717,12 @@ async function runningSubagentsStatus($: EngineInterface, running: RunningSet, k
   return subagentsStatusPart(await resolveLocale($), shown)
 }
 
-/** 0.6.14 T1: the effort a subagent's step was sent with, onto its record (only when it changed). Best-effort. */
-async function noteSubagentEffort($: EngineInterface, running: RunningSet, agentId: string, effort: SessionEffort | null): Promise<void> {
+/** 0.6.14 T1: the effort a subagent's step was sent with, onto its record (only when it changed); 0.6.15 T4b: and where it came from. Best-effort. */
+async function noteSubagentEffort($: EngineInterface, running: RunningSet, agentId: string, effort: SessionEffort | null, effortSource: SubagentEffortSource): Promise<void> {
   await hydrateRunning($, running)
   const agent = running.agents.get(agentId)
-  if (agent === undefined || agent.effort === effort) return
-  running.agents.set(agentId, { ...agent, effort })
+  if (agent === undefined || (agent.effort === effort && agent.effortSource === effortSource)) return
+  running.agents.set(agentId, { ...agent, effort, effortSource })
   await persistRunning($, running)
 }
 
@@ -1202,7 +1202,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
   let wouldUse: string | null = null
   const remember = (result: AgentSpawnResult, tiers: ResolvedTiers | null, why: SubagentWhy): void => {
     if ('agentId' in result && result.agentId !== undefined) {
-      runningSubagents.set(result.agentId, { id: result.agentId, type: e.subagentType, description: e.description, label: subagentModelLabel(result.model ?? e.parentModel, tiers), effort: null, why, wouldUse })
+      runningSubagents.set(result.agentId, { id: result.agentId, type: e.subagentType, description: e.description, label: subagentModelLabel(result.model ?? e.parentModel, tiers), effort: null, effortSource: null, why, wouldUse })
     }
   }
   if (mode === 'off' || e.fork) {
@@ -1278,7 +1278,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
  * pre-computed target (a guard can hold a higher inherited value than the
  * tier's own target, which spawn time never sees).
  */
-async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null) => Promise<void>): StreamHookBody<TurnStepChunk, TurnStepResult> {
+async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource) => Promise<void>): StreamHookBody<TurnStepChunk, TurnStepResult> {
   let input: TurnStepInput | Frozen<TurnStepInput> = e
   if (mode !== 'off' && e.agentId === undefined) {
     let held: RouterSticky | undefined
@@ -1333,7 +1333,8 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
   if (e.agentId !== undefined) {
     // 0.6.14 T1: the effort this subagent step is actually sent with, for its row.
     try {
-      await noteEffort(e.agentId, input.effort ?? null)
+      // 0.6.15 T4b: with its source, read off this step: what the engine put on it against what is sent.
+      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null))
     } catch {
       // Visibility only: never a reason to hold the step.
     }
@@ -2129,7 +2130,7 @@ export function register(on: On, options: PluginOptions): void {
     // no prompt has resolved it yet this session (an honest "not yet
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
-    const noteEffort = (agentId: string, effort: SessionEffort | null): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort)
+    const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort, source)
     return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort)
   })
 

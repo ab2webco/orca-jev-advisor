@@ -92,11 +92,14 @@ const WHY_SHORT_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
   unknown: "agents.short.unknown",
 };
 
-function effortText(locale: Locale, effort: SessionEffort | null, known: boolean): string {
-  if (!known) return "?";
+function effortText(locale: Locale, agent: RunningSubagent): string {
+  const { effort, effortSource } = agent;
+  // 0.6.15 T4b: unknown before its first step, whatever the reason says.
+  if (agent.why === "unknown" || effortSource === null) return "?";
   if (effort === null) return "—";
-  if (typeof effort === "number") return String(effort);
-  return translate(MODEL_ROUTER_CATALOG, locale, `effort.${effort}`);
+  const level = typeof effort === "number" ? String(effort) : translate(MODEL_ROUTER_CATALOG, locale, `effort.${effort}`);
+  if (effortSource === undefined || effortSource === "not-sent") return level;
+  return translate(MODEL_ROUTER_CATALOG, locale, "agents.effort.withSource", { level, source: translate(MODEL_ROUTER_CATALOG, locale, `agents.effort.source.${effortSource}`) });
 }
 
 function whyText(locale: Locale, agent: RunningSubagent, short: boolean): string {
@@ -149,7 +152,7 @@ export function subagentBand(locale: Locale, agents: readonly RunningSubagent[],
     type: prefix.length > 0 && agent.type.startsWith(prefix) ? agent.type.slice(prefix.length) : agent.type,
     description: agent.description,
     model: agent.label ?? "?",
-    effort: effortText(locale, agent.effort, agent.why !== "unknown"),
+    effort: effortText(locale, agent),
     whyFull: whyText(locale, agent, false),
     whyShort: whyText(locale, agent, true),
   }));

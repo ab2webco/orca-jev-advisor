@@ -2302,6 +2302,8 @@ interface StoredSubagent {
   description: string;
   label: string | null;
   effort: string | number | null;
+  /** 0.6.15 T4b. */
+  effortSource?: string | null;
   why: string;
   wouldUse: string | null;
 }
@@ -2319,7 +2321,8 @@ test("0.6.14 T1: a started subagent is stored with its type, description, model 
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await spawnAs(handlers, engine, spawnEvent({ model: "opus", subagentType: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" }), "agent-1", "claude-opus-5-5");
   assert.deepEqual(storedSubagents(host), [
-    { id: "agent-1", type: "acme-frontend-developer", description: "Adding Definition of Done to spec.md", label: "Opus 5.5", effort: null, why: "explicit", wouldUse: null },
+    // 0.6.15 T4b: its effort's source is unknown (null) until its first step.
+    { id: "agent-1", type: "acme-frontend-developer", description: "Adding Definition of Done to spec.md", label: "Opus 5.5", effort: null, effortSource: null, why: "explicit", wouldUse: null },
   ]);
 });
 
@@ -2331,6 +2334,21 @@ test("0.6.14 T1: the effort a subagent's step is sent is stored with it", async 
   await spawnThrough(handlers, engine, spawnEvent());
   await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
   assert.equal(storedSubagents(host)[0]?.effort, "medium", "what turn.step sent, not what it carried");
+  assert.equal(storedSubagents(host)[0]?.effortSource, "jev", "0.6.15 T4b: the router set it");
+});
+
+// 0.6.15 T4b: an agent whose model is fixed runs at the effort the engine put
+// on its step (inherited from the session, its model settings or its
+// definition); the band shows that level and says where it came from.
+test("0.6.15 T4b: a fixed-model subagent stores the effort its step carries, as inherited", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await spawnAs(handlers, engine, spawnEvent({ model: "opus", subagentType: "acme-frontend-developer", description: "Fixed model" }), "agent-1", "claude-opus-5-5");
+  const step = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  assert.equal(step.effort, "high", "visibility only: the effort sent is unchanged");
+  assert.deepEqual([storedSubagents(host)[0]?.effort, storedSubagents(host)[0]?.effortSource], ["high", "inherited"]);
 });
 
 test("0.6.14 T1: measure mode stores the model it would use", async () => {
@@ -2457,9 +2475,10 @@ test("0.6.14 T2: the owner's four agents, each on its own row with its own model
   assert.equal(lines[0], "Running agents: 4");
   assert.equal(lines.length, 5);
   assert.match(lines[1] ?? "", /^frontend-developer +Reading playwright\.config\.ts +\? +\? +no data: started before the plugin reloaded$/);
-  assert.match(lines[2] ?? "", /^frontend-developer +Adding Definition of Done to spec\.md +Opus 5\.5 +extra high +explicit request$/);
-  assert.match(lines[3] ?? "", /^general-purpose +Creating a worktree for verify-report generation +Sonnet 5\.5 +medium +lowered by Jev$/);
-  assert.match(lines[4] ?? "", /^backend-developer +Watching CI checks on PR 867 +Sonnet 5\.5 +high +explicit request$/);
+  // 0.6.15 T4b: each effort names its source, read off the agent's step (all three kept the level the engine put on it).
+  assert.match(lines[2] ?? "", /^frontend-developer +Adding Definition of Done to spec\.md +Opus 5\.5 +extra high \(inherited\) +explicit request$/);
+  assert.match(lines[3] ?? "", /^general-purpose +Creating a worktree for verify-report generation +Sonnet 5\.5 +medium \(inherited\) +lowered by Jev$/);
+  assert.match(lines[4] ?? "", /^backend-developer +Watching CI checks on PR 867 +Sonnet 5\.5 +high \(inherited\) +explicit request$/);
 });
 
 test("0.6.14 T2: the status line only counts the running agents, the count the host lists", async () => {

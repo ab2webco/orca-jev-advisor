@@ -117,3 +117,24 @@ test("sharedTypePrefix: a project prefix every custom agent type shares; the eng
   assert.equal(sharedTypePrefix(["general-purpose", "Explore"]), "");
   assert.equal(sharedTypePrefix(["acme-web-frontend", "acme-web-backend"]), "acme-web-");
 });
+
+// 0.6.15 T4b: the effort a subagent really runs at, and where it came from,
+// read off the step it sends: the level the engine resolved for it
+// (inherited from the session, its model settings or its definition), the
+// one Jev set, none sent at all, or `?` before its first step.
+test("subagentBand: the effort names its source, and is ? until the agent's first step", () => {
+  const agents: RunningSubagent[] = [
+    { id: "a-1", type: "general-purpose", description: "One", label: "Opus 5.5", effort: "high", effortSource: "inherited", why: "explicit", wouldUse: null },
+    { id: "a-2", type: "general-purpose", description: "Two", label: "Sonnet 5.5", effort: "medium", effortSource: "jev", why: "lowered", wouldUse: null },
+    { id: "a-3", type: "general-purpose", description: "Three", label: "Haiku 4.5", effort: null, effortSource: "not-sent", why: "chosen", wouldUse: null },
+    { id: "a-4", type: "general-purpose", description: "Four", label: "Opus 5.5", effort: null, effortSource: null, why: "explicit", wouldUse: null },
+  ];
+  const [, one, two, three, four] = lines(200, "es", agents);
+  assert.match(one ?? "", /Opus 5\.5 +alto \(heredado\) +pedido explícito$/);
+  assert.match(two ?? "", /Sonnet 5\.5 +medio \(Jev\) /);
+  assert.match(three ?? "", /Haiku 4\.5 +— /);
+  assert.match(four ?? "", /Opus 5\.5 +\? +pedido explícito$/);
+  const [, oneEn, twoEn] = lines(200, "en", agents);
+  assert.match(oneEn ?? "", /Opus 5\.5 +high \(inherited\) /);
+  assert.match(twoEn ?? "", /Sonnet 5\.5 +medium \(Jev\) /);
+});
