@@ -8,7 +8,7 @@
 // that scan lets it read, so it inherits that design unchanged.
 import { resolve } from "node:path";
 import { afterHome, gitInvocation, locateCommandSegments } from "./command_locations.ts";
-import { someSegmentMatches } from "./git_discard.ts";
+import { someSegmentMatches, splitOnCommandSeparatorsDetailed } from "./git_discard.ts";
 import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
 import type { SegmentMatchSeverity } from "./git_discard.ts";
 
@@ -131,4 +131,109 @@ export function protectedPushOutcome(command: string, cwd: string, home: string,
     return "deny";
   }
   return severity;
+}
+
+// Words that run the command after them, with their own options and
+// `NAME=value` assignments: `sudo -E`, `env A=1`, `/usr/bin/env`.
+const RUNNER_PREFIX = String.raw`(?:(?:(?:\S*/)?(?:sudo|doas|env|command|exec|nohup|time)|timeout(?:\s+-\S+)*\s+\d\S*)\s+(?:-\S+\s+|[A-Za-z_]\w*=\S*\s+)*)*`;
+const CURL_WGET_STAGE = new RegExp(String.raw`^${RUNNER_PREFIX}(?:\S*/)?(?:curl|wget)(?:\s|$)`);
+const SHELL_STAGE = new RegExp(String.raw`^${RUNNER_PREFIX}(?:\S*/)?(?:bash|sh|zsh|dash|ksh)(?:\s|$)`);
+const INTERPRETER_STAGE = new RegExp(String.raw`^${RUNNER_PREFIX}(?:\S*/)?(?:python[\d.]*|perl|ruby|node)((?:\s+\S+)*)\s*$`);
+// An interpreter given one of these reads its program from the argument, not from stdin.
+const PROGRAM_FROM_ARGUMENT = new Set(["-c", "-m", "-e", "-E", "-p", "-n", "-r", "--eval", "--print", "--require"]);
+
+/** True when `view` is a pipe stage that runs what arrives on stdin: a shell, or an interpreter with no program of its own. */
+function runsStdin(view: string): boolean {
+  if (SHELL_STAGE.test(view)) return true;
+  const match = INTERPRETER_STAGE.exec(view);
+  if (match === null) return false;
+  const args = (match[1] ?? "").trim().split(/\s+/).filter((arg) => arg.length > 0);
+  return args.every((arg) => arg === "-" || (arg.startsWith("-") && !PROGRAM_FROM_ARGUMENT.has(arg)));
+}
+
+const REMOTE_CODE = "__remote_code__";
+
+/** Where the `$(`, backtick or `<(` substitution opening at `start` closes, or -1. */
+function substitutionEnd(command: string, start: number, backtick: boolean): number {
+  let depth = 0;
+  let single = false;
+  let double = false;
+  for (let index = start; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (single || double) continue;
+    else if (backtick && char === "`" && index > start) return index;
+    else if (!backtick && char === "(") depth += 1;
+    else if (!backtick && char === ")" && --depth === 0) return index;
+  }
+  return -1;
+}
+
+const DOWNLOAD_AT = /^\s*(?:\S*\/)?(?:curl|wget)\b/;
+
+/**
+ * `command` with every `$(curl ...)`, `` `wget ...` `` and `<(curl ...)` --
+ * a download whose OUTPUT becomes text or a file the command reads --
+ * replaced by one marker word, so a rule can see what receives it
+ * (`bash -c "$(curl ...)"`, `eval ...`, `bash <(curl ...)`). Text inside
+ * single quotes is never a substitution and stays as written.
+ */
+export function withDownloadsMarked(command: string): string {
+  let out = "";
+  let single = false;
+  let double = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (char === "\\" && !single) {
+      out += command.slice(index, index + 2);
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    const opens = !single && (command.startsWith("$(", index) || char === "`" || (!double && command.startsWith("<(", index)));
+    if (opens) {
+      const backtick = char === "`";
+      const bodyStart = backtick ? index + 1 : index + 2;
+      const end = substitutionEnd(command, backtick ? index : index + 1, backtick);
+      if (end !== -1 && DOWNLOAD_AT.test(command.slice(bodyStart, end))) {
+        out += REMOTE_CODE;
+        index = end;
+        continue;
+      }
+    }
+    out += char;
+  }
+  return out;
+}
+
+const RUNS_DOWNLOAD = new RegExp(String.raw`(?:^|[\s(])(?:\S*/)?(?:bash|sh|zsh|dash|ksh|eval|source|\.|python[\d.]*|perl|ruby|node)(?:\s+-\S+)*\s+${REMOTE_CODE}(?:\s|$)`);
+const CURL_PIPE_SHELL_SPANNING = /\b(curl|wget)\b[^|]*\|\s*(?:\S*\/)?(?:(?:sudo|env)\s+(?:-\S+\s+)*)?(?:\S*\/)?(bash|sh|zsh|dash|ksh)\b/;
+
+/**
+ * The curlPipeShell rule's outcome: remote code handed to a shell or an
+ * interpreter. A real pipe (split by splitOnCommandSeparatorsDetailed, so a
+ * quoted `|` is never one) from a curl/wget stage to any LATER stage of the
+ * same pipeline that runs its stdin (`curl | tee f | bash`); a download's
+ * output run through `bash -c`, `eval`, `source` or process substitution;
+ * and the whole shape inside one segment's own text, which someSegmentMatches
+ * grades as interpreter code (advice) or a mention (data).
+ */
+export function curlToShellOutcome(command: string): SegmentMatchSeverity {
+  const { segments, joiners } = splitOnCommandSeparatorsDetailed(command);
+  let downloadUpstream = false;
+  for (let i = 0; i < segments.length; i += 1) {
+    const segment = segments[i] ?? "";
+    if (joiners[i] !== "|") downloadUpstream = false;
+    else if (downloadUpstream && someSegmentMatches(segment, { test: runsStdin }) === "deny") return "deny";
+    downloadUpstream ||= someSegmentMatches(segment, CURL_WGET_STAGE) === "deny";
+  }
+  const marked = someSegmentMatches(withDownloadsMarked(command), RUNS_DOWNLOAD);
+  if (marked === "deny") return "deny";
+  return strongerSeverity(marked, someSegmentMatches(command, CURL_PIPE_SHELL_SPANNING));
 }

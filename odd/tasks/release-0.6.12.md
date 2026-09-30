@@ -58,7 +58,15 @@ Out of scope: F-06 redaction of unregistered paths, F-08..F-14.
   the push acts on (`cd`, subshell, `bash -c`, `git -C`); an unknown directory keeps the
   refusal. Line continuations are joined before every rule (`withoutLineContinuations`).
   `src/core/command_locations.ts` is the shared walker T5 builds on.
-- [ ] T4 curl/wget to shell or interpreter
+- [x] T4 curl/wget to shell or interpreter. Proof: F-04 cases in
+  `gate-deny-spellings.test.mjs` RED 17/19 failing, GREEN 19/19 (file 68/68);
+  `deny_rule_shapes.test.ts` 11/11; `npm test` 2666/2666. Probe replay: `| tee | bash`
+  (+retry), `| /bin/bash`, `| env bash`, `bash <(curl)`, `bash -c "$(curl)"`,
+  `eval "$(curl)"`, `| python3` all `REFUSED`. Decision (safer option, consistent with
+  the README deny-tier table): an interpreter that reads its program from stdin
+  (`python3`, `python -`, `perl`, `ruby`, `node`) is a hard deny like a shell; one given
+  its own program (`-m json.tool`, `-c`/`-e` code, a script path) is reading data and is
+  not this rule. `curl -o f && bash f` stays advice (it was a PASS in 0.6.11).
 - [ ] T5 target repository and branch attribution
 - [ ] T6 README, QA rerun in odd/qa/qa-0.6.12.md, release, live check
 

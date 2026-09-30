@@ -106,7 +106,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
-import { FORCE_PUSH_SHAPE, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
+import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -461,22 +461,15 @@ function segmentRule(pattern: { test(segment: string): boolean }): (ctx: RuleCon
  * neither ever matches a plain FILENAME that merely ends in `.sh`
  * (`curl -fsSL x | tee install.sh` must stay unmatched: `tee`, not a shell,
  * is what actually runs).
+ *
+ * 0.6.12 F-04 widened it (curlToShellOutcome, deny_rule_shapes.ts): any
+ * later stage of the pipeline (`curl | tee f | bash`), `/bin/bash`, `env
+ * bash`, an interpreter reading its program on stdin (`| python3`), and a
+ * download's output run by `bash -c "$(curl ...)"`, `eval`, `source` or
+ * `bash <(curl ...)`.
  */
-const CURL_WGET_COMMAND_PATTERN = /^(?:(?:sudo|env|command|exec|nohup|time|timeout)\s+(?:-\S+\s+)*)*(curl|wget)(\s|$)/
-const SHELL_TARGET_COMMAND_PATTERN = /^(?:sudo\s+(?:-\S+\s+)*)?(bash|sh|zsh|dash|ksh)(\s|$)/
-const CURL_PIPE_SHELL_SPANNING_PATTERN = /\b(curl|wget)\b[^|]*\|\s*(?:sudo\s+(?:-\S+\s+)*)?(bash|sh|zsh|dash|ksh)\b/
-
 function curlPipeShellRule(ctx: RuleContext): RuleOutcome {
-  const { segments, joiners } = splitOnCommandSeparatorsDetailed(ctx.command)
-  for (let i = 1; i < segments.length; i += 1) {
-    if (joiners[i] !== '|') continue
-    const left = segments[i - 1] ?? ''
-    const right = segments[i] ?? ''
-    if (someSegmentMatches(left, CURL_WGET_COMMAND_PATTERN) === 'deny' && someSegmentMatches(right, SHELL_TARGET_COMMAND_PATTERN) === 'deny') {
-      return 'deny'
-    }
-  }
-  return someSegmentMatches(ctx.command, CURL_PIPE_SHELL_SPANNING_PATTERN)
+  return curlToShellOutcome(ctx.command)
 }
 
 /**
