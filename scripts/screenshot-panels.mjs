@@ -19,7 +19,7 @@
  * Overflow is measured, never eyeballed: `scrollWidth > clientWidth` is what
  * catches a table that is 386px wide in a 320px viewport.
  *
- * Usage: node scripts/screenshot-panels.mjs [--scenario fresh|ready|all]
+ * Usage: node scripts/screenshot-panels.mjs [--scenario fresh|ready|all] [--locale es-ES]
  */
 import { chromium } from 'playwright'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
@@ -617,6 +617,10 @@ const BASELINE = {
  */
 const { modelMeasurements: _readyModelMeasurements, ...READY_WITHOUT_MODEL_MEASUREMENTS } = READY
 const MODELS_EMPTY = { ...READY_WITHOUT_MODEL_MEASUREMENTS, models: [] }
+// 0.6.14 T4 (JEVADV-85): MODELS_EMPTY is a catalog the worker never seeded
+// (no modelsSeeded marker), so the Models tab names the shipped models; this
+// one the person emptied after the seed, which keeps the plain text.
+const MODELS_EMPTIED = { ...MODELS_EMPTY, modelsSeeded: true }
 
 /**
  * JEVADV-11 (odd/tasks/release-0.5.1.md) -- two real client repositories
@@ -835,7 +839,7 @@ const SKILLS_READY = {
   measurementsSummary: { ...READY.measurementsSummary, modSkills: realModSkillsSummary(skillsLogRows()) },
 }
 
-const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'catalog-proposals': CATALOG_PROPOSALS, 'consumption-ready': CONSUMPTION_READY, 'router-ready': ROUTER_READY }
+const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'models-emptied': MODELS_EMPTIED, 'catalog-proposals': CATALOG_PROPOSALS, 'consumption-ready': CONSUMPTION_READY, 'router-ready': ROUTER_READY }
 // Added after the literal so the existing scenario list stays untouched.
 SCENARIOS['skills-ready'] = SKILLS_READY
 
@@ -1097,7 +1101,7 @@ async function main() {
               viewport: { width, height: 900 },
               colorScheme: theme,
               deviceScaleFactor: 2,
-              locale: 'en-US'
+              locale: process.argv.includes('--locale') ? process.argv[process.argv.indexOf('--locale') + 1] : 'en-US'
             })
             const page = await context.newPage()
             await page.addInitScript(hostBridge, SCENARIOS[scenario])
