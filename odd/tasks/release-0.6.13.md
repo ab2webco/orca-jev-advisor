@@ -105,6 +105,33 @@ F-10..F-14, the rest of the backlog.
   Open, not T2: the verdict cache keys on the command's shape, so a deny cached for `docker
   volume rm prod_pgdata` answered `docker volume rm dev_pgdata`, and one for a PR body with
   an attribution line answered a clean body (see the report).
+- [x] T0b (added 2026-09-30, urgent, reported by the lead) a push to a feature branch whose
+  NAME holds a protected word is not a push to a shared branch. Reproduced on the installed
+  0.6.12 hook from a client repository with a GitHub remote: `git push -u origin
+  fix/cin-1184-production-azure-storage`, `fix/main-menu`, `feat/master-data` `REFUSED` (the
+  rule matched `\b(main|master|production)\b` anywhere after `git push`; `-` and `/` are word
+  boundaries). Proof: `deny_rule_shapes.test.ts` 2, `push_remote.test.ts` 5,
+  `push_own_branch.test.ts` 1, `gate-deny-spellings.test.mjs` 2: RED 10/10 (5 of them as
+  the missing `resolveImplicitPushDestination` export), GREEN 10/10; `npm test` 2735/2735.
+  Live probe (working-tree hook, the same client repository): the three names above, `HEAD:fix/
+  main-menu` allowed (own-branch allow); `git push origin main`, `HEAD:main`,
+  `HEAD:refs/heads/main`, `feature/x:production`, `--delete main`, `:main` `REFUSED`; a
+  scratch repo on `feature/x` tracking origin/main with `push.default=upstream`: `git push`
+  and `git push origin` `REFUSED`, `git push -u origin HEAD` allowed. Decisions: the
+  destination ref is judged exactly (after `:`, or the whole ref; `+` and `refs/heads/`
+  dropped; with `--delete`/`-d` the ref itself); a remote named `production` and `main` as a
+  SOURCE (`main:feature/x`) are no longer refusals; `--all`/`--branches` is a push to a
+  shared branch (it pushes local main too). A push naming no destination is judged by what
+  git would push (push_remote.ts `resolveImplicitPushDestination`, read from disk like the
+  remote): explicit `HEAD` is the current branch; otherwise `push.default` (local over
+  ~/.gitconfig over the XDG file, default `simple`): `simple`/`current` the current branch,
+  `upstream`/`tracking` its `branch.<name>.merge`, `matching` a shared-branch push, `nothing`
+  or no upstream nothing; a `remote.<name>.push` refspec, a detached HEAD or no repository
+  stay unknown (not refused locally, as before). The own-branch allow uses the same answer,
+  so a bare `git push` whose upstream is main under `upstream` no longer qualifies. The local
+  remote exemption (JEVADV-39) applies to both. Protected names stay `main`, `master`,
+  `production` (push_remote.ts; there is no config for them). This also delivers T3's three
+  pushProtected spellings (`--delete main`, `:main`, `feature/x:production`).
 - [ ] T3 N-04 refusals
 - [ ] T4 unregistered paths redacted
 - [ ] T5 interpreter heredocs and gate tail

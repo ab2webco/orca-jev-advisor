@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import { afterHome, gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
 import { someSegmentMatches, splitOnCommandSeparatorsDetailed } from "./git_discard.ts";
 import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
+import type { ImplicitPushDestination } from "./push_remote.ts";
 import type { SegmentMatchSeverity } from "./git_discard.ts";
 
 const SEVERITY_RANK: Readonly<Record<string, number>> = { ask: 1, code: 2, deny: 3 };
@@ -106,10 +107,89 @@ const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includ
 /** True when `view` runs a force push, in any flag spelling and through any git global option. */
 export const FORCE_PUSH_SHAPE = { test: (view: string): boolean => FORCE_PUSH.test(withoutGitGlobalOptionsBeforePush(view)) };
 
-const PUSH_PROTECTED = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANCH_NAMES.join("|")})\\b`);
+/** One `git push` read from a view: its remote and refspecs, and the flags that change what they mean. */
+interface PushInvocation {
+  readonly refspecs: readonly string[];
+  /** `--delete`/`-d`: every refspec names a remote branch to delete. */
+  readonly deletes: boolean;
+  /** `--all`/`--branches`: every local branch, a shared one included. */
+  readonly allBranches: boolean;
+  /** `--mirror`/`--tags`: no current-branch push is implied. */
+  readonly noImplicit: boolean;
+}
 
-/** True when `view` runs a push naming a shared branch, through any git global option. */
-export const PUSH_PROTECTED_SHAPE = { test: (view: string): boolean => PUSH_PROTECTED.test(withoutGitGlobalOptionsBeforePush(view)) };
+// `git push` options that take the next word as their value.
+const PUSH_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
+const GIT_PUSH_AT = /\bgit\s+push\b/g;
+
+/** Every `git push` in `view` (git global options already dropped), read word by word. */
+function pushInvocations(view: string): readonly PushInvocation[] {
+  const text = withoutGitGlobalOptionsBeforePush(view);
+  const out: PushInvocation[] = [];
+  for (const match of text.matchAll(GIT_PUSH_AT)) {
+    const words = text.slice((match.index ?? 0) + match[0].length).trim().split(/\s+/).filter((word) => word.length > 0);
+    const positionals: string[] = [];
+    let repo: string | null = null;
+    let deletes = false;
+    let allBranches = false;
+    let noImplicit = false;
+    for (let at = 0; at < words.length; at += 1) {
+      const word = words[at] ?? "";
+      if (word === "--") {
+        positionals.push(...words.slice(at + 1));
+        break;
+      }
+      if (word.startsWith("--")) {
+        const name = word.includes("=") ? word.slice(0, word.indexOf("=")) : word;
+        if (name === "--repo") repo = word.includes("=") ? word.slice(word.indexOf("=") + 1) : (words[at + 1] ?? "");
+        if (PUSH_OPTIONS_WITH_VALUE.has(name) && !word.includes("=")) at += 1;
+        deletes ||= name === "--delete";
+        allBranches ||= name === "--all" || name === "--branches";
+        noImplicit ||= name === "--mirror" || name === "--tags";
+        continue;
+      }
+      if (word.startsWith("-") && word.length > 1) {
+        deletes ||= word.includes("d");
+        if (word.endsWith("o")) at += 1;
+        continue;
+      }
+      positionals.push(word);
+    }
+    out.push({ refspecs: repo !== null ? positionals : positionals.slice(1), deletes, allBranches, noImplicit });
+  }
+  return out;
+}
+
+/** The remote branch a refspec updates (`+` and `refs/heads/` dropped), or `HEAD` for a bare HEAD. */
+function refspecDestination(refspec: string, deletes: boolean): string {
+  const spec = refspec.startsWith("+") ? refspec.slice(1) : refspec;
+  const colon = deletes ? -1 : spec.indexOf(":");
+  const destination = colon === -1 ? spec : spec.slice(colon + 1) || spec.slice(0, colon);
+  return destination.replace(/^refs\/heads\//, "");
+}
+
+/**
+ * 0.6.13 T0b: a push is to a shared branch when a refspec's DESTINATION is
+ * one, exactly -- the part after `:` (or the whole ref), `+` and
+ * `refs/heads/` dropped -- or when it deletes one, or pushes every branch.
+ * It used to be any protected word anywhere after `git push`, so
+ * `fix/main-menu` and `fix/cin-1184-production-azure-storage` (`-` and `/`
+ * are word boundaries), a remote named `production`, or `main` as a source
+ * (`main:feature/x`) were all refused as pushes to a shared branch.
+ */
+function pushesToProtected(view: string): boolean {
+  return pushInvocations(view).some((push) => push.allBranches || push.refspecs.some((refspec) => PROTECTED_BRANCH_NAMES.includes(refspecDestination(refspec, push.deletes))));
+}
+
+/** True when `view` runs a push naming a shared branch as its destination, through any git global option. */
+export const PUSH_PROTECTED_SHAPE = { test: pushesToProtected };
+
+/** A push whose destination is the current branch's business: no refspec, or only `HEAD`. */
+function implicitPush(push: PushInvocation): boolean {
+  return !push.deletes && !push.allBranches && !push.noImplicit && push.refspecs.every((refspec) => refspecDestination(refspec, false) === "HEAD");
+}
+
+const IMPLICIT_PUSH_SHAPE = { test: (view: string): boolean => pushInvocations(view).some(implicitPush) };
 
 /**
  * The pushProtected rule's outcome. A command-position match is set aside
@@ -117,18 +197,35 @@ export const PUSH_PROTECTED_SHAPE = { test: (view: string): boolean => PUSH_PROT
  * that remote is read in the repository the push acts on -- after `cd`,
  * `pushd`, a subshell, `bash -c` or `git -C` -- never the session's own.
  * A directory that cannot be known keeps the refusal.
+ *
+ * 0.6.13 T0b: a push that names no destination (`git push`, `git push
+ * origin`, `git push origin HEAD`) goes where git would send it,
+ * `implicitDestination` answers that for the directory the push runs in
+ * (push_remote.ts resolveImplicitPushDestination); a shared branch there, or
+ * `push.default=matching`, is the same refusal. An unknown answer keeps the
+ * command to the ordinary path, as before.
  */
-export function protectedPushOutcome(command: string, cwd: string, home: string, remoteIsLocal: (push: string, dir: string) => boolean): SegmentMatchSeverity {
+export function protectedPushOutcome(
+  command: string,
+  cwd: string,
+  home: string,
+  remoteIsLocal: (push: string, dir: string) => boolean,
+  implicitDestination: (dir: string, head: boolean) => ImplicitPushDestination,
+): SegmentMatchSeverity {
   let severity: SegmentMatchSeverity = null;
   for (const { segment, dir } of locateCommandSegments(command, cwd, home)) {
-    const outcome = someSegmentMatches(segment, PUSH_PROTECTED_SHAPE);
-    if (outcome !== "deny") {
-      severity = strongerSeverity(severity, outcome);
-      continue;
-    }
     const pushDir = gitInvocation(segment, dir, resolve(home))?.dir ?? null;
-    if (pushDir !== null && remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) continue;
-    return "deny";
+    const outcome = someSegmentMatches(segment, PUSH_PROTECTED_SHAPE);
+    if (outcome === "deny") {
+      if (pushDir !== null && remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) continue;
+      return "deny";
+    }
+    severity = strongerSeverity(severity, outcome);
+    if (pushDir === null || someSegmentMatches(segment, IMPLICIT_PUSH_SHAPE) !== "deny") continue;
+    const head = pushInvocations(segment).some((push) => implicitPush(push) && push.refspecs.length > 0);
+    const destination = implicitDestination(pushDir, head);
+    const shared = destination.kind === "matching" || (destination.kind === "branch" && PROTECTED_BRANCH_NAMES.includes(destination.name));
+    if (shared && !remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) return "deny";
   }
   return severity;
 }

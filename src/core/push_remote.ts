@@ -18,8 +18,10 @@
 // refused, only narrows the one case the task names.
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-import { resolveGitDirForConfig } from "./linked_worktree.ts";
+import { resolveGitDirForConfig, resolveGitDirForHead } from "./linked_worktree.ts";
 
 /**
  * The exact branch names gate-bash.ts's pushProtectedRule treats as
@@ -199,5 +201,128 @@ export function resolvePushRemoteIsLocal(input: ResolvePushRemoteInput): boolean
     return isLocalRemoteReference(url);
   } catch {
     return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.13 T0b: where a push with no destination of its own goes.
+//
+// `git push`, `git push origin` and `git push origin HEAD` name no branch, so
+// neither the protected-push rule nor the own-branch allow can read one off
+// the command. Git decides it from the current branch, `push.default` (local
+// config over the global files) and, for `upstream`, the branch's own
+// upstream -- a feature branch tracking origin/main pushes straight to main
+// under `push.default=upstream`. This reads those, the same way the remote
+// lookup above reads `.git/config`: from disk, no `git` subprocess.
+// ---------------------------------------------------------------------------
+
+/** What a push with no destination of its own updates on the remote. */
+export type ImplicitPushDestination =
+  | { readonly kind: "branch"; readonly name: string }
+  /** `push.default=matching`: every branch that exists on both sides, a shared one included. */
+  | { readonly kind: "matching" }
+  /** `push.default=nothing`, or `upstream` with no upstream: git pushes nothing. */
+  | { readonly kind: "none" }
+  | { readonly kind: "unknown" };
+
+export interface ImplicitPushInput {
+  /** The directory the push runs in. */
+  readonly cwd: string;
+  /** True for an explicit `HEAD` refspec: the current branch to its own name, whatever push.default says. */
+  readonly head: boolean;
+  /** Injectable for tests -- defaults to a real, synchronous UTF-8 file read. */
+  readonly readFile?: (path: string) => string;
+  /** The global config files git reads, in precedence order (later wins); defaults to ~/.gitconfig and the XDG one. */
+  readonly globalConfigPaths?: readonly string[];
+}
+
+function defaultGlobalConfigPaths(): readonly string[] {
+  const xdg = process.env["XDG_CONFIG_HOME"];
+  return [join(xdg !== undefined && xdg.length > 0 ? xdg : join(homedir(), ".config"), "git", "config"), join(homedir(), ".gitconfig")];
+}
+
+/** The body of the first `[name]` / `[name "sub"]` section in `configText`; a bare name matches in any case, a subsection exactly, as git reads them. */
+function configSection(configText: string, name: string, subsection: string | null): string | null {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const header = subsection === null
+    ? new RegExp(`^\\[${escapedName}\\]\\s*$`, "im")
+    : new RegExp(`^\\[${escapedName}\\s+"${subsection.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\]\\s*$`, "m");
+  const match = header.exec(configText);
+  if (match === null) return null;
+  const after = configText.slice(match.index + match[0].length);
+  const next = /^\[/m.exec(after);
+  return next === null ? after : after.slice(0, next.index);
+}
+
+/** A config value, unquoted and case-insensitive on its key; the last one in the section wins, as in git. */
+function configValue(body: string | null, key: string): string | null {
+  if (body === null) return null;
+  const matches = [...body.matchAll(new RegExp(`^[ \\t]*${key}[ \\t]*=[ \\t]*(.+?)[ \\t]*$`, "gim"))];
+  const raw = matches.at(-1)?.[1];
+  if (raw === undefined) return null;
+  return raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"') ? raw.slice(1, -1) : raw;
+}
+
+/** The current branch of the checkout at `cwd` (a linked worktree's own), or null on a detached or unreadable HEAD. */
+export function readCurrentBranch(cwd: string, readFile: (path: string) => string = (path) => readFileSync(path, "utf8")): string | null {
+  try {
+    const gitDir = resolveGitDirForHead(cwd);
+    if (gitDir === null) return null;
+    const match = /^ref:\s*refs\/heads\/(.+)$/.exec(readFile(join(gitDir, "HEAD")).trim());
+    const branch = (match?.[1] ?? "").trim();
+    return branch.length > 0 ? branch : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where a push with no destination of its own goes, read the way git reads it:
+ * the current branch; `push.default` from the local config, else the global
+ * files, else `simple`; for `upstream`/`tracking` the branch's
+ * `branch.<name>.merge`. `simple` and `current` push the current branch to its
+ * own name (`simple` refuses an upstream of another name, so it never lands
+ * anywhere else). A `remote.<name>.push` refspec overrides all of this and is
+ * not followed here: unknown, like a detached HEAD or no repository.
+ */
+export function resolveImplicitPushDestination(input: ImplicitPushInput): ImplicitPushDestination {
+  const readFile = input.readFile ?? ((path: string) => readFileSync(path, "utf8"));
+  const unknown: ImplicitPushDestination = { kind: "unknown" };
+  const branch = readCurrentBranch(input.cwd, readFile);
+  if (branch === null) return unknown;
+  if (input.head) return { kind: "branch", name: branch };
+  const gitDir = resolveGitDirForConfig(input.cwd);
+  if (gitDir === null) return unknown;
+  let local: string;
+  try {
+    local = readFile(`${gitDir}/config`);
+  } catch {
+    return unknown;
+  }
+  if (parseGitConfigRemotes(local).some((remote) => configValue(remoteConfigSection(local, remote.name), "push") !== null)) return unknown;
+  const globals = (input.globalConfigPaths ?? defaultGlobalConfigPaths()).map((path) => {
+    try {
+      return readFile(path);
+    } catch {
+      return "";
+    }
+  });
+  const pushDefault = [local, ...[...globals].reverse()].map((text) => configValue(configSection(text, "push", null), "default")).find((value) => value !== null) ?? "simple";
+  switch (pushDefault.toLowerCase()) {
+    case "nothing":
+      return { kind: "none" };
+    case "matching":
+      return { kind: "matching" };
+    case "upstream":
+    case "tracking": {
+      const merge = configValue(configSection(local, "branch", branch), "merge");
+      if (merge === null) return { kind: "none" };
+      return { kind: "branch", name: merge.replace(/^refs\/heads\//, "") };
+    }
+    case "simple":
+    case "current":
+      return { kind: "branch", name: branch };
+    default:
+      return unknown;
   }
 }

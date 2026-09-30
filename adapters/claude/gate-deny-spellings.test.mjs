@@ -192,6 +192,34 @@ for (const command of PROTECTED_PUSH_SPELLINGS) {
   })
 }
 
+// 0.6.13 T0b: the destination ref is judged exactly (reproduced on 0.6.12
+// from a repository with a GitHub remote): a feature branch whose name holds
+// a protected word is not a shared branch.
+test('0.6.13 T0b: a push to a feature branch whose name holds main, master or production is not refused', () => {
+  const home = makeHome()
+  const repo = makeRepo(home, 'app', 'git@github.com:acme/app.git')
+  for (const command of [
+    'git push -u origin fix/cin-1184-production-azure-storage',
+    'git push -u origin fix/main-menu',
+    'git push origin feat/master-data',
+    'git push origin HEAD:fix/main-menu',
+  ]) {
+    assertNotRefused(command, { home, cwd: repo })
+  }
+})
+
+test('0.6.13 T0b: a bare push that git would send to main is refused, and so is its retry', () => {
+  const home = makeHome()
+  const repo = makeRepo(home, 'app', 'git@github.com:acme/app.git')
+  execFileSync('git', ['-C', repo, 'checkout', '-q', '-b', 'feature/x'])
+  execFileSync('git', ['-C', repo, 'config', 'branch.feature/x.remote', 'origin'])
+  execFileSync('git', ['-C', repo, 'config', 'branch.feature/x.merge', 'refs/heads/main'])
+  execFileSync('git', ['-C', repo, 'config', 'push.default', 'upstream'])
+  assertRefusedTwice('git push', PROTECTED_RULE, { home, cwd: repo })
+  assertRefusedTwice('git push origin HEAD:refs/heads/main', PROTECTED_RULE, { home, cwd: repo })
+  assertRefusedTwice('git push origin feature/x:production', PROTECTED_RULE, { home, cwd: repo })
+})
+
 test('F-03: a backslash-newline continuation never hides a force push', () => {
   assertRefusedTwice('git push \\\n--force origin x', FORCE_RULE)
 })

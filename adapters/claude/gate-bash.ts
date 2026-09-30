@@ -109,7 +109,7 @@ import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gat
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
 import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
-import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
+import { resolveImplicitPushDestination, resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -494,7 +494,8 @@ function curlPipeShellRule(ctx: RuleContext): RuleOutcome {
  */
 function pushProtectedRule(ctx: RuleContext): RuleOutcome {
   // 0.6.12 F-03: the remote is read in the repository the push acts on.
-  return protectedPushOutcome(ctx.command, ctx.cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }))
+  // 0.6.13 T0b: a push naming no destination is judged by where git would send it.
+  return protectedPushOutcome(ctx.command, ctx.cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
 }
 
 /**
