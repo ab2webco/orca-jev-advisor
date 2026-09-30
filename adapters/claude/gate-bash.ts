@@ -61,7 +61,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -109,7 +109,7 @@ import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gat
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
 import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
-import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
+import { resolveImplicitPushDestination, resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
@@ -406,6 +406,13 @@ interface RuleContext {
  * be there to answer. See someSegmentMatches' own doc comment
  * (src/core/git_discard.ts) for exactly how the two scan passes decide this.
  */
+// A global option with its value, joined (`--context=prod`, `-chdir=infra`)
+// or as the next word (`--context prod`, `-n web`).
+const KUBECTL_DELETE_SHAPE = /\bkubectl(\s+--?[\w-]+(=\S+|\s+(?!-)\S+)?)*?\s+(delete|drain)\b/
+function terraformShape (verb: string): RegExp {
+  return new RegExp(`\\b(terraform|tofu)(\\s+-[\\w-]+(=\\S+)?)*\\s+${verb}\\b`)
+}
+
 function segmentRule(pattern: { test(segment: string): boolean }): (ctx: RuleContext) => RuleOutcome {
   return (ctx) => someSegmentMatches(ctx.command, pattern)
 }
@@ -494,7 +501,8 @@ function curlPipeShellRule(ctx: RuleContext): RuleOutcome {
  */
 function pushProtectedRule(ctx: RuleContext): RuleOutcome {
   // 0.6.12 F-03: the remote is read in the repository the push acts on.
-  return protectedPushOutcome(ctx.command, ctx.cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }))
+  // 0.6.13 T0b: a push naming no destination is judged by where git would send it.
+  return protectedPushOutcome(ctx.command, ctx.cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
 }
 
 /**
@@ -599,9 +607,12 @@ const NEVER_SILENTLY: readonly {
   // ambiguous interpreter code -- see git_discard.ts's SQL_EXEC_FLAGS -- so
   // it keeps denying outright, never softening to 'code'/advice.
   { evaluate: segmentRule(/\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
-  { evaluate: segmentRule(/kubectl\s+(delete|drain)\b/), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
-  { evaluate: segmentRule(/\b(terraform|tofu)\s+apply\b/), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
-  { evaluate: segmentRule(/\b(terraform|tofu)\s+destroy\b/), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
+  // The tools' own global options may come before the verb (`kubectl
+  // --context prod delete`, `-n web`, `terraform -chdir=infra apply`): the
+  // same command as the plain spelling (0.6.13 T3), as git's are for a push.
+  { evaluate: segmentRule(KUBECTL_DELETE_SHAPE), why: 'rule.kubectlDelete', denyToggle: 'denyKubectlDelete' },
+  { evaluate: segmentRule(terraformShape('apply')), why: 'rule.terraformApply', denyToggle: 'denyTerraformApply' },
+  { evaluate: segmentRule(terraformShape('destroy')), why: 'rule.terraformDestroy', denyToggle: 'denyTerraformDestroy' },
   // curlPipeShell (see curlPipeShellRule's own doc comment above): a real
   // curl/wget piping into a real shell, in command position on both sides,
   // never a mention (a quoted grep/echo argument) or data (a heredoc body
@@ -668,7 +679,10 @@ function emit(decision: Decision, reason: string, systemMessage?: string): void 
     },
   }
   if (systemMessage !== undefined) payload['systemMessage'] = systemMessage
-  process.stdout.write(JSON.stringify(payload))
+  // 0.6.13 T5 (JEVADV-68): written synchronously, because the process exits
+  // as soon as main() returns (see the end of this file); a pipe write on
+  // macOS is asynchronous and could be cut off by that exit.
+  writeSync(1, JSON.stringify(payload))
 }
 
 /** No verdict: the permission follows its normal course. This is the default exit. */
@@ -689,7 +703,7 @@ function passThroughWithNotice(message: string): void {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
     systemMessage: t('notice', { message }),
   }
-  process.stdout.write(JSON.stringify(payload))
+  writeSync(1, JSON.stringify(payload))
   process.exit(0)
 }
 
@@ -938,7 +952,7 @@ function emitAdvice(segment: string, effect: string, modelText: string): void {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: modelText },
     systemMessage: t('advisedLine', { segment, effect }),
   }
-  process.stdout.write(JSON.stringify(payload))
+  writeSync(1, JSON.stringify(payload))
 }
 
 /**
@@ -2188,4 +2202,9 @@ async function main(): Promise<void> {
   emit(resolved.decision, finalReason, finalSystemMessage)
 }
 
+// 0.6.13 T5 (JEVADV-68): exit as soon as the verdict is written. Every write
+// above is synchronous (writeSync, appendFileSync), so nothing is lost; what
+// this cuts is whatever timer is still pending -- before 0.6.13 the losing
+// Jev budget timer kept the process alive a median 1.4 s past its verdict.
 await main()
+process.exit(0)

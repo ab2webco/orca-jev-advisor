@@ -192,6 +192,85 @@ for (const command of PROTECTED_PUSH_SPELLINGS) {
   })
 }
 
+// 0.6.13 T0b: the destination ref is judged exactly (reproduced on 0.6.12
+// from a repository with a GitHub remote): a feature branch whose name holds
+// a protected word is not a shared branch.
+test('0.6.13 T0b: a push to a feature branch whose name holds main, master or production is not refused', () => {
+  const home = makeHome()
+  const repo = makeRepo(home, 'app', 'git@github.com:acme/app.git')
+  for (const command of [
+    'git push -u origin fix/cin-1184-production-azure-storage',
+    'git push -u origin fix/main-menu',
+    'git push origin feat/master-data',
+    'git push origin HEAD:fix/main-menu',
+  ]) {
+    assertNotRefused(command, { home, cwd: repo })
+  }
+})
+
+test('0.6.13 T0b: a bare push that git would send to main is refused, and so is its retry', () => {
+  const home = makeHome()
+  const repo = makeRepo(home, 'app', 'git@github.com:acme/app.git')
+  execFileSync('git', ['-C', repo, 'checkout', '-q', '-b', 'feature/x'])
+  execFileSync('git', ['-C', repo, 'config', 'branch.feature/x.remote', 'origin'])
+  execFileSync('git', ['-C', repo, 'config', 'branch.feature/x.merge', 'refs/heads/main'])
+  execFileSync('git', ['-C', repo, 'config', 'push.default', 'upstream'])
+  assertRefusedTwice('git push', PROTECTED_RULE, { home, cwd: repo })
+  assertRefusedTwice('git push origin HEAD:refs/heads/main', PROTECTED_RULE, { home, cwd: repo })
+  assertRefusedTwice('git push origin feature/x:production', PROTECTED_RULE, { home, cwd: repo })
+})
+
+// 0.6.13 T3 (N-04): six stops that were only advice in 0.6.12 are local-rule
+// refusals, retry included.
+const N04_REFUSALS = [
+  ['echo ~ | xargs rm -rf', RM_RULE],
+  ['find ~ -delete', RM_RULE],
+  ['find / -delete', RM_RULE],
+  ['git push --mirror', FORCE_RULE],
+  ['git push origin --delete main', PROTECTED_RULE],
+  ['git push origin :main', PROTECTED_RULE],
+  ['git push origin feature/x:production', PROTECTED_RULE],
+]
+
+for (const [command, rule] of N04_REFUSALS) {
+  test(`0.6.13 T3: ${JSON.stringify(command)} is refused by a local rule, and so is its retry`, () => {
+    assertRefusedTwice(command, rule)
+  })
+}
+
+// 0.6.13 T3: kubectl's and terraform's own global options before the verb
+// (the 0.6.12 QA rows H-k8s-ctx-delete, H-tf-chdir) are the same command as
+// the plain spelling the rule already refuses, as git's are for a push.
+const KUBECTL_RULE = /deletes something that is running and serving right now/
+const TF_APPLY_RULE = /creates or changes real infrastructure/
+const TF_DESTROY_RULE = /destroys real infrastructure/
+const GLOBAL_OPTION_REFUSALS = [
+  ['kubectl --context prod delete ns x', KUBECTL_RULE],
+  ['kubectl -n web delete pod x', KUBECTL_RULE],
+  ['kubectl --namespace=web --context prod drain node-1', KUBECTL_RULE],
+  ['terraform -chdir=infra apply', TF_APPLY_RULE],
+  ['tofu -chdir=infra apply -auto-approve', TF_APPLY_RULE],
+  ['terraform -chdir=infra destroy', TF_DESTROY_RULE],
+]
+
+for (const [command, rule] of GLOBAL_OPTION_REFUSALS) {
+  test(`0.6.13 T3: ${JSON.stringify(command)} is refused like its plain spelling, and so is its retry`, () => {
+    assertRefusedTwice(command, rule)
+  })
+}
+
+test('0.6.13 T3: kubectl and terraform verbs that change nothing stay unrefused', () => {
+  for (const command of ['kubectl --context prod get pods', 'kubectl -n web describe pod delete-me', 'terraform -chdir=infra plan', "grep -rn 'terraform -chdir=infra apply' docs/"]) {
+    assertNotRefused(command)
+  }
+})
+
+test('0.6.13 T3: the same text as data stays data', () => {
+  for (const command of ["grep -rn 'echo ~ | xargs rm -rf' docs/", 'echo "find ~ -delete"', "git commit -m 'never git push --mirror'", "find ~ -name '*.tmp' -delete"]) {
+    assertNotRefused(command)
+  }
+})
+
 test('F-03: a backslash-newline continuation never hides a force push', () => {
   assertRefusedTwice('git push \\\n--force origin x', FORCE_RULE)
 })
@@ -287,6 +366,28 @@ test('F-04: a curl-to-shell spelling in an echo, a grep pattern or a heredoc bod
   }
 })
 
+// 0.6.13 T1 (F-09/N-03): text in a known data position is data. The commit
+// message form Claude Code writes (`-m "$(cat <<'EOF' ... EOF)"`) was refused
+// as a force push; the same text sent to a terminal or written to a file must
+// not be refused either, while a real push next to it still is.
+test('0.6.13 T1: a message, terminal text or file body naming a rule is data, never a local-rule refusal', () => {
+  const home = makeHome()
+  for (const command of [
+    "git commit -m \"$(cat <<'EOF'\nfix: never git push --force origin main\n\nnor rm -rf /\nEOF\n)\"",
+    "orca terminal send --terminal t --enter --text 'run git push origin main and rm -rf /'",
+    "cat > /tmp/x.mjs <<'EOF'\nconst s = 'git push --force origin main'\nEOF",
+    "gh release create v1 --notes 'never git push --force origin main'",
+    "git commit -F - <<'EOF'\nnever git push --force origin main\nEOF",
+  ]) {
+    assertNotRefused(command, { home })
+  }
+})
+
+test('0.6.13 T1: a real push next to data text is still refused', () => {
+  assertRefusedTwice("orca terminal send --terminal t --text 'git push is data here' && git push --force origin x", /force push/)
+  assertRefusedTwice("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && git push --force origin x", /force push/)
+})
+
 // F-05: the recorded project and command family follow the repository the
 // command acts on, not the session's.
 function lastRecord (home) {
@@ -306,4 +407,15 @@ test('F-05: a refusal of a push reached through cd or git -C is recorded under t
     assert.equal(record.project, 'app', `${command}: recorded under the project it acts on`)
     assert.equal(record.commandFamily, 'git push', `${command}: recorded under the family of what it runs, never cd`)
   }
+})
+
+// 0.6.13 T5 (JEVADV-63): the 0.6.12 QA row K-py-heredoc-force -- a python
+// heredoc whose program runs a force push -- is the forcePush rule.
+test('0.6.13 T5: an interpreter heredoc that runs a force push is refused, and so is its retry', () => {
+  assertRefusedTwice("python3 - <<'PY'\nimport os\nos.system('git push --force origin x')\nPY", FORCE_RULE)
+  assertRefusedTwice("node <<'JS'\nrequire('child_process').execSync('git push -f origin x')\nJS", FORCE_RULE)
+})
+
+test('0.6.13 T5: an interpreter heredoc that only prints the text is not refused', () => {
+  assertNotRefused("python3 - <<'PY'\nprint('git push --force origin x')\nPY")
 })

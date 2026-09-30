@@ -117,6 +117,17 @@ test("does not qualify: master and production are protected too, same list pushP
   assert.equal(qualifiesForLocalGitAllow({ command: "git push origin production", cwd: NO_REPO_CWD }).qualifies, false);
 });
 
+// 0.6.13 T0b: a bare push goes where git's push.default sends it. With
+// `upstream`, a feature branch tracking origin/main pushes to main.
+test("does not qualify: bare `git push` on a feature branch whose upstream is main, with push.default=upstream", () => {
+  const repo = repoOnBranch("push-own-branch-upstream-main-", "feature/x");
+  git(["config", "branch.feature/x.remote", "origin"], repo);
+  git(["config", "branch.feature/x.merge", "refs/heads/main"], repo);
+  git(["config", "push.default", "upstream"], repo);
+  assert.equal(qualifiesForLocalGitAllow({ command: "git push", cwd: repo }).qualifies, false);
+  assertQualifies("git push origin HEAD", repo, "ownBranchPush");
+});
+
 // ---------------------------------------------------------------------------
 // Does not qualify: detached HEAD (no branch to resolve at all).
 // ---------------------------------------------------------------------------

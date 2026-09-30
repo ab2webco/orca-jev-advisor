@@ -49,18 +49,18 @@
 //   - PROTECTED_BRANCH_NAMES and isBareRemoteName (push_remote.ts) -- the
 //     ONE shared/protected-branch list and the ONE bare-remote-name check,
 //     never a second copy of either.
-//   - resolveGitDirForHead (linked_worktree.ts) to read the CURRENT
-//     worktree's own HEAD (never the main checkout's, for a linked
-//     worktree) when the refspec is omitted or `HEAD`.
+//   - resolveImplicitPushDestination (push_remote.ts) to read where a push
+//     with an omitted or `HEAD` refspec really goes: the CURRENT worktree's
+//     own HEAD (never the main checkout's, for a linked worktree), and for
+//     an omitted refspec push.default and the upstream (0.6.13 T0b).
 
 import { readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import { hasCommandSubstitution } from "./command_shape.ts";
 import { isObviouslySafeCommand } from "./gate_safe_command.ts";
 import { splitOnCommandSeparatorsDetailed, tokenize } from "./git_discard.ts";
-import { resolveGitDirForHead } from "./linked_worktree.ts";
-import { PROTECTED_BRANCH_NAMES, isBareRemoteName } from "./push_remote.ts";
+import { PROTECTED_BRANCH_NAMES, isBareRemoteName, resolveImplicitPushDestination } from "./push_remote.ts";
 
 export interface OwnBranchPushInput {
   readonly command: string;
@@ -115,7 +115,7 @@ function parseCdSegment(segmentText: string): string | null {
  * `cwd` exactly the way a shell resolves `cd`'s own argument: absolute as
  * written, or joined onto `cwd` when relative -- never touching the
  * filesystem itself. This never confirms `dirArg` IS a git worktree root:
- * readCurrentBranch's own resolveGitDirForHead walks UP from whatever
+ * push_remote.ts readCurrentBranch's resolveGitDirForHead walks UP from whatever
  * directory it is given looking for the nearest `.git`, the exact same
  * tolerance `cwd` itself already gets with no `cd` prefix at all, so a `cd`
  * into a non-repository subdirectory that merely sits inside a real
@@ -162,37 +162,14 @@ export function parsePushSegment(segmentText: string): readonly string[] | null 
 }
 
 /**
- * The CURRENT branch of the repository at `cwd`, read straight off disk (no
- * `git` subprocess): `HEAD`'s own `ref: refs/heads/<name>` line, resolved
- * through resolveGitDirForHead so a linked worktree's OWN branch is read,
- * never its main checkout's. `null` on anything this cannot positively
- * resolve -- no repository, an unreadable HEAD, or a detached HEAD (a raw
- * commit SHA, with no `ref:` line at all) -- which the caller treats as
- * "does not qualify", never as some assumed default branch.
- */
-function readCurrentBranch(cwd: string, readFile: (path: string) => string): string | null {
-  try {
-    const gitDir = resolveGitDirForHead(cwd);
-    if (gitDir === null) return null;
-    const raw = readFile(join(gitDir, "HEAD")).trim();
-    const match = /^ref:\s*refs\/heads\/(.+)$/.exec(raw);
-    if (match === null) return null;
-    const branch = (match[1] ?? "").trim();
-    return branch.length > 0 ? branch : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
  * One push segment's own resolved (non-protected) destination branch, or
  * `null` when the segment is not a qualifying push at all -- called once per
  * push-shaped segment by `qualifiesForLocalGitAllow` below (see that
  * function's own doc for the full command-level shape this composes into:
  * a single push segment, or one led by exactly `cd <dir> &&`).
  *
- * An omitted or explicit `HEAD` refspec resolves the CURRENT branch through
- * resolveGitDirForHead/readCurrentBranch, read from `branchResolutionCwd` --
+ * An omitted or explicit `HEAD` refspec resolves where git would push it
+ * (push_remote.ts resolveImplicitPushDestination), read from `branchResolutionCwd` --
  * `cwd` itself with no `cd` prefix, or the leading `cd <dir> &&` prefix's OWN
  * resolved target (resolveCdTargetDir) when one is present, so a
  * `cd`-prefixed push's current branch is read from the directory the push
@@ -214,8 +191,12 @@ function classifyPushSegment(segmentText: string, branchResolutionCwd: string, r
     if (!isPlainBranchRefspec(refspecToken)) return null;
     branch = refspecToken;
   } else {
-    branch = readCurrentBranch(branchResolutionCwd, readFile);
-    if (branch === null) return null;
+    // 0.6.13 T0b: where git would actually send it -- `HEAD` is the current
+    // branch's own name, no refspec follows push.default and the upstream (a
+    // feature branch tracking main pushes to main under `upstream`).
+    const destination = resolveImplicitPushDestination({ cwd: branchResolutionCwd, head: refspecToken === "HEAD", readFile });
+    if (destination.kind !== "branch") return null;
+    branch = destination.name;
   }
 
   return PROTECTED_BRANCH_NAMES.includes(branch) ? null : branch;

@@ -9,12 +9,12 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 
-import { extractPushRemoteArg, isLocalRemoteReference, parseGitConfigRemotePushUrl, parseGitConfigRemoteUrl, parseGitConfigRemotes, resolvePushRemoteIsLocal } from "./push_remote.ts";
+import { extractPushRemoteArg, isLocalRemoteReference, parseGitConfigRemotePushUrl, parseGitConfigRemoteUrl, parseGitConfigRemotes, resolveImplicitPushDestination, resolvePushRemoteIsLocal } from "./push_remote.ts";
 
 // ---------------------------------------------------------------------------
 // A bare remote NAME resolved through a REAL `.git/config` -- same fixture
@@ -289,4 +289,63 @@ test("parseGitConfigRemotes: lists every remote section with its url and pushurl
 
 test("parseGitConfigRemotes: a config with no remote section lists none", () => {
   assert.deepEqual(parseGitConfigRemotes("[core]\n\tbare = false\n"), []);
+});
+
+// 0.6.13 T0b: a push that names no destination (`git push`, `git push
+// origin`, `git push origin HEAD`) updates what git's own push.default and
+// the branch's upstream say -- read from the same config files git reads.
+
+/** A repository on `branch` whose upstream is origin/<upstream>, with `extra` config lines set locally. */
+function repoTracking(prefix: string, branch: string, upstream: string, extra: readonly [string, string][] = []): string {
+  const root = join(makeTempRoot(prefix), "repo");
+  initRepo(root);
+  git(["checkout", "-q", "-b", branch], root);
+  git(["config", `branch.${branch}.remote`, "origin"], root);
+  git(["config", `branch.${branch}.merge`, `refs/heads/${upstream}`], root);
+  for (const [key, value] of extra) git(["config", key, value], root);
+  return root;
+}
+
+const NO_GLOBAL: readonly string[] = [];
+
+test("resolveImplicitPushDestination: push.default=upstream pushes to the upstream, which can be main", () => {
+  const repo = repoTracking("implicit-upstream-", "feature/x", "main", [["push.default", "upstream"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: repo, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "branch", name: "main" });
+});
+
+test("resolveImplicitPushDestination: the default (simple) and current push the current branch to its own name", () => {
+  const simple = repoTracking("implicit-simple-", "feature/x", "main");
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: simple, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "branch", name: "feature/x" });
+  const current = repoTracking("implicit-current-", "feature/y", "main", [["push.default", "current"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: current, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "branch", name: "feature/y" });
+});
+
+test("resolveImplicitPushDestination: an explicit HEAD is the current branch's own name, whatever push.default says", () => {
+  const repo = repoTracking("implicit-head-", "feature/x", "main", [["push.default", "upstream"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: repo, head: true, globalConfigPaths: NO_GLOBAL }), { kind: "branch", name: "feature/x" });
+});
+
+test("resolveImplicitPushDestination: matching and nothing, and a global push.default under a local one", () => {
+  const matching = repoTracking("implicit-matching-", "feature/x", "feature/x", [["push.default", "matching"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: matching, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "matching" });
+  const nothing = repoTracking("implicit-nothing-", "feature/x", "main", [["push.default", "nothing"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: nothing, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "none" });
+  const globalDir = makeTempRoot("implicit-global-");
+  const globalConfig = join(globalDir, "gitconfig");
+  writeFileSync(globalConfig, "[push]\n\tdefault = upstream\n");
+  const fromGlobal = repoTracking("implicit-from-global-", "feature/x", "main");
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: fromGlobal, head: false, globalConfigPaths: [globalConfig] }), { kind: "branch", name: "main" });
+  const localWins = repoTracking("implicit-local-wins-", "feature/x", "main", [["push.default", "current"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: localWins, head: false, globalConfigPaths: [globalConfig] }), { kind: "branch", name: "feature/x" });
+});
+
+test("resolveImplicitPushDestination: unknown outside a repository, on a detached HEAD, or with a remote push refspec", () => {
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: "/nonexistent/not-a-repository", head: false, globalConfigPaths: NO_GLOBAL }), { kind: "unknown" });
+  const root = join(makeTempRoot("implicit-detached-"), "repo");
+  initRepo(root);
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  git(["checkout", "-q", sha], root);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: root, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "unknown" });
+  const refspec = repoTracking("implicit-remote-push-", "feature/x", "feature/x", [["remote.origin.url", "git@example.com:a/b.git"], ["remote.origin.push", "refs/heads/*:refs/heads/main"]]);
+  assert.deepEqual(resolveImplicitPushDestination({ cwd: refspec, head: false, globalConfigPaths: NO_GLOBAL }), { kind: "unknown" });
 });

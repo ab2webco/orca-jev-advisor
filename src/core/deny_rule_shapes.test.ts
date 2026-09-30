@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome, withDownloadsMarked, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
 import { someSegmentMatches } from "./git_discard.ts";
+import type { ImplicitPushDestination } from "./push_remote.ts";
 
 const HOME = "/home/dev";
 const PROJECT = "/home/dev/Projects/app";
@@ -48,6 +49,49 @@ test("force push: lease-guarded and ordinary pushes, and mentions, are not the r
   assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git -C . push -fu')"`, FORCE_PUSH_SHAPE), "code");
 });
 
+// 0.6.13 T3 (N-04): the root or the home directory deleted through a pipe
+// into `xargs rm`, or by `find -delete`/`-exec rm -r` with nothing to filter
+// what it deletes, is the same rule as `rm -rf ~`.
+test("rm: root or home fed to xargs rm, or wiped by an unfiltered find, is a command-position deny", () => {
+  for (const command of [
+    "echo ~ | xargs rm -rf",
+    "echo $HOME | xargs rm -rf",
+    "echo / | xargs -n1 rm -fr",
+    "printf '%s' ~ | xargs rm -r",
+    "find ~ -delete",
+    "find / -delete",
+    "find ~/ -type f -delete",
+    "sudo find / -xdev -depth -delete",
+    "find $HOME -exec rm -rf {} +",
+    "find ~ -mindepth 1 -execdir rm -r {} ;",
+  ]) {
+    assert.equal(recursiveRmOfRootOrHomeOutcome(command, PROJECT, HOME), "deny", command);
+  }
+});
+
+test("rm: a filtered find, a project path, or a mention of these is not the rule", () => {
+  for (const command of [
+    "find ~ -name '*.pyc' -delete",
+    "find / -path '*/node_modules/.cache' -delete",
+    "find . -delete",
+    "find ~/Projects/app/dist -delete",
+    "echo ~/tmp/x | xargs rm -rf",
+    "echo ~ | xargs ls",
+    "find ~ -type f -print",
+    "grep -n 'find ~ -delete' notes.md",
+    'echo "echo ~ | xargs rm -rf"',
+  ]) {
+    assert.equal(recursiveRmOfRootOrHomeOutcome(command, PROJECT, HOME), null, command);
+  }
+});
+
+test("force push: git push --mirror rewrites every remote ref, so it is the rule", () => {
+  for (const command of ["git push --mirror", "git push --mirror origin", "git -C /tmp push --mirror backup"]) {
+    assert.equal(someSegmentMatches(command, FORCE_PUSH_SHAPE), "deny", command);
+  }
+  assert.equal(someSegmentMatches('echo "git push --mirror"', FORCE_PUSH_SHAPE), null);
+});
+
 test("git global options are dropped only before push", () => {
   assert.equal(withoutGitGlobalOptionsBeforePush("git -C /tmp --no-pager -c a=b push -f"), "git push -f");
   assert.equal(withoutGitGlobalOptionsBeforePush("/usr/bin/git -C . push"), "/usr/bin/git push");
@@ -57,12 +101,70 @@ test("git global options are dropped only before push", () => {
 test("protected push: judged in the repository it acts on, a local remote there sets it aside", () => {
   const localIn = new Set(["/home/dev/Projects/personal"]);
   const remoteIsLocal = (_push: string, dir: string): boolean => localIn.has(dir);
-  const outcome = (command: string, cwd: string) => protectedPushOutcome(command, cwd, HOME, remoteIsLocal);
+  const outcome = (command: string, cwd: string) => protectedPushOutcome(command, cwd, HOME, remoteIsLocal, UNKNOWN_IMPLICIT);
   assert.equal(outcome("git -C ../shared push origin main", "/home/dev/Projects/personal"), "deny");
   assert.equal(outcome("cd ../shared && git push origin main", "/home/dev/Projects/personal"), "deny");
   assert.equal(outcome("git -C ../personal push origin main", "/home/dev/Projects/shared"), null);
   assert.equal(outcome("cd $X && git push origin main", "/home/dev/Projects/personal"), "deny");
   assert.equal(outcome('echo "git -C ../shared push origin main"', "/home/dev/Projects/personal"), null);
+});
+
+// 0.6.13 T0b: the destination ref is judged exactly. A feature branch whose
+// NAME holds a protected word (`fix/main-menu`, `feat/master-data`,
+// `fix/cin-1184-production-azure-storage`) was refused as a push to a shared
+// branch, because `-` and `/` are word boundaries.
+const UNKNOWN_IMPLICIT = (): ImplicitPushDestination => ({ kind: "unknown" });
+const neverLocal = (): boolean => false;
+
+test("protected push: the destination ref, and only it, decides", () => {
+  const outcome = (command: string, implicit: (dir: string, head: boolean) => ImplicitPushDestination = UNKNOWN_IMPLICIT) => protectedPushOutcome(command, PROJECT, HOME, neverLocal, implicit);
+  for (const command of [
+    "git push origin main",
+    "git push -u origin master",
+    "git push origin HEAD:main",
+    "git push origin HEAD:refs/heads/main",
+    "git push origin refs/heads/production",
+    "git push origin feature/x:production",
+    "git push origin --delete main",
+    "git push -d origin master",
+    "git push origin :main",
+    "git push --repo=origin main",
+    "git push --all origin",
+  ]) {
+    assert.equal(outcome(command), "deny", command);
+  }
+  for (const command of [
+    "git push -u origin fix/cin-1184-production-azure-storage",
+    "git push -u origin fix/main-menu",
+    "git push origin feat/master-data",
+    "git push origin main-menu",
+    "git push origin feature/x:feature/main-fix",
+    "git push origin main:feature/x",
+    "git push production feature/x",
+    "git push -o ci.skip=main origin feature/x",
+    "git push --tags origin",
+  ]) {
+    assert.equal(outcome(command), null, command);
+  }
+});
+
+test("protected push: a push with no destination of its own is judged by what git would push", () => {
+  const onto = (destination: ImplicitPushDestination) => (): ImplicitPushDestination => destination;
+  const outcome = (command: string, implicit: () => ImplicitPushDestination) => protectedPushOutcome(command, PROJECT, HOME, neverLocal, implicit);
+  assert.equal(outcome("git push", onto({ kind: "branch", name: "main" })), "deny");
+  assert.equal(outcome("git push origin", onto({ kind: "branch", name: "main" })), "deny");
+  assert.equal(outcome("git push -u origin HEAD", onto({ kind: "branch", name: "production" })), "deny");
+  assert.equal(outcome("git push", onto({ kind: "matching" })), "deny");
+  assert.equal(outcome("git push", onto({ kind: "branch", name: "feature/main-menu" })), null);
+  assert.equal(outcome("git push", onto({ kind: "none" })), null);
+  assert.equal(outcome("git push", UNKNOWN_IMPLICIT), null);
+  assert.equal(outcome("git push origin feature/x", onto({ kind: "branch", name: "main" })), null, "an explicit destination never asks what the current branch is");
+  let asked: boolean | null = null;
+  protectedPushOutcome("git push origin HEAD", PROJECT, HOME, neverLocal, (_dir, head) => {
+    asked = head;
+    return { kind: "unknown" };
+  });
+  assert.equal(asked, true, "an explicit HEAD refspec is told apart from no refspec");
 });
 
 test("curl to shell: any later pipe stage, substitutions and interpreters on stdin are a command-position deny", () => {

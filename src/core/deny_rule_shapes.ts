@@ -10,6 +10,7 @@ import { resolve } from "node:path";
 import { afterHome, gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
 import { someSegmentMatches, splitOnCommandSeparatorsDetailed } from "./git_discard.ts";
 import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
+import type { ImplicitPushDestination } from "./push_remote.ts";
 import type { SegmentMatchSeverity } from "./git_discard.ts";
 
 const SEVERITY_RANK: Readonly<Record<string, number>> = { ask: 1, code: 2, deny: 3 };
@@ -72,20 +73,89 @@ export function runsRecursiveRmOfRootOrHome(view: string, options: RecursiveRmOp
   return false;
 }
 
+/** `find` options before the start paths. */
+const FIND_LEADING_OPTIONS: ReadonlySet<string> = new Set(["-H", "-L", "-P", "-E", "-X", "-s", "-x"]);
+/** `find` expression words that do not narrow what it matches; the value-taking ones skip their value. */
+const FIND_UNFILTERED: ReadonlySet<string> = new Set(["-depth", "-d", "-xdev", "-mount", "-follow", "-noleaf", "-ignore_readdir_race", "-print", "-print0", "-delete"]);
+const FIND_UNFILTERED_WITH_VALUE: ReadonlySet<string> = new Set(["-type", "-mindepth", "-maxdepth"]);
+const FIND_EXEC: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+
+/**
+ * 0.6.13 T3 (N-04): true when `view` runs a `find` from the root or the home
+ * directory that deletes what it finds -- `-delete`, or `-exec rm` -- with
+ * nothing to narrow it: only depth, traversal, `-type` and print options.
+ * A test such as `-name '*.pyc'` or `-path` makes it a cleanup, judged by Jev.
+ */
+function runsUnfilteredFindDelete(view: string, options: RecursiveRmOptions): boolean {
+  const words = viewWords(view);
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i] ?? "";
+    if (word !== "find" && !word.endsWith("/find")) continue;
+    let at = i + 1;
+    while (FIND_LEADING_OPTIONS.has(words[at] ?? "")) at += 1;
+    const paths: string[] = [];
+    while (at < words.length && !(words[at] ?? "").startsWith("-") && words[at] !== "!") paths.push(words[at++] ?? "");
+    if (!paths.some((path) => isRootOrHome(path, options.home) || (options.runsInRootOrHome && isWholeDirectory(path)))) continue;
+    let deletes = false;
+    let filtered = false;
+    for (; at < words.length; at += 1) {
+      const token = words[at] ?? "";
+      if (FIND_EXEC.has(token)) {
+        const program = words[at + 1] ?? "";
+        deletes ||= program === "rm" || program.endsWith("/rm");
+        break;
+      }
+      if (FIND_UNFILTERED_WITH_VALUE.has(token)) at += 1;
+      else if (token === "-delete") deletes = true;
+      else if (!FIND_UNFILTERED.has(token)) filtered = true;
+    }
+    if (deletes && !filtered) return true;
+  }
+  return false;
+}
+
+/** A pipe stage that prints the root or the home directory: `echo ~`, `printf '%s' $HOME`. */
+function printsRootOrHome(view: string, home: string): boolean {
+  const words = viewWords(view);
+  const program = words[0] ?? "";
+  if (program !== "echo" && program !== "printf") return false;
+  const args = words.slice(1).filter((arg, at) => !(program === "printf" && at === 0 && arg.includes("%")) && !/^-[a-zA-Z]+$/.test(arg));
+  return args.length > 0 && args.every((arg) => isRootOrHome(arg, home));
+}
+
+/** A pipe stage whose `xargs` runs a recursive `rm` on what it reads. */
+function xargsRunsRecursiveRm(view: string): boolean {
+  const words = viewWords(view);
+  const xargs = words.findIndex((word) => word === "xargs" || word.endsWith("/xargs"));
+  if (xargs === -1) return false;
+  const rm = words.findIndex((word, at) => at > xargs && (word === "rm" || word.endsWith("/rm")));
+  return rm !== -1 && words.slice(rm + 1).some((arg) => arg === "--recursive" || /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(arg));
+}
+
 /**
  * The rmRf rule's outcome for a whole command run from `cwd`: each simple
  * command is read through someSegmentMatches, and the directory it runs in
  * (command_locations.ts) decides whether `.` or `*` names the root or the
  * home directory (`cd / && rm -rf *`, `pushd ~ && rm -rf .`).
+ *
+ * 0.6.13 T3 (N-04): an unfiltered `find -delete` from root or home, and root
+ * or home printed into `xargs rm -r` through a real pipe (`echo ~ | xargs rm
+ * -rf`), are the same effect and the same rule.
  */
 export function recursiveRmOfRootOrHomeOutcome(command: string, cwd: string, home: string): SegmentMatchSeverity {
   const homeDir = resolve(home);
   let severity: SegmentMatchSeverity = null;
   for (const { segment, dir } of locateCommandSegments(command, cwd, homeDir)) {
-    const runsInRootOrHome = dir === "/" || dir === homeDir;
-    const outcome = someSegmentMatches(segment, { test: (view) => runsRecursiveRmOfRootOrHome(view, { home: homeDir, runsInRootOrHome }) });
+    const options = { home: homeDir, runsInRootOrHome: dir === "/" || dir === homeDir };
+    const outcome = someSegmentMatches(segment, { test: (view) => runsRecursiveRmOfRootOrHome(view, options) || runsUnfilteredFindDelete(view, options) });
     if (outcome === "deny") return "deny";
     severity = strongerSeverity(severity, outcome);
+  }
+  const { segments, joiners } = splitOnCommandSeparatorsDetailed(command);
+  for (let i = 1; i < segments.length; i += 1) {
+    if (joiners[i] !== "|") continue;
+    const printed = someSegmentMatches(segments[i - 1] ?? "", { test: (view) => printsRootOrHome(view, homeDir) }) === "deny";
+    if (printed && someSegmentMatches(segments[i] ?? "", { test: xargsRunsRecursiveRm }) === "deny") return "deny";
   }
   return severity;
 }
@@ -99,17 +169,96 @@ export function withoutGitGlobalOptionsBeforePush(view: string): string {
   return view.replace(GIT_GLOBAL_OPTIONS_BEFORE_PUSH, "$1git");
 }
 
-// `--force` (never `--force-with-lease`/`--force-if-includes`), a short
-// cluster holding `f` (`-f`, `-fu`, `-uf`, `-qf`), or a `+refspec`.
-const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includes)\b|-[a-zA-Z0-9]*f[a-zA-Z0-9]*\b)|(?:^|\s)\+\S)/;
+// `--force` (never `--force-with-lease`/`--force-if-includes`), `--mirror`,
+// a short cluster holding `f` (`-f`, `-fu`, `-uf`, `-qf`), or a `+refspec`.
+const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includes)\b|--mirror\b|-[a-zA-Z0-9]*f[a-zA-Z0-9]*\b)|(?:^|\s)\+\S)/;
 
 /** True when `view` runs a force push, in any flag spelling and through any git global option. */
 export const FORCE_PUSH_SHAPE = { test: (view: string): boolean => FORCE_PUSH.test(withoutGitGlobalOptionsBeforePush(view)) };
 
-const PUSH_PROTECTED = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANCH_NAMES.join("|")})\\b`);
+/** One `git push` read from a view: its remote and refspecs, and the flags that change what they mean. */
+interface PushInvocation {
+  readonly refspecs: readonly string[];
+  /** `--delete`/`-d`: every refspec names a remote branch to delete. */
+  readonly deletes: boolean;
+  /** `--all`/`--branches`: every local branch, a shared one included. */
+  readonly allBranches: boolean;
+  /** `--mirror`/`--tags`: no current-branch push is implied. */
+  readonly noImplicit: boolean;
+}
 
-/** True when `view` runs a push naming a shared branch, through any git global option. */
-export const PUSH_PROTECTED_SHAPE = { test: (view: string): boolean => PUSH_PROTECTED.test(withoutGitGlobalOptionsBeforePush(view)) };
+// `git push` options that take the next word as their value.
+const PUSH_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(["-o", "--push-option", "--repo", "--receive-pack", "--exec"]);
+const GIT_PUSH_AT = /\bgit\s+push\b/g;
+
+/** Every `git push` in `view` (git global options already dropped), read word by word. */
+function pushInvocations(view: string): readonly PushInvocation[] {
+  const text = withoutGitGlobalOptionsBeforePush(view);
+  const out: PushInvocation[] = [];
+  for (const match of text.matchAll(GIT_PUSH_AT)) {
+    const words = text.slice((match.index ?? 0) + match[0].length).trim().split(/\s+/).filter((word) => word.length > 0);
+    const positionals: string[] = [];
+    let repo: string | null = null;
+    let deletes = false;
+    let allBranches = false;
+    let noImplicit = false;
+    for (let at = 0; at < words.length; at += 1) {
+      const word = words[at] ?? "";
+      if (word === "--") {
+        positionals.push(...words.slice(at + 1));
+        break;
+      }
+      if (word.startsWith("--")) {
+        const name = word.includes("=") ? word.slice(0, word.indexOf("=")) : word;
+        if (name === "--repo") repo = word.includes("=") ? word.slice(word.indexOf("=") + 1) : (words[at + 1] ?? "");
+        if (PUSH_OPTIONS_WITH_VALUE.has(name) && !word.includes("=")) at += 1;
+        deletes ||= name === "--delete";
+        allBranches ||= name === "--all" || name === "--branches";
+        noImplicit ||= name === "--mirror" || name === "--tags";
+        continue;
+      }
+      if (word.startsWith("-") && word.length > 1) {
+        deletes ||= word.includes("d");
+        if (word.endsWith("o")) at += 1;
+        continue;
+      }
+      positionals.push(word);
+    }
+    out.push({ refspecs: repo !== null ? positionals : positionals.slice(1), deletes, allBranches, noImplicit });
+  }
+  return out;
+}
+
+/** The remote branch a refspec updates (`+` and `refs/heads/` dropped), or `HEAD` for a bare HEAD. */
+function refspecDestination(refspec: string, deletes: boolean): string {
+  const spec = refspec.startsWith("+") ? refspec.slice(1) : refspec;
+  const colon = deletes ? -1 : spec.indexOf(":");
+  const destination = colon === -1 ? spec : spec.slice(colon + 1) || spec.slice(0, colon);
+  return destination.replace(/^refs\/heads\//, "");
+}
+
+/**
+ * 0.6.13 T0b: a push is to a shared branch when a refspec's DESTINATION is
+ * one, exactly -- the part after `:` (or the whole ref), `+` and
+ * `refs/heads/` dropped -- or when it deletes one, or pushes every branch.
+ * It used to be any protected word anywhere after `git push`, so
+ * `fix/main-menu` and `fix/cin-1184-production-azure-storage` (`-` and `/`
+ * are word boundaries), a remote named `production`, or `main` as a source
+ * (`main:feature/x`) were all refused as pushes to a shared branch.
+ */
+function pushesToProtected(view: string): boolean {
+  return pushInvocations(view).some((push) => push.allBranches || push.refspecs.some((refspec) => PROTECTED_BRANCH_NAMES.includes(refspecDestination(refspec, push.deletes))));
+}
+
+/** True when `view` runs a push naming a shared branch as its destination, through any git global option. */
+export const PUSH_PROTECTED_SHAPE = { test: pushesToProtected };
+
+/** A push whose destination is the current branch's business: no refspec, or only `HEAD`. */
+function implicitPush(push: PushInvocation): boolean {
+  return !push.deletes && !push.allBranches && !push.noImplicit && push.refspecs.every((refspec) => refspecDestination(refspec, false) === "HEAD");
+}
+
+const IMPLICIT_PUSH_SHAPE = { test: (view: string): boolean => pushInvocations(view).some(implicitPush) };
 
 /**
  * The pushProtected rule's outcome. A command-position match is set aside
@@ -117,18 +266,35 @@ export const PUSH_PROTECTED_SHAPE = { test: (view: string): boolean => PUSH_PROT
  * that remote is read in the repository the push acts on -- after `cd`,
  * `pushd`, a subshell, `bash -c` or `git -C` -- never the session's own.
  * A directory that cannot be known keeps the refusal.
+ *
+ * 0.6.13 T0b: a push that names no destination (`git push`, `git push
+ * origin`, `git push origin HEAD`) goes where git would send it,
+ * `implicitDestination` answers that for the directory the push runs in
+ * (push_remote.ts resolveImplicitPushDestination); a shared branch there, or
+ * `push.default=matching`, is the same refusal. An unknown answer keeps the
+ * command to the ordinary path, as before.
  */
-export function protectedPushOutcome(command: string, cwd: string, home: string, remoteIsLocal: (push: string, dir: string) => boolean): SegmentMatchSeverity {
+export function protectedPushOutcome(
+  command: string,
+  cwd: string,
+  home: string,
+  remoteIsLocal: (push: string, dir: string) => boolean,
+  implicitDestination: (dir: string, head: boolean) => ImplicitPushDestination,
+): SegmentMatchSeverity {
   let severity: SegmentMatchSeverity = null;
   for (const { segment, dir } of locateCommandSegments(command, cwd, home)) {
-    const outcome = someSegmentMatches(segment, PUSH_PROTECTED_SHAPE);
-    if (outcome !== "deny") {
-      severity = strongerSeverity(severity, outcome);
-      continue;
-    }
     const pushDir = gitInvocation(segment, dir, resolve(home))?.dir ?? null;
-    if (pushDir !== null && remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) continue;
-    return "deny";
+    const outcome = someSegmentMatches(segment, PUSH_PROTECTED_SHAPE);
+    if (outcome === "deny") {
+      if (pushDir !== null && remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) continue;
+      return "deny";
+    }
+    severity = strongerSeverity(severity, outcome);
+    if (pushDir === null || someSegmentMatches(segment, IMPLICIT_PUSH_SHAPE) !== "deny") continue;
+    const head = pushInvocations(segment).some((push) => implicitPush(push) && push.refspecs.length > 0);
+    const destination = implicitDestination(pushDir, head);
+    const shared = destination.kind === "matching" || (destination.kind === "branch" && PROTECTED_BRANCH_NAMES.includes(destination.name));
+    if (shared && !remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) return "deny";
   }
   return severity;
 }

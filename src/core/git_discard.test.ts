@@ -270,6 +270,15 @@ test("someSegmentMatches: a quoted sentence naming the pattern is not a match --
   assert.equal(someSegmentMatches('git commit -m "build && test git push --force later"', forcePush), null);
 });
 
+// 0.6.13 T1 (F-09): the release notes flag and the terminal text flag are
+// data positions too -- not even a mention for the Jev path to weigh.
+test("someSegmentMatches: gh release notes and orca terminal text are data, never a match", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  assert.equal(someSegmentMatches('gh release create v1 --notes "never git push --force"', forcePush), null);
+  assert.equal(someSegmentMatches('gh release create v1 -n "never git push --force"', forcePush), null);
+  assert.equal(someSegmentMatches("orca terminal send --terminal t --enter --text 'run git push --force now'", forcePush), null);
+});
+
 test("someSegmentMatches: a quoted PROTECTED BRANCH sentence is not a match either", () => {
   const pushProtected = /git\s+push\b.*\b(main|master|production)\b/;
   assert.equal(someSegmentMatches('gh pr comment 1 --body "please do not push straight to main"', pushProtected), null);
