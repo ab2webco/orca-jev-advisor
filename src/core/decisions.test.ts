@@ -669,8 +669,10 @@ test("buildActionGateState: data text reaches Jev as a placeholder, the command 
   assert.equal(sent.proposed_command, "orca terminal send --terminal t --enter --text ‹text›");
   const written = buildActionGateState("cat > /tmp/x.mjs <<'EOF'\nconst s = 'git push --force origin main'\nEOF", "some context");
   assert.equal(written.proposed_command, "cat > /tmp/x.mjs <<'EOF'\n‹text›\nEOF");
+  // 0.6.15 T1 (JEVADV-83): a script's own argument is text too; until 0.6.14
+  // it reached Jev in full, as if the script might run it.
   const script = buildActionGateState("node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'", "some context");
-  assert.equal(script.proposed_command, "node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'");
+  assert.equal(script.proposed_command, "node probe.mjs ‹text›");
 });
 
 // 0.6.13 T4 (F-06): the request the gate sends Jev carries no home or volume

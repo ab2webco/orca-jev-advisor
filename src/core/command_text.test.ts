@@ -181,7 +181,6 @@ test("text that runs, or that a script may run, keeps its text for Jev", () => {
     `python3 - <<'PY'\nimport os; os.system('${text}')\nPY`,
     `cat <<'EOF' | bash\n${text}\nEOF`,
     `tee run.sh <<'EOF' | sh\n${text}\nEOF`,
-    `node probe.mjs '[["O","${text}"]]'`,
     `bash -c '${text}'`,
     `git commit -m "$(${text})"`,
     `git commit -m "\`${text}\`"`,
@@ -309,4 +308,128 @@ test("a call in code still runs wherever it sits: assigned, nested, after a stri
     const inspected = withoutHeredocBodies(command);
     assert.ok(inspected.split("\n").includes(expected), `${command}\n=> ${inspected}`);
   }
+});
+
+// 0.6.15 T1 (JEVADV-83): Jev reads the words in command position. Every other
+// quoted text -- a script's argument, a loop's strings, a search pattern, the
+// source handed to an interpreter -- is a placeholder, unless the program is
+// known to run it. 0.6.13 T1 listed the data positions instead, so every
+// unlisted one (`node probe.mjs '<json>'`, a `for` list) reached Jev as if it
+// were the command.
+test("a quoted argument of any program reaches Jev as a placeholder", () => {
+  const force = phrase("git", "push", "--force", "origin", "main");
+  const k8s = phrase("kubectl", "--context", "prod", "get", "pods");
+  const cases: readonly [string, string][] = [
+    [`node probe.mjs '[["O","${force}"]]'`, `node probe.mjs ${PLACEHOLDER}`],
+    [`for c in '${k8s}' 'terraform plan'; do echo "$c"; done`, `for c in ${PLACEHOLDER} ${PLACEHOLDER}; do echo "$c"; done`],
+    [`orca orchestration ask --question 'did you ${force}?'`, `orca orchestration ask --question ${PLACEHOLDER}`],
+    [`grep -rn "${force}" src | head -3`, `grep -rn ${PLACEHOLDER} src | head -3`],
+    [`echo "${force}" > notes.md && git add notes.md`, `echo ${PLACEHOLDER} > notes.md && git add notes.md`],
+    [`R="${force}"; make approve F=x R="$R"`, `R=${PLACEHOLDER}; make approve F=x R="$R"`],
+  ];
+  for (const [command, expected] of cases) assert.equal(withDataTextAsPlaceholders(command), expected, command);
+});
+
+test("the paths and refs a command acts on stay readable, quoted or not", () => {
+  for (const command of [
+    `rm -rf "$HOME/Library/Application Support/app/cache"`,
+    `cd "/Volumes/My Disk/app" && git push origin main`,
+    `git push -u origin 'feature/x'`,
+    `docker volume rm prod_pgdata`,
+    `S=~/Library/Application\\ Support/app/state.json; cp "$S" /tmp/state.json`,
+  ]) {
+    assert.equal(withDataTextAsPlaceholders(command), command, command);
+  }
+});
+
+test("a program that runs its argument keeps it, read again as a command line", () => {
+  const force = phrase("git", "push", "--force", "origin", "main");
+  const drop = phrase("DROP", "TABLE", "users");
+  for (const command of [
+    `eval "${force}"`,
+    `watch -n 5 '${force}'`,
+    `xargs -I{} sh -c '${force} {}'`,
+    `find . -name '*.tmp' -exec sh -c 'rm -rf "$1"' _ {} \;`,
+    `docker exec app sh -c 'psql -c "${drop}"'`,
+    `psql -c "${drop}"`,
+    `mysql -e "${drop}"`,
+    `sqlite3 app.db "${drop}"`,
+    `awk 'BEGIN { system("rm -rf ~") }'`,
+    `python3 -c "import os; os.system('${force}')"`,
+    `docker exec db psql -U app -c "${drop}"`,
+    `kubectl exec -it pg-0 -- psql -c "${drop}"`,
+    `bin/rails runner 'User.destroy_all; puts User.count'`,
+    `bundle exec rails runner "Order.delete_all"`,
+  ]) {
+    assert.equal(withDataTextAsPlaceholders(command), command, command);
+  }
+  // What the run command line itself holds as text is a placeholder again.
+  assert.equal(withDataTextAsPlaceholders(`sh -c 'echo "a b c"; ${force}'`), `sh -c 'echo ${PLACEHOLDER}; ${force}'`);
+  assert.equal(withDataTextAsPlaceholders(`ssh host 'grep -rn "${force}" /srv'`), `ssh host 'grep -rn ${PLACEHOLDER} /srv'`);
+});
+
+// N-10, N-11 (qa-0.6.14): the source handed to an interpreter is read the way
+// its language reads it. Code stays; a string it only holds or writes is a
+// placeholder; a string it runs stays; a comment is dropped.
+test("interpreter source reaches Jev as code, its text as placeholders", () => {
+  const force = phrase("git", "push", "--force", "origin", "main");
+  const rm = phrase("execSync('rm", "-rf", "~')", "is", "refused");
+  const cases: readonly [string, string][] = [
+    [`python3 -c "print('${force}')"`, `python3 -c "print('${PLACEHOLDER}')"`],
+    [`node -e "console.log('${force}')"`, `node -e "console.log('${PLACEHOLDER}')"`],
+    [
+      `python3 - <<'PY'\np = 'notes.md'\n# ${force}\nopen(p, 'w').write('${force}')\nPY`,
+      `python3 - <<'PY'\np = 'notes.md'\n\nopen(p, 'w').write('${PLACEHOLDER}')\nPY`,
+    ],
+    [
+      `node - <<'EOF'\nconst fs = require("fs")\nfs.writeFileSync("notes.md", "${rm}")\nEOF`,
+      `node - <<'EOF'\nconst fs = require("fs")\nfs.writeFileSync("notes.md", "${PLACEHOLDER}")\nEOF`,
+    ],
+    [`python3 - <<'PY'\nimport os\nos.system('${force}')\nPY`, `python3 - <<'PY'\nimport os\nos.system('${force}')\nPY`],
+    [`python3 - <<'PY'\nname = 'x'\nprint(f"hello {name} and ${force}")\nPY`, `python3 - <<'PY'\nname = 'x'\nprint(f"${PLACEHOLDER}{name}${PLACEHOLDER}")\nPY`],
+  ];
+  for (const [command, expected] of cases) assert.equal(withDataTextAsPlaceholders(command), expected, command);
+});
+
+test("a heredoc fed to a program that does not run it reaches Jev as a placeholder; one fed to ssh or a SQL client stays", () => {
+  const force = phrase("git", "push", "--force", "origin", "main");
+  const drop = phrase("DROP", "TABLE", "users;");
+  assert.equal(withDataTextAsPlaceholders(`jq -s . <<'EOF'\n{"note": "${force}"}\nEOF`), `jq -s . <<'EOF'\n${PLACEHOLDER}\nEOF`);
+  for (const command of [`ssh host <<'EOF'\n${force}\nEOF`, `psql app <<'EOF'\n${drop}\nEOF`]) {
+    assert.equal(withDataTextAsPlaceholders(command), command, command);
+  }
+});
+
+// N-10 (qa-0.6.14): an f-string's {…} is code, so a call placed in one runs.
+test("a call inside a Python f-string's braces reaches the rules; the f-string's text does not", () => {
+  const force = phrase("git", "push", "--force", "origin", "x");
+  const inspected = withoutHeredocBodies(`python3 - <<'PY'\nimport os\nprint(f"done: {os.system('${force}')}")\nPY`);
+  assert.ok(inspected.split("\n").includes(force), inspected);
+  const quoted = withoutHeredocBodies(`python3 - <<'PY'\nprint(f"never os.system('${force}') {1 + 1}")\nPY`);
+  assert.ok(!quoted.includes(force), quoted);
+});
+
+// What a pipe or a here-string feeds a shell, an interpreter or a SQL client
+// is run by it, so Jev keeps reading it; fed to anything else it is text.
+test("text piped or here-stringed into a program that runs it keeps its text for Jev", () => {
+  const drop = phrase("DROP", "TABLE", "users;");
+  const force = phrase("git", "push", "--force", "origin", "main");
+  for (const command of [
+    `echo "${drop}" | psql`,
+    `psql <<< "${drop}"`,
+    `printf '%s\\n' "${force}" | bash`,
+    `echo "${force}" | tee run.sh | sh`,
+    `echo "${drop}" | ssh db 'mysql app'`,
+  ]) {
+    assert.equal(withDataTextAsPlaceholders(command), command, command);
+  }
+  assert.equal(withDataTextAsPlaceholders(`echo "${force}" | grep push`), `echo ${PLACEHOLDER} | grep push`);
+  assert.equal(withDataTextAsPlaceholders(`jq -r . <<< "${force}"`), `jq -r . <<< ${PLACEHOLDER}`);
+});
+
+// A `$( )` runs, so its command line is read again as one, inside quotes too.
+test("a command substitution is read again as a command line, its own text a placeholder", () => {
+  const force = phrase("git", "push", "--force", "origin", "main");
+  assert.equal(withDataTextAsPlaceholders(`node probe.mjs "$(printf '%s' '${force} is refused')"`), `node probe.mjs "$(printf '%s' ${PLACEHOLDER})"`);
+  assert.equal(withDataTextAsPlaceholders(`echo "$(${force})"`), `echo "$(${force})"`);
 });

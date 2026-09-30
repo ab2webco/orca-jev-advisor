@@ -37,6 +37,8 @@
 //
 // Pure: no I/O.
 
+import { commandsRunByProgram, languageOfProgram } from "./program_text.ts";
+
 /** Options git accepts BEFORE the subcommand that take a separate value. */
 const GLOBAL_OPTIONS_WITH_VALUE = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
 
@@ -605,8 +607,11 @@ const INTERPRETER_CODE_PROGRAMS: ReadonlySet<string> = new Set(INTERPRETER_CODE_
 const SQL_EXEC_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["psql", new Set(["-c", "--command"])],
   ["mysql", new Set(["-e", "--execute"])],
+  ["sqlite3", new Set<string>()],
 ]);
 const SQL_EXEC_PROGRAMS: ReadonlySet<string> = new Set(SQL_EXEC_FLAGS.keys());
+/** sqlite3 options that take a separate value; its SQL is the positional after the database (0.6.15 T1). */
+const SQLITE_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(["-cmd", "-separator", "-newline", "-nullvalue", "-init", "-vfs", "-maxsize", "-mmap", "-pagecache", "-lookaside", "-heap"]);
 
 /** One shell word of a scanned segment: its dequoted text, and whether ANY
  *  of its characters were drawn from inside a quote. */
@@ -939,7 +944,10 @@ function dataPositionIndexes(tokens: readonly ScanToken[]): ReadonlySet<number> 
  * really does run (just not as shell syntax).
  */
 function interpreterCodePositions(tokens: readonly ScanToken[]): ReadonlySet<number> {
-  const plain = tokens.map((token) => token.text);
+  return interpreterCodePositionsOf(tokens.map((token) => token.text));
+}
+
+function interpreterCodePositionsOf(plain: readonly string[]): ReadonlySet<number> {
   const script = scriptProgramCodePosition(plain);
   if (script !== null) return script;
   const { name: program, index: programIndex } = resolveProgram(plain, INTERPRETER_CODE_PROGRAMS);
@@ -947,7 +955,7 @@ function interpreterCodePositions(tokens: readonly ScanToken[]): ReadonlySet<num
   const flags = INTERPRETER_CODE_FLAGS.get(program);
   if (flags === undefined) return positions;
   for (let j = programIndex + 1; j < plain.length; j += 1) {
-    if (flags.has(plain[j] ?? "") && j + 1 < tokens.length) positions.add(j + 1);
+    if (flags.has(plain[j] ?? "") && j + 1 < plain.length) positions.add(j + 1);
   }
   return positions;
 }
@@ -1010,15 +1018,75 @@ const SED_RUNS_A_COMMAND = /(?:^|[;{}\n]|\d|\$|\/)\s*e(?:\s|$|;)|\bs(.).*\1.*\1[
 
 /** The token indexes that are a SQL-exec position -- see SQL_EXEC_FLAGS' own doc comment above. Never opaque under ANY mode, including "command-strict". */
 function sqlExecPositions(tokens: readonly ScanToken[]): ReadonlySet<number> {
-  const plain = tokens.map((token) => token.text);
+  return sqlExecPositionsOf(tokens.map((token) => token.text));
+}
+
+function sqlExecPositionsOf(plain: readonly string[]): ReadonlySet<number> {
   const { name: program, index: programIndex } = resolveProgram(plain, SQL_EXEC_PROGRAMS);
   const positions = new Set<number>();
   const flags = SQL_EXEC_FLAGS.get(program);
   if (flags === undefined) return positions;
+  if (program === "sqlite3") {
+    // `sqlite3 [options] DB SQL...`: every positional after the database is SQL it runs.
+    let seenDatabase = false;
+    for (let j = programIndex + 1; j < plain.length; j += 1) {
+      const token = plain[j] ?? "";
+      if (token.startsWith("-")) {
+        if (SQLITE_OPTIONS_WITH_VALUE.has(token)) j += 1;
+        continue;
+      }
+      if (seenDatabase) positions.add(j);
+      seenDatabase = true;
+    }
+    return positions;
+  }
   for (let j = programIndex + 1; j < plain.length; j += 1) {
-    if (flags.has(plain[j] ?? "") && j + 1 < tokens.length) positions.add(j + 1);
+    if (flags.has(plain[j] ?? "") && j + 1 < plain.length) positions.add(j + 1);
   }
   return positions;
+}
+
+/** What a program does with one of its own arguments when it runs it (0.6.15 T1): see runArgumentPositions. */
+export type RunArgument =
+  | { readonly kind: "interpreter"; readonly program: string }
+  | { readonly kind: "sql" }
+  | { readonly kind: "script-code" };
+
+/**
+ * The arguments of the command `texts` (one simple command's shell words,
+ * quotes removed) that its program runs rather than reads: an interpreter's
+ * `-c`/`-e` source, a SQL client's statement, an awk or sed program that can
+ * run a command. The same positions scanSegment never hides; exported for
+ * the copy of the command Jev reads (command_text.ts).
+ */
+export function runArgumentPositions(texts: readonly string[]): ReadonlyMap<number, RunArgument> {
+  const own = runArgumentPositionsAt(texts);
+  if (own.size > 0) return own;
+  // Reached through a program this module does not model (`docker exec db
+  // psql -c …`, `kubectl exec p -- psql -c …`, `bundle exec rails runner …`):
+  // the first word naming one of these runners starts the command it runs.
+  const start = texts.findIndex((text, at) => at > 0 && RUNNER_NAMES.has(programName(stripLeadingGroupers(text))));
+  if (start === -1) return own;
+  return new Map([...runArgumentPositionsAt(texts.slice(start))].map(([index, run]): [number, RunArgument] => [index + start, run]));
+}
+
+/** `rails runner CODE`: ruby code run as the application (`-e ENV` takes a value). */
+const RAILS_RUNNER_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(["-e", "--environment"]);
+/** The programs runArgumentPositions knows to run one of their own arguments. */
+const RUNNER_NAMES: ReadonlySet<string> = new Set([...INTERPRETER_CODE_PROGRAMS, ...SQL_EXEC_PROGRAMS, ...SCRIPT_PROGRAMS, "rails"]);
+
+function runArgumentPositionsAt(texts: readonly string[]): ReadonlyMap<number, RunArgument> {
+  const out = new Map<number, RunArgument>();
+  const program = resolveProgram(texts, INTERPRETER_CODE_PROGRAMS).name;
+  for (const index of interpreterCodePositionsOf(texts)) {
+    out.set(index, SCRIPT_PROGRAMS.has(resolveProgram(texts, SCRIPT_PROGRAMS).name) ? { kind: "script-code" } : { kind: "interpreter", program });
+  }
+  for (const index of sqlExecPositionsOf(texts)) out.set(index, { kind: "sql" });
+  if (programName(stripLeadingGroupers(texts[0] ?? "")) === "rails" && texts[1] === "runner") {
+    const code = afterOwnOptions(texts, 2, RAILS_RUNNER_OPTIONS_WITH_VALUE);
+    if (code < texts.length) out.set(code, { kind: "interpreter", program: "ruby" });
+  }
+  return out;
 }
 
 /**
@@ -1078,7 +1146,20 @@ function scanTokens(tokens: readonly ScanToken[], nextBody: () => string, mode: 
   const dataPositions = dataPositionIndexes(tokens);
   const codePositions = interpreterCodePositions(tokens);
   const alwaysVisible = sqlExecPositions(tokens);
-  return tokens.map((token, i) => scanTokenWithBodies(token, nextBody, isHiddenInMode(i, mode, dataPositions, codePositions, alwaysVisible))).join(" ");
+  const language = mode === "command" ? languageOfProgram(resolveProgram(tokens.map((token) => token.text), INTERPRETER_CODE_PROGRAMS).name) : null;
+  return tokens
+    .map((token, i) => {
+      // 0.6.15 T1 (N-10): in the "command" view an interpreter's source is
+      // read the way its language reads it, as its heredoc body already is
+      // (program_text.ts): what it hands a shell is what it runs, and a
+      // string it only prints or holds is not. The "visible" view keeps the
+      // raw text, so such a string is still a mention for Jev to read.
+      if (language !== null && codePositions.has(i) && !alwaysVisible.has(i) && !token.text.includes(SCAN_SUBSTITUTION_MARKER)) {
+        return commandsRunByProgram(token.text, language).join("\n");
+      }
+      return scanTokenWithBodies(token, nextBody, isHiddenInMode(i, mode, dataPositions, codePositions, alwaysVisible));
+    })
+    .join(" ");
 }
 
 /**
@@ -1123,18 +1204,10 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
   // of some other program (`grep -n watch "..." f`) from being misread as
   // that wrapper's own command.
   const plainTexts = tokens.map((token) => token.text);
-  const { name, index } = resolveProgram(plainTexts, RECURSIVE_COMMAND_PROGRAMS);
 
-  // A program that runs ANOTHER program named in its own arguments hands off
-  // a whole command line, exactly like a wrapper: `find ... -exec sh -c '...'`
-  // and a `--` hand-off (`docker exec c -- sh -c '...'`, `kubectl exec p --
-  // git ...`). The rest of the segment from that point is scanned as its own
-  // command line, so a shell reached this way is recursed into instead of
-  // being read as one opaque quoted argument (review finding
-  // R3-wrapper-only-at-resolved-program). `xargs` needs nothing here: it is
-  // already one of WRAPPERS.
-  const handOff = RECURSIVE_COMMAND_PROGRAMS.has(name) ? -1 : execHandOffIndex(plainTexts, index, name);
-  if (handOff !== -1) {
+  const handOffAt = commandHandOff(plainTexts);
+  if (handOffAt !== null && handOffAt.kind === "command-line") {
+    const handOff = handOffAt.index;
     const before = scanTokens(tokens.slice(0, handOff), nextScannedBody, mode);
     const rest = tokens
       .slice(handOff)
@@ -1145,27 +1218,7 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
     if (scanned === null) return null;
     return [before, scanned].join(" ");
   }
-  const isEval = name === "eval";
-  const takesDashC = SHELLS.has(name) || DASH_C_COMMAND_PROGRAMS.has(name);
-  const flagIndex = takesDashC
-    ? tokens.findIndex((candidate, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(candidate.text))
-    : -1;
-  const isSsh = name === "ssh";
-  const isWatch = name === "watch";
-  const resolvedScriptStart = isEval
-    ? index + 1
-    : flagIndex !== -1
-      ? flagIndex + 1
-      : isSsh
-        ? afterOwnOptions(plainTexts, index + 1, SSH_OPTIONS_WITH_VALUE) + 1
-        : isWatch
-          ? afterOwnOptions(plainTexts, index + 1, WATCH_OPTIONS_WITH_VALUE)
-          : -1;
-  // JEVADV-37 item 3: nothing above recognised a runner for this segment at
-  // all -- the resolved program is some OTHER, unmodelled command (`parallel`,
-  // `flock`, `chroot`, ...). Fall back to a real shell `-c` pair found
-  // ANYWHERE in the segment -- see shellDashCAnywhereIndex's own doc comment.
-  const scriptStart = resolvedScriptStart !== -1 ? resolvedScriptStart : shellDashCAnywhereIndex(plainTexts);
+  const scriptStart = handOffAt === null ? -1 : handOffAt.index;
   if (scriptStart !== -1 && tokens[scriptStart] !== undefined) {
     const before = scanTokens(tokens.slice(0, scriptStart), nextScannedBody, mode);
     // The script is scanned again as a whole, so its substitutions go back
@@ -1181,6 +1234,61 @@ function scanSegment(segment: string, depth: number, mode: ScanMode): string | n
   }
 
   return scanTokens(tokens, nextScannedBody, mode);
+}
+
+/** Where a segment hands a whole command line on (see commandHandOff). */
+export interface CommandHandOff {
+  /** The word where it starts. */
+  readonly index: number;
+  /**
+   * `command-line`: the words from `index` on are a command line in their own
+   * right (`find -exec`, a `--` hand-off). `dash-c`: the one word at `index`
+   * is a script (`sh -c`, `su -c`, `script -c`). `script`: the words from
+   * `index` on, joined, are one (`eval`, `ssh host`, `watch`).
+   */
+  readonly kind: "command-line" | "dash-c" | "script";
+}
+
+/**
+ * Where the simple command `texts` (its shell words, quotes removed) hands a
+ * command line to another program, or null. Shared by scanSegment and the
+ * copy of the command Jev reads (command_text.ts, 0.6.15 T1).
+ *
+ * A program that runs ANOTHER program named in its own arguments hands off
+ * a whole command line, exactly like a wrapper: `find ... -exec sh -c '...'`
+ * and a `--` hand-off (`docker exec c -- sh -c '...'`, `kubectl exec p --
+ * git ...`). The rest of the segment from that point is scanned as its own
+ * command line, so a shell reached this way is recursed into instead of
+ * being read as one opaque quoted argument (review finding
+ * R3-wrapper-only-at-resolved-program). `xargs` needs nothing here: it is
+ * already one of WRAPPERS.
+ *
+ * JEVADV-37 item 3: when nothing recognised a runner for this segment at
+ * all -- the resolved program is some OTHER, unmodelled command (`parallel`,
+ * `flock`, `chroot`, ...) -- a real shell `-c` pair found ANYWHERE in the
+ * segment still counts -- see shellDashCAnywhereIndex's own doc comment.
+ */
+export function commandHandOff(texts: readonly string[]): CommandHandOff | null {
+  const { name, index } = resolveProgram(texts, RECURSIVE_COMMAND_PROGRAMS);
+  const handOff = RECURSIVE_COMMAND_PROGRAMS.has(name) ? -1 : execHandOffIndex(texts, index, name);
+  if (handOff !== -1) return { index: handOff, kind: "command-line" };
+  const takesDashC = SHELLS.has(name) || DASH_C_COMMAND_PROGRAMS.has(name);
+  const flagIndex = takesDashC ? texts.findIndex((text, at) => at > index && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(text)) : -1;
+  const resolved: CommandHandOff | null =
+    name === "eval"
+      ? { index: index + 1, kind: "script" }
+      : flagIndex !== -1
+        ? { index: flagIndex + 1, kind: "dash-c" }
+        : name === "ssh"
+          ? { index: afterOwnOptions(texts, index + 1, SSH_OPTIONS_WITH_VALUE) + 1, kind: "script" }
+          : name === "watch"
+            ? { index: afterOwnOptions(texts, index + 1, WATCH_OPTIONS_WITH_VALUE), kind: "script" }
+            : null;
+  const found = resolved ?? (() => {
+    const anywhere = shellDashCAnywhereIndex(texts);
+    return anywhere === -1 ? null : { index: anywhere, kind: "dash-c" as const };
+  })();
+  return found !== null && found.index < texts.length ? found : null;
 }
 
 /**

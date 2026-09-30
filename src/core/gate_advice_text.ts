@@ -24,6 +24,7 @@
 //
 // Pure: no I/O, no clock, no randomness.
 
+import { withoutHeredocBodies, withoutLineContinuations } from "./command_text.ts";
 import { splitOnCommandSeparators } from "./git_discard.ts";
 import { isSafeSegment } from "./gate_safe_command.ts";
 import { isProtectedRecoverabilityWhy } from "./git_recoverability.ts";
@@ -65,9 +66,12 @@ function truncateSegment(text: string): string {
   return trimmed.length <= SEGMENT_MAX_CHARS ? trimmed : `${trimmed.slice(0, SEGMENT_MAX_CHARS - 1)}…`;
 }
 
-/** The command's own segments that change something -- never a tier-1a-safe one (a bare `git status`, a bare `cd`, ...), at most two, each truncated. */
+/**
+ * The command's own segments that change something -- never a tier-1a-safe one (a bare `git status`, a bare `cd`, ...), at most two, each truncated.
+ * Read with its heredoc bodies set aside as the local rules read it (0.6.15 T1, N-11): a line of a body is not a command line.
+ */
 export function affectedSegments(command: string): readonly string[] {
-  return splitOnCommandSeparators(command)
+  return splitOnCommandSeparators(withoutLineContinuations(withoutHeredocBodies(command)))
     .filter((segment) => !isSafeSegment(segment))
     .slice(0, MAX_SEGMENTS_NAMED)
     .map(truncateSegment);

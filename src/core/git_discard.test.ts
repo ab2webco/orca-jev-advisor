@@ -658,3 +658,17 @@ test("someSegmentMatches: awk programs and sed scripts are interpreter code -- '
   assert.equal(someSegmentMatches(`sed -n '1e git push --force origin main' notes.md`, forcePush), "code");
   assert.equal(someSegmentMatches(`sed -e 's/x/git push --force origin main/e' notes.md`, forcePush), "code");
 });
+
+// 0.6.15 T1 (N-10, qa-0.6.14): an interpreter's `-c`/`-e` source is read the
+// way its language reads it, as its heredoc body already is (0.6.14 N-09).
+// A string the program only prints is text, so it is a mention; a string it
+// hands a shell is still ambiguous code ('code', an advice, as before).
+test("someSegmentMatches: a -c/-e string the program only prints is a mention, not code", () => {
+  const forcePush = /git\s+push\b.*(--force|-f)\b/;
+  const run = ["git", "push", "--force", "origin", "main"].join(" ");
+  assert.equal(someSegmentMatches(`python3 -c "print('${run}')"`, forcePush), "ask");
+  assert.equal(someSegmentMatches(`python3 -c "# os.system('${run}')"`, forcePush), "ask");
+  assert.equal(someSegmentMatches(`node -e "console.log('${run} is refused')"`, forcePush), "ask");
+  assert.equal(someSegmentMatches(`ruby -e "puts 'system(\\"${run}\\")'"`, forcePush), "ask");
+  assert.equal(someSegmentMatches(`python3 -c "import os; print(f'{os.system(\\"${run}\\")}')"`, forcePush), "code");
+});
