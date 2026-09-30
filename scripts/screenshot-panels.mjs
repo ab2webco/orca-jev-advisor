@@ -705,7 +705,7 @@ const CONSUMPTION_READY = {
  * applied switch, and a real dollar estimate -- so both new UI pieces show
  * their populated state, not the honest-but-uninteresting empty one.
  */
-const ROUTER_EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const ROUTER_EFFORT_DEFAULTS = { simple: 'medium', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const ROUTER_TIERS_ANTHROPIC = {
   simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
   standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },

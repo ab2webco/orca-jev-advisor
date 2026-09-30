@@ -40,9 +40,16 @@ export function effortRank(effort: SessionEffort | null | undefined): number | n
   return rank === -1 ? null : rank;
 }
 
-/** §4: the effort each tier asks for, where the model takes one. The default the person's per-tier setting overrides (0.6.2 E3). */
+/**
+ * §4: the effort each tier asks for, where the model takes one. The default
+ * the person's per-tier setting overrides (0.6.2 E3). 0.6.16 T1: simple is
+ * medium, not low -- half the turns that edited were rated simple
+ * (odd/research/phase-effort.md §2) and low has never been measured on work
+ * that edits. Since no default is low, a `low` in the per-tier map is always
+ * the person's own, and it is sent as they set it.
+ */
 export const TIER_EFFORT: Readonly<Record<RouterTier, RouterEffort>> = {
-  simple: "low",
+  simple: "medium",
   standard: "medium",
   complex: "high",
   frontier: "xhigh",
@@ -426,6 +433,10 @@ export interface RouterDecisionRecord {
   readonly effort: SessionEffort | null;
   /** JEVADV-63: the project this decision was made in, resolved from the session's cached OrcaContext (see src/core/project_name.ts); null when not yet known this session. */
   readonly project: string | null;
+  /** 0.6.16 T1: the session, turn and (for a subagent) agent the decision was made for -- the same ids its turn-usage steps carry, so the two join without a time window; null when not known. */
+  readonly sessionId: string | null;
+  readonly turnId: string | null;
+  readonly agentId: string | null;
 }
 
 export interface RouterDecisionRecordInput {
@@ -443,6 +454,9 @@ export interface RouterDecisionRecordInput {
   readonly effort?: SessionEffort | null;
   /** JEVADV-63: null when not given -- an honest "not yet known" state, not a bug. */
   readonly project?: string | null;
+  readonly sessionId?: string | null;
+  readonly turnId?: string | null;
+  readonly agentId?: string | null;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -467,5 +481,8 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     origin: input.origin ?? null,
     effort: input.effort ?? null,
     project: input.project ?? null,
+    sessionId: input.sessionId ?? null,
+    turnId: input.turnId ?? null,
+    agentId: input.agentId ?? null,
   };
 }

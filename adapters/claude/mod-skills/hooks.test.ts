@@ -118,6 +118,7 @@ function makeFakeEngine(host: FakeHost): unknown {
   return {
     session: {
       cwd: async () => CWD,
+      id: async () => "session-1",
       usage: async () => {
         if (host.failUsage) throw new Error("fake host: session.usage failed");
         return { startedAt: 0, context: {}, rateLimits: host.rateLimits };
@@ -1299,6 +1300,47 @@ test("router, active: the person switching model mid-session wins -- the router 
   host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
   const manual = turnStepEvent({ index: 1, model: "claude-sonnet-5-5", effort: "medium" });
   assert.deepEqual(await stepThrough(handlers, engine, manual), manual);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.16 T1: decision rows join their steps by id; the router's own low is
+// never sent on work that may edit.
+// ---------------------------------------------------------------------------
+
+test("0.6.16 T1: a main decision row carries the session and turn, and the steps carry the same ids", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "add a --json flag to the export command", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, turnId: "turn-7" }));
+  const [decision] = routerDecisionLines(host);
+  assert.deepEqual([decision?.sessionId, decision?.turnId, decision?.agentId], ["session-1", "turn-7", null]);
+  const step = turnUsageLines(host).at(-1);
+  assert.deepEqual([step?.sessionId, step?.turnId, step?.index, step?.agentId], ["session-1", "turn-7", 0, null]);
+});
+
+test("0.6.16 T1: a subagent decision row carries its agent and its own turn", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooks(host);
+  await spawnThrough(handlers, engine, spawnEvent());
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  const [decision] = routerDecisionLines(host);
+  assert.deepEqual([decision?.point, decision?.sessionId, decision?.turnId, decision?.agentId], ["subagent", "session-1", "sub-1", "agent-1"]);
+  assert.deepEqual([turnUsageLines(host).at(-1)?.agentId, turnUsageLines(host).at(-1)?.turnId], ["agent-1", "sub-1"]);
+});
+
+test("0.6.16 T1 (hook, active): simple work held on the session's Opus runs at medium, not the router's old low", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "rename userId to accountId", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple", 0.5));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent({ index: 0, model: "claude-opus-5-5", effort: "low" }));
+  assert.equal(seen.model, "claude-opus-5-5");
+  assert.equal(seen.effort, "medium");
 });
 
 // ---------------------------------------------------------------------------

@@ -106,12 +106,12 @@ test("planRouterModeWrite: refuses a file that is not a JSON object, never overw
 
 import { parseTierEffort, planRouterEffortWrite, routerEffortFromSettings } from "./model_router_mode.ts";
 
-const DEFAULTS = { simple: "low", standard: "medium", complex: "high", frontier: "xhigh" };
+const DEFAULTS = { simple: "medium", standard: "medium", complex: "high", frontier: "xhigh" };
 
 test("parseTierEffort: valid per-tier values override the defaults; anything else is ignored", () => {
   assert.deepEqual(parseTierEffort(undefined), DEFAULTS);
   assert.deepEqual(parseTierEffort({ complex: "xhigh" }), { ...DEFAULTS, complex: "xhigh" });
-  assert.deepEqual(parseTierEffort({ frontier: "max", simple: "medium" }), { ...DEFAULTS, frontier: "max", simple: "medium" });
+  assert.deepEqual(parseTierEffort({ frontier: "max", simple: "low" }), { ...DEFAULTS, frontier: "max", simple: "low" });
   assert.deepEqual(parseTierEffort({ complex: "ultra", standard: 3, frontier: null, unknown: "high" }), DEFAULTS);
   assert.deepEqual(parseTierEffort("xhigh"), DEFAULTS);
   assert.deepEqual(parseTierEffort(["high"]), DEFAULTS);
@@ -142,9 +142,10 @@ test("planRouterEffortWrite: back to the defaults removes the option; the same v
   assert.equal(planRouterEffortWrite(JSON.stringify({}), DEFAULTS).kind, "unchanged");
   assert.deepEqual(planRouterEffortWrite("{ not json", DEFAULTS), { kind: "refuse", reason: "unparseable" });
   assert.deepEqual(planRouterEffortWrite("[]", DEFAULTS), { kind: "refuse", reason: "not-an-object" });
-  const created = planRouterEffortWrite(null, { ...DEFAULTS, simple: "medium" });
+  // 0.6.16 T1: a person's own low on simple work differs from the default, so it is stored and respected.
+  const created = planRouterEffortWrite(null, { ...DEFAULTS, simple: "low" });
   assert.equal(created.kind, "write");
-  if (created.kind === "write") assert.deepEqual(JSON.parse(created.text), { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { simple: "medium" } } } } });
+  if (created.kind === "write") assert.deepEqual(JSON.parse(created.text), { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { routerEffort: { simple: "low" } } } } });
 });
 
 test("nit 7: back to the defaults over a stray key writes an explicit empty routerEffort, so the defaults really apply", () => {

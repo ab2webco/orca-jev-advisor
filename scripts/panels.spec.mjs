@@ -2674,7 +2674,7 @@ const TIERS_ANTHROPIC = {
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true }
 }
-const EFFORT_DEFAULTS = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const EFFORT_DEFAULTS = { simple: 'medium', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const MODEL_ROUTER_STATUS_EFFORT = {
   targets: [
     { target: 'home', mode: 'measure', effort: EFFORT_DEFAULTS, tiers: TIERS_ANTHROPIC, steward: { mode: 'measure', threshold: 120000 } },

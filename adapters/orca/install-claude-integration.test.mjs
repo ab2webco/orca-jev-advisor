@@ -1042,7 +1042,7 @@ test('finding 6: a settings.json that is not a JSON object is refused and left a
 // 0.6.2 E3: the effort each tier asks for, per target, next to the mode.
 // ---------------------------------------------------------------------------
 
-const DEFAULT_TIER_EFFORT = { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }
+const DEFAULT_TIER_EFFORT = { simple: 'medium', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 
 test('router-mode-status: each target reports its per-tier effort and the model each tier resolves to there', () => {
   const home = makeHome()

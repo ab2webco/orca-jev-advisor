@@ -595,6 +595,11 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
   const line = JSON.stringify({
     at,
     agent: e.agentId === undefined ? 'main' : 'subagent',
+    // 0.6.16 T1: the ids a router decision row carries, so the two join.
+    sessionId: await readSessionId($),
+    turnId: e.turnId,
+    index: e.index,
+    agentId: e.agentId ?? null,
     model: r.usage?.model ?? e.model,
     effort: e.effort ?? null,
     input: r.usage?.input_tokens ?? null,
@@ -1083,7 +1088,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   })
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey }
   const next: RouterSticky = decision.changed
@@ -1117,7 +1122,7 @@ async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mod
   })
   if (decision === null) return { input: stickyStepInput(e, sticky, mode), status: null }
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId }))}\n`)
   const next: RouterSticky = { ...sticky, model: decision.model, effort: decision.effort, rewrite: false, pendingLower: null }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
   return { input: stickyStepInput(e, next, mode), status: null }
@@ -1152,7 +1157,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
@@ -1367,6 +1372,9 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           quotaSource: target.quotaSource,
           effort: loggedEffort,
           project: target.project,
+          sessionId: await readSessionId($),
+          turnId: e.turnId,
+          agentId: e.agentId,
         })
         await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
       } catch {
@@ -1474,7 +1482,7 @@ async function stewardModels($: EngineInterface): Promise<{ readonly mainModel: 
   return { mainModel: own, currentModel: own }
 }
 
-async function stewardSessionId($: EngineInterface): Promise<string | null> {
+async function readSessionId($: EngineInterface): Promise<string | null> {
   try {
     return await $.session.id()
   } catch {
@@ -1565,7 +1573,7 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       personTurns: state.personTurns,
       locale: await resolveLocale($),
       verdict: jev?.verdict ?? null,
-      sessionId: await stewardSessionId($),
+      sessionId: await readSessionId($),
       mainWindow,
       currentModel: models.currentModel,
       wouldFire,
