@@ -287,6 +287,28 @@ test('F-04: a curl-to-shell spelling in an echo, a grep pattern or a heredoc bod
   }
 })
 
+// 0.6.13 T1 (F-09/N-03): text in a known data position is data. The commit
+// message form Claude Code writes (`-m "$(cat <<'EOF' ... EOF)"`) was refused
+// as a force push; the same text sent to a terminal or written to a file must
+// not be refused either, while a real push next to it still is.
+test('0.6.13 T1: a message, terminal text or file body naming a rule is data, never a local-rule refusal', () => {
+  const home = makeHome()
+  for (const command of [
+    "git commit -m \"$(cat <<'EOF'\nfix: never git push --force origin main\n\nnor rm -rf /\nEOF\n)\"",
+    "orca terminal send --terminal t --enter --text 'run git push origin main and rm -rf /'",
+    "cat > /tmp/x.mjs <<'EOF'\nconst s = 'git push --force origin main'\nEOF",
+    "gh release create v1 --notes 'never git push --force origin main'",
+    "git commit -F - <<'EOF'\nnever git push --force origin main\nEOF",
+  ]) {
+    assertNotRefused(command, { home })
+  }
+})
+
+test('0.6.13 T1: a real push next to data text is still refused', () => {
+  assertRefusedTwice("orca terminal send --terminal t --text 'git push is data here' && git push --force origin x", /force push/)
+  assertRefusedTwice("git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && git push --force origin x", /force push/)
+})
+
 // F-05: the recorded project and command family follow the repository the
 // command acts on, not the session's.
 function lastRecord (home) {

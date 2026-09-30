@@ -655,6 +655,18 @@ test("buildActionGateState: a deployPublishSignal is carried through verbatim, i
   assert.equal(state.deployPublishSignal, "triggers a deployment workflow on GitHub Actions");
 });
 
+// 0.6.13 T1 (F-09/N-03): text a known CLI never runs -- a message sent to a
+// terminal, a commit message, a heredoc written to a file -- reaches Jev as a
+// placeholder; the command around it, and anything that runs, keep their text.
+test("buildActionGateState: data text reaches Jev as a placeholder, the command around it does not", () => {
+  const sent = buildActionGateState("orca terminal send --terminal t --enter --text 'run git push origin main and rm -rf /'", "some context");
+  assert.equal(sent.proposed_command, "orca terminal send --terminal t --enter --text ‹text›");
+  const written = buildActionGateState("cat > /tmp/x.mjs <<'EOF'\nconst s = 'git push --force origin main'\nEOF", "some context");
+  assert.equal(written.proposed_command, "cat > /tmp/x.mjs <<'EOF'\n‹text›\nEOF");
+  const script = buildActionGateState("node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'", "some context");
+  assert.equal(script.proposed_command, "node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'");
+});
+
 // ===========================================================================
 // 0.6.11 T3: policy text and advisor.decide pass through the same redaction
 // as prompts and commands. A policy id is text the developer wrote (it can

@@ -52,7 +52,26 @@ Out of scope: F-08 as a local rule (kubectl/terraform stay policy or advice),
 F-10..F-14, the rest of the backlog.
 
 ## Checklist
-- [ ] T1 data positions are data
+- [x] T1 data positions are data. Proof: 10 regression tests (`command_text.test.ts` 6,
+  `decisions.test.ts` 1, `git_discard.test.ts` 1, `gate-deny-spellings.test.mjs` 2) RED 7/10
+  failing against a pass-through stub of `withDataTextAsPlaceholders`, GREEN 10/10, plus one
+  guard added after (a heredoc inside `eval "$(cat <<EOF`/`echo "$(...)" | bash` stays
+  visible); `npm test` 2718/2718. Live probe (working-tree hook, orca-supervisor): `orca
+  terminal send --text 'run git push origin main and rm -rf /'` allow (was advice),
+  `cat > /tmp/x.mjs <<'EOF'` with a force push in the body allow, `git push origin main`
+  `REFUSED`, `git commit -m "$(cat <<'EOF' ...force push...EOF)"` allow (was `REFUSED` as a
+  force push: the form Claude Code writes every commit message in), `git commit -F -`,
+  `gh pr create --body-file -`, `tee f <<EOF` allow. `gh release create --notes '<text>'`
+  stays advice: Jev reads `--notes ‹text›`, the advice is the deploy/publish floor ("creates
+  a GitHub release"), not the text. Decisions: Jev reads `‹text›` in place of the value
+  (quoted or not) of `git commit|tag -m/--message`, `gh pr|issue|release create|edit|comment
+  --title/-t/--body/-b/--notes/-n` and `orca terminal send --text`, and in place of a heredoc
+  body written by `cat >`/`tee` (not piped on), read by `git commit|tag -F -`/`gh --body-file
+  -`, or the `cat` of `-m "$(cat <<'EOF'`; a value holding `$(`/backticks keeps its text. A
+  heredoc opened inside a double-quoted `$(` is now read as one (it was invisible, so the
+  message body reached the rules); it is stripped for the rules only when it is such a
+  message, since `eval "$(cat <<EOF` runs it. `gh --notes/-n` joined gh's data flags for the
+  rules (it was a mention, sent to Jev).
 - [ ] T2 prohibits judged on violation
 - [ ] T3 N-04 refusals
 - [ ] T4 unregistered paths redacted

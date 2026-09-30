@@ -763,9 +763,10 @@ const GIT_COMMIT_MESSAGE_FLAGS = new Set(["-m", "--message", "-F"]);
 /** `git tag -m` / `git notes add -m` only ever take the short form. */
 const GIT_SINGLE_M_FLAG = new Set(["-m"]);
 
-/** gh's text flags: a PR/issue body, title, subject or comment message,
- *  across every gh subcommand -- gh never runs this text, it posts it. */
-const GH_TEXT_FLAGS = new Set(["--body", "-b", "--title", "-t", "--subject", "--message", "-m"]);
+/** gh's text flags: a PR/issue body, title, subject, comment message or
+ *  release notes (`--notes`/`-n`, 0.6.13 T1), across every gh subcommand --
+ *  gh never runs this text, it posts it. */
+const GH_TEXT_FLAGS = new Set(["--body", "-b", "--title", "-t", "--subject", "--message", "-m", "--notes", "-n"]);
 
 const GREP_FAMILY = new Set(["grep", "egrep", "fgrep", "rg", "ag"]);
 /** grep-family flags whose OWN value is the pattern, wherever it appears. */
