@@ -15,7 +15,7 @@
 
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawn } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -55,8 +55,8 @@ function modCopyMarkerPathFor (home) {
  *  skills-mod copy to fail (P5) passes a directory with no `adapters/claude/
  *  mod-skills` under it instead, which fails `cp()` the same way a real
  *  permission problem would -- no chmod gymnastics needed. */
-function run (mode, home, pluginRoot = PLUGIN_ROOT) {
-  const env = { ...process.env, HOME: home }
+function run (mode, home, pluginRoot = PLUGIN_ROOT, extraEnv = {}) {
+  const env = { ...process.env, HOME: home, ...extraEnv }
   delete env.ORCA_USER_DATA_PATH
   delete env.XDG_CONFIG_HOME
   delete env.XDG_CACHE_HOME
@@ -108,6 +108,18 @@ const GATE_MARKER = 'orca-jev-advisor: asking Jev before running this command'
 const OUTCOME_MARKER = 'orca-jev-advisor: recording what you decided'
 const AGENT_MODEL_MARKER = 'orca-jev-advisor: asking Jev which model this subagent needs'
 const AGENT_OUTCOME_MARKER = 'orca-jev-advisor: recording which model the subagent ran on'
+
+test('a relative plugin root is written as an absolute path, so the hook runs from any repository', () => {
+  const home = makeHome()
+  const env = { ...process.env, HOME: home, ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor') }
+  delete env.ORCA_USER_DATA_PATH
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT_PATH, 'install', '.'], { env, cwd: PLUGIN_ROOT, encoding: 'utf8' }))
+  assert.equal(result.ok, true)
+  const gateEntries = ownEntries(readSettings(home), 'PreToolUse', GATE_MARKER)
+  assert.deepEqual(gateEntries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-bash.ts')])
+})
 
 test('a fresh install registers all four events, each with its own hook', () => {
   const home = makeHome()
@@ -877,7 +889,7 @@ function runRouter (args, home, userDataDir) {
 /** A throwaway Orca `userData` dir with one fake account directory under
  *  `claude-accounts/<accountId>` -- all discoverTargets() itself needs to
  *  find it (settingsPathFor's own `auth/settings.json` is created lazily by
- *  writeSettingsAtomic on the first router-mode-set, exactly like a real
+ *  writeSettingsIfUnchanged on the first router-mode-set, exactly like a real
  *  account Orca has never written a hook into yet). */
 function makeUserDataWithAccount (home, accountId) {
   const userDataDir = join(home, 'orca-userdata')
@@ -1094,4 +1106,269 @@ test('steward-set: an unknown mode, a threshold out of range or a bad shape is r
   assert.equal(existsSync(settingsPathFor(home)), false)
   const noTarget = runRouter(['steward-set', 'account:nope', JSON.stringify({ mode: 'off', threshold: 120000 })], home)
   assert.equal(noTarget.reason, 'unknown-target')
+})
+
+// 0.6.11 T2c (M6): install and uninstall write settings.json through the same
+// guarded write as router-mode/steward, so an edit made while they run is
+// merged again instead of lost.
+
+function runAsync (mode, home, extraEnv) {
+  const env = { ...process.env, HOME: home, ...extraEnv }
+  delete env.ORCA_USER_DATA_PATH
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCRIPT_PATH, mode, PLUGIN_ROOT], { env })
+    let stdout = ''
+    child.stdout.on('data', (chunk) => { stdout += chunk })
+    child.on('error', reject)
+    child.on('close', () => resolve(JSON.parse(stdout)))
+  })
+}
+
+test('T2c: an edit made while install runs survives, and the hooks are still installed', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
+  await sleep(250)
+  writeSettings(home, { model: 'opus', permissions: { allow: ['Bash(ls)'] } })
+  const result = await pending
+  assert.equal(result.ok, true)
+  const settings = readSettings(home)
+  assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] }, 'the concurrent edit must not be lost')
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1)
+  assert.equal(settings.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, '1')
+})
+
+test('T2c: a settings.json that keeps changing under install is reported as a failed target, never clobbered', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  const pending = runAsync('install', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '800' })
+  await sleep(300)
+  writeSettings(home, { model: 'opus', edit: 1 })
+  await sleep(1000)
+  writeSettings(home, { model: 'opus', edit: 2 })
+  const result = await pending
+  assert.equal(result.targets[0].ok, false)
+  assert.match(result.targets[0].detail, /kept changing/)
+  assert.deepEqual(readSettings(home), { model: 'opus', edit: 2 })
+})
+
+test('T2c: an edit made while uninstall runs survives, and our hooks are gone', async () => {
+  const home = makeHome()
+  writeSettings(home, { model: 'opus' })
+  run('install', home)
+  const pending = runAsync('uninstall', home, { ORCA_TEST_DELAY_BEFORE_RENAME_MS: '700' })
+  await sleep(250)
+  const during = readSettings(home)
+  writeSettings(home, { ...during, permissions: { allow: ['Bash(ls)'] } })
+  const result = await pending
+  assert.equal(result.ok, true)
+  const settings = readSettings(home)
+  assert.deepEqual(settings.permissions, { allow: ['Bash(ls)'] })
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 0)
+})
+
+// 0.6.11 T2d (M7): install replaces only a copy that is ours (a marker, or a
+// symlink to our source); anything else at that path is left untouched and
+// reported through modCopyWarning.
+
+test('T2d: a foreign directory at the mod path is left untouched and reported as foreign-mod-copy', () => {
+  const home = makeHome()
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(copyPath, { recursive: true })
+  writeFileSync(join(copyPath, 'not-ours.txt'), 'a real skill someone else installed', 'utf8')
+
+  const result = run('install', home)
+  assert.equal(result.ok, true, 'the hooks and env still install')
+  assert.equal(result.changes.modCopy, false)
+  assert.equal(result.modCopyWarning, 'foreign-mod-copy')
+  assert.equal(result.targets[0].modCopyWarning, 'foreign-mod-copy')
+  assert.match(result.targets[0].modCopyDetail, /not installed by Orca Jev/)
+  assert.equal(readFileSync(join(copyPath, 'not-ours.txt'), 'utf8'), 'a real skill someone else installed')
+  assert.equal(existsSync(modCopyMarkerPathFor(home)), false, 'no marker may claim a directory that is not ours')
+  assert.equal(ownEntries(readSettings(home), 'PreToolUse', GATE_MARKER).length, 1)
+})
+
+test('T2d: a symlink to somewhere else at the mod path is left untouched too', () => {
+  const home = makeHome()
+  const elsewhere = join(home, 'somebody-elses-skill')
+  mkdirSync(elsewhere, { recursive: true })
+  writeFileSync(join(elsewhere, 'SKILL.md'), 'theirs', 'utf8')
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(dirname(copyPath), { recursive: true })
+  symlinkSync(elsewhere, copyPath, 'dir')
+
+  const result = run('install', home)
+  assert.equal(result.modCopyWarning, 'foreign-mod-copy')
+  assert.equal(lstatSync(copyPath).isSymbolicLink(), true)
+  assert.equal(readFileSync(join(elsewhere, 'SKILL.md'), 'utf8'), 'theirs')
+})
+
+// 0.6.11 T2a: hooks run an absolute Node >= 24 found at install time.
+
+/** A stand-in `node` that only answers --version, the one thing the installer asks of it. */
+function fakeNode (home, name, version) {
+  const path = join(home, 'fake-bin', name, 'node')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, `#!/bin/sh\necho ${version}\n`, { mode: 0o755 })
+  chmodSync(path, 0o755)
+  return path
+}
+
+const NODE_HOOK_EVENTS = [['PreToolUse', 'Bash'], ['PostToolUse', 'Bash'], ['PermissionDenied', 'Bash'], ['PostToolUseFailure', 'Bash'], ['PreToolUse', 'Agent'], ['PostToolUse', 'Agent'], ['PostToolUseFailure', 'Agent']]
+
+function hookCommands (settings) {
+  return NODE_HOOK_EVENTS.flatMap(([event, matcher]) => (group(settings, event, matcher)?.hooks ?? [])
+    .filter((h) => String(h.statusMessage).startsWith('orca-jev-advisor')).map((h) => h.command))
+}
+
+test('T2a: every hook command is the absolute Node >= 24 found at install time', () => {
+  const home = makeHome()
+  const good = fakeNode(home, 'good', 'v26.9.0')
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: good })
+  assert.deepEqual(result.node, { state: 'ok', path: good, version: 'v26.9.0' })
+  assert.equal(result.nodeCommandVerified, true)
+  const commands = hookCommands(readSettings(home))
+  assert.equal(commands.length, 7)
+  assert.deepEqual([...new Set(commands)], [good])
+})
+
+test('T2a: a Node older than 24 is skipped when a newer one is later in the list', () => {
+  const home = makeHome()
+  const old = fakeNode(home, 'old', 'v20.11.0')
+  const good = fakeNode(home, 'good', 'v24.1.0')
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: `${old}:${join(home, 'nowhere', 'node')}:${good}` })
+  assert.equal(result.node.state, 'ok')
+  assert.equal(result.node.path, good)
+  assert.deepEqual([...new Set(hookCommands(readSettings(home)))], [good])
+})
+
+test('T2a: only an old Node -> too-old with the version seen; the hooks are still written', () => {
+  const home = makeHome()
+  const old = fakeNode(home, 'old', 'v20.11.0')
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: old })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.node, { state: 'too-old', path: old, version: 'v20.11.0' })
+  assert.equal(result.nodeCommandVerified, false)
+  assert.equal(hookCommands(readSettings(home)).length, 7)
+  assert.ok(!hookCommands(readSettings(home)).includes(old), 'a too-old Node must not become the hook command')
+})
+
+test('T2a: no Node at all -> missing, hooks still written', () => {
+  const home = makeHome()
+  const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: join(home, 'nowhere', 'node') })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.node, { state: 'missing', path: null, version: null })
+  assert.equal(hookCommands(readSettings(home)).length, 7)
+})
+
+test('T2a: status probes the command the installed hooks actually use', () => {
+  const home = makeHome()
+  const good = fakeNode(home, 'good', 'v26.9.0')
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: good })
+  assert.deepEqual(run('status', home).node, { state: 'ok', path: good, version: 'v26.9.0' })
+  writeFileSync(good, '#!/bin/sh\necho v20.11.0\n', { mode: 0o755 })
+  assert.deepEqual(run('status', home).node, { state: 'too-old', path: good, version: 'v20.11.0' })
+})
+
+// 0.6.11 T2b: the doctor runs every installed hook exactly as written, and
+// every hook's pathMatches counts.
+
+function hookResult (result, hook) {
+  return result.results.find((r) => r.hook === hook)
+}
+
+test('T2b: status aggregates pathMatches for all three hook families, per target and overall', () => {
+  const home = makeHome()
+  run('install', home)
+  const status = run('status', home)
+  assert.equal(status.hook.pathMatches, true)
+  assert.equal(status.outcomeHook.pathMatches, true)
+  assert.equal(status.agentModelHook.pathMatches, true)
+
+  const settings = readSettings(home)
+  const agentHook = agentGroup(settings, 'PreToolUse').hooks.find((h) => h.statusMessage === AGENT_MODEL_MARKER)
+  agentHook.args = ['/old/plugin/root/adapters/claude/agent-model.ts']
+  writeSettings(home, settings)
+  const stale = run('status', home)
+  assert.equal(stale.agentModelHook.pathMatches, false)
+  assert.equal(stale.hook.pathMatches, true)
+})
+
+test('T2b: hooks-check runs each installed hook as written and every one exits cleanly', () => {
+  const home = makeHome()
+  run('install', home)
+  const result = run('hooks-check', home, PLUGIN_ROOT, { ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor') })
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.results.map((r) => r.hook).sort(), ['agent-model', 'gate-bash', 'gate-outcome'])
+  for (const r of result.results) assert.equal(r.ok, true, `${r.hook}: ${r.reason} ${r.detail}`)
+})
+
+test('T2b: hooks-check sends the exact command and args from settings, with a harmless JSON payload on stdin', () => {
+  const home = makeHome()
+  const recorder = join(home, 'fake-bin', 'rec', 'node')
+  mkdirSync(dirname(recorder), { recursive: true })
+  writeFileSync(recorder, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\n{ printf '%s\\n' "$1"; cat; } > "${recorder}.$$.run"\n`, { mode: 0o755 })
+  chmodSync(recorder, 0o755)
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: recorder })
+  const result = run('hooks-check', home)
+  assert.equal(result.results.every((r) => r.ok), true)
+  const runs = readdirSync(dirname(recorder)).filter((f) => f.endsWith('.run')).map((f) => readFileSync(join(dirname(recorder), f), 'utf8').split('\n'))
+  assert.deepEqual(runs.map(([arg]) => arg).sort(), ['gate-bash.ts', 'gate-outcome.ts', 'agent-model.ts'].map((f) => join(PLUGIN_ROOT, 'adapters', 'claude', f)).sort())
+  const payloads = runs.map(([, json]) => JSON.parse(json))
+  const gate = payloads.find((p) => p.hook_event_name === 'PreToolUse')
+  assert.equal(gate.tool_name, 'Bash')
+  assert.equal(gate.tool_input.command, 'pwd')
+})
+
+test('T2b: a hook that exits non-zero is named with its exit code and stderr', () => {
+  const home = makeHome()
+  const broken = join(home, 'fake-bin', 'broken', 'node')
+  mkdirSync(dirname(broken), { recursive: true })
+  writeFileSync(broken, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\necho "ERR_UNKNOWN_FILE_EXTENSION .ts" >&2\nexit 3\n', { mode: 0o755 })
+  chmodSync(broken, 0o755)
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: broken })
+  const result = run('hooks-check', home)
+  const gate = hookResult(result, 'gate-bash')
+  assert.equal(gate.ok, false)
+  assert.equal(gate.reason, 'exit-code')
+  assert.match(gate.detail, /3/)
+  assert.match(gate.detail, /ERR_UNKNOWN_FILE_EXTENSION/)
+})
+
+test('T2b: a command that cannot be started is reported as a spawn error', () => {
+  const home = makeHome()
+  run('install', home)
+  const settings = readSettings(home)
+  for (const [event, matcher] of NODE_HOOK_EVENTS) {
+    for (const h of group(settings, event, matcher).hooks) if (String(h.statusMessage).startsWith('orca-jev-advisor')) h.command = join(home, 'no-such-node')
+  }
+  writeSettings(home, settings)
+  const result = run('hooks-check', home)
+  for (const r of result.results) {
+    assert.equal(r.ok, false)
+    assert.equal(r.reason, 'spawn-error')
+  }
+})
+
+test('T2b: a hook that never returns is reported as a timeout', () => {
+  const home = makeHome()
+  const slow = join(home, 'fake-bin', 'slow', 'node')
+  mkdirSync(dirname(slow), { recursive: true })
+  writeFileSync(slow, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo v26.0.0; exit 0; fi\nexec sleep 5\n', { mode: 0o755 })
+  chmodSync(slow, 0o755)
+  run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: slow })
+  const result = run('hooks-check', home, PLUGIN_ROOT, { ORCA_JEV_HOOK_CHECK_TIMEOUT_MS: '400' })
+  const gate = hookResult(result, 'gate-bash')
+  assert.equal(gate.ok, false)
+  assert.equal(gate.reason, 'timeout')
+})
+
+test('T2b: a hook that is not installed is not run and not reported', () => {
+  const home = makeHome()
+  const result = run('hooks-check', home)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.results, [])
 })

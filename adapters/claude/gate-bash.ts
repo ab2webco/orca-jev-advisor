@@ -82,8 +82,10 @@ import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
-import { buildCrossRepoSentence, pickStricterDestination } from '../../src/core/cross_repo_context.ts'
-import type { RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
+import { buildCrossRepoSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
+import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
+import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
+import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
 import { PROTECTED_BRANCH_NAMES, parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { classifyClientReach } from '../../src/core/client_reach.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
@@ -1460,12 +1462,13 @@ function appendAbBenchmarkSample(
 }
 
 /**
- * What makes a feature branch different from a client's main. This string
- * is sent to Jev as model input (see askJev/buildActionGateState below) and
- * is also folded into the cache key, so it stays in English like every
- * other prompt this project sends the model.
+ * What git says about the session's own checkout. Rendered by
+ * cross_repo_context.ts's renderRepoContext twice (0.6.11 T3): in clear for
+ * the verdict-cache key, and through a Jev pseudonym table for the copy Jev
+ * reads -- so no repository or branch name reaches Jev in clear, while the
+ * cache key stays byte-for-byte what it always was.
  */
-function repoContext(cwd: string): string {
+function readRepoFacts(cwd: string): RepoFacts {
   const run = (args: string[]): string => {
     try {
       return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
@@ -1476,13 +1479,7 @@ function repoContext(cwd: string): string {
   const branch = run(['rev-parse', '--abbrev-ref', 'HEAD'])
   const remote = run(['remote', 'get-url', 'origin']).replace(/^.*[:/]/, '').replace(/\.git$/, '')
   const dirty = run(['status', '--porcelain']).length > 0
-  const parts = [
-    remote.length > 0 ? `repository ${remote}` : 'no remote',
-    branch.length > 0 ? `branch ${branch}` : 'unknown branch',
-    branch === 'main' || branch === 'master' ? 'this is the shared main branch' : 'this is a working branch',
-    dirty ? 'with uncommitted changes' : 'clean',
-  ]
-  return parts.join(', ')
+  return { remote, branch, dirty }
 }
 
 type GateAxes = { readonly reversible: number | null; readonly external: number | null; readonly consequence: number | null; readonly ceiling: number } | null
@@ -1582,11 +1579,11 @@ type JevOutcome =
  * team-internal command (0.6.8 T3) -- the cache key and this question must
  * judge the very same policy set.
  */
-async function askJev(apiKey: string, command: string, context: string, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[]): Promise<JevOutcome> {
+async function askJev(apiKey: string, command: string, jevContext: string, jevNames: JevNames, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[]): Promise<JevOutcome> {
   try {
     const questions = {
       ...buildActionGateQuestions(),
-      ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies) : {}),
+      ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies, jevNames) : {}),
     }
     const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
     // The advise-model release, Part 3(a): a local, no-network fact ("this
@@ -1595,7 +1592,7 @@ async function askJev(apiKey: string, command: string, context: string, localGit
     // a destination policy (client_always_asks, ...) can recognise it too --
     // see decisions.ts's own doc on buildActionGateState's deployPublishSignal.
     const deployPublish = detectDeployPublish(command)
-    const response = await callJev(apiKey, buildActionGateState(command, context, destination, deployPublish?.description), questions, { budgetMs: BUDGET_MS })
+    const response = await callJev(apiKey, buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames), questions, { budgetMs: BUDGET_MS })
     const gate = decideGateAction({
       action: command,
       policies: commandScopedPolicies,
@@ -1942,7 +1939,16 @@ async function main(): Promise<void> {
   // exactly like deployPublishSignal's own precedent -- so a coverage
   // judgment never mistakes "on main, deleting something" for a command
   // that actually acts on a different repository, on a different branch.
-  const context = repoContext(cwd) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
+  //
+  // 0.6.11 T3: rendered twice from the same facts. `context` is the clear
+  // text the cache key has always folded in; `jevContext` is the copy Jev
+  // reads, every repository, branch and path swapped through `jevNames` --
+  // the same table then redacts the destination label and the policy rules.
+  const repoFacts = readRepoFacts(cwd)
+  const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
+  const jevNames = createJevPseudonyms()
+  const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
+  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '')
   // The destination is resolved once, above (folding in every target's own
   // repository too -- see pickStricterDestination): it is part of the cache
   // key, because two repositories with different thresholds must never
@@ -2035,7 +2041,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, context, localGitAllow, matchedDestination, commandScopedPolicies)
+  const outcome = await askJev(apiKey as string, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {

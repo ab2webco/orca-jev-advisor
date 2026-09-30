@@ -83,6 +83,7 @@ import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/or
 import { modSkillsProjectName } from '../../../../src/core/project_name.ts'
 import { listSkillInventory, stripSkillFrontmatter } from '../../../../src/core/skill_inventory.ts'
 import type { SkillFs, SkillFsEntry, SkillFsStat, SkillSummary } from '../../../../src/core/skill_inventory.ts'
+import { measurementFileName, measurementFilesToRead, measurementLegacyFileName, type MeasurementLog } from '../../../../src/core/measurement_files.ts'
 import {
   DEFAULT_FITS_THRESHOLD,
   DEFAULT_GATE_THRESHOLD,
@@ -151,9 +152,9 @@ import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
 import type { RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
-import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaBandOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
-import type { ActivityMessage, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
-import type { DestinationKind, QuotaBand, SessionEffort, TierEffort, TierEffortMap, TurnActivity } from '../../../../src/core/model_router_decide.ts'
+import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
+import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
+import type { DestinationKind, QuotaBand, QuotaSource, SessionEffort, TierEffort, TierEffortMap, TurnActivity } from '../../../../src/core/model_router_decide.ts'
 import { resolveRouterDestination } from '../../../../src/core/model_router_destination.ts'
 import type { RouterDestination } from '../../../../src/core/model_router_destination.ts'
 import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_router_subagent.ts'
@@ -292,15 +293,12 @@ export async function resolveModSkillsSamplingConfig($: EngineInterface): Promis
  * toolMeasurementDecisionsToday (tools, JEVADV-4): the two logs are
  * counted the same tolerant way, only the file name differs.
  */
-async function measurementDecisionsTodayIn($: EngineInterface, fileName: string, today: string): Promise<number> {
+async function measurementDecisionsTodayIn($: EngineInterface, log: MeasurementLog, today: string): Promise<number> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return 0
-    const path = `${paths.cacheDir}/${fileName}`
-    if (!(await $.fs.exists(path))) return 0
-    const content = await $.fs.read(path)
     let count = 0
-    for (const line of content.split('\n')) {
+    for (const line of await readMeasurementLines($, paths.cacheDir, log, today)) {
       if (line.length === 0) continue
       let parsed: unknown
       try {
@@ -318,9 +316,43 @@ async function measurementDecisionsTodayIn($: EngineInterface, fileName: string,
   }
 }
 
+/**
+ * Every line of `log`'s files under `cacheDir` (see
+ * src/core/measurement_files.ts), or with `day` only that day's hours plus
+ * the legacy file -- which is skipped once it was last written before `day`,
+ * so a finished 4 MiB legacy file is not re-read on every prompt forever. A
+ * cache dir the engine cannot list reads as the legacy file alone.
+ */
+async function readMeasurementLines($: EngineInterface, cacheDir: string, log: MeasurementLog, day?: string): Promise<string[]> {
+  const legacy = measurementLegacyFileName(log)
+  let names: string[]
+  try {
+    names = (await $.fs.list(cacheDir)).filter((entry) => entry.kind === 'file').map((entry) => entry.name)
+  } catch {
+    names = [legacy]
+  }
+  const lines: string[] = []
+  for (const name of measurementFilesToRead(log, names, day)) {
+    const path = `${cacheDir}/${name}`
+    if (!(await $.fs.exists(path))) continue
+    if (name === legacy && day !== undefined && (await lastWrittenDay($, path)) < day) continue
+    lines.push(...(await $.fs.read(path)).split('\n'))
+  }
+  return lines
+}
+
+/** The UTC day `path` was last written, or `"9999-12-31"` (never skip it) when the engine cannot say. */
+async function lastWrittenDay($: EngineInterface, path: string): Promise<string> {
+  try {
+    return new Date((await $.fs.stat(path)).mtimeMs).toISOString().slice(0, 10)
+  } catch {
+    return '9999-12-31'
+  }
+}
+
 /** `measurementDecisionsTodayIn` over the skill-selection log (mod-skills-measurements.jsonl). */
 export async function measurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
-  return measurementDecisionsTodayIn($, 'mod-skills-measurements.jsonl', today)
+  return measurementDecisionsTodayIn($, 'mod-skills', today)
 }
 
 /**
@@ -334,7 +366,7 @@ export async function measurementDecisionsToday($: EngineInterface, today: strin
  * of a real count.
  */
 export async function toolMeasurementDecisionsToday($: EngineInterface, today: string): Promise<number> {
-  return measurementDecisionsTodayIn($, 'mod-tools-measurements.jsonl', today)
+  return measurementDecisionsTodayIn($, 'mod-tools', today)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,17 +387,13 @@ export async function resolveModSkillsReadiness($: EngineInterface): Promise<Mod
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return null
-    const path = `${paths.cacheDir}/mod-skills-measurements.jsonl`
     const rows: unknown[] = []
-    if (await $.fs.exists(path)) {
-      const content = await $.fs.read(path)
-      for (const line of content.split('\n')) {
-        if (line.length === 0) continue
-        try {
-          rows.push(JSON.parse(line))
-        } catch {
-          continue
-        }
+    for (const line of await readMeasurementLines($, paths.cacheDir, 'mod-skills')) {
+      if (line.length === 0) continue
+      try {
+        rows.push(JSON.parse(line))
+      } catch {
+        continue
       }
     }
     return evaluateModSkillsReadiness(computeComparableStats(rows), DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS)
@@ -488,22 +516,23 @@ async function appendToFile($: EngineInterface, path: string, line: string): Pro
   await $.fs.write(path, existing + line)
 }
 
-export async function appendMeasurement($: EngineInterface, line: string): Promise<void> {
+/** Appends one skill-selection record to the hour `at` falls in (src/core/measurement_files.ts). */
+export async function appendMeasurement($: EngineInterface, at: string, line: string): Promise<void> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return
-    await appendToFile($, `${paths.cacheDir}/mod-skills-measurements.jsonl`, line)
+    await appendToFile($, `${paths.cacheDir}/${measurementFileName('mod-skills', at)}`, line)
   } catch {
     // Measurement is best-effort and must never block or fail a prompt.
   }
 }
 
-/** Same shape as `appendMeasurement`, in its own file, for tool-selection records (src/core/tool_measurement.ts). */
-export async function appendToolMeasurement($: EngineInterface, line: string): Promise<void> {
+/** Same shape as `appendMeasurement`, in its own files, for tool-selection records (src/core/tool_measurement.ts). */
+export async function appendToolMeasurement($: EngineInterface, at: string, line: string): Promise<void> {
   try {
     const paths = await resolveHomePaths($)
     if (!paths) return
-    await appendToFile($, `${paths.cacheDir}/mod-tools-measurements.jsonl`, line)
+    await appendToFile($, `${paths.cacheDir}/${measurementFileName('mod-tools', at)}`, line)
   } catch {
     // Measurement is best-effort and must never block or fail a prompt.
   }
@@ -681,7 +710,22 @@ async function readVaultSettings($: EngineInterface): Promise<unknown> {
   return vaultDir === null ? null : readJsonFile($, `${vaultDir}/settings.json`)
 }
 
-async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; tierEffort: TierEffortMap }> {
+/**
+ * The 5-hour and 7-day windows Claude Code hands its status line, live for
+ * this session's account (`$.session.usage().rateLimits`). Empty when the
+ * session has no reading yet (before its first API response, off a
+ * subscription) or the call fails: the router then falls back to the mirror.
+ */
+async function readLiveRateLimits($: EngineInterface): Promise<readonly LiveRateLimit[]> {
+  try {
+    const usage = await $.session.usage()
+    return usage.rateLimits.map((window) => ({ kind: window.kind, percentUsed: window.percentUsed, ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }) }))
+  } catch {
+    return []
+  }
+}
+
+async function resolveRouterAccount($: EngineInterface, account: string): Promise<{ tiers: ResolvedTiers; band: QuotaBand; quotaSource: QuotaSource; tierEffort: TierEffortMap }> {
   const paths = await resolveHomePaths($)
   const vaultSettings = await readVaultSettings($)
   const vaultEnv = vaultSettings === null ? {} : parseVaultEnv(vaultSettings)
@@ -705,7 +749,8 @@ async function resolveRouterAccount($: EngineInterface, account: string): Promis
   const quotaFile = paths ? parseQuota(await readJsonFile($, `${paths.configDir}/quota.json`)) : { accounts: [], checkedAt: null }
   const quota = quotaFile.accounts.find((row) => row.id === account) ?? null
   const tiers = resolveAccountTiers({ env: { ...processEnv, ...vaultEnv }, catalog, quota })
-  return { tiers, band: quotaBandOf(quota, quotaFile.checkedAt, await $.clock.now()), tierEffort: routerEffortFromSettings(vaultSettings) }
+  const pressure = quotaPressureOf({ live: await readLiveRateLimits($), mirror: quota, mirrorCheckedAt: quotaFile.checkedAt, nowMs: await $.clock.now() })
+  return { tiers, band: pressure.band, quotaSource: pressure.source, tierEffort: routerEffortFromSettings(vaultSettings) }
 }
 
 /**
@@ -920,7 +965,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
 
   const promptText = lastPromptText(messages)
   const account = await resolveAccountId($)
-  const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+  const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
   const destination = await resolveSessionDestination($, await $.session.cwd())
   const jev = await askTierJudgment($, options, promptText, null, band, destination.destinationKind)
   const decision = decideStart({
@@ -934,7 +979,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   })
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey }
   const next: RouterSticky = decision.changed
@@ -957,7 +1002,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
  */
 async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', sticky: RouterSticky, text: string, activity: TurnActivity | null, originKind: string | null, project: string | null): Promise<RoutedStep> {
   const account = await resolveAccountId($)
-  const { tiers, band } = await resolveRouterAccount($, account)
+  const { tiers, band, quotaSource } = await resolveRouterAccount($, account)
   const decision = decideEngineTurn({
     tiers,
     currentModel: sticky.model,
@@ -968,7 +1013,7 @@ async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mod
   })
   if (decision === null) return { input: stickyStepInput(e, sticky, mode), status: null }
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, origin: originKind, project }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, origin: originKind, project }))}\n`)
   const next: RouterSticky = { ...sticky, model: decision.model, effort: decision.effort, rewrite: false, pendingLower: null }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
   return { input: stickyStepInput(e, next, mode), status: null }
@@ -978,7 +1023,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   const promptText = lastPromptText(messages)
   const activity = summarizePreviousTurn(messages)
   const account = await resolveAccountId($)
-  const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+  const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
   const destination = await resolveSessionDestination($, await $.session.cwd())
   const jev = await askTierJudgment($, options, promptText, activity, band, destination.destinationKind)
   const stageInput: StageDecisionInput = {
@@ -1003,7 +1048,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
@@ -1083,6 +1128,7 @@ interface SubagentEffortTarget {
   readonly decision: SubagentDecision
   readonly applied: boolean
   readonly quotaBand: QuotaBand
+  readonly quotaSource: QuotaSource
   readonly project: string | null
 }
 
@@ -1111,7 +1157,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const modelFixed = fixedModel !== null
     if (modelFixed) why = 'explicit'
     const account = await resolveAccountId($)
-    const { tiers, band, tierEffort } = await resolveRouterAccount($, account)
+    const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
     labelTiers = tiers
     const text = `${e.description}\n${e.prompt}`
     const destination = await resolveSessionDestination($, cwd)
@@ -1135,7 +1181,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
     const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? tierEffort[decision.tier] : null) : null
     const applied = mode === 'active' && decision.changed
-    pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, project }
+    pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
     why = subagentWhy({ decision, applied, explicit: modelFixed })
     if (applied) input = { ...e, model: decision.model }
   } catch {
@@ -1207,6 +1253,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           decision: { ...target.decision, effort: null },
           applied: target.applied,
           quotaBand: target.quotaBand,
+          quotaSource: target.quotaSource,
           effort: loggedEffort,
           project: target.project,
         })
@@ -1767,6 +1814,7 @@ export function register(on: On, options: PluginOptions): void {
         const readiness = await resolveModSkillsReadiness($)
         await appendMeasurement(
           $,
+          at,
           serializeRecord(
             buildDecisionRecord({
               id: measurementId,
@@ -1887,6 +1935,7 @@ export function register(on: On, options: PluginOptions): void {
         const at = new Date(await $.clock.now()).toISOString()
         await appendToolMeasurement(
           $,
+          at,
           serializeToolRecord(
             buildToolDecisionRecord({
               id: measurementId,
@@ -1939,7 +1988,7 @@ export function register(on: On, options: PluginOptions): void {
       const id = pendingMeasurementId
       pendingMeasurementId = null
       const at = new Date(await $.clock.now()).toISOString()
-      await appendMeasurement($, serializeRecord(buildObservationRecord(id, e.skill, at)))
+      await appendMeasurement($, at, serializeRecord(buildObservationRecord(id, e.skill, at)))
     }
     return next(e)
   })
@@ -2026,7 +2075,7 @@ export function register(on: On, options: PluginOptions): void {
       pendingToolMeasurementId = null
       try {
         const at = new Date(await $.clock.now()).toISOString()
-        await appendToolMeasurement($, serializeToolRecord(buildToolObservationRecord(id, e.tool, at)))
+        await appendToolMeasurement($, at, serializeToolRecord(buildToolObservationRecord(id, e.tool, at)))
       } catch {
         // Measurement is best-effort and must never block or fail a call.
       }

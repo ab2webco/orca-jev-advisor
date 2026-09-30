@@ -15,8 +15,8 @@
 import type { QuotaAccount } from "./consumption.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
-import type { GuardContext, QuotaBand, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
+import { CONFIDENCE_FLOOR, TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
+import type { GuardContext, QuotaBand, QuotaSource, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
 
 export { shiftForPressure };
 
@@ -26,14 +26,83 @@ export { shiftForPressure };
 
 const STALE_QUOTA_MS = 30 * 60_000;
 
-/** The band for this account's weekly usage; a missing, unknown or stale (> 30 min) quota is normal. */
-export function quotaBandOf(quota: QuotaAccount | null, checkedAt: string | null, nowMs: number): QuotaBand {
-  if (quota === null || quota.weeklyUsedPercent === null || checkedAt === null) return "normal";
-  const checkedMs = Date.parse(checkedAt);
-  if (!Number.isFinite(checkedMs) || nowMs - checkedMs > STALE_QUOTA_MS) return "normal";
-  if (quota.weeklyUsedPercent >= 95) return "strong-economy";
-  if (quota.weeklyUsedPercent >= 80) return "economy";
+/** One rate-limit window of `$.session.usage().rateLimits`: what Claude Code hands its status line. */
+export interface LiveRateLimit {
+  readonly kind: string;
+  readonly percentUsed: number;
+  readonly resetsAt?: string;
+}
+
+export interface QuotaPressure {
+  readonly band: QuotaBand;
+  readonly source: QuotaSource;
+}
+
+export interface QuotaPressureInput {
+  readonly live: readonly LiveRateLimit[];
+  readonly mirror: QuotaAccount | null;
+  readonly mirrorCheckedAt: string | null;
+  readonly nowMs: number;
+}
+
+function bandOfPercent(percent: number): QuotaBand {
+  if (percent >= 95) return "strong-economy";
+  if (percent >= 80) return "economy";
   return "normal";
+}
+
+const BAND_ORDER: Readonly<Record<QuotaBand, number>> = { normal: 0, economy: 1, "strong-economy": 2 };
+
+/**
+ * A live window's figure, or null. The live reading carries no read time of
+ * its own (it is what the session's last API response reported), so its
+ * freshness bound is the window itself: once `resetsAt` has passed, the
+ * figure describes a window that no longer exists and is dropped. A window
+ * with no reset time is trusted as reported.
+ */
+function liveFigure(live: readonly LiveRateLimit[], kind: "five_hour" | "seven_day", nowMs: number): number | null {
+  for (const window of live) {
+    if (window.kind !== kind || !Number.isFinite(window.percentUsed)) continue;
+    if (window.resetsAt !== undefined) {
+      const resetMs = Date.parse(window.resetsAt);
+      if (Number.isFinite(resetMs) && resetMs <= nowMs) continue;
+    }
+    return window.percentUsed;
+  }
+  return null;
+}
+
+/**
+ * The band is the tighter of the 5-hour and the 7-day window. Each window
+ * prefers the live reading; a window the live reading lacks is filled from
+ * the Orca mirror while that is fresh (<= 30 min); otherwise it is unknown
+ * and calm. `source` says which fed the band.
+ */
+export function quotaPressureOf(input: QuotaPressureInput): QuotaPressure {
+  const checkedMs = input.mirrorCheckedAt === null ? Number.NaN : Date.parse(input.mirrorCheckedAt);
+  const mirrorFresh = input.mirror !== null && Number.isFinite(checkedMs) && input.nowMs - checkedMs <= STALE_QUOTA_MS;
+  const mirrorFigures: Readonly<Record<"five_hour" | "seven_day", number | null>> = mirrorFresh && input.mirror !== null
+    ? { five_hour: input.mirror.sessionUsedPercent, seven_day: input.mirror.weeklyUsedPercent }
+    : { five_hour: null, seven_day: null };
+  let liveUsed = false;
+  let mirrorUsed = false;
+  let band: QuotaBand = "normal";
+  for (const kind of ["five_hour", "seven_day"] as const) {
+    const fromLive = liveFigure(input.live, kind, input.nowMs);
+    const figure = fromLive ?? mirrorFigures[kind];
+    if (figure === null) continue;
+    if (fromLive !== null) liveUsed = true;
+    else mirrorUsed = true;
+    const windowBand = bandOfPercent(figure);
+    if (BAND_ORDER[windowBand] > BAND_ORDER[band]) band = windowBand;
+  }
+  const source: QuotaSource = liveUsed ? (mirrorUsed ? "live+mirror" : "live") : mirrorUsed ? "mirror" : "none";
+  return { band, source };
+}
+
+/** The band from the Orca mirror alone: the tighter of its 5-hour and weekly figures; a missing, unknown or stale (> 30 min) quota is normal. */
+export function quotaBandOf(quota: QuotaAccount | null, checkedAt: string | null, nowMs: number): QuotaBand {
+  return quotaPressureOf({ live: [], mirror: quota, mirrorCheckedAt: checkedAt, nowMs }).band;
 }
 
 /** Consecutive turns a lower tier must repeat before a downgrade (§6.4-§6.5). */
@@ -430,7 +499,13 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   }
   if (proposedRank === currentRank) return out(decideEffort(input, base, targetEffort, guards, currentRank));
   if (proposedRank > currentRank) {
-    if (input.jev.confidence < 0.7 && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
+    if (input.jev.confidence < CONFIDENCE_FLOOR && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
+    // 0.6.11 T5: a model change drops the prompt cache, an effort change does
+    // not. One tier up, with nothing forcing it, raise the effort on the
+    // model already running first; the model follows only if the need shows
+    // again on a later turn, when the effort is already at its ceiling.
+    const raised = oneStepEffortRaise(input, current, judged, guards, currentTooSmall, proposedRank - currentRank);
+    if (raised !== null) return out({ ...stay, ...base, effort: raised, changed: true, reason: "effort-raise", guard: null, pending: null, effortTarget: raised });
     // The tier's effort, even back on the session's own model (0.6.2 E1: a
     // sticky `xhigh` is the account's default, not what this work needs);
     // only a person's own `max` or numeric budget is kept, never lowered.
@@ -464,10 +539,33 @@ export function decideStage(input: StageDecisionInput): StageDecision {
   return out({ ...base, current, model, effort, changed: true, reason: "downgrade", guard: null, pending: null, breakEven: result, effortTarget: null });
 }
 
+/** The most effort the effort-first step asks of a smaller model: the larger one exists for beyond it. */
+const EFFORT_FIRST_CEILING: TierEffort = "high";
+
+/**
+ * 0.6.11 T5: the effort to raise the current model to before changing it, or
+ * null when the model must change now: more than one tier up, any guard, a
+ * context the model cannot hold, a model that takes no effort, a person's own
+ * `max` or budget, or an effort already at the ceiling for this work.
+ */
+function oneStepEffortRaise(input: StageDecisionInput, current: string, judged: RouterTier, guards: readonly RouterGuard[], currentTooSmall: boolean, steps: number): TierEffort | null {
+  if (steps !== 1 || guards.length > 0 || currentTooSmall) return null;
+  if (typeof input.currentEffort === "number") return null;
+  if (isPersonEffort(input.configuredEffort) && input.currentEffort === input.configuredEffort) return null;
+  const asked = tierEffortOn(input.tiers, current, judged, input.tierEffort);
+  const askedRank = effortRank(asked);
+  if (asked === null || askedRank === null) return null;
+  const capRank = effortRank(EFFORT_FIRST_CEILING) ?? askedRank;
+  const ceiling = askedRank < capRank ? asked : EFFORT_FIRST_CEILING;
+  const ceilingRank = Math.min(askedRank, capRank);
+  const from = effortRank(input.currentEffort);
+  return from === null || from < ceilingRank ? ceiling : null;
+}
+
 /**
  * 0.6.2 E2: Jev's tier resolves to the model the session already runs, so
  * only the effort can follow the work. A raise is quality: it applies at
- * once with confidence ≥ 0.70, and no guard blocks it. A lowering rewrites
+ * once with confidence at or above CONFIDENCE_FLOOR, and no guard blocks it. A lowering rewrites
  * the cache for an output-only saving, so it must earn it the way a model
  * downgrade does: no guard, the same lower effort on consecutive prompts,
  * and a break-even on the session's real output medians -- unknown ones
@@ -486,7 +584,7 @@ function decideEffort(input: StageDecisionInput, base: Pick<StageDecision, "tier
     return { ...stay, reason: "same", pending: null, effortTarget: null };
   }
   if (from === null || to > from) {
-    if ((input.jev?.confidence ?? 0) < 0.7) return { ...stay, reason: "low-confidence", pending: null, effortTarget: targetEffort };
+    if ((input.jev?.confidence ?? 0) < CONFIDENCE_FLOOR) return { ...stay, reason: "low-confidence", pending: null, effortTarget: targetEffort };
     return { ...stay, effort: targetEffort, changed: true, reason: "effort-raise", pending: null, effortTarget: targetEffort };
   }
   if (guards.length > 0) return { ...stay, reason: "held-by-guard", guard: guards[0] ?? null, pending: null, effortTarget: targetEffort };

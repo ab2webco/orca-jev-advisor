@@ -6,7 +6,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCrossRepoSentence, pickStricterDestination } from "./cross_repo_context.ts";
+import { buildCrossRepoSentence, pickStricterDestination, renderRepoContext } from "./cross_repo_context.ts";
+import { createJevPseudonyms, IDENTITY_NAMES } from "./jev_pseudonyms.ts";
 
 const REPO_A = "/home/dev/Projects/orca-supervisor";
 const REPO_B = "/home/dev/Projects/orca-oss-plugin-nav-close";
@@ -123,4 +124,36 @@ test("a tie keeps the first candidate encountered", () => {
   const first = destination("first", 50);
   const second = destination("second", 50);
   assert.equal(pickStricterDestination([first, second])?.destination.id, "first");
+});
+
+// 0.6.11 T3: the copy sent to Jev names no repository, branch or path in
+// clear; the local copy (the verdict-cache key) stays exactly as it was.
+test("with a Jev pseudonym table, the sentence says the same thing without naming a path or a feature branch", () => {
+  const session = { repoRoot: REPO_A, branch: "main" };
+  const targets = [{ path: `${REPO_B}/tmp-file.txt`, repoRoot: REPO_B, branch: "fix/plugin-nav-page-close" }];
+  const sentence = buildCrossRepoSentence(session, targets, createJevPseudonyms());
+  assert.equal(
+    sentence,
+    "The command acts on files in the repository at <path-1> on branch <branch-1>, not in the session's current repository (<path-2> on main).",
+  );
+});
+
+test("renderRepoContext in clear is the exact text the cache key has always used", () => {
+  assert.equal(
+    renderRepoContext({ remote: "orca-supervisor", branch: "fix/x", dirty: true }, IDENTITY_NAMES),
+    "repository orca-supervisor, branch fix/x, this is a working branch, with uncommitted changes",
+  );
+  assert.equal(renderRepoContext({ remote: "", branch: "", dirty: false }, IDENTITY_NAMES), "no remote, unknown branch, this is a working branch, clean");
+  assert.equal(renderRepoContext({ remote: "r", branch: "main", dirty: false }, IDENTITY_NAMES), "repository r, branch main, this is the shared main branch, clean");
+});
+
+test("renderRepoContext for Jev swaps the repository and a feature branch for placeholders, and keeps main in clear", () => {
+  assert.equal(
+    renderRepoContext({ remote: "acme-shop", branch: "feat/login", dirty: false }, createJevPseudonyms()),
+    "repository <repo-1>, branch <branch-1>, this is a working branch, clean",
+  );
+  assert.equal(
+    renderRepoContext({ remote: "acme-shop", branch: "master", dirty: false }, createJevPseudonyms()),
+    "repository <repo-1>, branch master, this is the shared main branch, clean",
+  );
 });

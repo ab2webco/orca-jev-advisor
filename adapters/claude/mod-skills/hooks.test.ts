@@ -66,6 +66,10 @@ interface FakeHost {
   failProcess: boolean;
   /** `$.agent.list()` rows (0.6.8 T6); null makes the call reject, like a host without it. */
   agents: { id: string; status: string }[] | null;
+  /** `$.session.usage().rateLimits`: the live figures Claude Code gives its status line (0.6.11 T6). */
+  rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[];
+  /** When true, `$.session.usage()` rejects. */
+  failUsage: boolean;
 }
 
 function makeFakeHost(): FakeHost {
@@ -82,6 +86,8 @@ function makeFakeHost(): FakeHost {
     failMessages: false,
     failProcess: false,
     agents: null,
+    rateLimits: [],
+    failUsage: false,
   };
 }
 
@@ -98,8 +104,13 @@ const HOME = "/home/dev";
 const CONFIG_DIR = `${HOME}/.config/orca-supervisor`;
 const CACHE_DIR = `${HOME}/.cache/orca-supervisor`;
 const CWD = "/home/dev/Projects/sandbox";
-const SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements.jsonl`;
-const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
+// The fake clock starts at 2026-09-25T10:00Z and only moves a millisecond per read, so every record lands in this hour's files.
+const SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements-2026-09-25T10.jsonl`;
+const TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements-2026-09-25T10.jsonl`;
+const LEGACY_SKILL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-skills-measurements.jsonl`;
+const LEGACY_TOOL_MEASUREMENTS_PATH = `${CACHE_DIR}/mod-tools-measurements.jsonl`;
+/** The engine's own limit: `$.fs.read` and `$.fs.write` reject above 4 MiB. */
+const FS_LIMIT_BYTES = 4 * 1024 * 1024;
 
 /** Builds a fake `$` (EngineInterface) backed by `host`'s mutable state. */
 function makeFakeEngine(host: FakeHost): unknown {
@@ -107,6 +118,10 @@ function makeFakeEngine(host: FakeHost): unknown {
   return {
     session: {
       cwd: async () => CWD,
+      usage: async () => {
+        if (host.failUsage) throw new Error("fake host: session.usage failed");
+        return { startedAt: 0, context: {}, rateLimits: host.rateLimits };
+      },
       messages: async () => {
         if (host.failMessages) throw new Error("fake host: session.messages failed");
         return host.messages;
@@ -129,9 +144,11 @@ function makeFakeEngine(host: FakeHost): unknown {
       read: async (path: string) => {
         const content = host.files.get(path);
         if (content === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        if (content.length > FS_LIMIT_BYTES) throw new Error("fake host: read over 4 MiB rejects");
         return content;
       },
       write: async (path: string, text: string) => {
+        if (text.length > FS_LIMIT_BYTES) throw new Error("fake host: write over 4 MiB rejects");
         host.files.set(path, text);
       },
       list: async (path: string) => {
@@ -565,6 +582,74 @@ test("readiness reflects a decision recorded earlier in this same session, not a
 });
 
 // ---------------------------------------------------------------------------
+// JEVADV-62: a measurement log must never go silent. Seen live on
+// 2026-09-29: mod-tools-measurements.jsonl reached 4,194,231 bytes, every
+// append (a whole-file rewrite) crossed the engine's 4 MiB limit and was
+// swallowed, and nothing was recorded again.
+// ---------------------------------------------------------------------------
+
+function fullLegacyLog(pair: readonly Record<string, unknown>[]): string {
+  const head = pair.map((row) => `${JSON.stringify(row)}\n`).join("");
+  const filler = `${JSON.stringify({ type: "decision", id: "old", at: "2026-09-20T08:00:00.000Z", mode: "active", pad: "x".repeat(200) })}\n`;
+  return head + filler.repeat(Math.floor((FS_LIMIT_BYTES - 64 - head.length) / filler.length));
+}
+
+test("a legacy log at the 4 MiB limit: new records land in this hour's own file and the old history still counts", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const legacySkills = fullLegacyLog([
+    { type: "decision", id: "legacy", at: "2026-09-24T08:00:00.000Z", mode: "measurement", decision: { name: "graft-helper" } },
+    { type: "observation", id: "legacy", at: "2026-09-24T08:01:00.000Z", skill: "graft-helper" },
+  ]);
+  const legacyTools = fullLegacyLog([]);
+  host.files.set(LEGACY_SKILL_MEASUREMENTS_PATH, legacySkills);
+  host.files.set(LEGACY_TOOL_MEASUREMENTS_PATH, legacyTools);
+  const { handlers, engine } = loadHooks(host);
+
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+    jevResponse({ which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 }, needsOneTool: { type: "noul", noul: 0.1 } }),
+  );
+  await submitPrompt(handlers, engine, "what does this file do");
+
+  const skillRecord = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(skillRecord.mode, "measurement", "today's bug: the decision was lost because the whole-file rewrite crossed 4 MiB");
+  assert.equal(
+    (skillRecord.readiness as { comparableShortfall: number }).comparableShortfall,
+    999,
+    "readiness must still fold the comparable pair recorded in the legacy file",
+  );
+  assert.ok(host.files.has(TOOL_MEASUREMENTS_PATH), "the tool decision lands in this hour's own tool file");
+  assert.equal(host.files.get(LEGACY_SKILL_MEASUREMENTS_PATH), legacySkills, "the legacy file is only ever read, never rewritten");
+  assert.equal(host.files.get(LEGACY_TOOL_MEASUREMENTS_PATH), legacyTools, "the legacy file is only ever read, never rewritten");
+});
+
+test("the daily sampling cap counts today's hourly files, not only the legacy file", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 2 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const today = [
+    { type: "decision", id: "a", at: "2026-09-25T08:00:00.000Z", mode: "measurement" },
+    { type: "decision", id: "b", at: "2026-09-25T09:00:00.000Z", mode: "measurement" },
+  ];
+  host.files.set(`${CACHE_DIR}/mod-skills-measurements-2026-09-25T08.jsonl`, `${JSON.stringify(today[0])}\n`);
+  host.files.set(`${CACHE_DIR}/mod-skills-measurements-2026-09-25T09.jsonl`, `${JSON.stringify(today[1])}\n`);
+  const { handlers, engine } = loadHooks(host);
+
+  await submitPrompt(handlers, engine, "what does this file do");
+
+  assert.equal(host.fetchCalls.length, 0, "two samples already recorded today in hourly files: the cap of 2 is reached");
+  assert.equal(host.files.has(SKILL_MEASUREMENTS_PATH), false);
+});
+
+// ---------------------------------------------------------------------------
 // JEVADV-38 R3-missing-mixed-mode-and-stale-flag-tests
 // ---------------------------------------------------------------------------
 
@@ -989,7 +1074,51 @@ test("router, measure (the default): decides and logs at session start, changes 
   assert.equal(decision.quotaBand, "normal");
   for (const key of ["at", "confidence", "reason", "guard", "contextTokens", "switchCost", "stepSaving", "expectedSteps"]) assert.ok(key in decision, key);
   assert.equal(JSON.stringify(decision).includes("what time"), false, "no prompt text in the decision log");
-  assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5 (stage: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · would use: Haiku 4.5");
+});
+
+test("router quota: the live 5-hour and 7-day figures set the band, and the record says live (0.6.11 T6)", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.rateLimits = [
+    { kind: "five_hour", percentUsed: 96.5, resetsAt: "2026-09-25T13:00:00.000Z" },
+    { kind: "seven_day", percentUsed: 30, resetsAt: "2026-09-30T00:00:00.000Z" },
+  ];
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.quotaBand, "strong-economy");
+  assert.equal(decision?.quotaSource, "live");
+  const sent = host.fetchCalls.map((call) => call.body ?? "").join("\n");
+  assert.ok(sent.includes("strong-economy"), "Jev is told the live pressure");
+});
+
+test("router quota: with no live reading the fresh Orca mirror decides, and the record says mirror", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CONFIG_DIR}/quota.json`, JSON.stringify({ checkedAt: "2026-09-25T09:55:00.000Z", accounts: [{ id: "acct-1", status: "ok", sessionUsedPercent: 12, weeklyUsedPercent: 85, resetsAt: null }] }));
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.quotaBand, "economy");
+  assert.equal(decision?.quotaSource, "mirror");
+});
+
+test("router quota: a failing session.usage falls back to the mirror, and to none without one", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.failUsage = true;
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.quotaBand, "normal");
+  assert.equal(decision?.quotaSource, "none");
 });
 
 test("router decision record: carries the resolved project once orcaContextCache is warm (JEVADV-63)", async () => {
@@ -1045,7 +1174,7 @@ test("router, active: a simple first prompt runs on Haiku with no effort, and ev
   assert.equal(first.model, "claude-haiku-4-5-20251001");
   assert.equal("effort" in first, false);
   assert.equal(routerDecisionLines(host)[0]?.applied, true);
-  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5");
 
   host.messages = [...host.messages, { role: "assistant", text: "", toolUses: [] }];
   const second = await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, index: 1 }));
@@ -1202,7 +1331,7 @@ test("router, active, stage: a downgrade needs the same lower tier on 2 turns an
   assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · high effort · kept: waiting for another such turn (Jev: ask)");
   const turn3 = await playTurn(host, handlers, engine, 3, "and summarise them in one line", 4);
   assert.equal(turn3.model, "claude-haiku-4-5-20251001", "the second lower turn with a positive break-even switches");
-  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)", "a switch reads as before");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5", "a switch reads as before");
 
   const decisions = routerDecisionLines(host);
   assert.deepEqual(decisions.map((row) => row.point), ["start", "stage", "stage"]);
@@ -2026,7 +2155,7 @@ test("nit 10 (hook): after the person switches model, the router part says it is
   host.fetchQueue.push(tierAnswer("simple"));
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
-  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 (stage: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5");
   host.messages = [...host.messages, { role: "assistant", text: "hello", toolUses: [] }];
   await stepThrough(handlers, engine, turnStepEvent({ index: 1, model: "claude-sonnet-5-5", effort: "medium" }));
   assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5.5 · kept: your choice");

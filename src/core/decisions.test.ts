@@ -16,6 +16,8 @@ import test from "node:test";
 
 import {
   buildActionGateState,
+  buildDestinationState,
+  buildPolicyQuestions,
   buildSeedScopeIndex,
   CONSEQUENCE_NOISE_MARGIN,
   decideAction,
@@ -30,6 +32,7 @@ import {
 } from "./decisions.ts";
 import type { Policy, PolicyScope } from "./decisions.ts";
 import type { Answer, ChoiceAnswer, NoulAnswer, ScoreAnswer } from "./jev.ts";
+import { createJevPseudonyms } from "./jev_pseudonyms.ts";
 
 const ACTION = "do something";
 
@@ -617,9 +620,24 @@ test("buildActionGateState: a command with nothing secret-shaped is passed throu
   assert.equal(state.proposed_command, "git status");
 });
 
-test("buildActionGateState: context and destination are unaffected by redaction -- only the command is ever touched", () => {
-  const state = buildActionGateState("export TOKEN=abc123456789", "repo context here", { label: "a client site", kind: "client-site" });
-  assert.equal(state.context, "repo context here");
+// 0.6.11 T3: context and destination pass through the same redaction as the
+// command -- secrets, plus every repository, branch and path name the gate
+// registered while rendering the context (see jev_pseudonyms.ts).
+test("buildActionGateState: context and destination go through redaction too -- secrets and every known name", () => {
+  const names = createJevPseudonyms();
+  const context = `repository ${names.name("repo", "acme-shop")}, branch ${names.name("branch", "feat/login")}`;
+  const state = buildActionGateState("git status", `${context} TOKEN=abc123456789`, { label: "the acme-shop storefront", kind: "client-site" }, undefined, names);
+  assert.equal(state.context, "repository <repo-1>, branch <branch-1> TOKEN=[REDACTED]");
+  assert.deepEqual(state.destination, { kind: "client-site", description: "the <repo-1> storefront" });
+});
+
+test("buildActionGateState: a derived destination label (a bare repository name) never reaches Jev in clear", () => {
+  const state = buildActionGateState("git status", "some context", { label: "acme-shop (acme-shop-hotfix)", kind: "project" });
+  assert.deepEqual(state.destination, { kind: "project", description: "<repo-1> (<repo-2>)" });
+});
+
+test("buildActionGateState: a written destination description with no known name reaches Jev unchanged", () => {
+  const state = buildActionGateState("git status", "some context", { label: "a client site", kind: "client-site" });
   assert.deepEqual(state.destination, { kind: "client-site", description: "a client site" });
 });
 
@@ -635,4 +653,76 @@ test("buildActionGateState: an omitted deployPublishSignal never adds the field 
 test("buildActionGateState: a deployPublishSignal is carried through verbatim, in its own field", () => {
   const state = buildActionGateState("gh workflow run deploy.yml", "some context", undefined, "triggers a deployment workflow on GitHub Actions");
   assert.equal(state.deployPublishSignal, "triggers a deployment workflow on GitHub Actions");
+});
+
+// ===========================================================================
+// 0.6.11 T3: policy text and advisor.decide pass through the same redaction
+// as prompts and commands. A policy id is text the developer wrote (it can
+// name a client), so Jev sees each policy under a neutral key -- policy_1,
+// policy_2, in list order -- and interpretDestinationPolicy maps the key it
+// answers back to the real policy locally.
+// ===========================================================================
+
+const T3_POLICIES: Policy[] = [
+  { id: "acme_prod_needs_a_human", rule: "Deploying acme-shop needs a person; the token is TOKEN=abc123456789", kind: "requires_human", destinations: ["acme-shop"], scope: "command" },
+  { id: "tests_are_fine", rule: "Running the tests is always fine.", kind: "permits" },
+];
+
+test("buildPolicyQuestions: Jev sees neutral keys and redacted rules, never a policy id or a secret", () => {
+  const names = createJevPseudonyms();
+  names.name("repo", "acme-shop");
+  const criteria = (buildPolicyQuestions(T3_POLICIES, names).coverage as { criteria: Record<string, string> }).criteria;
+  assert.deepEqual(Object.keys(criteria), ["policy_1", "policy_2", "no_policy"]);
+  assert.equal(criteria["policy_1"], "Deploying <repo-1> needs a person; the token is TOKEN=[REDACTED]");
+  assert.equal(criteria["policy_2"], "Running the tests is always fine.");
+});
+
+test("interpretDestinationPolicy: a neutral key Jev answers resolves to the real policy, and the decision names the real id", () => {
+  const decision = interpretDestinationPolicy(ACTION, T3_POLICIES, answers("policy_1", 0.9, 0.9));
+  assert.equal(decision?.outcome, "ask");
+  assert.equal(decision?.policyId, "acme_prod_needs_a_human");
+});
+
+test("interpretDestinationPolicy: a neutral key past the end of the list resolves to nothing", () => {
+  assert.equal(interpretDestinationPolicy(ACTION, T3_POLICIES, answers("policy_3", 0.9, 0.9)), null);
+});
+
+test("buildDestinationState (advisor.decide): the action and every policy are redacted; no id, destination or scope is sent", () => {
+  const state = buildDestinationState("export TOKEN=abc123456789; deploy", "ctx", T3_POLICIES);
+  const text = JSON.stringify(state);
+  assert.equal(state.proposed_action, "export TOKEN=[REDACTED]; deploy");
+  assert.deepEqual(state.team_policies, [
+    { id: "policy_1", rule: "Deploying acme-shop needs a person; the token is TOKEN=[REDACTED]", kind: "requires_human" },
+    { id: "policy_2", rule: "Running the tests is always fine.", kind: "permits" },
+  ]);
+  assert.ok(!text.includes("acme_prod_needs_a_human") && !text.includes("abc123456789"), "a policy id or a secret reached the request");
+});
+
+test("buildDestinationState (advisor.decide) without policies still redacts the action", () => {
+  const state = buildDestinationState("export TOKEN=abc123456789; deploy", "ctx");
+  assert.equal(state.proposed_action, "export TOKEN=[REDACTED]; deploy");
+});
+
+test("buildActionGateState: the command reads with the same placeholders as the context, and rm -rf on a worktree path is shortened", () => {
+  const names = createJevPseudonyms();
+  const context = `current branch ${names.name("branch", "feature-x")}, worktree ${names.name("path", "/home/dev/Projects/acme-shop")}`;
+  const push = buildActionGateState("git push origin feature-x", context, undefined, undefined, names);
+  assert.equal(push.proposed_command, "git push origin <branch-1>");
+  assert.equal(push.context, "current branch <branch-1>, worktree <path-1>");
+  const rm = buildActionGateState("rm -rf /home/dev/Projects/acme-shop/build", context, undefined, undefined, names);
+  assert.equal(rm.proposed_command, "rm -rf <path-1>/build");
+});
+
+test("buildActionGateState: a protected branch and an unregistered word stay in clear in the command", () => {
+  const names = createJevPseudonyms();
+  names.name("branch", "main");
+  const state = buildActionGateState("git push origin main && npm test", "ctx", undefined, undefined, names);
+  assert.equal(state.proposed_command, "git push origin main && npm test");
+});
+
+test("buildActionGateState: secrets are removed first, then names, so a secret never leaves a name behind", () => {
+  const names = createJevPseudonyms();
+  names.name("repo", "acme-shop");
+  const state = buildActionGateState("cd acme-shop && export TOKEN=abc123456789", "ctx", undefined, undefined, names);
+  assert.equal(state.proposed_command, "cd <repo-1> && export TOKEN=[REDACTED]");
 });

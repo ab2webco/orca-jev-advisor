@@ -36,7 +36,7 @@
  * Always prints exactly one JSON line to stdout: `{ok: true, gate, modSkills}`
  * or `{ok: false, reason, detail}`.
  */
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
@@ -48,10 +48,10 @@ import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } f
 import { modSkillsProjectName } from '../../src/core/project_name.ts'
 import { toGateDecisionRecord } from './log-files.mjs'
 import { HUMAN_QUEUE_FILE, parseHumanQueue, waitingItems } from '../../src/core/human_queue.ts'
+import { measurementFilesToRead } from '../../src/core/measurement_files.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
-const MOD_SKILLS_LOG_PATH = join(CACHE_DIR, 'mod-skills-measurements.jsonl')
 const APPROVALS_LOG_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 const AB_BENCHMARK_LOG_PATH = join(CACHE_DIR, 'ab-benchmark-results.jsonl')
 const HUMAN_QUEUE_PATH = join(CACHE_DIR, HUMAN_QUEUE_FILE)
@@ -381,8 +381,27 @@ async function aggregateNotRunByCommandFamily () {
     .sort((a, b) => b.notRun - a.notRun)
 }
 
+/** The skill-selection log across the legacy single file and its hourly files (src/core/measurement_files.ts). */
+async function readModSkillsRows () {
+  let names
+  try {
+    names = await readdir(CACHE_DIR)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { rows: [], corrupt: 0 }
+    throw error
+  }
+  const rows = []
+  let corrupt = 0
+  for (const name of measurementFilesToRead('mod-skills', names)) {
+    const file = await readJsonl(join(CACHE_DIR, name))
+    rows.push(...file.rows)
+    corrupt += file.corrupt
+  }
+  return { rows, corrupt }
+}
+
 async function aggregateModSkills () {
-  const { rows, corrupt } = await readJsonl(MOD_SKILLS_LOG_PATH)
+  const { rows, corrupt } = await readModSkillsRows()
   const decisions = rows.filter((r) => r.type === 'decision')
   const observations = rows.filter((r) => r.type === 'observation')
   const observationById = new Map(observations.map((o) => [o.id, o]))

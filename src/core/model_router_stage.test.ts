@@ -16,6 +16,7 @@ import {
   hysteresisTurns,
   medianOf,
   quotaBandOf,
+  quotaPressureOf,
   shiftForPressure,
   summarizePreviousTurn,
   summarizeSinceLastPrompt,
@@ -90,6 +91,61 @@ test("quota bands: < 80 normal, 80–94 economy, ≥ 95 strong economy", () => {
   assert.equal(quotaBandOf(quota(94.9), FRESH, NOW), "economy");
   assert.equal(quotaBandOf(quota(95), FRESH, NOW), "strong-economy");
   assert.equal(quotaBandOf(quota(100), FRESH, NOW), "strong-economy");
+});
+
+function quotaBoth(session: number | null, weekly: number | null): QuotaAccount {
+  return { id: "a", status: "ok", sessionUsedPercent: session, weeklyUsedPercent: weekly, resetsAt: null };
+}
+
+test("quota bands: the band is the tighter of the 5-hour and the 7-day window", () => {
+  assert.equal(quotaBandOf(quotaBoth(96, 10), FRESH, NOW), "strong-economy");
+  assert.equal(quotaBandOf(quotaBoth(85, 10), FRESH, NOW), "economy");
+  assert.equal(quotaBandOf(quotaBoth(85, 96), FRESH, NOW), "strong-economy");
+  assert.equal(quotaBandOf(quotaBoth(10, 85), FRESH, NOW), "economy");
+  assert.equal(quotaBandOf(quotaBoth(null, 85), FRESH, NOW), "economy");
+  assert.equal(quotaBandOf(quotaBoth(96, null), FRESH, NOW), "strong-economy");
+  assert.equal(quotaBandOf(quotaBoth(null, null), FRESH, NOW), "normal");
+});
+
+// Live rate limits (0.6.11 T6): the figures Claude Code gives its status line,
+// read through `$.session.usage().rateLimits`.
+const LATER = new Date(NOW + 60 * 60_000).toISOString();
+const EARLIER = new Date(NOW - 60_000).toISOString();
+
+test("quota pressure: a live reading wins over the mirror and says so", () => {
+  const live = [
+    { kind: "five_hour", percentUsed: 97, resetsAt: LATER },
+    { kind: "seven_day", percentUsed: 40, resetsAt: LATER },
+  ];
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(0, 0), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "strong-economy", source: "live" });
+  const calm = [
+    { kind: "five_hour", percentUsed: 5, resetsAt: LATER },
+    { kind: "seven_day", percentUsed: 10, resetsAt: LATER },
+  ];
+  assert.deepEqual(quotaPressureOf({ live: calm, mirror: quotaBoth(99, 99), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "normal", source: "live" });
+});
+
+test("quota pressure: no live reading falls back to the mirror, or to none", () => {
+  assert.deepEqual(quotaPressureOf({ live: [], mirror: quotaBoth(10, 85), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "economy", source: "mirror" });
+  assert.deepEqual(quotaPressureOf({ live: [], mirror: quotaBoth(10, 85), mirrorCheckedAt: new Date(NOW - 31 * 60_000).toISOString(), nowMs: NOW }), { band: "normal", source: "none" });
+  assert.deepEqual(quotaPressureOf({ live: [], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "none" });
+});
+
+test("quota pressure: a live window that already reset is not a reading", () => {
+  const live = [{ kind: "five_hour", percentUsed: 99, resetsAt: EARLIER }];
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(10, 85), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "economy", source: "mirror" });
+});
+
+test("quota pressure: a window without a reset time still counts; other kinds (spend_limit) and junk are ignored", () => {
+  assert.deepEqual(quotaPressureOf({ live: [{ kind: "five_hour", percentUsed: 90 }], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "economy", source: "live" });
+  assert.deepEqual(quotaPressureOf({ live: [{ kind: "spend_limit", percentUsed: 150, resetsAt: LATER }], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "none" });
+  assert.deepEqual(quotaPressureOf({ live: [{ kind: "five_hour", percentUsed: Number.NaN }], mirror: null, mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "none" });
+});
+
+test("quota pressure: a window the live reading lacks is filled from the fresh mirror", () => {
+  const live = [{ kind: "five_hour", percentUsed: 10, resetsAt: LATER }];
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(0, 96), mirrorCheckedAt: FRESH, nowMs: NOW }), { band: "strong-economy", source: "live+mirror" });
+  assert.deepEqual(quotaPressureOf({ live, mirror: quotaBoth(0, 96), mirrorCheckedAt: null, nowMs: NOW }), { band: "normal", source: "live" });
 });
 
 test("quota bands: missing, unknown or stale (> 30 min) quota means normal", () => {
@@ -486,10 +542,64 @@ test("E1: an upgrade back to the session's own model uses the tier's effort, not
   assert.equal(decision.effortTarget, "high");
 });
 
-test("E1: frontier work on Opus (no Fable) upgrades at xhigh, the frontier tier's own effort", () => {
-  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "frontier", confidence: 0.9 }, currentModel: "claude-sonnet-5-5", currentEffort: "medium" });
+test("E1: frontier work on Opus (no Fable) upgrades at xhigh, the frontier tier's own effort, once effort is at its ceiling", () => {
+  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "frontier", confidence: 0.9 }, currentModel: "claude-sonnet-5-5", currentEffort: "high" });
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.effort, "xhigh");
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.11 T5: effort before model (a model change drops the prompt cache)
+// ---------------------------------------------------------------------------
+
+const ON_SONNET = { currentModel: "claude-sonnet-5-5", configuredModel: "claude-sonnet-5-5", configuredEffort: "medium" } as const;
+
+test("T5: a one-step upgrade first raises the effort on the current model when it is below what the work asks", () => {
+  const decision = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "medium" });
+  assert.equal(decision.reason, "effort-raise");
+  assert.equal(decision.model, "claude-sonnet-5-5");
+  assert.equal(decision.effort, "high");
+  assert.equal(decision.changed, true);
+  assert.equal(decision.effortTarget, "high");
+  assert.equal(decision.pending, null);
+});
+
+test("T5: the effort is capped at high on the smaller model, even for frontier work", () => {
+  const decision = stage({ ...ON_SONNET, jev: { tier: "frontier", confidence: 0.9 }, currentEffort: "low" });
+  assert.equal(decision.reason, "effort-raise");
+  assert.equal(decision.effort, "high");
+});
+
+test("T5: the model changes when the need persists on the next turn (effort already at its ceiling)", () => {
+  const first = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "medium" });
+  const next = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: first.effort });
+  assert.equal(next.reason, "upgrade");
+  assert.equal(next.model, "claude-opus-5-5");
+  assert.equal(next.effort, "high");
+});
+
+test("T5: a multi-step upgrade, a guard, a person's own effort and a model with no effort are unchanged", () => {
+  const twoSteps = stage({ ...ON_SONNET, tiers: TIERS, jev: { tier: "complex", confidence: 0.9 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null });
+  assert.equal(twoSteps.reason, "upgrade");
+  const guarded = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "medium", guards: { ...CALM, text: "Read /x/brief.md and do what it says" } });
+  assert.equal(guarded.reason, "upgrade", "a guard forces the model, not a delay");
+  const own = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: "max", configuredEffort: "max" });
+  assert.equal(own.reason, "upgrade", "a person's own max is at the ceiling already");
+  const numeric = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.9 }, currentEffort: 32_000, configuredEffort: 32_000 });
+  assert.equal(numeric.reason, "upgrade");
+});
+
+test("T5: under the confidence floor nothing changes, model or effort", () => {
+  const decision = stage({ ...ON_SONNET, jev: { tier: "complex", confidence: 0.6 }, currentEffort: "medium", guards: { ...CALM, confidence: 0.6 } });
+  assert.equal(decision.reason, "low-confidence");
+  assert.equal(decision.changed, false);
+});
+
+test("T5: downgrades keep their own hysteresis and break-even; effort is not lowered first", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.9 }, currentEffort: "high" });
+  assert.equal(decision.reason, "hysteresis");
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.effort, "high");
 });
 
 test("E1: a person's max or numeric effort is never lowered by an upgrade back to their own model", () => {

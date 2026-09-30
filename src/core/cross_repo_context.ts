@@ -24,6 +24,8 @@
 // Pure: no I/O, no locale -- both stay English/generic like repoContext().
 import type { MatchableDestination } from "./destination_match.ts";
 import type { MatchedDestinationForCwd } from "./linked_worktree.ts";
+import { IDENTITY_NAMES } from "./jev_pseudonyms.ts";
+import type { JevNames } from "./jev_pseudonyms.ts";
 
 export interface RepoLocation {
   /** Null when the path is outside any git repository this codebase can positively resolve (a scratch directory, `/tmp`, `$TMPDIR`, ...). */
@@ -41,14 +43,43 @@ function sameRepo(a: RepoLocation, b: RepoLocation): boolean {
   return a.repoRoot === b.repoRoot;
 }
 
-function targetOpening(location: RepoLocation): string {
-  if (location.repoRoot === null) return "The command acts on files outside any repository";
-  return `The command acts on files in the repository at ${location.repoRoot} on branch ${location.branch ?? "an unknown branch"}`;
+function branchOf(location: RepoLocation, names: JevNames): string {
+  return location.branch === null ? "an unknown branch" : names.name("branch", location.branch);
 }
 
-function sessionClause(location: RepoLocation): string {
+function targetOpening(location: RepoLocation, names: JevNames): string {
+  if (location.repoRoot === null) return "The command acts on files outside any repository";
+  return `The command acts on files in the repository at ${names.name("path", location.repoRoot)} on branch ${branchOf(location, names)}`;
+}
+
+function sessionClause(location: RepoLocation, names: JevNames): string {
   if (location.repoRoot === null) return "outside any repository";
-  return `${location.repoRoot} on ${location.branch ?? "an unknown branch"}`;
+  return `${names.name("path", location.repoRoot)} on ${branchOf(location, names)}`;
+}
+
+/** What gate-bash.ts reads from git about the session's own checkout. */
+export interface RepoFacts {
+  /** The origin remote's repository name, `.git` stripped; empty when there is no origin. */
+  readonly remote: string;
+  /** The checked-out branch; empty when git could not say. */
+  readonly branch: string;
+  readonly dirty: boolean;
+}
+
+/**
+ * What makes a feature branch different from a client's main, as one
+ * English sentence. Rendered twice by the gate (0.6.11 T3): in clear with
+ * IDENTITY_NAMES for the verdict-cache key -- byte-for-byte the text it has
+ * always been -- and with a fresh Jev pseudonym table for the copy Jev reads.
+ */
+export function renderRepoContext(facts: RepoFacts, names: JevNames): string {
+  const { remote, branch, dirty } = facts;
+  return [
+    remote.length > 0 ? `repository ${names.name("repo", remote)}` : "no remote",
+    branch.length > 0 ? `branch ${names.name("branch", branch)}` : "unknown branch",
+    branch === "main" || branch === "master" ? "this is the shared main branch" : "this is a working branch",
+    dirty ? "with uncommitted changes" : "clean",
+  ].join(", ");
 }
 
 /**
@@ -62,7 +93,7 @@ function sessionClause(location: RepoLocation): string {
  * tell two such targets apart by, so naming each one's own path would claim
  * a precision this module does not have.
  */
-export function buildCrossRepoSentence(session: RepoLocation, targets: readonly TargetLocation[]): string | null {
+export function buildCrossRepoSentence(session: RepoLocation, targets: readonly TargetLocation[], names: JevNames = IDENTITY_NAMES): string | null {
   const differing = targets.filter((target) => !sameRepo(target, session));
   if (differing.length === 0) return null;
 
@@ -77,7 +108,7 @@ export function buildCrossRepoSentence(session: RepoLocation, targets: readonly 
       if (seenRepoRoots.has(target.repoRoot)) continue;
       seenRepoRoots.add(target.repoRoot);
     }
-    sentences.push(`${targetOpening(target)}, not in the session's current repository (${sessionClause(session)}).`);
+    sentences.push(`${targetOpening(target, names)}, not in the session's current repository (${sessionClause(session, names)}).`);
   }
   return sentences.join(" ");
 }

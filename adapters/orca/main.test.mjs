@@ -37,6 +37,7 @@ const {
   attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
+  attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
@@ -52,6 +53,8 @@ const {
   CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  claudeIntegrationPermissionArgs,
+  describeClaudeIntegration,
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
@@ -232,6 +235,146 @@ test('claudeIntegrationResultPayload carries modCopyWarning through -- P5, the p
 test('claudeIntegrationResultPayload reports modCopyWarning as null when the install had nothing to warn about', () => {
   const payload = claudeIntegrationResultPayload('ci-3', { ok: true })
   assert.equal(payload.modCopyWarning, null)
+})
+
+test('claudeIntegrationResultPayload carries the Node the hooks were pointed at, so the panel can say when it is too old', () => {
+  const node = { state: 'too-old', path: '/usr/local/bin/node', version: 'v20.11.0' }
+  assert.deepEqual(claudeIntegrationResultPayload('ci-4', { ok: true, node }).node, node)
+  assert.equal(claudeIntegrationResultPayload('ci-5', { ok: true }).node, null)
+})
+
+test('claudeIntegrationPermissionArgs: only the modes that probe Node or run hooks may spawn children', () => {
+  for (const mode of ['install', 'status']) {
+    assert.ok(claudeIntegrationPermissionArgs(mode).includes('--allow-child-process'), mode)
+  }
+  for (const mode of ['uninstall', 'router-mode-status', 'router-mode-set', 'router-effort-set', 'steward-set']) {
+    assert.ok(!claudeIntegrationPermissionArgs(mode).includes('--allow-child-process'), mode)
+  }
+})
+
+test('claudeIntegrationPermissionArgs: install may read the Node version managers\' directories, and status stays read-only', () => {
+  const install = claudeIntegrationPermissionArgs('install')
+  assert.ok(install.some((arg) => arg.startsWith('--allow-fs-read=') && arg.endsWith('.nvm/versions/node')))
+  assert.ok(install.some((arg) => arg.startsWith('--allow-fs-write=')))
+  assert.ok(!claudeIntegrationPermissionArgs('status').some((arg) => arg.startsWith('--allow-fs-write=')))
+})
+
+const HEALTHY_STATUS = {
+  ok: true,
+  node: { state: 'ok', path: '/opt/homebrew/bin/node', version: 'v26.9.0' },
+  hook: { installed: true, pathMatches: true },
+  outcomeHook: { installed: true, pathMatches: true },
+  agentModelHook: { installed: true, pathMatches: true },
+  env: { installed: true, name: 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS' },
+  modCopy: { installed: true }
+}
+const HEALTHY_HOOK_RUNS = { ok: true, results: ['gate-bash', 'gate-outcome', 'agent-model'].map((hook) => ({ hook, targets: ['home'], ok: true, reason: null, detail: null })) }
+
+test('describeClaudeIntegration: everything in place and every hook ran is ok', () => {
+  const check = describeClaudeIntegration(HEALTHY_STATUS, HEALTHY_HOOK_RUNS)
+  assert.equal(check.id, 'claude-integration')
+  assert.equal(check.ok, true)
+})
+
+test('describeClaudeIntegration: a stale path counts for the outcome and Agent hooks, not only the gate', () => {
+  const outcome = describeClaudeIntegration({ ...HEALTHY_STATUS, outcomeHook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.equal(outcome.ok, false)
+  assert.match(outcome.detail, /gate-outcome\.ts/)
+  const agent = describeClaudeIntegration({ ...HEALTHY_STATUS, agentModelHook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.equal(agent.ok, false)
+  assert.match(agent.detail, /agent-model\.ts/)
+  const gate = describeClaudeIntegration({ ...HEALTHY_STATUS, hook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.match(gate.detail, /gate-bash\.ts/)
+})
+
+test('describeClaudeIntegration: names the hook that failed to run and why', () => {
+  const runs = { ok: true, results: [
+    { hook: 'gate-bash', targets: ['home'], ok: false, reason: 'exit-code', detail: 'exited with code 1: ERR_UNKNOWN_FILE_EXTENSION' },
+    { hook: 'gate-outcome', targets: ['home'], ok: true, reason: null, detail: null },
+    { hook: 'agent-model', targets: ['home'], ok: false, reason: 'timeout', detail: 'no answer within 5000 ms' }
+  ] }
+  const check = describeClaudeIntegration(HEALTHY_STATUS, runs)
+  assert.equal(check.ok, false)
+  assert.match(check.detail, /gate-bash.*exit-code.*ERR_UNKNOWN_FILE_EXTENSION/)
+  assert.match(check.detail, /agent-model.*timeout/)
+  assert.doesNotMatch(check.detail, /gate-outcome/)
+})
+
+test('describeClaudeIntegration: a Node that is too old or missing is a problem with the version seen', () => {
+  const old = describeClaudeIntegration({ ...HEALTHY_STATUS, node: { state: 'too-old', path: '/usr/local/bin/node', version: 'v20.11.0' } }, HEALTHY_HOOK_RUNS)
+  assert.equal(old.ok, false)
+  assert.match(old.detail, /Node 24 or newer.*v20\.11\.0.*\/usr\/local\/bin\/node/)
+  const missing = describeClaudeIntegration({ ...HEALTHY_STATUS, node: { state: 'missing', path: null, version: null } }, HEALTHY_HOOK_RUNS)
+  assert.match(missing.detail, /Node 24 or newer/)
+})
+
+test('describeClaudeIntegration: a hooks-check that itself failed is reported, never read as passing', () => {
+  const check = describeClaudeIntegration(HEALTHY_STATUS, { ok: false, reason: 'no-json', detail: 'timed out' })
+  assert.equal(check.ok, false)
+  assert.match(check.detail, /could not run the hooks/i)
+})
+
+test('describeClaudeIntegration: a status that could not be read says so', () => {
+  const check = describeClaudeIntegration({ ok: false, reason: 'exception', detail: 'boom' }, null)
+  assert.equal(check.ok, false)
+  assert.match(check.detail, /Could not read the status: boom/)
+})
+
+test('claudeIntegrationPermissionArgs: hooks-check is read-only on disk but may spawn the hooks', () => {
+  const args = claudeIntegrationPermissionArgs('hooks-check')
+  assert.ok(args.includes('--allow-child-process'))
+  assert.ok(!args.some((arg) => arg.startsWith('--allow-fs-write=')))
+})
+
+// 0.6.11 T2e: the poll loop looks again for Orca accounts added after
+// Configure, at most once a minute, and installs only when Configure was done.
+
+const RESCAN_OK = { hook: { installed: true, pathMatches: true }, outcomeHook: { installed: true, pathMatches: true }, agentModelHook: { installed: true, pathMatches: true } }
+const RESCAN_BARE = { hook: { installed: false, pathMatches: false }, outcomeHook: { installed: false, pathMatches: false }, agentModelHook: { installed: false, pathMatches: false } }
+
+function rescanDeps (targets) {
+  const calls = { status: 0, install: 0, publish: 0 }
+  return {
+    calls,
+    deps: {
+      readStatus: async () => { calls.status += 1; return { ok: true, targets } },
+      install: async () => { calls.install += 1; return { ok: true } },
+      publish: async () => { calls.publish += 1 }
+    }
+  }
+}
+
+test('attendClaudeIntegrationRescan: a new account after Configure is installed, and the status published afterwards', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_OK }, { id: 'account:new', ...RESCAN_BARE }])
+  const memory = { lastCheckedAt: null, signature: null }
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 1_000 })
+  assert.deepEqual(calls, { status: 1, install: 1, publish: 1 })
+})
+
+test('attendClaudeIntegrationRescan: looks at most once a minute', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_OK }])
+  const memory = { lastCheckedAt: null, signature: null }
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 1_000 })
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 30_000 })
+  assert.equal(calls.status, 1)
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 61_000 })
+  assert.equal(calls.status, 2)
+})
+
+test('attendClaudeIntegrationRescan: never configured (nothing installed anywhere) installs nothing', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_BARE }, { id: 'account:a', ...RESCAN_BARE }])
+  await attendClaudeIntegrationRescan(fakeOrca(), { lastCheckedAt: null, signature: null }, { ...deps, now: () => 1_000 })
+  assert.deepEqual(calls, { status: 1, install: 0, publish: 0 })
+})
+
+test('attendClaudeIntegrationRescan: an install that cannot fix the account is not retried every minute', async () => {
+  const { calls, deps } = rescanDeps([{ id: 'home', ...RESCAN_OK }, { id: 'account:stuck', ...RESCAN_BARE }])
+  const memory = { lastCheckedAt: null, signature: null }
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 1_000 })
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 62_000 })
+  await attendClaudeIntegrationRescan(fakeOrca(), memory, { ...deps, now: () => 123_000 })
+  assert.equal(calls.status, 3)
+  assert.equal(calls.install, 1)
 })
 
 test('attendLocaleRequest: an expired request publishes reason "expired"', async () => {

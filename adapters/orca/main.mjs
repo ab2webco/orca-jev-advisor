@@ -62,6 +62,8 @@ import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.
 import { ADVISOR_CATALOG } from '../../src/core/i18n_advisor.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
 import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
+import { managedNodeRoots } from '../../src/core/node_runtime.ts'
+import { decideRescanInstall, isRescanDue } from '../../src/core/claude_integration_rescan.ts'
 import {
   attendModelsMirrorRequest,
   attendModelsSeedRequest,
@@ -824,6 +826,8 @@ const PLUGIN_ROOT = join(__dirname, '..', '..')
 const ORCA_CLI_BIN = orcaCliCommand(PLATFORM, { orcaCliCommand: process.env.ORCA_CLI_COMMAND })
 const CLAUDE_INTEGRATION_SCRIPT = join(__dirname, 'install-claude-integration.mjs')
 const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
+// hooks-check runs the hooks in parallel with 5 s each; the outer budget must outlast that.
+const HOOKS_CHECK_TIMEOUT_MS = 15000
 
 // JEV-060 slice 2, §9 T9: `router-mode-status`/`router-mode-set` read/write
 // the exact same settings.json files as status/install/uninstall (CONFIG_DIR,
@@ -831,7 +835,30 @@ const CLAUDE_INTEGRATION_TIMEOUT_MS = 8000
 // `router-mode-status` is read-only, like `status`; every other mode
 // (install, uninstall, router-mode-set, router-effort-set) needs the write
 // grants too.
-const READ_ONLY_MODES = ['status', 'router-mode-status']
+const READ_ONLY_MODES = ['status', 'router-mode-status', 'hooks-check']
+// The modes that run `node --version` (and, for the doctor, the hooks
+// themselves): everything else must stay unable to start a process.
+const CHILD_PROCESS_MODES = ['install', 'status', 'hooks-check']
+
+/** The `--permission` flags the installer runs under for `mode`. */
+function claudeIntegrationPermissionArgs (mode) {
+  const args = [
+    '--permission',
+    `--allow-fs-read=${PLUGIN_ROOT}`,
+    `--allow-fs-read=${CONFIG_DIR}`,
+    `--allow-fs-read=${CLAUDE_HOME_DIR}`,
+    `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
+  ]
+  if (!READ_ONLY_MODES.includes(mode)) {
+    args.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
+  }
+  if (CHILD_PROCESS_MODES.includes(mode)) {
+    // Listing installed Node versions (nvm, fnm) needs to read their roots.
+    for (const { root } of managedNodeRoots(PLATFORM, HOME_PATHS.home)) args.push(`--allow-fs-read=${root}`)
+    args.push('--allow-child-process')
+  }
+  return args
+}
 
 /** `extraArgs` replaces the single positional `pluginRoot` every OTHER mode
  *  passes by default -- router-mode-status needs none, router-mode-set
@@ -839,18 +866,9 @@ const READ_ONLY_MODES = ['status', 'router-mode-status']
 function runClaudeIntegrationScript (mode, extraArgs = [PLUGIN_ROOT]) {
   return new Promise((resolve) => {
     try {
-      const permissionArgs = [
-        '--permission',
-        `--allow-fs-read=${PLUGIN_ROOT}`,
-        `--allow-fs-read=${CONFIG_DIR}`,
-        `--allow-fs-read=${CLAUDE_HOME_DIR}`,
-        `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
-      ]
-      if (!READ_ONLY_MODES.includes(mode)) {
-        permissionArgs.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
-      }
+      const permissionArgs = claudeIntegrationPermissionArgs(mode)
       execFile(process.execPath, [...permissionArgs, CLAUDE_INTEGRATION_SCRIPT, mode, ...extraArgs], {
-        timeout: CLAUDE_INTEGRATION_TIMEOUT_MS,
+        timeout: mode === 'hooks-check' ? HOOKS_CHECK_TIMEOUT_MS : CLAUDE_INTEGRATION_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
         env: sidecarEnv({ ELECTRON_RUN_AS_NODE: '1' })
       }, (error, stdout) => {
@@ -903,7 +921,8 @@ function claudeIntegrationResultPayload (id, result) {
     ok: result.ok,
     reason: result.reason ?? null,
     detail: result.detail ?? null,
-    modCopyWarning: result.modCopyWarning ?? null
+    modCopyWarning: result.modCopyWarning ?? null,
+    node: result.node ?? null
   }
 }
 
@@ -1717,6 +1736,26 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
     .catch((err) => orca.log(`claude integration result publish failed: ${err.message}`))
 
   await publishClaudeIntegrationStatus(orca, storageHost)
+}
+
+/**
+ * Looks again, at most once a minute, for what Configure would fix: an Orca
+ * account added since, or a hook left on an old plugin root. Installs only
+ * once the integration has been configured before (see
+ * decideRescanInstall). `memory` is the poll loop's own
+ * `{ lastCheckedAt, signature }`; `deps` is `{ readStatus, install, publish, now }`.
+ */
+async function attendClaudeIntegrationRescan (orca, memory, deps) {
+  const now = deps.now()
+  if (!isRescanDue(now, memory.lastCheckedAt)) return
+  memory.lastCheckedAt = now
+  const status = await deps.readStatus()
+  const decision = decideRescanInstall(status, memory.signature)
+  memory.signature = decision.signature
+  if (!decision.install) return
+  orca.log(`claude integration rescan: installing for ${decision.signature}`)
+  await deps.install()
+  await deps.publish()
 }
 
 // ---------------------------------------------------------------------------
@@ -2550,24 +2589,44 @@ async function checkSecretMirror (secretsHost) {
   return { id: 'secret-mirror', ok: false, detail: 'The mirror file does not match secrets (out of sync) -- save the key again from the panel.' }
 }
 
-/** Whether the Claude Code side (hook, env var, mod link) is actually in place right now. */
-async function checkClaudeIntegration () {
-  const status = await claudeIntegrationStatus()
+/**
+ * The doctor's verdict on the Claude Code side, from installer `status` and
+ * `hooks-check`: every hook installed AND pointing at this plugin root AND
+ * actually runnable, the env var, the skills mod, and a Node the hooks can
+ * use. Pure so it can be tested without spawning anything.
+ */
+function describeClaudeIntegration (status, hookRuns) {
   if (!status.ok) {
     return { id: 'claude-integration', ok: false, detail: `Could not read the status: ${String(status.detail ?? status.reason ?? 'no detail').slice(0, 160)}` }
   }
   const parts = []
   if (!status.hook.installed) parts.push('missing the PreToolUse hook')
   else if (!status.hook.pathMatches) parts.push('the hook points at a different gate-bash.ts path')
+  if (!status.outcomeHook?.installed) parts.push('missing the outcome hooks')
+  else if (!status.outcomeHook.pathMatches) parts.push('the outcome hooks point at a different gate-outcome.ts path')
   if (!status.env.installed) parts.push(`missing ${status.env.name}=1`)
   if (!status.modCopy.installed) parts.push('the skills mod copy is missing or stale')
-  // T6a's Agent-matcher hooks (adapters/claude/agent-model.ts) -- read the
-  // same way status.hook/env/modCopy already are above, no restructuring
-  // needed: install-claude-integration.mjs's status() already reports this
-  // field (see that file's own `agentModelHook` aggregate).
+  // T6a's Agent-matcher hooks (adapters/claude/agent-model.ts).
   if (status.agentModelHook?.installed !== true) parts.push('missing the Agent model PreToolUse/PostToolUse hooks')
-  if (parts.length === 0) return { id: 'claude-integration', ok: true, detail: 'Hook, environment variable and skills mod all installed.' }
+  else if (!status.agentModelHook.pathMatches) parts.push('the Agent model hooks point at a different agent-model.ts path')
+  if (status.node?.state === 'too-old') parts.push(`Node 24 or newer is required; found ${status.node.version} at ${status.node.path}`)
+  else if (status.node?.state === 'missing') parts.push('Node 24 or newer is required; none was found')
+  if (hookRuns && hookRuns.ok) {
+    for (const run of hookRuns.results) {
+      if (!run.ok) parts.push(`the ${run.hook} hook fails when run (${run.reason}: ${String(run.detail ?? '').slice(0, 200)})`)
+    }
+  } else {
+    parts.push(`could not run the hooks to check them (${String(hookRuns?.detail ?? hookRuns?.reason ?? 'no detail').slice(0, 120)})`)
+  }
+  if (parts.length === 0) return { id: 'claude-integration', ok: true, detail: 'Hook, environment variable and skills mod all installed, and every hook ran cleanly.' }
   return { id: 'claude-integration', ok: false, detail: `Not fully installed: ${parts.join('; ')}.` }
+}
+
+/** Whether the Claude Code side (hooks, env var, mod copy, Node) is actually in place and working right now. */
+async function checkClaudeIntegration () {
+  const status = await claudeIntegrationStatus()
+  const hookRuns = status.ok ? await runClaudeIntegrationScript('hooks-check') : null
+  return describeClaudeIntegration(status, hookRuns)
 }
 
 /** advisor.doctor -- checks the key against a real Jev call, CLI reachability, catalog validity, the secret mirror, and the Claude Code integration. */
@@ -2649,12 +2708,22 @@ export default function activate (orca) {
   const catalogPolicyMirrorSeen = { value: null }
   const policySeedNoticeSeen = { value: null }
   const modelsMirrorSeen = { value: null }
+  // The activation install covers the first minute; the first look comes after it.
+  const claudeRescanMemory = { lastCheckedAt: Date.now(), signature: null }
+  const claudeRescanDeps = {
+    readStatus: claudeIntegrationStatus,
+    install: () => installClaudeIntegration(orca),
+    publish: () => publishClaudeIntegrationStatus(orca, storageHost),
+    now: () => Date.now()
+  }
   const runSecretPoll = () => {
     publishWorkerHeartbeat(orca, storageHost)
       .then(() => attendSecretRequest(orca, storageHost, secretsHost))
       .catch((error) => orca.log(`secret request handling failed: ${error.message}`))
       .then(() => attendClaudeIntegrationRequest(orca, storageHost))
       .catch((error) => orca.log(`claude integration request handling failed: ${error.message}`))
+      .then(() => attendClaudeIntegrationRescan(orca, claudeRescanMemory, claudeRescanDeps))
+      .catch((error) => orca.log(`claude integration rescan failed: ${error.message}`))
       .then(() => attendLocaleRequest(orca, storageHost))
       .catch((error) => orca.log(`locale request handling failed: ${error.message}`))
       .then(() => attendModSkillsConfigRequest(orca, storageHost))
@@ -2877,6 +2946,7 @@ export {
   attendCatalogProposalAcceptRequest,
   attendCatalogRefreshRequest,
   attendClaudeIntegrationRequest,
+  attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
@@ -2890,6 +2960,8 @@ export {
   CATALOG_PROPOSALS_STATUS_KEY,
   CATALOG_REFRESH_RESULT_KEY,
   CLAUDE_INTEGRATION_RESULT_KEY,
+  claudeIntegrationPermissionArgs,
+  describeClaudeIntegration,
   claudeIntegrationResultPayload,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,

@@ -723,3 +723,16 @@ test('gate.waiting: the items still waiting, newest first, without the ones alre
   assert.deepEqual(Object.keys(result.gate.waiting[0]).sort(), ['at', 'command', 'id', 'policyId', 'project'], 'the hashed key never leaves the reader')
   assert.equal(result.gate.waiting[0].command, 'npm publish')
 })
+
+test('modSkills reads the legacy file and every hourly file together (JEVADV-62)', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [decisionRow('a', '2026-09-28T10:00:00.000Z')])
+  const cache = join(home, '.cache', 'orca-supervisor')
+  writeFileSync(join(cache, 'mod-skills-measurements-2026-09-29T17.jsonl'), `${JSON.stringify(decisionRow('b', '2026-09-29T17:30:00.000Z'))}\n`, 'utf8')
+  writeFileSync(join(cache, 'mod-skills-measurements-2026-09-30T01.jsonl'), `${JSON.stringify(decisionRow('c', '2026-09-30T01:00:00.000Z'))}\n`, 'utf8')
+  writeFileSync(join(cache, 'mod-tools-measurements-2026-09-30T01.jsonl'), `${JSON.stringify(decisionRow('d', '2026-09-30T02:00:00.000Z'))}\n`, 'utf8')
+  const result = run(home)
+  assert.equal(result.modSkills.totalDecisions, 3)
+  assert.equal(result.modSkills.firstAt, '2026-09-28T10:00:00.000Z')
+  assert.equal(result.modSkills.lastAt, '2026-09-30T01:00:00.000Z')
+})

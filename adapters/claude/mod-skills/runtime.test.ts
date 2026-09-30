@@ -189,7 +189,11 @@ test("resolveUserSkillsDir is null when neither CLAUDE_CONFIG_DIR nor home is kn
 
 interface FakeEngine {
   env: { get: (name: string) => Promise<string | undefined> };
-  fs: { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string> };
+  fs: {
+    exists: (path: string) => Promise<boolean>;
+    read: (path: string) => Promise<string>;
+    list?: (dir: string) => Promise<{ name: string; kind: string }[]>;
+  };
 }
 
 function fakeEngine(env: Readonly<Record<string, string>>, files: Readonly<Record<string, string>>): FakeEngine {
@@ -484,3 +488,54 @@ test("orcaCliCommandFor: ORCA_CLI_COMMAND, when set, wins; an empty one is ignor
   assert.equal(orcaCliCommandFor({ home: "/Users/dev", orcaCliCommand: "orca-dev" }), "orca-dev")
   assert.equal(orcaCliCommandFor({ home: "/home/dev", orcaCliCommand: "  " }), "orca-ide")
 })
+
+// ---------------------------------------------------------------------------
+// JEVADV-62: the two logs are split per hour; the daily count and readiness
+// read the legacy single file and every hourly file together.
+// ---------------------------------------------------------------------------
+
+function listingEngine(env: Readonly<Record<string, string>>, files: Readonly<Record<string, string>>): FakeEngine {
+  const base = fakeEngine(env, files);
+  return {
+    ...base,
+    fs: {
+      ...base.fs,
+      list: async (dir: string) =>
+        Object.keys(files)
+          .filter((path) => path.startsWith(`${dir}/`) && !path.slice(dir.length + 1).includes("/"))
+          .map((path) => ({ name: path.slice(dir.length + 1), kind: "file" })),
+    },
+  };
+}
+
+function rowsText(rows: readonly Record<string, unknown>[]): string {
+  return rows.map((row) => `${JSON.stringify(row)}\n`).join("");
+}
+
+test("measurementDecisionsToday: adds today's hourly files to the legacy file, and skips other days' hours", async () => {
+  const cache = "/home/dev/.cache/orca-supervisor";
+  const engine = listingEngine(
+    { HOME: "/home/dev" },
+    {
+      [measurementLogPath("/home/dev")]: rowsText([{ type: "decision", id: "a", at: "2026-09-24T01:00:00.000Z", mode: "measurement" }]),
+      [`${cache}/mod-skills-measurements-2026-09-24T08.jsonl`]: rowsText([{ type: "decision", id: "b", at: "2026-09-24T08:00:00.000Z", mode: "measurement" }]),
+      [`${cache}/mod-skills-measurements-2026-09-24T09.jsonl`]: rowsText([{ type: "decision", id: "c", at: "2026-09-24T09:00:00.000Z", mode: "measurement" }]),
+      [`${cache}/mod-skills-measurements-2026-09-23T09.jsonl`]: "{ this file is not read at all",
+      [`${cache}/mod-tools-measurements-2026-09-24T09.jsonl`]: rowsText([{ type: "decision", id: "d", at: "2026-09-24T09:00:00.000Z", mode: "measurement" }]),
+    },
+  );
+  assert.equal(await measurementDecisionsToday(engine as Parameters<typeof measurementDecisionsToday>[0], "2026-09-24"), 3);
+  assert.equal(await toolMeasurementDecisionsToday(engine as Parameters<typeof toolMeasurementDecisionsToday>[0], "2026-09-24"), 1);
+});
+
+test("resolveModSkillsReadiness: joins a decision in the legacy file with its observation in an hourly file", async () => {
+  const engine = listingEngine(
+    { HOME: "/home/dev" },
+    {
+      [measurementLogPath("/home/dev")]: rowsText([{ type: "decision", id: "a", mode: "measurement", decision: { name: "graft" } }]),
+      "/home/dev/.cache/orca-supervisor/mod-skills-measurements-2026-09-30T00.jsonl": rowsText([{ type: "observation", id: "a", skill: "graft" }]),
+    },
+  );
+  const result = await resolveModSkillsReadiness(engine as Parameters<typeof resolveModSkillsReadiness>[0]);
+  assert.deepEqual(result, { ready: false, comparableShortfall: 999, matchRateMet: null, reason: "not-enough-samples" });
+});

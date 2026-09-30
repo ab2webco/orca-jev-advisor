@@ -51,6 +51,9 @@ export const TIER_EFFORT: Readonly<Record<RouterTier, RouterEffort>> = {
 export type DestinationKind = "client-site" | "service" | "project" | "support";
 export type QuotaBand = "normal" | "economy" | "strong-economy";
 
+/** Where the quota band's figures came from: the live status-line reading, the Orca mirror, both (one window each), or nothing usable. */
+export type QuotaSource = "live" | "live+mirror" | "mirror" | "none";
+
 /** A compact summary of the previous turn (§6.1): counts only, plus the short text the topic flags read (edited paths, commands). */
 export interface TurnActivity {
   readonly toolCalls: number;
@@ -151,6 +154,11 @@ export function interpretTier(answers: Record<string, Answer>): TierJudgment | n
 // §6.2 quality guards
 // ---------------------------------------------------------------------------
 
+/**
+ * The confidence under which Jev's tier holds the model. 0.6.11 T4 measured it
+ * against the record (odd/tasks/release-0.6.11.md) and found no signal that
+ * moves it, so it stays 0.7.
+ */
 export const CONFIDENCE_FLOOR = 0.7;
 
 /**
@@ -410,6 +418,8 @@ export interface RouterDecisionRecord {
   readonly stepSaving: number | null;
   readonly expectedSteps: number | null;
   readonly quotaBand: QuotaBand;
+  /** 0.6.11 T6: which reading fed `quotaBand` (live status-line figures, the Orca mirror, both, or none); null on a line written before this field or by a path that did not say. */
+  readonly quotaSource: QuotaSource | null;
   /** JEV-061: the submitted prompt's `PromptOrigin` kind this decision answers, when known -- never its text. null for a subagent spawn (no submitted prompt) or when `prompt.submit` never stamped one for this turn. */
   readonly origin: string | null;
   /** JEV-061 slice 2: the subagent's own effort for its first step and after, when the router set a target at spawn; null otherwise (every other point, or a subagent with no explicit model/no guard/active-mode requirement unmet). 0.6.3 (JEVADV-63 R1): written from what that first step actually computed and sent -- unguarded, the tier's effort applies outright either direction; guarded, only a raise -- never the raw spawn-time target, so log and step can never diverge (see subagentStepEffort). */
@@ -427,6 +437,7 @@ export interface RouterDecisionRecordInput {
   /** Whether the decision was actually applied (active mode AND a change). */
   readonly applied: boolean;
   readonly quotaBand: QuotaBand;
+  readonly quotaSource?: QuotaSource | null;
   readonly breakEven?: { readonly contextTokens: number; readonly switchCost: number; readonly stepSaving: number; readonly expectedSteps: number } | null;
   readonly origin?: string | null;
   readonly effort?: SessionEffort | null;
@@ -452,6 +463,7 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     stepSaving: breakEven?.stepSaving ?? null,
     expectedSteps: breakEven?.expectedSteps ?? null,
     quotaBand: input.quotaBand,
+    quotaSource: input.quotaSource ?? null,
     origin: input.origin ?? null,
     effort: input.effort ?? null,
     project: input.project ?? null,

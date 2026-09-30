@@ -8,7 +8,7 @@
  * does: the worker's own permission sandbox only lets it read its plugin
  * root, and every one of these lives outside it.
  *
- * Usage: node install-claude-integration.mjs <install|uninstall|status> <pluginRoot>
+ * Usage: node install-claude-integration.mjs <install|uninstall|status|hooks-check> <pluginRoot>
  *        node install-claude-integration.mjs router-mode-status
  *        node install-claude-integration.mjs router-mode-set <target> <mode>
  *
@@ -61,6 +61,9 @@
  *             as found.
  * status      Read-only: reports whether each of the seven is in place
  *             right now, for the config panel and advisor.doctor.
+ * hooks-check Runs each installed hook (gate-bash, gate-outcome,
+ *             agent-model) as its settings.json entry writes it, with a
+ *             no-op payload, and reports which ones failed and why.
  * router-mode-status  Read-only, no pluginRoot needed: `{ok, targets: [
  *             {target: "home" | "<account uuid>", mode}, ...]}`, one row
  *             per target discoverTargets() finds -- JEV-060 slice 2 §7/§9,
@@ -100,12 +103,14 @@ import {
   guardedRm as rm,
   guardedWriteFile as writeFile
 } from '../../src/core/guarded_fs.ts'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { delimiter, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
 import { DEFAULT_LOCALE, parseLocaleFile } from '../../src/core/i18n.ts'
+import { classifyNode, managedNodeRoots, nodeCandidatePaths } from '../../src/core/node_runtime.ts'
 import {
   ORCA_USER_DATA_ENV,
   accountConfigTarget,
@@ -309,11 +314,10 @@ function localizedMarker (family, locale) {
  *  ours. `locale` picks which of `markers` the freshly-built `entry` itself
  *  carries -- defaults to DEFAULT_LOCALE for a caller (status/uninstall)
  *  that only needs `markers`/`path`, never a fresh `entry`. */
-function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE) {
+function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE, node = resolveNodeCommand()) {
   const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
   const outcomePath = join(pluginRoot, 'adapters', 'claude', 'gate-outcome.ts')
   const agentModelPath = join(pluginRoot, 'adapters', 'claude', 'agent-model.ts')
-  const node = resolveNodeCommand()
   const gateMarker = localizedMarker('gate', locale)
   const agentModelMarker = localizedMarker('agentModel', locale)
   return {
@@ -406,35 +410,108 @@ function resolveNodeCommand () {
   return { command: 'node', verified: false }
 }
 
+const NODE_PROBE_TIMEOUT_MS = 3000
+const NODE_CANDIDATES_ENV = 'ORCA_JEV_NODE_CANDIDATES'
+
+/** Runs `<command> --version` and classifies the answer; a command that does not run is `missing`. */
+function probeNode (command) {
+  return new Promise((resolve) => {
+    execFile(command, ['--version'], { timeout: NODE_PROBE_TIMEOUT_MS, maxBuffer: 4096 }, (error, stdout) => {
+      resolve(error ? classifyNode(command, '') : classifyNode(command, String(stdout)))
+    })
+  })
+}
+
+async function listDirNames (dir) {
+  try {
+    return (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name)
+  } catch {
+    return []
+  }
+}
+
+/** The first Node >= 24 among the override list, PATH and the well-known
+ *  install places; failing that, the first Node that runs at all (so the
+ *  report can say which version it saw). */
+async function findNode () {
+  const managed = {}
+  for (const { root } of managedNodeRoots(PLATFORM, HOME)) managed[root] = await listDirNames(root)
+  const candidates = nodeCandidatePaths({ platform: PLATFORM, home: HOME, pathEnv: process.env.PATH ?? '', override: process.env[NODE_CANDIDATES_ENV], managed })
+  let firstSeen = null
+  for (const candidate of candidates) {
+    const info = await probeNode(candidate)
+    if (info.state === 'ok') return info
+    if (info.state === 'too-old' && firstSeen === null) firstSeen = info
+  }
+  return firstSeen ?? { state: 'missing', path: null, version: null }
+}
+
+/**
+ * What install writes as every hook's `command`, and what it saw. A real
+ * Node running this sidecar is trusted as before (execPath); under Electron
+ * the bare `node` of the GUI's PATH is exactly what went wrong, so an
+ * absolute Node >= 24 is looked for instead. When none qualifies the old
+ * fallback is kept -- the hooks are still written -- and `info` says why it
+ * is not good enough.
+ */
+async function resolveNode () {
+  const fallback = resolveNodeCommand()
+  if (process.versions.electron === undefined && process.env[NODE_CANDIDATES_ENV] === undefined) {
+    return { ...fallback, info: classifyNode(process.execPath, process.version) }
+  }
+  const info = await findNode()
+  if (info.state === 'ok') return { command: info.path, verified: true, info }
+  return { ...fallback, verified: false, info }
+}
+
+/** The Node an installed hook command really resolves to: probed as written, or, for a bare name, the first match on PATH. */
+async function probeHookCommand (command) {
+  if (isAbsolute(command)) return probeNode(command)
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (dir.length === 0) continue
+    const info = await probeNode(join(dir, command))
+    if (info.state !== 'missing') return info
+  }
+  return { state: 'missing', path: null, version: null }
+}
+
 // ---------------------------------------------------------------------------
 // Atomic, backed-up settings.json read/write
 // ---------------------------------------------------------------------------
 
 async function readSettings (settingsPath) {
   try {
-    const raw = await readFile(settingsPath, 'utf8')
-    const parsed = JSON.parse(raw)
-    return isRecord(parsed) ? parsed : {}
+    return parseSettingsText(await readFile(settingsPath, 'utf8'))
   } catch (error) {
     if (error?.code === 'ENOENT') return {}
     throw new Error(`settings.json exists but could not be read/parsed: ${String(error?.message ?? error)}`)
   }
 }
 
-/** Writes settings.json atomically (temp file + rename): a crash mid-write
- *  leaves an incomplete TEMP file, never a half-written real one.
- *
- *  `ORCA_TEST_DELAY_BEFORE_RENAME_MS` is read only for the "corrupt the
- *  write on purpose" verification (a real SIGKILL sent to this process
- *  between the temp write and the rename); it is never set in normal
- *  operation, so it is a no-op there. */
-async function writeSettingsAtomic (settingsPath, settings) {
-  await mkdir(dirname(settingsPath), { recursive: true })
-  const tempPath = `${settingsPath}.${randomUUID()}.tmp`
-  await writeFile(tempPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8')
-  const testDelay = Number(process.env.ORCA_TEST_DELAY_BEFORE_RENAME_MS ?? '0')
-  if (testDelay > 0) await new Promise((resolve) => setTimeout(resolve, testDelay))
-  await rename(tempPath, settingsPath)
+function parseSettingsText (raw) {
+  const parsed = JSON.parse(raw)
+  return isRecord(parsed) ? parsed : {}
+}
+
+/** Runs `mutate` on the current settings and replaces the file only if it is
+ *  still what was read (writeSettingsIfUnchanged); on a lost race it re-reads
+ *  and merges again, once, then throws -- never a lost edit. Returns what
+ *  `mutate` returned on the attempt that landed. */
+async function mutateSettingsGuarded (settingsPath, mutate) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const raw = await readRawSettings(settingsPath)
+    let settings = {}
+    if (raw !== null) {
+      try {
+        settings = parseSettingsText(raw)
+      } catch (error) {
+        throw new Error(`settings.json exists but could not be read/parsed: ${String(error?.message ?? error)}`)
+      }
+    }
+    const result = mutate(settings)
+    if (await writeSettingsIfUnchanged(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, raw)) return result
+  }
+  throw new Error(`settings.json at ${settingsPath} kept changing while it was being written; nothing was written`)
 }
 
 /** Backs up the pre-modification settings.json exactly once: a run that
@@ -824,7 +901,7 @@ async function modCopyState (modCopyPath, markerPath, source, digest) {
     if (error?.code === 'ENOENT') return null
     throw error
   })
-  if (!st) return { exists: false, ours: false, current: false, hasManifest: false }
+  if (!st) return { exists: false, ours: false, foreign: false, current: false, hasManifest: false }
 
   const marker = await readModCopyMarker(markerPath)
   let ours
@@ -839,7 +916,11 @@ async function modCopyState (modCopyPath, markerPath, source, digest) {
 
   const hasManifest = await pathExists(join(modCopyPath, ...MOD_SKILLS_MANIFEST_PATH.split('/')))
   const current = ours && !st.isSymbolicLink() && marker !== null && typeof marker.digest === 'string' && digest !== null && marker.digest === digest && hasManifest
-  return { exists: true, ours, current, hasManifest }
+  // A marker at all means an earlier install of this mod (any plugin root)
+  // wrote it, so replacing is fine; no marker and not a link to our source
+  // means somebody else's files, which install must never delete.
+  const foreign = marker === null && !ours
+  return { exists: true, ours, foreign, current, hasManifest }
 }
 
 async function installModCopy (pluginRoot, modCopyPath, markerPath) {
@@ -853,10 +934,13 @@ async function installModCopy (pluginRoot, modCopyPath, markerPath) {
 
   const state = await modCopyState(modCopyPath, markerPath, source, plan.digest)
   if (state.current) return { changed: false }
+  if (state.foreign) {
+    return { changed: false, reason: 'foreign-mod-copy', detail: `${modCopyPath} exists and was not installed by Orca Jev; it was left untouched, so the skills mod is not on disk here` }
+  }
 
   if (state.exists) {
-    // Stale (different plugin root or changed content), an unrecognized
-    // leftover, or -- always -- a pre-fix symlink: replace wholesale rather
+    // Stale (different plugin root or changed content) or -- always -- a
+    // pre-fix symlink: replace wholesale rather
     // than merging into it or trusting a symlink's target as good enough,
     // the same way a stale settings.json container is never partially
     // reused. `rm` on a path that is itself a symlink removes the link,
@@ -911,7 +995,8 @@ function modCopyPathFor (target) {
 
 async function install (pluginRoot) {
   const locale = await resolveLocale()
-  const { node, specs } = hookSpecs(pluginRoot, locale)
+  const node = await resolveNode()
+  const { specs } = hookSpecs(pluginRoot, locale, node)
   const discovery = await discoverTargets()
   const stored = (await readInstallState()) ?? {}
   const states = targetStates(stored)
@@ -929,16 +1014,16 @@ async function install (pluginRoot) {
       })
       await backupSettingsOnce(backupPathFor(target), rawBefore)
 
-      const settings = await readSettings(settingsPath)
-      const hookChanged = installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, specs[0].entry, state)
-      const postChanged = installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, specs[1].entry, state)
-      const deniedChanged = installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, specs[2].entry, state)
-      const postFailureChanged = installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, specs[3].entry, state)
-      const agentPreChanged = installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, specs[4].entry, state)
-      const agentPostChanged = installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, specs[5].entry, state)
-      const agentPostFailureChanged = installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, specs[6].entry, state)
-      const envChanged = installEnvVar(settings, state)
-      await writeSettingsAtomic(settingsPath, settings)
+      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
+        hookChanged: installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, specs[0].entry, state),
+        postChanged: installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, specs[1].entry, state),
+        deniedChanged: installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, specs[2].entry, state),
+        postFailureChanged: installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, specs[3].entry, state),
+        agentPreChanged: installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, specs[4].entry, state),
+        agentPostChanged: installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, specs[5].entry, state),
+        agentPostFailureChanged: installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, specs[6].entry, state),
+        envChanged: installEnvVar(settings, state)
+      }))
       states[target.id] = state
 
       const modCopyPath = modCopyPathFor(target)
@@ -1002,7 +1087,8 @@ async function install (pluginRoot) {
     },
     modCopyWarning: perTarget.find((t) => t.ok && t.modCopyWarning)?.modCopyWarning ?? null,
     failures: failed,
-    nodeCommandVerified: nodeVerified
+    nodeCommandVerified: nodeVerified,
+    node: node.info
   }
 }
 
@@ -1046,16 +1132,16 @@ async function uninstall (pluginRoot) {
     }
     migrateLegacyPreToolUseFlags(state)
     try {
-      const settings = await readSettings(settingsPath)
-      const hookChanged = uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, state)
-      const postChanged = uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, state)
-      const deniedChanged = uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, state)
-      const postFailureChanged = uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, state)
-      const agentPreChanged = uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, state)
-      const agentPostChanged = uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, state)
-      const agentPostFailureChanged = uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, state)
-      const envChanged = uninstallEnvVar(settings, state)
-      await writeSettingsAtomic(settingsPath, settings)
+      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
+        hookChanged: uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, state),
+        postChanged: uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, state),
+        deniedChanged: uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, state),
+        postFailureChanged: uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, state),
+        agentPreChanged: uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, state),
+        agentPostChanged: uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, state),
+        agentPostFailureChanged: uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, state),
+        envChanged: uninstallEnvVar(settings, state)
+      }))
       const modCopyPath = modCopyPathFor(target)
       const modResult = await uninstallModCopy(pluginRoot, modCopyPath, modCopyMarkerPathFor(modCopyPath))
       await rm(backupPathFor(target), { force: true })
@@ -1121,6 +1207,7 @@ async function status (pluginRoot) {
   const modPlan = await planModSkillsCopy(pluginRoot).catch(() => null)
 
   const perTarget = []
+  const discoveredGateCommands = []
   for (const target of discovery.targets) {
     const settingsPath = settingsPathFor(PLATFORM, target)
     let settings = {}
@@ -1131,6 +1218,7 @@ async function status (pluginRoot) {
       readError = String(error?.message ?? error).slice(0, 200)
     }
     const ownGateHook = findMarkedHook(findGroup(settings, gateSpec.event, gateSpec.matcher), gateSpec.markers)
+    discoveredGateCommands.push(ownGateHook?.command)
     const ownPostHook = findMarkedHook(findGroup(settings, postSpec.event, postSpec.matcher), postSpec.markers)
     const ownDeniedHook = findMarkedHook(findGroup(settings, deniedSpec.event, deniedSpec.matcher), deniedSpec.markers)
     const ownPostFailureHook = findMarkedHook(findGroup(settings, postFailureSpec.event, postFailureSpec.matcher), postFailureSpec.markers)
@@ -1181,15 +1269,20 @@ async function status (pluginRoot) {
     })
   }
 
+  const installedGate = discoveredGateCommands.find((c) => typeof c === 'string')
+  const node = installedGate !== undefined ? await probeHookCommand(installedGate) : await findNode()
+
   const orcaTargets = perTarget.filter((t) => t.orcaManaged)
   return {
     ok: true,
+    node,
     targets: perTarget,
     // The headline figures the panel shows: "installed" must mean every
     // place Claude Code actually reads, and the Orca panes are the ones
     // that matter most for a plugin shipped for Orca.
     hook: {
       installed: perTarget.every((t) => t.hook.installed),
+      pathMatches: perTarget.every((t) => t.hook.pathMatches),
       installedCount: perTarget.filter((t) => t.hook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.hook.installed),
@@ -1197,6 +1290,7 @@ async function status (pluginRoot) {
     },
     outcomeHook: {
       installed: perTarget.every((t) => t.outcomeHook.installed),
+      pathMatches: perTarget.every((t) => t.outcomeHook.pathMatches),
       installedCount: perTarget.filter((t) => t.outcomeHook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.outcomeHook.installed),
@@ -1204,6 +1298,7 @@ async function status (pluginRoot) {
     },
     agentModelHook: {
       installed: perTarget.every((t) => t.agentModelHook.installed),
+      pathMatches: perTarget.every((t) => t.agentModelHook.pathMatches),
       installedCount: perTarget.filter((t) => t.agentModelHook.installed).length,
       totalCount: perTarget.length,
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.agentModelHook.installed),
@@ -1218,6 +1313,79 @@ async function status (pluginRoot) {
     orcaUserData: { path: discovery.userData.path, source: discovery.userData.source, accountsDir: discovery.accountsDir, found: discovery.accountsFound, reason: discovery.reason },
     statePath: STATE_PATH
   }
+}
+
+const HOOK_CHECK_TIMEOUT_MS = Number(process.env.ORCA_JEV_HOOK_CHECK_TIMEOUT_MS ?? '') || 5000
+
+/** One payload per hook that its own script treats as "nothing to do": an
+ *  obviously safe command for the gate, and events that never match a
+ *  pending approval or an Agent call for the other two -- so running them
+ *  writes and asks nothing, yet still loads every import. */
+function hookCheckPayloads () {
+  const base = { tool_use_id: 'orca-jev-hooks-check', cwd: tmpdir() }
+  return {
+    'gate-bash': { ...base, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
+    'gate-outcome': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
+    'agent-model': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } }
+  }
+}
+
+/** Runs `command args` with `payload` on stdin and says how it ended. */
+function runHookOnce (command, args, payload) {
+  return new Promise((resolve) => {
+    const env = { ...process.env }
+    delete env.ELECTRON_RUN_AS_NODE
+    try {
+      const child = execFile(command, args, { timeout: HOOK_CHECK_TIMEOUT_MS, maxBuffer: 256 * 1024, env }, (error, _stdout, stderr) => {
+        if (!error) return resolve({ ok: true, reason: null, detail: null })
+        const tail = String(stderr ?? '').trim().slice(-300)
+        if (error.killed) return resolve({ ok: false, reason: 'timeout', detail: `no answer within ${HOOK_CHECK_TIMEOUT_MS} ms` })
+        if (typeof error.code === 'number') return resolve({ ok: false, reason: 'exit-code', detail: `exited with code ${error.code}${tail ? `: ${tail}` : ''}` })
+        return resolve({ ok: false, reason: 'spawn-error', detail: String(error.code ?? error.message).slice(0, 200) })
+      })
+      child.stdin?.on('error', () => {})
+      child.stdin?.end(JSON.stringify(payload))
+    } catch (error) {
+      resolve({ ok: false, reason: 'spawn-error', detail: String(error?.message ?? error).slice(0, 200) })
+    }
+  })
+}
+
+/**
+ * hooks-check: runs every installed hook exactly as its settings.json entry
+ * says (command, then args) with a payload it treats as a no-op, so a hook
+ * that cannot start (no Node, Node too old for type stripping, a stale
+ * path) fails here instead of silently failing open in every session. One
+ * run per distinct command and args, however many targets share it.
+ */
+async function hooksCheck (pluginRoot) {
+  const { specs } = hookSpecs(pluginRoot)
+  const families = [['gate-bash', specs[0]], ['gate-outcome', specs[1]], ['agent-model', specs[4]]]
+  const payloads = hookCheckPayloads()
+  const discovery = await discoverTargets()
+  const runs = new Map()
+  for (const target of discovery.targets) {
+    let settings
+    try {
+      settings = await readSettings(settingsPathFor(PLATFORM, target))
+    } catch {
+      continue
+    }
+    for (const [hook, spec] of families) {
+      const own = findMarkedHook(findGroup(settings, spec.event, spec.matcher), spec.markers)
+      if (own === undefined || typeof own.command !== 'string') continue
+      const args = Array.isArray(own.args) ? own.args.filter((a) => typeof a === 'string') : []
+      const key = JSON.stringify([hook, own.command, args])
+      const entry = runs.get(key) ?? { hook, command: own.command, args, targets: [] }
+      entry.targets.push(target.id)
+      runs.set(key, entry)
+    }
+  }
+  const results = await Promise.all([...runs.values()].map(async (entry) => ({
+    ...entry,
+    ...(await runHookOnce(entry.command, entry.args, payloads[entry.hook]))
+  })))
+  return { ok: true, results }
 }
 
 /**
@@ -1272,8 +1440,8 @@ async function readJsonOrNull (path) {
  * router-mode-set <target> <mode>: writes ONLY `pluginConfigs[<router key>]
  * .options.routerMode` into that target's settings.json (`withRouterMode`,
  * pure, keeps every other key exactly as found), creating the file if it
- * does not exist yet -- same atomic write (`writeSettingsAtomic`) install/
- * uninstall already use for every other settings.json change. Rejects an
+ * does not exist yet -- same guarded write (`mutateSettingsGuarded`) install/
+ * uninstall use for every other settings.json change. Rejects an
  * unknown target or mode rather than guessing one; neither reaches disk.
  */
 async function routerModeSet (targetId, modeArg) {
@@ -1386,8 +1554,8 @@ async function readRawSettings (settingsPath) {
 /** Writes `text` through a temp file and renames it over settings.json only
  *  if the file still reads exactly `expectedRaw` (null: still absent) right
  *  before the rename; otherwise removes the temp file and returns false.
- *  Honors the same test-only ORCA_TEST_DELAY_BEFORE_RENAME_MS as
- *  writeSettingsAtomic, before the re-read. */
+ *  Honors the test-only ORCA_TEST_DELAY_BEFORE_RENAME_MS (a
+ *  slow rename, to let a test race an edit in) before the re-read. */
 async function writeSettingsIfUnchanged (settingsPath, text, expectedRaw) {
   await mkdir(dirname(settingsPath), { recursive: true })
   const tempPath = `${settingsPath}.${randomUUID()}.tmp`
@@ -1416,7 +1584,9 @@ async function main () {
     } else if (mode === 'steward-set') {
       result = await stewardSet(process.argv[3], process.argv[4])
     } else {
-      const pluginRoot = process.argv[3]
+      const givenRoot = process.argv[3]
+      // Hooks run from whatever repository Claude is in, so a relative root would only work in this one.
+      const pluginRoot = typeof givenRoot === 'string' && givenRoot.length > 0 ? resolvePath(givenRoot) : givenRoot
       if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
         result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status> <pluginRoot>' }
       } else if (mode === 'install') {
@@ -1425,6 +1595,8 @@ async function main () {
         result = await uninstall(pluginRoot)
       } else if (mode === 'status') {
         result = await status(pluginRoot)
+      } else if (mode === 'hooks-check') {
+        result = await hooksCheck(pluginRoot)
       } else {
         result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
       }

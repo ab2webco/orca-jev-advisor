@@ -77,11 +77,11 @@ export function routerStatusText(locale: Locale, mode: "measure" | "active", inp
   const why = kept === null ? null : translate(MODEL_ROUTER_CATALOG, locale, `why.${kept}`);
   if (input.effort === null) {
     if (why !== null) return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.kept.noEffort" : "status.measure.kept.noEffort", { model: input.label, why, stage });
-    return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.noEffort" : "status.measure.noEffort", { model: input.label, stage });
+    return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.noEffort" : "status.measure.noEffort", { model: input.label });
   }
   const effort = translate(MODEL_ROUTER_CATALOG, locale, `effort.${input.effort}`);
   if (why !== null) return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.kept.effort" : "status.measure.kept.effort", { model: input.label, effort, why, stage });
-  return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.effort" : "status.measure.effort", { model: input.label, effort, stage });
+  return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.effort" : "status.measure.effort", { model: input.label, effort });
 }
 
 /** 0.6.2 E8: a warm session keeps the model it runs (the context is warm; a switch would rewrite it), and says so. */
