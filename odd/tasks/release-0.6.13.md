@@ -132,7 +132,28 @@ F-10..F-14, the rest of the backlog.
   remote exemption (JEVADV-39) applies to both. Protected names stay `main`, `master`,
   `production` (push_remote.ts; there is no config for them). This also delivers T3's three
   pushProtected spellings (`--delete main`, `:main`, `feature/x:production`).
-- [ ] T3 N-04 refusals
+- [x] T3 N-04 refusals. Proof: `deny_rule_shapes.test.ts` 3 new (xargs/find deny, filtered
+  find and mentions not, `--mirror`) and `gate-deny-spellings.test.mjs` 8 new (the seven
+  spellings refused twice, data stays data): RED 6/11 (the three push spellings were already
+  green from T0b, the two data/negative cases hold), GREEN 11/11; `npm test` 2746/2746.
+  Live probe (working-tree hook), each with an identical retry: from feat-app `echo ~ |
+  xargs rm -rf`, `find ~ -delete`, `find / -delete` `REFUSED` rmRf, `git push --mirror`
+  `REFUSED` forcePush; from orca-supervisor (GitHub remote) `git push origin --delete main`,
+  `git push origin :main`, `git push origin feature/x:production` `REFUSED` pushProtected.
+  From feat-app those three are set aside by the JEVADV-39 local-remote exemption (its
+  origin is a local bare directory), so they reach Jev: `--delete main` and
+  `feature/x:production` advice, `:main` `REFUSED` by never_write_to_main; the 0.6.12 QA rows
+  H-force-delete-main/H-protected-feat-to-main ran there, so their replay needs a repository
+  with a shared remote. Kept as advice (no local rule): `sqlite3 app.db "DROP TABLE users"`
+  advice, `curl -o f && bash f` advice. Three of the five now stop by TEAM POLICY, not a local
+  rule, through T2: `git merge feature/x` on main `REFUSED` never_write_to_main (as planned),
+  `kubectl --context prod delete ns x` `REFUSED` production_data, `terraform -chdir=infra
+  apply` asked by infrastructure_changes (requires_human). Decisions: `find` from root or home
+  is the rule only when it deletes (`-delete`, `-exec`/`-execdir`/`-ok rm`) with nothing that
+  narrows it (only depth, traversal, `-type` and print options); `-name`, `-path` and every
+  other test make it a cleanup for Jev. Root or home printed by `echo`/`printf` through a
+  real pipe into `xargs ... rm -r` is the rule. `--mirror` joined forcePush (it overwrites
+  and deletes every remote ref).
 - [ ] T4 unregistered paths redacted
 - [ ] T5 interpreter heredocs and gate tail
 - [ ] T6 README, QA, release, live check

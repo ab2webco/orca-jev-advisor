@@ -220,6 +220,30 @@ test('0.6.13 T0b: a bare push that git would send to main is refused, and so is 
   assertRefusedTwice('git push origin feature/x:production', PROTECTED_RULE, { home, cwd: repo })
 })
 
+// 0.6.13 T3 (N-04): six stops that were only advice in 0.6.12 are local-rule
+// refusals, retry included.
+const N04_REFUSALS = [
+  ['echo ~ | xargs rm -rf', RM_RULE],
+  ['find ~ -delete', RM_RULE],
+  ['find / -delete', RM_RULE],
+  ['git push --mirror', FORCE_RULE],
+  ['git push origin --delete main', PROTECTED_RULE],
+  ['git push origin :main', PROTECTED_RULE],
+  ['git push origin feature/x:production', PROTECTED_RULE],
+]
+
+for (const [command, rule] of N04_REFUSALS) {
+  test(`0.6.13 T3: ${JSON.stringify(command)} is refused by a local rule, and so is its retry`, () => {
+    assertRefusedTwice(command, rule)
+  })
+}
+
+test('0.6.13 T3: the same text as data stays data', () => {
+  for (const command of ["grep -rn 'echo ~ | xargs rm -rf' docs/", 'echo "find ~ -delete"', "git commit -m 'never git push --mirror'", "find ~ -name '*.tmp' -delete"]) {
+    assertNotRefused(command)
+  }
+})
+
 test('F-03: a backslash-newline continuation never hides a force push', () => {
   assertRefusedTwice('git push \\\n--force origin x', FORCE_RULE)
 })

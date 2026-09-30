@@ -49,6 +49,49 @@ test("force push: lease-guarded and ordinary pushes, and mentions, are not the r
   assert.equal(someSegmentMatches(`python3 -c "import os; os.system('git -C . push -fu')"`, FORCE_PUSH_SHAPE), "code");
 });
 
+// 0.6.13 T3 (N-04): the root or the home directory deleted through a pipe
+// into `xargs rm`, or by `find -delete`/`-exec rm -r` with nothing to filter
+// what it deletes, is the same rule as `rm -rf ~`.
+test("rm: root or home fed to xargs rm, or wiped by an unfiltered find, is a command-position deny", () => {
+  for (const command of [
+    "echo ~ | xargs rm -rf",
+    "echo $HOME | xargs rm -rf",
+    "echo / | xargs -n1 rm -fr",
+    "printf '%s' ~ | xargs rm -r",
+    "find ~ -delete",
+    "find / -delete",
+    "find ~/ -type f -delete",
+    "sudo find / -xdev -depth -delete",
+    "find $HOME -exec rm -rf {} +",
+    "find ~ -mindepth 1 -execdir rm -r {} ;",
+  ]) {
+    assert.equal(recursiveRmOfRootOrHomeOutcome(command, PROJECT, HOME), "deny", command);
+  }
+});
+
+test("rm: a filtered find, a project path, or a mention of these is not the rule", () => {
+  for (const command of [
+    "find ~ -name '*.pyc' -delete",
+    "find / -path '*/node_modules/.cache' -delete",
+    "find . -delete",
+    "find ~/Projects/app/dist -delete",
+    "echo ~/tmp/x | xargs rm -rf",
+    "echo ~ | xargs ls",
+    "find ~ -type f -print",
+    "grep -n 'find ~ -delete' notes.md",
+    'echo "echo ~ | xargs rm -rf"',
+  ]) {
+    assert.equal(recursiveRmOfRootOrHomeOutcome(command, PROJECT, HOME), null, command);
+  }
+});
+
+test("force push: git push --mirror rewrites every remote ref, so it is the rule", () => {
+  for (const command of ["git push --mirror", "git push --mirror origin", "git -C /tmp push --mirror backup"]) {
+    assert.equal(someSegmentMatches(command, FORCE_PUSH_SHAPE), "deny", command);
+  }
+  assert.equal(someSegmentMatches('echo "git push --mirror"', FORCE_PUSH_SHAPE), null);
+});
+
 test("git global options are dropped only before push", () => {
   assert.equal(withoutGitGlobalOptionsBeforePush("git -C /tmp --no-pager -c a=b push -f"), "git push -f");
   assert.equal(withoutGitGlobalOptionsBeforePush("/usr/bin/git -C . push"), "/usr/bin/git push");

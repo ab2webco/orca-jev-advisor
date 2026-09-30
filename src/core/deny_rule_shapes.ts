@@ -73,20 +73,89 @@ export function runsRecursiveRmOfRootOrHome(view: string, options: RecursiveRmOp
   return false;
 }
 
+/** `find` options before the start paths. */
+const FIND_LEADING_OPTIONS: ReadonlySet<string> = new Set(["-H", "-L", "-P", "-E", "-X", "-s", "-x"]);
+/** `find` expression words that do not narrow what it matches; the value-taking ones skip their value. */
+const FIND_UNFILTERED: ReadonlySet<string> = new Set(["-depth", "-d", "-xdev", "-mount", "-follow", "-noleaf", "-ignore_readdir_race", "-print", "-print0", "-delete"]);
+const FIND_UNFILTERED_WITH_VALUE: ReadonlySet<string> = new Set(["-type", "-mindepth", "-maxdepth"]);
+const FIND_EXEC: ReadonlySet<string> = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+
+/**
+ * 0.6.13 T3 (N-04): true when `view` runs a `find` from the root or the home
+ * directory that deletes what it finds -- `-delete`, or `-exec rm` -- with
+ * nothing to narrow it: only depth, traversal, `-type` and print options.
+ * A test such as `-name '*.pyc'` or `-path` makes it a cleanup, judged by Jev.
+ */
+function runsUnfilteredFindDelete(view: string, options: RecursiveRmOptions): boolean {
+  const words = viewWords(view);
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i] ?? "";
+    if (word !== "find" && !word.endsWith("/find")) continue;
+    let at = i + 1;
+    while (FIND_LEADING_OPTIONS.has(words[at] ?? "")) at += 1;
+    const paths: string[] = [];
+    while (at < words.length && !(words[at] ?? "").startsWith("-") && words[at] !== "!") paths.push(words[at++] ?? "");
+    if (!paths.some((path) => isRootOrHome(path, options.home) || (options.runsInRootOrHome && isWholeDirectory(path)))) continue;
+    let deletes = false;
+    let filtered = false;
+    for (; at < words.length; at += 1) {
+      const token = words[at] ?? "";
+      if (FIND_EXEC.has(token)) {
+        const program = words[at + 1] ?? "";
+        deletes ||= program === "rm" || program.endsWith("/rm");
+        break;
+      }
+      if (FIND_UNFILTERED_WITH_VALUE.has(token)) at += 1;
+      else if (token === "-delete") deletes = true;
+      else if (!FIND_UNFILTERED.has(token)) filtered = true;
+    }
+    if (deletes && !filtered) return true;
+  }
+  return false;
+}
+
+/** A pipe stage that prints the root or the home directory: `echo ~`, `printf '%s' $HOME`. */
+function printsRootOrHome(view: string, home: string): boolean {
+  const words = viewWords(view);
+  const program = words[0] ?? "";
+  if (program !== "echo" && program !== "printf") return false;
+  const args = words.slice(1).filter((arg, at) => !(program === "printf" && at === 0 && arg.includes("%")) && !/^-[a-zA-Z]+$/.test(arg));
+  return args.length > 0 && args.every((arg) => isRootOrHome(arg, home));
+}
+
+/** A pipe stage whose `xargs` runs a recursive `rm` on what it reads. */
+function xargsRunsRecursiveRm(view: string): boolean {
+  const words = viewWords(view);
+  const xargs = words.findIndex((word) => word === "xargs" || word.endsWith("/xargs"));
+  if (xargs === -1) return false;
+  const rm = words.findIndex((word, at) => at > xargs && (word === "rm" || word.endsWith("/rm")));
+  return rm !== -1 && words.slice(rm + 1).some((arg) => arg === "--recursive" || /^-[a-zA-Z]*[rR][a-zA-Z]*$/.test(arg));
+}
+
 /**
  * The rmRf rule's outcome for a whole command run from `cwd`: each simple
  * command is read through someSegmentMatches, and the directory it runs in
  * (command_locations.ts) decides whether `.` or `*` names the root or the
  * home directory (`cd / && rm -rf *`, `pushd ~ && rm -rf .`).
+ *
+ * 0.6.13 T3 (N-04): an unfiltered `find -delete` from root or home, and root
+ * or home printed into `xargs rm -r` through a real pipe (`echo ~ | xargs rm
+ * -rf`), are the same effect and the same rule.
  */
 export function recursiveRmOfRootOrHomeOutcome(command: string, cwd: string, home: string): SegmentMatchSeverity {
   const homeDir = resolve(home);
   let severity: SegmentMatchSeverity = null;
   for (const { segment, dir } of locateCommandSegments(command, cwd, homeDir)) {
-    const runsInRootOrHome = dir === "/" || dir === homeDir;
-    const outcome = someSegmentMatches(segment, { test: (view) => runsRecursiveRmOfRootOrHome(view, { home: homeDir, runsInRootOrHome }) });
+    const options = { home: homeDir, runsInRootOrHome: dir === "/" || dir === homeDir };
+    const outcome = someSegmentMatches(segment, { test: (view) => runsRecursiveRmOfRootOrHome(view, options) || runsUnfilteredFindDelete(view, options) });
     if (outcome === "deny") return "deny";
     severity = strongerSeverity(severity, outcome);
+  }
+  const { segments, joiners } = splitOnCommandSeparatorsDetailed(command);
+  for (let i = 1; i < segments.length; i += 1) {
+    if (joiners[i] !== "|") continue;
+    const printed = someSegmentMatches(segments[i - 1] ?? "", { test: (view) => printsRootOrHome(view, homeDir) }) === "deny";
+    if (printed && someSegmentMatches(segments[i] ?? "", { test: xargsRunsRecursiveRm }) === "deny") return "deny";
   }
   return severity;
 }
@@ -100,9 +169,9 @@ export function withoutGitGlobalOptionsBeforePush(view: string): string {
   return view.replace(GIT_GLOBAL_OPTIONS_BEFORE_PUSH, "$1git");
 }
 
-// `--force` (never `--force-with-lease`/`--force-if-includes`), a short
-// cluster holding `f` (`-f`, `-fu`, `-uf`, `-qf`), or a `+refspec`.
-const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includes)\b|-[a-zA-Z0-9]*f[a-zA-Z0-9]*\b)|(?:^|\s)\+\S)/;
+// `--force` (never `--force-with-lease`/`--force-if-includes`), `--mirror`,
+// a short cluster holding `f` (`-f`, `-fu`, `-uf`, `-qf`), or a `+refspec`.
+const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includes)\b|--mirror\b|-[a-zA-Z0-9]*f[a-zA-Z0-9]*\b)|(?:^|\s)\+\S)/;
 
 /** True when `view` runs a force push, in any flag spelling and through any git global option. */
 export const FORCE_PUSH_SHAPE = { test: (view: string): boolean => FORCE_PUSH.test(withoutGitGlobalOptionsBeforePush(view)) };
