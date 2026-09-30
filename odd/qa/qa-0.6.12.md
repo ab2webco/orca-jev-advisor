@@ -1,6 +1,6 @@
 # QA 0.6.12: gate refusals and where a command is judged
 
-Run 2026-09-30 against the branch `fabolivark/release-0.6.12` at c3f9d71
+Run 2026-09-30 against the release branch at c3f9d71
 (working-tree hook `adapters/claude/gate-bash.ts`, real team policies, live
 Jev). Scratch repositories only, under `/Volumes/Data/jev-live-check/`
 (`SCR` below): `demo-app` on main, `feat-app` on `feature/qa-work`,
