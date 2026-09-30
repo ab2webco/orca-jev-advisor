@@ -48,7 +48,16 @@ Out of scope: F-06 redaction of unregistered paths, F-08..F-14.
   2629/2629. Probe replay: `-fu` (+retry), `-qf`, `-uf`, `git -C /tmp`, `git -C .`,
   `git -c k=v`, `git --no-pager` before `push --force` all `REFUSED`. Git global
   options are dropped before `push` (FORCE_PUSH_SHAPE), so T3 reuses the same step.
-- [ ] T3 protected push through global options, prefixes, continuations
+- [x] T3 protected push through global options, prefixes, continuations. Proof: F-03
+  cases in `gate-deny-spellings.test.mjs` RED 7/11 failing, GREEN 11/11 (file 49/49);
+  `command_locations.test.ts` 3/3, `deny_rule_shapes.test.ts` 8/8, `command_text.test.ts`
+  12/12; `npm test` 2644/2644. Probe replay: `git -C /tmp push origin main` (+retry),
+  `env A=1 git -C /tmp ...`, `git push \`+LF+`origin main` (+retry), `git push \`+LF+
+  `--force origin x`, `GIT_SSH_COMMAND=ssh git push origin main` all `REFUSED`.
+  Decision: the JEVADV-39 local-remote exemption now reads the remote of the repository
+  the push acts on (`cd`, subshell, `bash -c`, `git -C`); an unknown directory keeps the
+  refusal. Line continuations are joined before every rule (`withoutLineContinuations`).
+  `src/core/command_locations.ts` is the shared walker T5 builds on.
 - [ ] T4 curl/wget to shell or interpreter
 - [ ] T5 target repository and branch attribution
 - [ ] T6 README, QA rerun in odd/qa/qa-0.6.12.md, release, live check

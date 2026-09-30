@@ -6,8 +6,10 @@
 // mention-vs-command design: a phrase in a grep pattern, a quoted argument,
 // an echo or a heredoc body is data. Each predicate here runs on the text
 // that scan lets it read, so it inherits that design unchanged.
-import { isAbsolute, resolve } from "node:path";
-import { someSegmentMatches, splitOnCommandSeparatorsDetailed, tokenize } from "./git_discard.ts";
+import { resolve } from "node:path";
+import { afterHome, gitInvocation, locateCommandSegments } from "./command_locations.ts";
+import { someSegmentMatches } from "./git_discard.ts";
+import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
 import type { SegmentMatchSeverity } from "./git_discard.ts";
 
 const SEVERITY_RANK: Readonly<Record<string, number>> = { ask: 1, code: 2, deny: 3 };
@@ -28,16 +30,6 @@ function viewWords(view: string): string[] {
 function isWholeDirectory(rest: string): boolean {
   const parts = rest.split("/").filter((part) => part.length > 0);
   return parts.every((part, at) => part === "." || part === ".." || (part === "*" && at === parts.length - 1));
-}
-
-/** `~`, `$HOME`, `${HOME}` or the home directory's own absolute path, and what follows it. */
-function afterHome(target: string, home: string): string | null {
-  for (const prefix of ["~", "${HOME}", "$HOME", home]) {
-    if (prefix.length === 0 || !target.startsWith(prefix)) continue;
-    const rest = target.slice(prefix.length);
-    if (rest.length === 0 || rest.startsWith("/")) return rest;
-  }
-  return null;
 }
 
 function isRootOrHome(target: string, home: string): boolean {
@@ -80,43 +72,16 @@ export function runsRecursiveRmOfRootOrHome(view: string, options: RecursiveRmOp
   return false;
 }
 
-const REDIRECTION = /^\d*[<>]/;
-
 /**
- * The directory a `cd`/`pushd` segment moves to, `null` when it cannot be
- * known (`cd -`, a variable, `popd`), or `undefined` when the segment is not
- * a directory change at all.
- */
-function directoryChange(words: readonly string[], from: string | null, home: string): string | null | undefined {
-  const program = words[0];
-  if (program === "popd") return null;
-  if (program !== "cd" && program !== "pushd") return undefined;
-  const args = words.slice(1).filter((word, at, all) => !word.startsWith("-") && !REDIRECTION.test(word) && !REDIRECTION.test(all[at - 1] ?? "x"));
-  const target = args[0];
-  if (target === undefined) return program === "cd" ? home : null;
-  const rest = afterHome(target, home);
-  if (rest !== null) return resolve(home, `.${rest}`);
-  if (/[$*?[`]/.test(target)) return null;
-  if (isAbsolute(target)) return resolve(target);
-  return from === null ? null : resolve(from, target);
-}
-
-/**
- * The rmRf rule's outcome for a whole command run from `cwd`: each segment
- * is read through someSegmentMatches, and a `cd`/`pushd` before it decides
- * whether `.` or `*` names the root or the home directory
- * (`cd / && rm -rf *`, `pushd ~ && rm -rf .`).
+ * The rmRf rule's outcome for a whole command run from `cwd`: each simple
+ * command is read through someSegmentMatches, and the directory it runs in
+ * (command_locations.ts) decides whether `.` or `*` names the root or the
+ * home directory (`cd / && rm -rf *`, `pushd ~ && rm -rf .`).
  */
 export function recursiveRmOfRootOrHomeOutcome(command: string, cwd: string, home: string): SegmentMatchSeverity {
   const homeDir = resolve(home);
-  let dir: string | null = resolve(cwd);
   let severity: SegmentMatchSeverity = null;
-  for (const segment of splitOnCommandSeparatorsDetailed(command).segments) {
-    const moved = directoryChange(tokenize(segment), dir, homeDir);
-    if (moved !== undefined) {
-      dir = moved;
-      continue;
-    }
+  for (const { segment, dir } of locateCommandSegments(command, cwd, homeDir)) {
     const runsInRootOrHome = dir === "/" || dir === homeDir;
     const outcome = someSegmentMatches(segment, { test: (view) => runsRecursiveRmOfRootOrHome(view, { home: homeDir, runsInRootOrHome }) });
     if (outcome === "deny") return "deny";
@@ -140,3 +105,30 @@ const FORCE_PUSH = /git\s+push\b.*(?:(?:^|\s)(?:--force(?!-with-lease|-if-includ
 
 /** True when `view` runs a force push, in any flag spelling and through any git global option. */
 export const FORCE_PUSH_SHAPE = { test: (view: string): boolean => FORCE_PUSH.test(withoutGitGlobalOptionsBeforePush(view)) };
+
+const PUSH_PROTECTED = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANCH_NAMES.join("|")})\\b`);
+
+/** True when `view` runs a push naming a shared branch, through any git global option. */
+export const PUSH_PROTECTED_SHAPE = { test: (view: string): boolean => PUSH_PROTECTED.test(withoutGitGlobalOptionsBeforePush(view)) };
+
+/**
+ * The pushProtected rule's outcome. A command-position match is set aside
+ * only when the push's remote resolves to a local directory (JEVADV-39), and
+ * that remote is read in the repository the push acts on -- after `cd`,
+ * `pushd`, a subshell, `bash -c` or `git -C` -- never the session's own.
+ * A directory that cannot be known keeps the refusal.
+ */
+export function protectedPushOutcome(command: string, cwd: string, home: string, remoteIsLocal: (push: string, dir: string) => boolean): SegmentMatchSeverity {
+  let severity: SegmentMatchSeverity = null;
+  for (const { segment, dir } of locateCommandSegments(command, cwd, home)) {
+    const outcome = someSegmentMatches(segment, PUSH_PROTECTED_SHAPE);
+    if (outcome !== "deny") {
+      severity = strongerSeverity(severity, outcome);
+      continue;
+    }
+    const pushDir = gitInvocation(segment, dir, resolve(home))?.dir ?? null;
+    if (pushDir !== null && remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir)) continue;
+    return "deny";
+  }
+  return severity;
+}

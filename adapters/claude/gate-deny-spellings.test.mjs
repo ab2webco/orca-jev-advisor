@@ -165,3 +165,67 @@ test('F-02: a force-push spelling inside a grep pattern, a quoted argument or an
     assertNotRefused(command)
   }
 })
+
+const PROTECTED_RULE = /pushes straight to a shared branch/
+
+function makeRepo (parent, name, remoteUrl) {
+  const dir = join(parent, name)
+  execFileSync('git', ['init', '-q', '-b', 'main', dir])
+  execFileSync('git', ['-C', dir, 'remote', 'add', 'origin', remoteUrl])
+  return dir
+}
+
+// F-03 (JEVADV-65 and new): git global options, env prefixes and a
+// backslash-newline continuation before a push to a protected branch.
+const PROTECTED_PUSH_SPELLINGS = [
+  'git -C /tmp push origin main',
+  'env A=1 git -C /tmp push origin main',
+  'GIT_SSH_COMMAND=ssh git -C /tmp push origin main',
+  'git --no-pager -C /tmp push origin main',
+  'git -C /tmp push \\\norigin main',
+  'git push \\\norigin main',
+]
+
+for (const command of PROTECTED_PUSH_SPELLINGS) {
+  test(`F-03: ${JSON.stringify(command)} is refused by the protected-push rule, and so is its retry`, () => {
+    assertRefusedTwice(command, PROTECTED_RULE)
+  })
+}
+
+test('F-03: a backslash-newline continuation never hides a force push', () => {
+  assertRefusedTwice('git push \\\n--force origin x', FORCE_RULE)
+})
+
+test('F-03: a push to main is judged against the remote of the repository it acts on, not the session', () => {
+  const home = makeHome()
+  const bare = join(home, 'personal-remote.git')
+  execFileSync('git', ['init', '-q', '--bare', bare])
+  const personal = makeRepo(home, 'personal', bare)
+  makeRepo(home, 'shared', 'git@github.com:acme/app.git')
+  for (const command of [
+    'git -C ../shared push origin main',
+    'cd ../shared && git push origin main',
+    '(cd ../shared && git push origin main)',
+    "bash -c 'cd ../shared && git push origin main'",
+    'git push \\\norigin main && git -C ../shared push origin main',
+  ]) {
+    assertRefusedTwice(command, PROTECTED_RULE, { home, cwd: personal, sessionId: `protected-${command}` })
+  }
+})
+
+test('F-03: a push to main of a repository whose remote is a local directory is not the protected-push rule, from any session', () => {
+  const home = makeHome()
+  const bare = join(home, 'personal-remote.git')
+  execFileSync('git', ['init', '-q', '--bare', bare])
+  makeRepo(home, 'personal', bare)
+  const shared = makeRepo(home, 'shared', 'git@github.com:acme/app.git')
+  for (const command of ['git -C ../personal push origin main', 'cd ../personal && git push origin main']) {
+    assertNotRefused(command, { home, cwd: shared })
+  }
+})
+
+test('F-03: a protected-push spelling in an echo or a grep pattern stays data', () => {
+  for (const command of ['echo "git -C /tmp push origin main"', 'grep -rn "git --no-pager push origin main" docs/']) {
+    assertNotRefused(command)
+  }
+})

@@ -86,7 +86,7 @@ import { buildCrossRepoSentence, pickStricterDestination, renderRepoContext } fr
 import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
-import { PROTECTED_BRANCH_NAMES, parseGitConfigRemotes } from '../../src/core/push_remote.ts'
+import { parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { classifyClientReach } from '../../src/core/client_reach.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
@@ -105,8 +105,8 @@ import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
-import { withoutHeredocBodies } from '../../src/core/command_text.ts'
-import { FORCE_PUSH_SHAPE, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
+import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
+import { FORCE_PUSH_SHAPE, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -479,12 +479,6 @@ function curlPipeShellRule(ctx: RuleContext): RuleOutcome {
   return someSegmentMatches(ctx.command, CURL_PIPE_SHELL_SPANNING_PATTERN)
 }
 
-// Built from push_remote.ts's own PROTECTED_BRANCH_NAMES -- the ONE
-// shared/protected-branch list, so this rule and push_own_branch.ts's
-// own-branch-push allow (real evidence: the owner's gate log, 2026-09-26) can
-// never drift apart into two different notions of "shared".
-const PUSH_PROTECTED_PATTERN = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANCH_NAMES.join('|')})\\b`)
-
 /**
  * pushProtected's own two-level match (segmentRule, same as forcePush above)
  * plus one narrowing step (JEVADV-39, odd/tasks/release-0.5.1.md T-lane-a):
@@ -505,10 +499,8 @@ const PUSH_PROTECTED_PATTERN = new RegExp(`git\\s+push\\b.*\\b(${PROTECTED_BRANC
  * to a local remote: that is forcePush's own rule above, untouched by this.
  */
 function pushProtectedRule(ctx: RuleContext): RuleOutcome {
-  const outcome = someSegmentMatches(ctx.command, PUSH_PROTECTED_PATTERN)
-  if (outcome !== 'deny') return outcome
-  if (resolvePushRemoteIsLocal({ command: ctx.command, cwd: ctx.cwd })) return null
-  return 'deny'
+  // 0.6.12 F-03: the remote is read in the repository the push acts on.
+  return protectedPushOutcome(ctx.command, ctx.cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }))
 }
 
 /**
@@ -1734,7 +1726,7 @@ async function main(): Promise<void> {
   // CONTENT describes one of these rules used to be refused as if the rule
   // were being run -- which refused the author of this very comment. A body
   // read by a shell keeps its text, because there it really is commands.
-  const inspected = withoutHeredocBodies(command)
+  const inspected = withoutLineContinuations(withoutHeredocBodies(command))
   const mentionOnly = mentionsRatherThanRuns(inspected)
   // Every rule is evaluated before anything is emitted: an 'ask' from one
   // rule (a rule whose switch is off) must never hide a command-position run

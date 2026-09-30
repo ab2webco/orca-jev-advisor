@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { FORCE_PUSH_SHAPE, recursiveRmOfRootOrHomeOutcome, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
+import { FORCE_PUSH_SHAPE, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
 import { someSegmentMatches } from "./git_discard.ts";
 
 const HOME = "/home/dev";
@@ -52,4 +52,15 @@ test("git global options are dropped only before push", () => {
   assert.equal(withoutGitGlobalOptionsBeforePush("git -C /tmp --no-pager -c a=b push -f"), "git push -f");
   assert.equal(withoutGitGlobalOptionsBeforePush("/usr/bin/git -C . push"), "/usr/bin/git push");
   assert.equal(withoutGitGlobalOptionsBeforePush("git -C /tmp commit -m x"), "git -C /tmp commit -m x");
+});
+
+test("protected push: judged in the repository it acts on, a local remote there sets it aside", () => {
+  const localIn = new Set(["/home/dev/Projects/personal"]);
+  const remoteIsLocal = (_push: string, dir: string): boolean => localIn.has(dir);
+  const outcome = (command: string, cwd: string) => protectedPushOutcome(command, cwd, HOME, remoteIsLocal);
+  assert.equal(outcome("git -C ../shared push origin main", "/home/dev/Projects/personal"), "deny");
+  assert.equal(outcome("cd ../shared && git push origin main", "/home/dev/Projects/personal"), "deny");
+  assert.equal(outcome("git -C ../personal push origin main", "/home/dev/Projects/shared"), null);
+  assert.equal(outcome("cd $X && git push origin main", "/home/dev/Projects/personal"), "deny");
+  assert.equal(outcome('echo "git -C ../shared push origin main"', "/home/dev/Projects/personal"), null);
 });

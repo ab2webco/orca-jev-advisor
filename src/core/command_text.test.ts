@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { withoutHeredocBodies } from "./command_text.ts";
+import { withoutHeredocBodies, withoutLineContinuations } from "./command_text.ts";
 
 // The phrases are assembled at run time rather than written out, so this file
 // can be read, edited and searched without the live gate stopping the person
@@ -101,4 +101,12 @@ test("an escaped quote inside $'...' does not close it, so a << after it is stil
   const run = phrase("git", "clean", "-f");
   const command = `echo $'it\\' <<EOF'\n${run}\nEOF`;
   assert.equal(withoutHeredocBodies(command), command);
+});
+
+test("a backslash-newline continuation is joined the way the shell joins it, except inside single quotes", () => {
+  assert.equal(withoutLineContinuations("git push \\\norigin main"), "git push origin main");
+  assert.equal(withoutLineContinuations('echo "a \\\nb"'), 'echo "a b"');
+  assert.equal(withoutLineContinuations("echo 'a \\\nb'"), "echo 'a \\\nb'");
+  assert.equal(withoutLineContinuations("printf '%s\\n' x\ngit status"), "printf '%s\\n' x\ngit status");
+  assert.equal(withoutLineContinuations("echo a\\\\\ngit status"), "echo a\\\\\ngit status");
 });
