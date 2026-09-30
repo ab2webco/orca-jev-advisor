@@ -149,3 +149,29 @@ function scanHeredocOpeners(line: string, openQuote: Quote): { delimiters: strin
   }
   return { delimiters, quote };
 }
+
+/**
+ * The command with every backslash-newline line continuation removed, the
+ * way the shell joins the two lines before running them (JEVADV-65:
+ * `git push \` + newline + `origin main` hid the branch from the rules).
+ * Inside single quotes a backslash is literal, so it stays.
+ */
+export function withoutLineContinuations(command: string): string {
+  if (!command.includes("\\\n")) return command;
+  let out = "";
+  let single = false;
+  let double = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    if (char === "\\" && !single) {
+      const next = command[index + 1] ?? "";
+      if (next !== "\n") out += char + next;
+      index += 1;
+      continue;
+    }
+    out += char;
+  }
+  return out;
+}
