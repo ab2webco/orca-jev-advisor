@@ -639,3 +639,28 @@ local rules, which need neither network nor key.
 
 Run the tests with `node --test src/core/*.test.ts`. There is no build
 step: Node runs the TypeScript directly.
+
+### The pre-push privacy guard
+
+`scripts/private-data.test.mjs` refuses an email outside the example
+domains, an absolute home path under `/Users`, and any term listed in your own
+`~/.config/orca-supervisor/private-terms.txt` (one term per line, never
+committed). CI cannot run that last check, because the list lives only on
+your machine, so a local `pre-push` hook runs it instead.
+
+`npm install` (or `npm ci`) installs it through the `prepare` script; run
+`npm run prepare` to install it by hand. It sets `core.hooksPath` to
+`.githooks` in this repository's own config, never the global one. That
+config is shared by every worktree of the clone.
+
+Before a push is sent, the hook checks every tracked file at each pushed
+commit, the files each pushed commit changes, and the message of every
+pushed commit. Any hit blocks the push, and it names only
+`<commit>:<file>:<line>`, never the text it matched. With no terms file it
+prints one line saying the term check was skipped and still runs the other
+two. If the check cannot run at all, the push is blocked.
+
+What it cannot see: anything written on GitHub itself (PR titles and
+bodies, review comments, squash-merge messages edited there), commit
+author and committer names and emails, branch and tag names, tag messages,
+and pushes made with `--no-verify`.
