@@ -1555,11 +1555,15 @@ async function readRawSettings (settingsPath) {
  *  if the file still reads exactly `expectedRaw` (null: still absent) right
  *  before the rename; otherwise removes the temp file and returns false.
  *  Honors the test-only ORCA_TEST_DELAY_BEFORE_RENAME_MS (a
- *  slow rename, to let a test race an edit in) before the re-read. */
+ *  slow rename, to let a test race an edit in) before the re-read, and
+ *  ORCA_TEST_BEFORE_RENAME_SIGNAL (a file that gets one line per attempt,
+ *  so a test edits inside the window instead of guessing it by the clock). */
 async function writeSettingsIfUnchanged (settingsPath, text, expectedRaw) {
   await mkdir(dirname(settingsPath), { recursive: true })
   const tempPath = `${settingsPath}.${randomUUID()}.tmp`
   await writeFile(tempPath, text, 'utf8')
+  const testSignal = process.env.ORCA_TEST_BEFORE_RENAME_SIGNAL
+  if (testSignal) await writeFile(testSignal, `${await readFile(testSignal, 'utf8').catch(() => '')}attempt\n`, 'utf8')
   const testDelay = Number(process.env.ORCA_TEST_DELAY_BEFORE_RENAME_MS ?? '0')
   if (testDelay > 0) await new Promise((resolve) => setTimeout(resolve, testDelay))
   if ((await readRawSettings(settingsPath)) !== expectedRaw) {
