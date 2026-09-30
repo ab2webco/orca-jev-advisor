@@ -2820,8 +2820,8 @@ test('steward: a threshold out of range is refused in place and nothing is sent'
 
 // 0.6.16 T2: the work kind at subagent spawn has its own switch per account,
 // next to the router mode, measure by default.
-test('0.6.16 T2: each account shows the work-kind switch, measure by default, and saving sends only it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target, at) => (at === 1 ? { ...target, workKind: 'active' } : target)) }
+test('0.6.16 T2: each account shows its work-kind switch, and saving sends only it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target, at) => ({ ...target, workKind: at === 1 ? 'active' : 'measure' })) }
   const { browser, page } = await openPanel({ modelRouterStatus: status })
   try {
     await page.click('#tab-models')
@@ -2844,12 +2844,14 @@ test('0.6.16 T2: each account shows the work-kind switch, measure by default, an
 })
 
 test('0.6.16 T2: the work-kind switch reads in Spanish', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT }, 'es')
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target) => ({ ...target, workKind: 'measure' })) }
+  const { browser, page } = await openPanel({ modelRouterStatus: status }, 'es')
   try {
     await page.click('#tab-models')
     const text = await page.evaluate(() => document.querySelector('[data-work-kind-target="home"]').innerText)
     assert.match(text, /tipo de trabajo/i)
     assert.match(text, /Medir/)
+    assert.equal(await page.locator('[data-work-kind-target]').count(), 2)
   } finally {
     await browser.close()
   }

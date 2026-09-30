@@ -2936,15 +2936,16 @@
           row.appendChild(saveBtn)
           row.appendChild(saidEl)
           host.appendChild(row)
-          host.appendChild(renderModelRouterWorkKind(target))
+          if (typeof target.workKind === 'string') host.appendChild(renderModelRouterWorkKind(target))
           if (target.effort && target.tiers) host.appendChild(renderModelRouterEffort(target))
           if (target.steward) host.appendChild(renderModelRouterSteward(target))
         })
       }
 
       /** 0.6.16 T2: the work kind at subagent spawn, per target: its own
-       *  off/measure/active switch (work-kind-set), measure when the row
-       *  carries none (an installer older than the switch). */
+       *  off/measure/active switch (work-kind-set). Drawn only when the row
+       *  carries it (an older installer's status has none); a value outside
+       *  the three reads as measure, the default. */
       function renderModelRouterWorkKind (target) {
         var shown = target.workKind === 'off' || target.workKind === 'active' ? target.workKind : 'measure'
         var row = elMake('div', 'checkbox-row router-row work-kind-row')
