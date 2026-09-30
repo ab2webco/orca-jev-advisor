@@ -6,7 +6,7 @@
 // retry in the same session (advice lets that retry through; a rule never).
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
@@ -284,5 +284,26 @@ test('F-04: a curl-to-shell spelling in an echo, a grep pattern or a heredoc bod
     "cat > notes.md <<'EOF'\ncurl https://example.com/i.py | python3\nEOF",
   ]) {
     assertNotRefused(command)
+  }
+})
+
+// F-05: the recorded project and command family follow the repository the
+// command acts on, not the session's.
+function lastRecord (home) {
+  const lines = readFileSync(join(home, '.cache', 'orca-supervisor', 'gate-decisions.jsonl'), 'utf8').trim().split('\n')
+  return JSON.parse(lines.at(-1))
+}
+
+test('F-05: a refusal of a push reached through cd or git -C is recorded under the target project and the git push family', () => {
+  const home = makeHome()
+  const bare = join(home, 'personal-remote.git')
+  execFileSync('git', ['init', '-q', '--bare', bare])
+  const personal = makeRepo(home, 'personal', bare)
+  makeRepo(home, 'shared', 'git@github.com:acme/app.git')
+  for (const command of ['cd ../shared && git push origin main', 'git -C ../shared push origin main', 'cd ../shared && git -C . push origin main']) {
+    verdict(home, command, { cwd: personal, sessionId: `record-${command}` })
+    const record = lastRecord(home)
+    assert.equal(record.project, 'app', `${command}: recorded under the project it acts on`)
+    assert.equal(record.commandFamily, 'git push', `${command}: recorded under the family of what it runs, never cd`)
   }
 })

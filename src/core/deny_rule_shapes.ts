@@ -7,7 +7,7 @@
 // an echo or a heredoc body is data. Each predicate here runs on the text
 // that scan lets it read, so it inherits that design unchanged.
 import { resolve } from "node:path";
-import { afterHome, gitInvocation, locateCommandSegments } from "./command_locations.ts";
+import { afterHome, gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
 import { someSegmentMatches, splitOnCommandSeparatorsDetailed } from "./git_discard.ts";
 import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
 import type { SegmentMatchSeverity } from "./git_discard.ts";
@@ -152,28 +152,6 @@ function runsStdin(view: string): boolean {
 }
 
 const REMOTE_CODE = "__remote_code__";
-
-/** Where the `$(`, backtick or `<(` substitution opening at `start` closes, or -1. */
-function substitutionEnd(command: string, start: number, backtick: boolean): number {
-  let depth = 0;
-  let single = false;
-  let double = false;
-  for (let index = start; index < command.length; index += 1) {
-    const char = command[index];
-    if (char === "\\" && !single) {
-      index += 1;
-      continue;
-    }
-    if (char === "'" && !double) single = !single;
-    else if (char === '"' && !single) double = !double;
-    else if (single || double) continue;
-    else if (backtick && char === "`" && index > start) return index;
-    else if (!backtick && char === "(") depth += 1;
-    else if (!backtick && char === ")" && --depth === 0) return index;
-  }
-  return -1;
-}
-
 const DOWNLOAD_AT = /^\s*(?:\S*\/)?(?:curl|wget)\b/;
 
 /**
@@ -185,31 +163,14 @@ const DOWNLOAD_AT = /^\s*(?:\S*\/)?(?:curl|wget)\b/;
  */
 export function withDownloadsMarked(command: string): string {
   let out = "";
-  let single = false;
-  let double = false;
-  for (let index = 0; index < command.length; index += 1) {
-    const char = command[index] ?? "";
-    if (char === "\\" && !single) {
-      out += command.slice(index, index + 2);
-      index += 1;
-      continue;
-    }
-    if (char === "'" && !double) single = !single;
-    else if (char === '"' && !single) double = !double;
-    const opens = !single && (command.startsWith("$(", index) || char === "`" || (!double && command.startsWith("<(", index)));
-    if (opens) {
-      const backtick = char === "`";
-      const bodyStart = backtick ? index + 1 : index + 2;
-      const end = substitutionEnd(command, backtick ? index : index + 1, backtick);
-      if (end !== -1 && DOWNLOAD_AT.test(command.slice(bodyStart, end))) {
-        out += REMOTE_CODE;
-        index = end;
-        continue;
-      }
-    }
-    out += char;
+  let from = 0;
+  for (const span of substitutionSpans(command)) {
+    const bodyStart = span.end - span.body.length;
+    out += command.slice(from, span.start);
+    out += DOWNLOAD_AT.test(span.body) ? REMOTE_CODE : `${command.slice(span.start, bodyStart)}${withDownloadsMarked(span.body)}${command[span.end] ?? ""}`;
+    from = span.end + 1;
   }
-  return out;
+  return out + command.slice(from);
 }
 
 const RUNS_DOWNLOAD = new RegExp(String.raw`(?:^|[\s(])(?:\S*/)?(?:bash|sh|zsh|dash|ksh|eval|source|\.|python[\d.]*|perl|ruby|node)(?:\s+-\S+)*\s+${REMOTE_CODE}(?:\s|$)`);

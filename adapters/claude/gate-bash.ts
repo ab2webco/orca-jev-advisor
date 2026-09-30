@@ -82,6 +82,7 @@ import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
+import { resolveActingDirectory } from '../../src/core/acting_location.ts'
 import { buildCrossRepoSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
 import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
@@ -986,6 +987,8 @@ function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | nu
 function resolveAdviceOutcome(input: {
   readonly command: string
   readonly cwd: string
+  /** Where the command acts (acting_location.ts), for the records; `cwd` when absent. */
+  readonly actingCwd?: string
   readonly sessionId: string | null
   readonly toolUseId: string | null
   readonly reasonsEnglish: readonly string[]
@@ -1001,10 +1004,10 @@ function resolveAdviceOutcome(input: {
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
   const teamInternal = input.teamInternal ?? false
-  if (tryAdviceRetryPass(command, cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
+  if (tryAdviceRetryPass(command, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
-  appendGateRecord(cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
+  appendGateRecord(input.actingCwd ?? cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
   recordAdviceIssued(sessionId, command)
   emitAdvice(segment, advice.effectSummary, advice.modelText)
 }
@@ -1721,6 +1724,10 @@ async function main(): Promise<void> {
   // read by a shell keeps its text, because there it really is commands.
   const inspected = withoutLineContinuations(withoutHeredocBodies(command))
   const mentionOnly = mentionsRatherThanRuns(inspected)
+  // 0.6.12 T5 (F-05/F-07): the repository the command acts in -- after `cd`,
+  // a subshell, `bash -c`, `git -C`, a write's own target -- is what the
+  // policies, the context Jev reads and the records follow, not the session's.
+  const actingCwd = resolveActingDirectory(inspected, cwd, homedir(), resolveRepoRootForCwd)
   // Every rule is evaluated before anything is emitted: an 'ask' from one
   // rule (a rule whose switch is off) must never hide a command-position run
   // that a LATER rule denies in the same command (review finding
@@ -1756,8 +1763,8 @@ async function main(): Promise<void> {
       continue
     }
     if (readDenyTierConfig()[denyToggle]) {
-      appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
-      appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
+      appendGateRecord(actingCwd, command, 'local-rule', 'deny', null, 'local-rule', null)
+      appendPendingApproval(toolUseId, actingCwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
       // 0.5.2: the person-facing line names the command and the rule in
       // plain words -- never the model-facing REFUSED text (which used to
       // be reused verbatim for both readers, in English, even in `es`).
@@ -1792,7 +1799,7 @@ async function main(): Promise<void> {
         ? `this text appears only inside inline interpreter code, which may be data rather than a command; if it ran, it would: ${tEnglish(why)}`
         : tEnglish(why)
     resolveAdviceOutcome({
-      command, cwd, sessionId, toolUseId,
+      command, cwd, actingCwd, sessionId, toolUseId,
       reasonsEnglish: [reasonEnglish],
       effectSource: { ruleKey: why },
       segment: matchedSegmentForRule(inspected, cwd, evaluate),
@@ -1815,7 +1822,7 @@ async function main(): Promise<void> {
   // least one target to compare against -- so the overwhelming majority of
   // commands (no rm/mv/cp/redirection/`cd`/`-C` shape at all) pay nothing
   // extra here.
-  const targetDirs = mentionOnly ? [] : resolveCommandTargetDirs(inspected, cwd)
+  const targetDirs = [...new Set([...(mentionOnly ? [] : resolveCommandTargetDirs(inspected, cwd)), ...(actingCwd !== cwd ? [actingCwd] : [])])]
   const targetLocations: readonly TargetLocation[] = targetDirs.map((path) => ({
     path,
     repoRoot: resolveRepoRootForCwd(path),
@@ -1841,7 +1848,7 @@ async function main(): Promise<void> {
   const catalogMatch =
     catalogMirror !== null
       ? pickStricterDestination([
-          matchDestinationForCwd(cwd, catalogMirror.destinations),
+          matchDestinationForCwd(actingCwd, catalogMirror.destinations),
           ...distinctTargetRepoRoots.map((root) => matchDestinationForCwd(root, catalogMirror.destinations)),
         ])
       : null
@@ -1867,7 +1874,7 @@ async function main(): Promise<void> {
   const teamInternal =
     teamOwners.length > 0 &&
     scopedPolicies.some(isRequiresHuman) &&
-    classifyClientReach(inspected, { teamOwners, remotes: readReachRemotes(cwd), currentBranch: resolveBranchForCwd(cwd) }).staysInsideTeam
+    classifyClientReach(inspected, { teamOwners, remotes: readReachRemotes(actingCwd), currentBranch: resolveBranchForCwd(actingCwd) }).staysInsideTeam
   const commandScopedPolicies = teamInternal ? scopedPolicies.filter((policy) => !isRequiresHuman(policy)) : scopedPolicies
 
   // Own-branch-push / guarded-git-delete local allow (Option D, real
@@ -1891,7 +1898,7 @@ async function main(): Promise<void> {
   //     decideGateAction and its own `localAllowQualifies` option).
   const localGitAllow: LocalGitAllowResult = mentionOnly ? { qualifies: false } : qualifiesForLocalGitAllow({ command, cwd })
   if (localGitAllow.qualifies && commandScopedPolicies.length === 0) {
-    appendGateRecord(cwd, command, 'local-rule', 'allow', null, 'local-allow', null, teamInternal)
+    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'local-allow', null, teamInternal)
     emit('allow', t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush'))
     return
   }
@@ -1907,7 +1914,7 @@ async function main(): Promise<void> {
   // costs neither a wasted network round trip nor even the no-key notice
   // machinery below -- true for an uncacheable command shape exactly as much
   // as a cacheable one.
-  if (tryAdviceRetryPass(command, cwd, sessionId, 'jev', null, teamInternal)) return
+  if (tryAdviceRetryPass(command, actingCwd, sessionId, 'jev', null, teamInternal)) return
 
   const apiKey = await resolveApiKey()
   const previouslyWarnedNoKey = readNoKeyWarned()
@@ -1929,7 +1936,7 @@ async function main(): Promise<void> {
   // text the cache key has always folded in; `jevContext` is the copy Jev
   // reads, every repository, branch and path swapped through `jevNames` --
   // the same table then redacts the destination label and the policy rules.
-  const repoFacts = readRepoFacts(cwd)
+  const repoFacts = readRepoFacts(actingCwd)
   const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
   const jevNames = createJevPseudonyms()
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
@@ -1982,13 +1989,13 @@ async function main(): Promise<void> {
       // empty status line.
       const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
         hit.deployPublishKind !== undefined ? { deployPublishKind: hit.deployPublishKind } : { riskReasonKeys: cachedRiskReasonKeys(hit) }
-      resolveAdviceOutcome({ command, cwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
+      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
       return
     }
     // 0.6.8 T4: a cached requires_human ask is queued the same way a fresh
     // one is -- see tryQueueForPerson.
-    if (hit.decision === 'ask' && typeof hit.policyId === 'string' && tryQueueForPerson({ queueMode, command, cwd, sessionId, policyId: hit.policyId, source: 'cache', latencyMs: null, teamInternal })) return
-    appendGateRecord(cwd, command, 'cache', hit.decision, null, 'cache', null, teamInternal)
+    if (hit.decision === 'ask' && typeof hit.policyId === 'string' && tryQueueForPerson({ queueMode, command, cwd: actingCwd, sessionId, policyId: hit.policyId, source: 'cache', latencyMs: null, teamInternal })) return
+    appendGateRecord(actingCwd, command, 'cache', hit.decision, null, 'cache', null, teamInternal)
 
     if (hit.decision !== 'allow') {
       // A cached stop is still a question the person has to answer, so it is
@@ -1997,7 +2004,7 @@ async function main(): Promise<void> {
       // is the honest, complete stopReason on its own -- it does not know,
       // and does not claim to know, which sub-reason produced the original
       // verdict it is replaying.
-      appendPendingApproval(toolUseId, cwd, command, key, matchedDestination?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
+      appendPendingApproval(toolUseId, actingCwd, command, key, matchedDestination?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
     }
     // A cached deny/ask can only ever have been a policy verdict (see
     // askJev's own note: the risk stage never returns 'deny', and its own
@@ -2035,7 +2042,7 @@ async function main(): Promise<void> {
     // nobody did. Without this, the log kept filling with 'cache' and
     // 'local-rule' rows and looked healthy while this half of the gate was
     // silently judging nothing. Best-effort, same as every other record.
-    appendGateRecord(cwd, command, 'none', 'allow', null, 'unreachable', null, teamInternal)
+    appendGateRecord(actingCwd, command, 'none', 'allow', null, 'unreachable', null, teamInternal)
     const previousUnreachableFailures = readUnreachableFailures()
     const unreachableNotice = decideUnreachableNotice(false, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD)
     if (unreachableNotice.nextConsecutiveFailures !== previousUnreachableFailures) writeUnreachableFailures(unreachableNotice.nextConsecutiveFailures)
@@ -2102,7 +2109,7 @@ async function main(): Promise<void> {
       writeCache(cache)
     }
     resolveAdviceOutcome({
-      command, cwd, sessionId, toolUseId,
+      command, cwd, actingCwd, sessionId, toolUseId,
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
       effectSource: { riskReasonKeys: resolved.riskAdviceReasonKeys },
       segment: jevSegmentFor(command),
@@ -2126,7 +2133,7 @@ async function main(): Promise<void> {
       writeCache(cache)
     }
     resolveAdviceOutcome({
-      command, cwd, sessionId, toolUseId,
+      command, cwd, actingCwd, sessionId, toolUseId,
       reasonsEnglish: [resolved.deployPublishAdvice],
       effectSource: { deployPublishKind: resolved.deployPublishKind },
       segment: jevSegmentFor(command),
@@ -2147,8 +2154,8 @@ async function main(): Promise<void> {
   // 0.6.8 T4: queue mode, after the verdict is cached AS the ask it is --
   // queueing never turns a policy stop into an advice, so a later hit (in
   // another session, or with queue mode off) still asks.
-  if (resolved.decision === 'ask' && resolved.policyId !== null && tryQueueForPerson({ queueMode, command, cwd, sessionId, policyId: resolved.policyId, source: 'jev', latencyMs: jevLatencyMs, teamInternal })) return
-  appendGateRecord(cwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId, teamInternal)
+  if (resolved.decision === 'ask' && resolved.policyId !== null && tryQueueForPerson({ queueMode, command, cwd: actingCwd, sessionId, policyId: resolved.policyId, source: 'jev', latencyMs: jevLatencyMs, teamInternal })) return
+  appendGateRecord(actingCwd, command, 'jev', resolved.decision, jevLatencyMs, jevStopReason, resolved.policyId, teamInternal)
   // Only a stop becomes a question worth an answer. A pass was never asked
   // about, so recording it would bury the handful of real decisions under
   // hundreds of non-events.

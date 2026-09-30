@@ -14,6 +14,10 @@ import { splitOnCommandSeparators, tokenize } from "./git_discard.ts";
 export interface LocatedSegment {
   /** One simple command, as written. */
   readonly segment: string;
+  /** The same command with each substitution (walked as its own segments) replaced by one inert word. */
+  readonly outer: string;
+  /** It runs inside a `$(...)`/backtick/`<(...)` substitution of another command. */
+  readonly substituted: boolean;
   /** The directory it starts in, or null when that cannot be known. */
   readonly dir: string | null;
 }
@@ -97,15 +101,87 @@ function subshellBody(segment: string): string | null {
   return segment.slice(1, -1).trim();
 }
 
-function walk(command: string, start: string | null, home: string, depth: number, out: LocatedSegment[]): string | null {
+export interface SubstitutionSpan {
+  /** Index of the opening `$`, `` ` ``, `<` or `>`. */
+  readonly start: number;
+  /** Index of the closing `)` or `` ` ``. */
+  readonly end: number;
+  /** The command line inside it. */
+  readonly body: string;
+}
+
+/** Where the substitution opening at `open` (its `(` or its first backtick) closes, or -1. */
+function closingIndex(command: string, open: number, backtick: boolean): number {
+  let depth = 0;
+  let single = false;
+  let double = false;
+  for (let index = open; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (single || double) continue;
+    else if (backtick && char === "`" && index > open) return index;
+    else if (!backtick && char === "(") depth += 1;
+    else if (!backtick && char === ")" && --depth === 0) return index;
+  }
+  return -1;
+}
+
+/**
+ * The outermost `$(...)`, backtick and `<(...)`/`>(...)` substitutions in
+ * `command` -- each one really runs, even inside double quotes. Text inside
+ * single quotes is never one. An unterminated one ends the scan.
+ */
+export function substitutionSpans(command: string): readonly SubstitutionSpan[] {
+  const spans: SubstitutionSpan[] = [];
+  let single = false;
+  let double = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    if (single) continue;
+    const opener = command.startsWith("$(", index) || (!double && (command.startsWith("<(", index) || command.startsWith(">(", index))) ? 2 : char === "`" ? 1 : 0;
+    if (opener === 0) continue;
+    const end = closingIndex(command, opener === 1 ? index : index + 1, opener === 1);
+    if (end === -1) break;
+    spans.push({ start: index, end, body: command.slice(index + opener, end) });
+    index = end;
+  }
+  return spans;
+}
+
+/** `segment` with every substitution replaced by one inert word: what the segment itself runs. */
+function withoutSubstitutions(segment: string, spans: readonly SubstitutionSpan[]): string {
+  let out = "";
+  let from = 0;
+  for (const span of spans) {
+    out += `${segment.slice(from, span.start)}_`;
+    from = span.end + 1;
+  }
+  return out + segment.slice(from);
+}
+
+function walk(command: string, start: string | null, home: string, depth: number, out: LocatedSegment[], substituted = false): string | null {
   let dir = start;
   for (const segment of splitOnCommandSeparators(command)) {
     const body = depth < MAX_DEPTH ? subshellBody(segment) : null;
     if (body !== null) {
-      walk(body, dir, home, depth + 1, out);
+      walk(body, dir, home, depth + 1, out, substituted);
       continue;
     }
-    const words = tokenize(segment);
+    const spans = depth < MAX_DEPTH ? substitutionSpans(segment) : [];
+    for (const span of spans) walk(span.body, dir, home, depth + 1, out, true);
+    const outer = withoutSubstitutions(segment, spans);
+    const words = tokenize(outer);
     const moved = directoryChange(words, dir, home);
     if (moved !== undefined) {
       dir = moved;
@@ -113,10 +189,10 @@ function walk(command: string, start: string | null, home: string, depth: number
     }
     const script = depth < MAX_DEPTH ? innerScript(words) : null;
     if (script !== null) {
-      walk(script, dir, home, depth + 1, out);
+      walk(script, dir, home, depth + 1, out, substituted);
       continue;
     }
-    out.push({ segment, dir });
+    out.push({ segment, outer, dir, substituted });
   }
   return dir;
 }
@@ -145,18 +221,22 @@ export function gitInvocation(segment: string, dir: string | null, home: string)
   if (programName(run[0] ?? "") !== "git") return null;
   let at = 1;
   let gitDir = dir;
+  let workTree: string | null | undefined;
+  let repository: string | null | undefined;
   while (at < run.length && (run[at] ?? "").startsWith("-")) {
     const option = run[at] ?? "";
-    const [name, inline] = option.includes("=") ? [option.slice(0, option.indexOf("=")), option.slice(option.indexOf("=") + 1)] : [option, null];
+    const [name, inline] = option.startsWith("--") && option.includes("=") ? [option.slice(0, option.indexOf("=")), option.slice(option.indexOf("=") + 1)] : [option, null];
     const value = inline ?? (GIT_OPTIONS_WITH_VALUE.has(name) ? (run[at + 1] ?? "") : null);
     if (name === "-C" && value !== null) gitDir = value.length === 0 ? gitDir : resolveDirectory(value, gitDir, home);
-    else if (name === "--work-tree" && value !== null) gitDir = resolveDirectory(value, gitDir, home);
+    else if (name === "--work-tree" && value !== null) workTree = resolveDirectory(value, gitDir, home);
     else if (name === "--git-dir" && value !== null) {
       const resolved = resolveDirectory(value, gitDir, home);
-      gitDir = resolved === null ? null : resolved.endsWith("/.git") ? resolved.slice(0, -"/.git".length) : resolved;
+      repository = resolved === null ? null : resolved.endsWith("/.git") ? resolved.slice(0, -"/.git".length) : resolved;
     }
     at += inline === null && GIT_OPTIONS_WITH_VALUE.has(name) ? 2 : 1;
   }
   const subcommand = run[at] ?? null;
-  return { subcommand, args: run.slice(at + 1), dir: gitDir };
+  // The repository (and so its remotes and branch) is the --git-dir's when one is given.
+  const acting = repository !== undefined ? repository : workTree !== undefined ? workTree : gitDir;
+  return { subcommand, args: run.slice(at + 1), dir: acting };
 }

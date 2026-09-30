@@ -8,6 +8,7 @@
 // which specific file or branch, only a coarse command *family* (`git
 // push`, `rm -rf`, `terraform`, ...) and which project it happened in.
 
+import { locateCommandSegments } from "./command_locations.ts";
 import { splitOnCommandSeparators, startsWithGitDiscard } from "./git_discard.ts";
 
 /**
@@ -193,13 +194,29 @@ export function commandFamily(command: string): string {
   // part, not its first word. `cd somewhere && rm -rf dist` filed under `cd`
   // hides exactly what the log exists to surface, and `cd` was 57% of a real
   // log read this way.
-  const segments = splitSegments(command);
+  const segments = familySegments(command);
   for (const { pattern, family } of FAMILY_PATTERNS) {
     for (const segment of segments) {
       if (pattern.test(segment)) return family;
     }
   }
   return programName(segments[0] ?? "");
+}
+
+const GIT_GLOBAL_OPTIONS = /^git(?:\s+(?:(?:-C|-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env|--super-prefix)\s+\S+|-\S+))+(?=\s)/;
+
+/**
+ * The simple commands the shell runs (0.6.12 T5, F-05): `cd`/`pushd`/`popd`
+ * dropped, a subshell, `bash -c`, `eval` and a substitution read as their own
+ * commands, and git's global options dropped, so `cd x && git -C . push` is
+ * `git push`, never `cd`. A command that is only a directory change keeps it.
+ */
+function familySegments(command: string): string[] {
+  const located = locateCommandSegments(command, "/", "/")
+    .filter(({ substituted }) => !substituted)
+    .map(({ outer }) => stripAssignments(outer.trim()).replace(GIT_GLOBAL_OPTIONS, "git"))
+    .filter((segment) => segment.length > 0);
+  return located.length > 0 ? located : splitSegments(command);
 }
 
 /**

@@ -67,7 +67,25 @@ Out of scope: F-06 redaction of unregistered paths, F-08..F-14.
   (`python3`, `python -`, `perl`, `ruby`, `node`) is a hard deny like a shell; one given
   its own program (`-m json.tool`, `-c`/`-e` code, a script path) is reading data and is
   not this rule. `curl -o f && bash f` stays advice (it was a PASS in 0.6.11).
-- [ ] T5 target repository and branch attribution
+- [x] T5 target repository and branch attribution. Proof: `src/core/acting_location.test.ts`
+  39 cases from the QA B-*/D-*/E-*/G-* rows, RED 38/39 against a stub of today's
+  behaviour (session cwd), GREEN 39/39; commandFamily test RED 1/1 then GREEN; record
+  test in `gate-deny-spellings.test.mjs` RED then GREEN (file 69/69); `npm test`
+  2707/2707. Live probe replay (working-tree hook, real policies, Jev): from feat-app,
+  `cd demo-app && git commit`, `git -C demo-app commit`, `bash -c 'cd demo-app && ...'`;
+  from orca-supervisor, `cd demo-app && echo x > math.js`, `git -C demo-app push origin
+  main` all `REFUSED` by `never_write_to_main` (retry refused too, from the cache),
+  recorded under project `remote` (demo-app's origin), family `git`/`git push`/`echo`;
+  F-07 from other-main (main), `cd feat-app && git commit` and `git -C feat-app commit`
+  allowed, recorded under `feat-app-remote`. Decisions: the acting directory is the one
+  place every writing part lands in (tier-1a-safe parts ignored; a file target counts by
+  its own repository); several places, or one that cannot be known (`cd $X`), keep the
+  session's. It replaces the session cwd for the repository facts Jev reads, the catalog
+  destination, the team-reach check and every record; the session stays in the
+  cross-repo sentence and in the cache key's cwd. Changed expectations, on purpose: two
+  commandFamily cases that encoded the defect (`cd d && git status` was `cd`, now `git`;
+  `cd src && ls` now `ls`) and three Part 4 cache-key contexts in `gate-bash.test.mjs`
+  whose primary facts are now the target repository's (sentence unchanged).
 - [ ] T6 README, QA rerun in odd/qa/qa-0.6.12.md, release, live check
 
 ## Acceptance criteria

@@ -706,7 +706,8 @@ test('Part 4: the replay case -- cwd on main in repo A, rm a file in repo B on a
 
   const home = makeHome()
   const command = `rm ${targetFile}`
-  const repoContext = `${computeRepoContextForTest(repoA)} The command acts on files in the repository at ${repoB} on branch fix/plugin-nav-page-close, not in the session's current repository (${repoA} on ${branchNameOf(repoA)}).`
+  // 0.6.12 T5: the facts Jev reads first are the repository the command acts in.
+  const repoContext = `${computeRepoContextForTest(repoB)} The command acts on files in the repository at ${repoB} on branch fix/plugin-nav-page-close, not in the session's current repository (${repoA} on ${branchNameOf(repoA)}).`
   const key = computeCacheKey(command, repoA, home, { repoContext })
 
   const cachePath = verdictCachePath(home)
@@ -758,7 +759,7 @@ test('Part 4: a target in a DIFFERENT cataloged destination selects the STRICTER
   }))
 
   const command = `rm ${targetFile}`
-  const repoContext = `${computeRepoContextForTest(repoA)} The command acts on files in the repository at ${repoB} on branch ${branchNameOf(repoB)}, not in the session's current repository (${repoA} on ${branchNameOf(repoA)}).`
+  const repoContext = `${computeRepoContextForTest(repoB)} The command acts on files in the repository at ${repoB} on branch ${branchNameOf(repoB)}, not in the session's current repository (${repoA} on ${branchNameOf(repoA)}).`
   const correctKey = computeCacheKey(command, repoA, home, { destinationId: 'repo-b-dest', treeRoot: repoB, repoContext, consequenceCeiling: 20 })
   const wrongKey = computeCacheKey(command, repoA, home, { destinationId: 'repo-a-dest', treeRoot: repoA, repoContext, consequenceCeiling: 80 })
   assert.notEqual(correctKey, wrongKey, 'the destination pick must actually change the key, or this test proves nothing')
@@ -787,7 +788,7 @@ test('Part 4: a target outside any repository (e.g. a scratch directory) is neve
 
   const home = makeHome()
   const command = `rm ${targetFile}`
-  const repoContext = `${computeRepoContextForTest(repo)} The command acts on files outside any repository, not in the session's current repository (${repo} on ${branchNameOf(repo)}).`
+  const repoContext = `${computeRepoContextForTest(outside)} The command acts on files outside any repository, not in the session's current repository (${repo} on ${branchNameOf(repo)}).`
   const key = computeCacheKey(command, repo, home, { repoContext })
 
   const cachePath = verdictCachePath(home)
