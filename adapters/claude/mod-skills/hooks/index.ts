@@ -136,7 +136,7 @@ import { computeHomePaths, orcaCliCommandFor, parseEnvFile, resolveUserSkillsDir
 import type { ModHomePaths } from './runtime.ts'
 import { parseQuota } from '../../../../src/core/consumption.ts'
 import { parseModelsMirror } from '../../../../src/core/model_mirror.ts'
-import { parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
+import { contextWindowOfModel, parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
 import type { ResolvedTiers } from '../../../../src/core/model_router_accounts.ts'
 import { buildTierQuestions, buildTierState, decideStart, interpretTier, routerDecisionFileName, routerDecisionRecord, toRouterEffort } from '../../../../src/core/model_router_decide.ts'
 import type { RouterDecision, TierJudgment } from '../../../../src/core/model_router_decide.ts'
@@ -145,12 +145,14 @@ import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '..
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
-import { parseRunningSubagents, reconcileRunning, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
+import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
-import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import { agentDefinitionEffort, agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
+import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedShare } from '../../../../src/core/effort_source.ts'
+import type { EffortSource } from '../../../../src/core/effort_source.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
-import type { ListedAgent, RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import type { ListedAgent, RunningSubagent, SubagentEffortSource, SubagentWhy } from '../../../../src/core/subagent_status.ts'
 import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
@@ -162,8 +164,8 @@ import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_r
 import type { SubagentDecision } from '../../../../src/core/model_router_subagent.ts'
 import { isPersonPromptOrigin } from '../../../../src/core/model_router_origin.ts'
 import type { RouterPromptOrigin, RouterSessionStats, RouterSticky, StewardState } from '../types/index.d.ts'
-import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
-import type { StewardDecision, StewardJudgment, StewardMode, StewardNotApplied } from '../../../../src/core/context_steward.ts'
+import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, softTierFires, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
+import type { StewardDecision, StewardJudgment, StewardMode, StewardNotApplied, StewardTier } from '../../../../src/core/context_steward.ts'
 import { stewardFromSettings } from '../../../../src/core/model_router_mode.ts'
 
 const DEFAULT_BUDGET_MS = 800
@@ -587,7 +589,7 @@ async function appendTurnUsage($: EngineInterface, atIso: string, line: string):
 }
 
 /** Builds and appends this step's usage line. Never touches `e` beyond reading it, and never throws (appendTurnUsage already swallows its own errors; a `$.clock.now()` rejection here is the only other failure mode, left to the caller's own try/catch). `project`: JEVADV-63, the session's own resolved project name (or null when not yet known this session) -- read from the caller's cached OrcaContext, never re-resolved here. */
-async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: TurnStepResult, project: string | null): Promise<void> {
+async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: TurnStepResult, project: string | null, effortLog: Record<string, unknown> = {}): Promise<void> {
   const at = new Date(await $.clock.now()).toISOString()
   const account = await resolveAccountId($)
   const line = JSON.stringify({
@@ -602,6 +604,7 @@ async function recordTurnUsage($: EngineInterface, e: Frozen<TurnStepInput>, r: 
     stopReason: r.stopReason,
     account,
     project,
+    ...effortLog,
   })
   await appendTurnUsage($, at, `${line}\n`)
 }
@@ -628,26 +631,68 @@ async function readExplicitModels($: EngineInterface): Promise<ExplicitModelsMod
  */
 async function readAgentDefinitionModel($: EngineInterface, subagentType: string, cwd: string): Promise<string | null> {
   try {
-    const paths = await resolveHomePaths($)
-    const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
-    const accountDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
-    const dirs = [`${cwd}/.claude/agents`, ...(accountDir === null ? [] : [`${accountDir}/agents`])]
-    const files: AgentDefinitionFile[] = []
-    for (const dir of dirs) {
-      if (!(await $.fs.exists(dir))) continue
-      for (const entry of await $.fs.list(dir)) {
-        if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.md')) continue
-        try {
-          files.push({ file: entry.name, text: await $.fs.read(`${dir}/${entry.name}`) })
-        } catch {
-          // An unreadable definition fixes nothing.
-        }
-      }
-    }
-    return agentDefinitionModel(files, subagentType)
+    return agentDefinitionModel(await readAgentDefinitionFiles($, cwd), subagentType)
   } catch {
     return null
   }
+}
+
+/** The agent definitions a subagent type may come from: the project's own `.claude/agents` first, then the account's. */
+async function readAgentDefinitionFiles($: EngineInterface, cwd: string): Promise<AgentDefinitionFile[]> {
+  const paths = await resolveHomePaths($)
+  const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+  const accountDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
+  const dirs = [`${cwd}/.claude/agents`, ...(accountDir === null ? [] : [`${accountDir}/agents`])]
+  const files: AgentDefinitionFile[] = []
+  for (const dir of dirs) {
+    if (!(await $.fs.exists(dir))) continue
+    for (const entry of await $.fs.list(dir)) {
+      if (entry.kind !== 'file' || !entry.name.toLowerCase().endsWith('.md')) continue
+      try {
+        files.push({ file: entry.name, text: await $.fs.read(`${dir}/${entry.name}`) })
+      } catch {
+        // An unreadable definition fixes nothing.
+      }
+    }
+  }
+  return files
+}
+
+/** One loop's (the main one's, or a subagent's) effort as its steps were sent, for the measure-only effort log. */
+interface EffortLoop {
+  readonly lastSent: SessionEffort | null
+  readonly frontmatter: SessionEffort | null
+  readonly settings: SessionEffort | null
+}
+
+function effortLevel(value: unknown): SessionEffort | null {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max' ? value : null
+}
+
+/**
+ * 0.6.15 T4c (odd/research/effort-per-task.md §4): measure only. What the
+ * turn-usage line adds about the effort: where the effort sent came from
+ * (src/core/effort_source.ts), the effort the router would choose, whether a
+ * subagent's model was fixed, and, on the first step after the effort
+ * changed, how much of the prompt missed the cache. The definition and the
+ * settings are read at a loop's first step and when its effort changes.
+ * Never changes the step.
+ */
+async function effortLogFields($: EngineInterface, e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult, loops: Map<string, EffortLoop>, running: Map<string, RunningSubagent>, targets: Map<string, SubagentEffortTarget>): Promise<Record<string, unknown>> {
+  const key = e.agentId ?? 'main'
+  const sent = input.effort ?? null
+  const loop = loops.get(key)
+  const changed = loop !== undefined && loop.lastSent !== sent
+  const agent = e.agentId === undefined ? undefined : running.get(e.agentId)
+  const fresh = loop === undefined || changed
+  const frontmatter = !fresh ? (loop?.frontmatter ?? null) : agent === undefined ? null : effortLevel(agentDefinitionEffort(await readAgentDefinitionFiles($, await $.session.cwd()), agent.type))
+  const settings = !fresh ? (loop?.settings ?? null) : settingsEffortFor(await readVaultSettings($), e.model)
+  loops.set(key, { lastSent: sent, frontmatter, settings })
+  const source: EffortSource = effortSourceOf({ carried: e.effort ?? null, sent, env: effortLevel(await $.env.get('CLAUDE_CODE_EFFORT_LEVEL')), frontmatter, settings, modelDefault: claudeCodeDefaultEffort(e.model) })
+  const sticky = e.agentId === undefined ? (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value : undefined
+  const routerEffort = e.agentId === undefined ? (sticky?.effort ?? null) : (targets.get(e.agentId)?.effort ?? null)
+  const share = changed ? uncachedShare({ input: r.usage?.input_tokens ?? null, cacheRead: r.usage?.cache_read_input_tokens ?? null, cacheWrite: r.usage?.cache_creation_input_tokens ?? null }) : undefined
+  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }) }
 }
 
 /**
@@ -717,12 +762,12 @@ async function runningSubagentsStatus($: EngineInterface, running: RunningSet, k
   return subagentsStatusPart(await resolveLocale($), shown)
 }
 
-/** 0.6.14 T1: the effort a subagent's step was sent with, onto its record (only when it changed). Best-effort. */
-async function noteSubagentEffort($: EngineInterface, running: RunningSet, agentId: string, effort: SessionEffort | null): Promise<void> {
+/** 0.6.14 T1: the effort a subagent's step was sent with, onto its record (only when it changed); 0.6.15 T4b: and where it came from. Best-effort. */
+async function noteSubagentEffort($: EngineInterface, running: RunningSet, agentId: string, effort: SessionEffort | null, effortSource: SubagentEffortSource): Promise<void> {
   await hydrateRunning($, running)
   const agent = running.agents.get(agentId)
-  if (agent === undefined || agent.effort === effort) return
-  running.agents.set(agentId, { ...agent, effort })
+  if (agent === undefined || (agent.effort === effort && agent.effortSource === effortSource)) return
+  running.agents.set(agentId, { ...agent, effort, effortSource })
   await persistRunning($, running)
 }
 
@@ -1202,7 +1247,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
   let wouldUse: string | null = null
   const remember = (result: AgentSpawnResult, tiers: ResolvedTiers | null, why: SubagentWhy): void => {
     if ('agentId' in result && result.agentId !== undefined) {
-      runningSubagents.set(result.agentId, { id: result.agentId, type: e.subagentType, description: e.description, label: subagentModelLabel(result.model ?? e.parentModel, tiers), effort: null, why, wouldUse })
+      runningSubagents.set(result.agentId, { id: result.agentId, type: e.subagentType, description: e.description, label: subagentModelLabel(result.model ?? e.parentModel, tiers), effort: null, effortSource: null, why, wouldUse })
     }
   }
   if (mode === 'off' || e.fork) {
@@ -1278,7 +1323,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
  * pre-computed target (a guard can hold a higher inherited value than the
  * tier's own target, which spawn time never sees).
  */
-async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null) => Promise<void>): StreamHookBody<TurnStepChunk, TurnStepResult> {
+async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource) => Promise<void>, effortLog: (e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult) => Promise<Record<string, unknown>>): StreamHookBody<TurnStepChunk, TurnStepResult> {
   let input: TurnStepInput | Frozen<TurnStepInput> = e
   if (mode !== 'off' && e.agentId === undefined) {
     let held: RouterSticky | undefined
@@ -1333,14 +1378,21 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
   if (e.agentId !== undefined) {
     // 0.6.14 T1: the effort this subagent step is actually sent with, for its row.
     try {
-      await noteEffort(e.agentId, input.effort ?? null)
+      // 0.6.15 T4b: with its source, read off this step: what the engine put on it against what is sent.
+      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null))
     } catch {
       // Visibility only: never a reason to hold the step.
     }
   }
   const r = yield* next(input)
+  let effortFields: Record<string, unknown> = {}
   try {
-    await recordTurnUsage($, input, r, project)
+    effortFields = await effortLog(e, input, r)
+  } catch {
+    // Measure-only: a lost field never affects the step or its usage line.
+  }
+  try {
+    await recordTurnUsage($, input, r, project, effortFields)
   } catch {
     // Recording is best-effort and must never affect the turn.
   }
@@ -1391,6 +1443,43 @@ interface StewardPlan {
   readonly instructions: string
   readonly personTurns: number
   readonly locale: Locale
+  /** 0.6.15 T4: what each log row also names (odd/research/steward-1m.md §6). */
+  readonly verdict: StewardJudgment['verdict'] | null
+  readonly sessionId: string | null
+  readonly mainWindow: number | null
+  readonly currentModel: string | null
+  readonly wouldFire: StewardTier | null
+}
+
+/**
+ * 0.6.15 T4: the session's MAIN model and the model this turn ran on. The
+ * router keeps the session's own model when it takes over (configuredModel)
+ * and, while it rewrites steps, the one it sends; without it, the engine's
+ * main-loop model is both. The main model's window is what the hard limit is
+ * measured against: a router step on a 200k model is not the session's.
+ */
+async function stewardModels($: EngineInterface): Promise<{ readonly mainModel: string | null; readonly currentModel: string | null }> {
+  let own: string | null = null
+  try {
+    own = await $.session.model()
+  } catch {
+    own = null
+  }
+  try {
+    const sticky = (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value
+    if (sticky !== undefined) return { mainModel: sticky.configuredModel, currentModel: sticky.rewrite ? sticky.model : sticky.configuredModel }
+  } catch {
+    // No router state: the engine's own model is the main one.
+  }
+  return { mainModel: own, currentModel: own }
+}
+
+async function stewardSessionId($: EngineInterface): Promise<string | null> {
+  try {
+    return await $.session.id()
+  } catch {
+    return null
+  }
 }
 
 async function readStewardState($: EngineInterface): Promise<StewardState> {
@@ -1455,11 +1544,17 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
     const state = await readStewardState($)
     const turnsSinceCompaction = state.lastCompactionTurn === null ? null : state.personTurns - state.lastCompactionTurn
     const contextTokens = usage.context.tokens ?? null
-    const gate = stewardGate({ mode, isSubagent: false, contextTokens, contextPercent: usage.context.percent ?? null, threshold: settings.threshold, turnsSinceCompaction })
+    const models = await stewardModels($)
+    const mainWindow = (models.mainModel === null ? null : contextWindowOfModel(models.mainModel)) ?? usage.context.window ?? null
+    const gate = stewardGate({ mode, isSubagent: false, contextTokens, mainWindow, threshold: settings.threshold, turnsSinceCompaction })
     if (!gate.ask || contextTokens === null) return
     const messages = await $.session.messages()
     const jev = await askStewardJudgment($, options, messages, contextTokens, turnsSinceCompaction)
-    const decision = decideSteward({ jev, hardLimit: gate.hardLimit })
+    const softActive = settings.softMode === 'active'
+    const decision = decideSteward({ jev, hardLimit: gate.hardLimit, softLimit: gate.softLimit, softActive })
+    // The soft tier ships measured: while its switch is on measure, a turn it
+    // would have compacted is decided as before and logged as `wouldFire`.
+    const wouldFire: StewardTier | null = !softActive && !decision.compact && softTierFires({ jev, softLimit: gate.softLimit }) ? 'soft-400k' : null
     const plan: StewardPlan = {
       mode,
       account: await resolveAccountId($),
@@ -1469,6 +1564,11 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       instructions: decision.compact ? stewardInstructions(collectStewardFacts(messages)) : '',
       personTurns: state.personTurns,
       locale: await resolveLocale($),
+      verdict: jev?.verdict ?? null,
+      sessionId: await stewardSessionId($),
+      mainWindow,
+      currentModel: models.currentModel,
+      wouldFire,
     }
     if (mode === 'active' && decision.compact) {
       await attemptStewardCompaction($, plan, 1, host)
@@ -1522,7 +1622,10 @@ async function attemptStewardCompaction($: EngineInterface, plan: StewardPlan, a
 async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boolean, contextAfter: number | null, notApplied: StewardNotApplied | null, host: StewardHost): Promise<void> {
   if (applied) await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...(await readStewardState($)), lastCompactionTurn: plan.personTurns })
   const at = new Date(await $.clock.now()).toISOString()
-  const record = stewardDecisionRecord({ at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied })
+  const record = stewardDecisionRecord({
+    at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied,
+    verdict: plan.verdict, sessionId: plan.sessionId, turnIndex: plan.personTurns, mainWindow: plan.mainWindow, currentModel: plan.currentModel, wouldFire: plan.wouldFire,
+  })
   await appendStewardDecision($, at, `${JSON.stringify(record)}\n`)
   host.show(stewardStatusPart(plan.locale, { mode: plan.mode, decision: plan.decision.decision, applied, before: plan.contextBefore, after: contextAfter }))
   if (applied && plan.decision.suggestClear) $.ui.toast(stewardClearHint(plan.locale), { timeoutMs: 15000 })
@@ -1615,6 +1718,8 @@ export function register(on: On, options: PluginOptions): void {
   // fits inside one process, unlike `routerSticky`, which must survive a
   // hot reload across a session that can run for hours.
   const subagentEffortTarget = new Map<string, SubagentEffortTarget>()
+  // 0.6.15 T4c: each loop's last sent effort, for the measure-only effort log.
+  const effortLoops = new Map<string, EffortLoop>()
 
   // Cached per session/process, as the feature document asks for the
   // inventory: re-scanning the filesystem on every prompt would defeat
@@ -2078,8 +2183,8 @@ export function register(on: On, options: PluginOptions): void {
     // no prompt has resolved it yet this session (an honest "not yet
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
-    const noteEffort = (agentId: string, effort: SessionEffort | null): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort)
-    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort)
+    const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort, source)
+    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, (step, input, r) => effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget))
   })
 
   on('agent.spawn', async ($, e, next) => {

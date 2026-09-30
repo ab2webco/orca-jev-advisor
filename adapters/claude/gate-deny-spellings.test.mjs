@@ -442,3 +442,21 @@ test('0.6.14 T3: the same call as code is still refused, however it is spelled',
   assertRefusedTwice("python3 - <<'PY'\nimport os\nx = os.system('git push --force origin x')\nPY", FORCE_RULE)
   assertRefusedTwice("node <<'EOF'\nrequire('child_process').execSync('rm -rf ~')\nEOF", RM_RULE)
 })
+
+// 0.6.15 T3 (N-07, qa-0.6.13): SQL fed to a SQL client through stdin runs
+// exactly as `psql -c` runs it, so it is the same refusal; an SQL comment
+// between the two words does not hide it. Printed anywhere else it is text.
+const DROP_RULE = /drops a table or a whole database/
+test('0.6.15 T3: SQL fed to a client through a pipe, a here-string or a heredoc is refused like psql -c', () => {
+  const drop = ['DROP', 'TABLE', 'users;'].join(' ')
+  assertRefusedTwice(`echo "${drop}" | psql`, DROP_RULE)
+  assertRefusedTwice(`printf '%s\\n' "${drop}" | mysql shop`, DROP_RULE)
+  assertRefusedTwice(`psql <<< "${drop}"`, DROP_RULE)
+  assertRefusedTwice(`sqlite3 app.db <<< "${drop}"`, DROP_RULE)
+  assertRefusedTwice(`psql shop <<'SQL'\nBEGIN;\n${drop}\nCOMMIT;\nSQL`, DROP_RULE)
+  assertRefusedTwice(`psql -c "DROP/**/TABLE users"`, DROP_RULE)
+  assertRefusedTwice(`sqlite3 app.db "${drop}"`, DROP_RULE)
+  assertNotRefused(`echo "${drop}" > migration.sql`)
+  assertNotRefused(`echo "${drop}" | grep DROP`)
+  assertNotRefused(`cat > notes.md <<'EOF'\n${drop}\nEOF`)
+})

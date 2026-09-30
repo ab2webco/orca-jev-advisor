@@ -239,6 +239,16 @@ export function collapseTier(tiers: ResolvedTiers, tier: RouterTier): RouterTier
   return ROUTER_TIERS.find((candidate) => tiers[candidate].modelId === id) ?? tier;
 }
 
+/** A model's context window in tokens from the built-in table (a `[1m]` suffix is 1M, a dated id's undated alias counts), or null for a model this file does not know. */
+export function contextWindowOfModel(modelId: string): number | null {
+  if (/\[1m\]$/i.test(modelId)) return 1_000_000;
+  const id = baseModelId(modelId);
+  const exact = ANTHROPIC_CONTEXT_WINDOWS[id];
+  if (exact !== undefined) return exact;
+  const dated = Object.keys(ANTHROPIC_CONTEXT_WINDOWS).find((key) => key.startsWith(`${id}-`) && /^\d{8}$/.test(key.slice(id.length + 1)));
+  return dated === undefined ? null : (ANTHROPIC_CONTEXT_WINDOWS[dated] ?? null);
+}
+
 /** `claude-opus-5-5[1m]` → `claude-opus-5-5`: a context-window suffix names the same model. */
 export function baseModelId(modelId: string): string {
   const bracket = modelId.indexOf("[");

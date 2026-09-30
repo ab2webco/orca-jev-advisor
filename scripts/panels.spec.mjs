@@ -2768,7 +2768,35 @@ test('steward: saving sends that target\'s mode and threshold in tokens', { skip
     assert.equal(request.target, 'home')
     assert.equal(request.mode, undefined)
     assert.equal(request.effort, undefined)
-    assert.deepEqual(request.steward, { mode: 'active', threshold: 100000 })
+    // 0.6.15 T4: the 400k soft tier's switch goes with them, measure unless changed.
+    assert.deepEqual(request.steward, { mode: 'active', threshold: 100000, softMode: 'measure' })
+  } finally {
+    await browser.close()
+  }
+})
+
+// 0.6.15 T4 (JEVADV-87): the 400k soft tier has its own switch, measure by
+// default, in the same steward row; the hint names both limits.
+test('steward: the 400k soft tier shows its own switch, measure by default, and saving sends it', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target, at) => (at === 1 ? { ...target, steward: { ...target.steward, softMode: 'active' } } : target)) }
+  const { browser, page } = await openPanel({ modelRouterStatus: status })
+  try {
+    await page.click('#tab-models')
+    const soft = await page.evaluate(() => Array.from(document.querySelectorAll('[data-steward-target]')).map((row) => {
+      const group = row.querySelector('[data-steward-soft]')
+      const pressed = group === null ? null : Array.from(group.querySelectorAll('button')).find((b) => b.className === 'active')
+      return { text: group === null ? '' : group.innerText, pressed: pressed === undefined || pressed === null ? null : pressed.getAttribute('data-value') }
+    }))
+    assert.deepEqual(soft.map((s) => s.pressed), ['measure', 'active'])
+    assert.match(soft[0].text, /400k/)
+    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    assert.match(hint, /600/)
+    assert.match(hint, /400/)
+    await page.evaluate(() => document.querySelector('[data-steward-target="home"] [data-steward-soft] button[data-value="active"]').click())
+    await page.click('[data-steward-target="home"] .model-router-steward-save')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.deepEqual(request.steward, { mode: 'measure', threshold: 120000, softMode: 'active' })
   } finally {
     await browser.close()
   }

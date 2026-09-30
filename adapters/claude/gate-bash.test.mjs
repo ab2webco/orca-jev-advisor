@@ -1001,9 +1001,13 @@ test('plain --force still hard-stops everywhere, unaffected by the --force-with-
 // -- the gate cannot tell executed code from data there.
 // ---------------------------------------------------------------------------
 
+// 0.6.15 T1 (N-10): `node -e` source is read the way node reads it, so the
+// ambiguous-code advice below is reached by a call that hands the text to a
+// shell. Until 0.6.14 a `console.log` of the same text reached it too; that
+// one is now a string, judged by Jev (the next test).
 test('node -e with dangerous-looking text is an advice, not a hard stop', () => {
   const home = makeHome()
-  const command = `node -e "console.log('git push --force origin main')"`
+  const command = `node -e "execSync('git push --force origin main')"`
   const payload = JSON.parse(run(home, command, { sessionId: 'session-node-e' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /REFUSED/i, 'an advice is not a hard stop')
@@ -1013,6 +1017,15 @@ test('node -e with dangerous-looking text is an advice, not a hard stop', () => 
   // rule's effect as settled fact the way a toggled-off rule's own advice does.
   assert.match(payload.hookSpecificOutput.permissionDecisionReason, /may be data rather than a command/)
   assert.match(payload.hookSpecificOutput.permissionDecisionReason, /if it ran, it would:/)
+})
+
+test('node -e that only prints dangerous-looking text is not a local advice: the text is a string (0.6.15 T1, N-10)', () => {
+  const home = makeHome()
+  const command = `node -e "console.log('git push --force origin main')"`
+  const stdout = run(home, command, { sessionId: 'session-node-e-print' })
+  const payload = stdout.trim() === '' ? {} : JSON.parse(stdout)
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny', stdout)
+  assert.doesNotMatch(String(payload.hookSpecificOutput?.permissionDecisionReason ?? ''), /may be data rather than a command/)
 })
 
 test('a real python3 -c hard reset is an advice, not a hard stop, now that interpreter code is ambiguous', () => {
@@ -2398,7 +2411,7 @@ test('en locale: the same toggled-off local-rule advice, in English', () => {
 test('es locale: an interpreter-code advice names the segment and the same rule-derived effect as a toggled-off match', () => {
   const home = makeHome()
   writeLocale(home, 'es')
-  const command = `node -e "console.log('git push --force origin main')"`
+  const command = `node -e "execSync('git push --force origin main')"`
   const payload = JSON.parse(run(home, command, { sessionId: 'session-node-e-es' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.equal(payload.systemMessage, `jev · avisó al modelo antes de \`${command}\`: publica fuera de tu máquina`)

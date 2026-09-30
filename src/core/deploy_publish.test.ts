@@ -64,3 +64,12 @@ test("an ordinary command matches nothing", () => {
   assert.equal(detectDeployPublish("npm test"), null);
   assert.equal(detectDeployPublish("git status"), null);
 });
+
+// 0.6.15 T1 (JEVADV-83): a heredoc body written to a file is text, so a line of
+// it that names a publish is not one; a body a shell reads still is.
+test("a publish named in a heredoc body written to a file is not detected; one fed to a shell is", () => {
+  const publish = ["npm", "publish"].join(" ");
+  assert.equal(detectDeployPublish(`cat > notes.md <<'EOF'\n${publish}\nEOF`), null);
+  assert.equal(detectDeployPublish(`python3 - <<'PY'\nopen('n.md','w').write("x")\nPY\n`), null);
+  assert.ok(detectDeployPublish(`bash <<'EOF'\n${publish}\nEOF`) !== null);
+});

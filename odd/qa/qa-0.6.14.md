@@ -1,6 +1,6 @@
 # QA 0.6.14: one row per running agent, string literals as data, empty-catalog hint
 
-Run 2026-09-30 against `fabolivark/release-0.6.14` rebased on 989d73e
+Run 2026-09-30 against the 0.6.14 release branch rebased on 989d73e
 (working-tree hook `adapters/claude/gate-bash.ts`, real team policies, live
 Jev). Scratch repositories under `/Volumes/Data/jev-live-check/` (`SCR`), as
 in odd/qa/qa-0.6.13.md.
@@ -65,4 +65,25 @@ no overflow at 320.
 
 ## Live check after the release
 
-Pending: filled in after the release.
+Released v0.6.14 (d9f2829, PR #18); the dev copy pulled to it, and all five
+installed mod copies (`~/.claude` and the four Orca accounts) carry
+`src/core/subagent_band.ts`. A real Claude Code session (Sonnet 5.5, a second
+Orca account) in `SCR/feat-app` launched four background agents in one
+message:
+
+| # | Type | Task | Model asked | Router decision (model-router log) |
+|---|---|---|---|---|
+| 1 | general-purpose | Count lines in math.js | opus | `explicit-lowered`, applied (Jev lowered it) |
+| 2 | general-purpose | List recent commits | none | `switch`, applied (chosen by Jev) |
+| 3 | Explore | Find the test files | none | `switch`, applied (chosen by Jev) |
+| 4 | general-purpose | Check the git status | haiku | `explicit`, kept |
+
+All four ran and reported. Another session of the owner's printed the
+reload notice with `ui.render` among the mod's hooks, so the band hook is
+registered.
+
+**Not looked at: the band as Claude Code paints it.** The test session's tab
+was behind the owner's working session, and the lead did not switch the
+owner's window. The rows were seen only in the hook's own tree painted by
+`npm run shots:band` (above). JEVADV-88 stays open until the live band is
+looked at.

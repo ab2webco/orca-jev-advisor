@@ -153,3 +153,10 @@ test("MODEL_RISK_REASON: every phrasing is written for the model, never 'you'/'y
 test("MODEL_RISK_REASON covers the near-limit case with model-appropriate text", () => {
   assert.match(MODEL_RISK_REASON["reason.tooCloseToTheLine"] as string, /Jev's risk score/);
 });
+
+// 0.6.15 T1 (N-11, qa-0.6.14): a heredoc body is not a command line, so its
+// first statement is never named as what the command would run.
+test("affectedSegments never names a line of a heredoc body", () => {
+  const segments = affectedSegments(`node - <<'EOF'\nconst fs = require("fs")\nfs.writeFileSync("notes.md", "x")\nEOF`);
+  assert.ok(!segments.some((segment) => segment.includes("require")), segments.join(" | "));
+});

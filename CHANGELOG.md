@@ -2,6 +2,42 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.15
+
+- **The gate reads only what runs.** A command's words in command position,
+  and the paths and refs they act on, are what the local rules and Jev read;
+  every other quoted text (a `for` list, a script's arguments, `python3 -c`
+  source that only prints, a heredoc written to a file) reaches Jev as a
+  placeholder, unless the program runs it (`eval`, `bash -c`, `ssh`,
+  `watch`, `xargs`, `find -exec`, `$( )`, SQL clients, interpreter source read
+  the way its language reads it, f-strings included). On 512 commands the
+  gate had stopped in real sessions, the ones that only edit, read or test
+  locally went from 39 stopped to 14, none refused; every remaining refusal
+  is the command's own action.
+- **A `requires_human` policy is judged on what the action does.** Planning
+  (`terraform plan`) and reading cluster state (`kubectl get`, `describe`,
+  `logs`) no longer ask a person under a policy that says they do not; apply
+  and destroy still stop.
+- **Exact push destination, SQL on stdin, resource names in the cache.** Jev
+  is told where a push goes, so a push to `main` from a feature checkout is
+  no longer a coin flip; SQL piped, here-stringed or heredoc'd into `psql`,
+  `mysql` or `sqlite3` is refused like `psql -c "DROP TABLE …"`; and the
+  verdict cache keys on the resource a command names, so `docker volume rm
+  prod_pgdata` and `dev_pgdata` never share a verdict (cache hit rate
+  unchanged at 36%).
+- **The context steward acts on 1M-token sessions.** It compacts at the end
+  of a turn once a session reaches 600k tokens (or 80% of the main model's
+  window, if smaller), measured on the session's main model rather than the
+  router's current one, which had compacted a session nine times at
+  160–230k after a switch to Haiku. A 400k tier (compact unless Jev is sure
+  the task is half done) ships in measure mode with its own switch. Every
+  decision row now records Jev's verdict, the session, the turn and the
+  windows. Research: `odd/research/steward-1m.md`.
+- **The agents band shows the effort each agent really runs at, and where it
+  comes from** (`alto (heredado)`, `medio (Jev)`), and the router logs the
+  effort of every step and its source, measure only. Research:
+  `odd/research/effort-per-task.md`, `odd/research/phase-effort.md`.
+
 ## 0.6.14
 
 - **Every running agent on its own row, above the prompt.** The status line

@@ -19,7 +19,9 @@
 // false strip waves a dangerous command through while a false keep costs one
 // refusal that the person can override by running it themselves.
 
-import { splitOnCommandSeparatorsDetailed, tokenize } from "./git_discard.ts";
+import { commandHandOff, runArgumentPositions, splitOnCommandSeparatorsDetailed, tokenize } from "./git_discard.ts";
+import { commandsRunByProgram, languageOfProgram, looksLikeOnePath, programTextAsPlaceholders } from "./program_text.ts";
+import type { ProgramLanguage } from "./program_text.ts";
 
 /** Programs whose heredoc body is itself shell, so the body must keep being read. */
 const SHELL_READERS = /(^|[\s|;&(])(ba|z|k|da|fi)?sh\b/;
@@ -48,194 +50,22 @@ const SHELL_READERS = /(^|[\s|;&(])(ba|z|k|da|fi)?sh\b/;
 export function withoutHeredocBodies(command: string): string {
   return mapHeredocBodies(command, (heredoc) => {
     if (bodyStaysVisible(heredoc)) return [...heredoc.body, ...heredoc.terminator];
-    if (!heredoc.nested && INTERPRETER_READERS.test(heredoc.openerLine)) return commandsRunByProgram(heredoc.body.join("\n"), heredoc.openerLine);
+    if (!heredoc.nested && INTERPRETER_READERS.test(heredoc.openerLine)) return commandsRunByProgram(heredoc.body.join("\n"), programLanguage(heredoc.openerLine));
     return [];
   });
 }
 
-// ---------------------------------------------------------------------------
-// 0.6.13 T5 (JEVADV-63): a heredoc body fed to python, node, perl or ruby is
-// a program. Stripping it whole hid what the program hands a shell -- the
-// 0.6.12 QA ran `python3 - <<'PY'` with `os.system('git push --force origin
-// x')` and got only advice. Keeping it whole would read Python as shell. So
-// the body is replaced by the command lines it runs: the string arguments of
-// a call that hands them to a shell or runs them as a program (os.system,
-// subprocess.*, child_process exec/spawn, system, exec, popen, Open3), and a
-// backtick, `qx` or `%x` string for perl and ruby. Each becomes its own line,
-// read by the rules in command position; a print or a string the program
-// only holds stays out of view, as before.
-// ---------------------------------------------------------------------------
+// 0.6.13 T5 (JEVADV-63) and 0.6.14 T3 (N-09): a heredoc body fed to python,
+// node, perl or ruby is a program, replaced by the command lines it runs,
+// read the way its own language reads it -- see program_text.ts.
 
 /** Programs whose heredoc body is a program in their own language. */
 const INTERPRETER_READERS = /(^|[\s|;&(])(?:\S*\/)?(?:python[\d.]*|node|perl|ruby)\b/;
-/** A call that runs its string arguments; `(` or, for perl and ruby, a string right after the name. */
-const RUNS_COMMAND_CALL = /(?<![\w$])(?:os\.(?:system|popen|exec\w*|spawn\w*)|subprocess\.\w+|execSync|execFileSync|execFile|spawnSync|spawn|exec|system|popen|Open3\.\w+)\s*(?:(\()|(?=["']))/g;
-/** perl's and ruby's own command strings: `qx{...}`/`qx(...)` and `%x(...)`/`%x{...}`. */
-const QUOTED_COMMAND = /(?:\bqx|%x)([({[])/g;
-const CLOSING: Readonly<Record<string, string>> = { "(": ")", "{": "}", "[": "]" };
 
-/** Every string literal in `text` ('...', "...", `...`), escapes kept as written. */
-function stringLiterals(text: string): string[] {
-  const out: string[] = [];
-  for (let at = 0; at < text.length; at += 1) {
-    const quote = text[at] ?? "";
-    if (quote !== "'" && quote !== '"' && quote !== "`") continue;
-    let end = at + 1;
-    while (end < text.length && text[end] !== quote) end += text[end] === "\\" ? 2 : 1;
-    out.push(text.slice(at + 1, end));
-    at = end;
-  }
-  return out;
-}
-
-/** The text from `from` up to the bracket that closes the one before it, strings skipped. */
-function bracketBody(text: string, from: number, open: string): string {
-  const close = CLOSING[open] ?? ")";
-  let depth = 1;
-  let at = from;
-  while (at < text.length && depth > 0) {
-    const char = text[at] ?? "";
-    if (char === "'" || char === '"' || char === "`") {
-      at += 1;
-      while (at < text.length && text[at] !== char) at += text[at] === "\\" ? 2 : 1;
-    } else if (char === open) depth += 1;
-    else if (char === close) depth -= 1;
-    at += 1;
-  }
-  return text.slice(from, Math.max(from, at - 1));
-}
-
-/** perl and ruby run a backtick string as a shell command; python has none and node's is a template. */
-const BACKTICK_RUNNERS = /(^|[\s|;&(])(?:\S*\/)?(?:perl|ruby)\b/;
-
-// 0.6.14 T3 (N-09, qa-0.6.13): the calls above were found by their text, so
-// one spelled inside a string literal -- a document the program writes,
-// quoting `os.system('git push --force ...')` -- read as a call, and the
-// write was refused as a force push. A pattern anchored at the start of a
-// statement would not do: `x = os.system(...)` is a call too. So the body is
-// first read the way its own language reads it: every string literal's text
-// and every comment is blanked out (same length, newlines kept), and a call
-// counts only where its name sits in what is left, the code. Its arguments
-// are then read from the original text at the same place. Per language:
-//   python  # comments; '…' "…" '''…''' """…""" with any r/b/u/f prefix
-//           (an f-string's {…} is not read as code: a known gap);
-//   node    // and /* */ comments; '…' "…"; `…` whose ${…} IS code again;
-//   perl, ruby  # comments; '…' "…"; a backtick string is a command, so it
-//           stays code, as does qx/%x.
-// ---------------------------------------------------------------------------
-
-type ProgramLanguage = "python" | "node" | "perl" | "ruby";
-
+/** The language of the interpreter an opener line feeds, python when it cannot tell. */
 function programLanguage(openerLine: string): ProgramLanguage {
-  const match = /(^|[\s|;&(])(?:\S*\/)?(python[\d.]*|node|perl|ruby)\b/.exec(openerLine);
-  const name = match?.[2] ?? "python";
-  return name.startsWith("python") ? "python" : (name as ProgramLanguage);
-}
-
-/** `text` with every string literal's contents and every comment blanked in `language`, so only code is left to match. */
-function codeOnly(text: string, language: ProgramLanguage): string {
-  const out = text.split("");
-  const blank = (from: number, to: number): void => {
-    for (let i = from; i < to && i < out.length; i += 1) if (out[i] !== "\n") out[i] = " ";
-  };
-  /** Scans code from `at`; stops at an unmatched `}` when `inTemplate` (a JS `${…}`), returning where. */
-  const scanCode = (start: number, inTemplate: boolean): number => {
-    let at = start;
-    let depth = 0;
-    while (at < text.length) {
-      const char = text[at] ?? "";
-      const nextChar = text[at + 1] ?? "";
-      if (inTemplate && char === "{") depth += 1;
-      if (inTemplate && char === "}") {
-        if (depth === 0) return at;
-        depth -= 1;
-      }
-      if (language === "node" && char === "/" && nextChar === "/") {
-        const end = text.indexOf("\n", at);
-        blank(at, end === -1 ? text.length : end);
-        at = end === -1 ? text.length : end;
-        continue;
-      }
-      if (language === "node" && char === "/" && nextChar === "*") {
-        const end = text.indexOf("*/", at + 2);
-        blank(at, end === -1 ? text.length : end + 2);
-        at = end === -1 ? text.length : end + 2;
-        continue;
-      }
-      // perl's `$#array` is its last index, not a comment.
-      if (language !== "node" && char === "#" && !(language === "perl" && text[at - 1] === "$")) {
-        const end = text.indexOf("\n", at);
-        blank(at, end === -1 ? text.length : end);
-        at = end === -1 ? text.length : end;
-        continue;
-      }
-      if (language === "node" && char === "`") {
-        at = scanTemplate(at + 1);
-        continue;
-      }
-      if (char === "'" || char === '"') {
-        const triple = language === "python" && text.startsWith(char.repeat(3), at);
-        const quote = triple ? char.repeat(3) : char;
-        let end = at + quote.length;
-        while (end < text.length && !text.startsWith(quote, end)) {
-          // A lone quote string ends at its line in python and node; a triple one never does.
-          if (!triple && text[end] === "\n" && (language === "python" || language === "node")) break;
-          end += text[end] === "\\" ? 2 : 1;
-        }
-        blank(at + quote.length, end);
-        at = end + quote.length;
-        continue;
-      }
-      at += 1;
-    }
-    return at;
-  };
-  /** A JS template from just after its opening backtick: text blanked, each `${…}` scanned as code. Returns past the closing backtick. */
-  const scanTemplate = (start: number): number => {
-    let at = start;
-    let from = start;
-    while (at < text.length && text[at] !== "`") {
-      if (text[at] === "\\") {
-        at += 2;
-        continue;
-      }
-      if (text[at] === "$" && text[at + 1] === "{") {
-        blank(from, at);
-        at = scanCode(at + 2, true) + 1;
-        from = at;
-        continue;
-      }
-      at += 1;
-    }
-    blank(from, at);
-    return at + 1;
-  };
-  scanCode(0, false);
-  return out.join("");
-}
-
-/** The command lines a program body runs through a shell or as a program (see the notes above). */
-function commandsRunByProgram(body: string, openerLine: string): string[] {
-  const out: string[] = [];
-  const add = (line: string): void => {
-    if (line.length > 0) out.push(line);
-  };
-  const code = codeOnly(body, programLanguage(openerLine));
-  for (const match of code.matchAll(RUNS_COMMAND_CALL)) {
-    const after = (match.index ?? 0) + match[0].length;
-    // `system("git", "push")`, `run(["git", "push"])`: every string argument, in order.
-    // `system "git push"` (perl, ruby): the one string right after the name.
-    const strings = match[1] === "(" ? stringLiterals(bracketBody(body, after, "(")) : stringLiterals(body.slice(after)).slice(0, 1);
-    add(strings.filter((part) => part.length > 0).join(" "));
-  }
-  if (BACKTICK_RUNNERS.test(openerLine)) {
-    for (const match of code.matchAll(QUOTED_COMMAND)) add(bracketBody(body, (match.index ?? 0) + match[0].length, match[1] ?? "(").trim());
-    for (const match of code.matchAll(/`([^`]*)`/g)) {
-      const at = (match.index ?? 0) + 1;
-      add(body.slice(at, at + (match[1] ?? "").length).trim());
-    }
-  }
-  return out;
+  const match = /(^|[\s|;&(])((?:\S*\/)?(?:python[\d.]*|node|perl|ruby))\b/.exec(openerLine);
+  return languageOfProgram(match?.[2] ?? "python") ?? "python";
 }
 
 /**
@@ -247,7 +77,8 @@ function commandsRunByProgram(body: string, openerLine: string): string[] {
  */
 function bodyStaysVisible(heredoc: Heredoc): boolean {
   if (heredoc.nested) return !heredocBodyIsData(heredoc.openerLine, heredoc.openerIndex);
-  return SHELL_READERS.test(heredoc.openerLine);
+  // 0.6.15 T3 (N-07): a SQL client runs its heredoc as it runs `psql -c`.
+  return SHELL_READERS.test(heredoc.openerLine) || SQL_READERS.test(heredoc.openerLine);
 }
 
 /** One heredoc as mapHeredocBodies hands it to its caller. */
@@ -309,11 +140,20 @@ function mapHeredocBodies(command: string, replace: (heredoc: Heredoc) => readon
 // placeholder in exactly two places: the value of a message/body flag of a
 // known CLI, and a heredoc body written to a file (or read as a message).
 //
-// Anything that may run keeps its text: a heredoc fed to a shell, an
-// interpreter or a pipe; a value holding a command substitution; a script's
-// own arguments (`node probe.mjs '<json>'`, the script may run them); an
-// unknown program's argument. When in doubt the text stays, because Jev
-// reading a mention costs an advice while Jev missing a command costs a miss.
+// 0.6.15 T1 (JEVADV-83): that list of data positions was the root cause of
+// the false positives left (qa-0.6.13): every shape nobody had listed -- a
+// `for` list's strings, `python3 -c` source, a script's JSON argument -- came
+// to Jev as if it were the command. It is inverted: the words in command
+// position reach Jev, and so do the paths and refs they act on; every other
+// quoted text is a placeholder unless the program is known to run it:
+// `eval`, `sh|bash|zsh -c`, `su -c`, `ssh host cmd`, `watch`, `xargs` and a
+// `--` hand-off, `find -exec`, `$( )` and backticks (all read again as a
+// command line, git_discard.ts commandHandOff); a SQL client's statement and
+// an awk or sed program that can run a command (kept as written); and an
+// interpreter's source, read as its language reads it (program_text.ts). A
+// heredoc follows its reader the same way: a shell or ssh reads it as
+// commands, a SQL client runs it, an interpreter reads it as its program,
+// and anything else only reads it as text.
 // ---------------------------------------------------------------------------
 
 /** What Jev reads in place of text that is data. */
@@ -410,15 +250,21 @@ function heredocBodyIsData(line: string, index: number): boolean {
 
   const head = splitOnCommandSeparatorsDetailed(before);
   if (head.trailing !== null) return false;
+  if (heredocFeedsAPipe(line, index)) return false;
   const tail = splitOnCommandSeparatorsDetailed(after);
-  const next = tail.joiners[1] ?? tail.trailing;
-  if (next !== undefined && next !== null && next.includes("|") && next !== "||") return false;
   const words = programWords(tokenize(`${head.segments.at(-1) ?? ""} ${tail.segments[0] ?? ""}`));
   const program = words[0];
   if (program === "tee") return true;
   if (program === "cat") return words.some((word) => STDOUT_TO_FILE.test(word));
   const flags = textFlagsOf(words);
   return flags !== null && readsTextFromStdin(words, flags);
+}
+
+/** True when the command whose heredoc opens at `index` of `line` pipes its output on (`cat <<EOF | bash`). */
+function heredocFeedsAPipe(line: string, index: number): boolean {
+  const tail = splitOnCommandSeparatorsDetailed(line.slice(index));
+  const next = tail.joiners[1] ?? tail.trailing;
+  return next !== undefined && next !== null && next.includes("|") && next !== "||";
 }
 
 /** One shell word of a command, with where it sits. */
@@ -458,7 +304,9 @@ function spanSegments(command: string): readonly (readonly SpanWord[])[] {
         index += 1;
         continue;
       }
-      if (/[;&|\n()]/.test(char)) {
+      // `2>&1`, `&>f`, `>&2` are redirections, not a background `&`.
+      const redirection = char === "&" && (/[<>]/.test(command[index - 1] ?? "") || command[index + 1] === ">");
+      if (/[;&|\n()]/.test(char) && !redirection) {
         endSegment(index);
         index += 1;
         continue;
@@ -482,29 +330,167 @@ function mayRun(raw: string): boolean {
   return raw.includes("$(") || raw.includes("`") || raw.includes("\u0000");
 }
 
-/** The command with the value of every known CLI text flag replaced by DATA_TEXT_PLACEHOLDER. */
-function withTextFlagValuesAsPlaceholders(command: string): string {
-  const replacements: { readonly start: number; readonly end: number; readonly text: string }[] = [];
-  for (const segment of spanSegments(command)) {
-    const words = segment.map((word) => tokenize(word.raw)[0] ?? word.raw);
-    const skipped = words.length - programWords(words).length;
-    const flags = textFlagsOf(programWords(words));
-    if (flags === null) continue;
-    for (let index = skipped + 1; index < segment.length; index += 1) {
-      const word = segment[index];
-      if (word === undefined) continue;
-      if (flags.text.has(word.raw)) {
-        const value = segment[index + 1];
-        if (value !== undefined && !mayRun(value.raw)) replacements.push({ start: value.start, end: value.end, text: dataPlaceholder(tokenize(value.raw)[0] ?? value.raw) });
-        index += 1;
-        continue;
-      }
-      const assigned = [...flags.text].find((flag) => flag.startsWith("--") && word.raw.startsWith(`${flag}=`));
-      if (assigned !== undefined && !mayRun(word.raw.slice(assigned.length + 1))) {
-        replacements.push({ start: word.start + assigned.length + 1, end: word.end, text: dataPlaceholder(tokenize(word.raw.slice(assigned.length + 1))[0] ?? "") });
-      }
+/** How deep a command line read inside another (`bash -c "ssh h '…'"`) is still read; deeper keeps its text. */
+const VIEW_MAX_DEPTH = 8;
+/** A heredoc read by a SQL client: its body is statements the client runs. */
+const SQL_READERS = /(^|[\s|;&(])(?:\S*\/)?(?:psql|mysql|mariadb|sqlite3)\b/;
+/** ssh runs the heredoc on its stdin as the remote shell's commands. */
+const REMOTE_SHELL_READERS = /(^|[\s|;&(])(?:\S*\/)?ssh\b/;
+
+/** Programs that run what they read on stdin: a shell, an interpreter, a SQL client, ssh's remote shell, xargs's command line. */
+const STDIN_RUNNERS = /^(?:(?:ba|z|k|da|fi)?sh|python[\d.]*|node|perl|ruby|php|osascript|psql|mysql|mariadb|sqlite3|ssh|xargs)$/;
+
+/** True when `texts` (one simple command's words) is a program that runs what it reads on stdin. */
+function runsItsInput(texts: readonly string[]): boolean {
+  return STDIN_RUNNERS.test(programWords(texts)[0] ?? "");
+}
+
+/** One piece of the command replaced in the copy Jev reads. */
+interface Replacement {
+  readonly start: number;
+  readonly end: number;
+  readonly text: string;
+}
+
+/** `viewed` in the quotes `raw` was written in, so a script read again stays one word. */
+function inQuotesOf(raw: string, viewed: string): string {
+  if (raw.length >= 2 && raw.endsWith("'") && (raw.startsWith("'") || raw.startsWith("$'"))) return `'${viewed}'`;
+  if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) return `"${viewed}"`;
+  return viewed;
+}
+
+/** What Jev reads for one heredoc body, by the program that reads it (see the notes above). */
+function heredocBodyForJev(heredoc: Heredoc, depth: number): string {
+  const body = heredoc.body.join("\n");
+  if (heredocBodyIsData(heredoc.openerLine, heredoc.openerIndex)) return dataPlaceholder(body);
+  if (heredoc.nested || SQL_READERS.test(heredoc.openerLine)) return body;
+  if (SHELL_READERS.test(heredoc.openerLine) || REMOTE_SHELL_READERS.test(heredoc.openerLine)) return commandLineForJev(body, depth + 1);
+  if (INTERPRETER_READERS.test(heredoc.openerLine)) return programTextAsPlaceholders(body, programLanguage(heredoc.openerLine), DATA_TEXT_PLACEHOLDER);
+  if (heredocFeedsAPipe(heredoc.openerLine, heredoc.openerIndex)) return body;
+  return dataPlaceholder(body);
+}
+
+/** The replacements for one simple command's words (see withDataTextAsPlaceholders). */
+function segmentReplacements(command: string, segment: readonly SpanWord[], depth: number, feedsARunner: boolean): readonly Replacement[] {
+  const texts = segment.map((word) => tokenize(word.raw)[0] ?? word.raw);
+  // What it prints is read by a later stage that runs it (`echo "DROP …" | psql`).
+  if (feedsARunner) return [];
+  const out: Replacement[] = [];
+  const handled = new Set<number>();
+  const handedOff = new Set<number>();
+  // A here-string is the stdin of the command it sits in (`psql <<< "DROP …"`).
+  if (runsItsInput(texts)) {
+    texts.forEach((text, index) => {
+      if (text.startsWith("<<<")) handled.add(text === "<<<" ? index + 1 : index);
+    });
+  }
+
+  // A known CLI's message/body flags are text even as one bare word (0.6.13 T1).
+  const skipped = texts.length - programWords(texts).length;
+  const flags = textFlagsOf(programWords(texts));
+  for (let index = skipped + 1; flags !== null && index < segment.length; index += 1) {
+    const word = segment[index];
+    if (word === undefined) continue;
+    if (flags.text.has(word.raw)) {
+      const value = segment[index + 1];
+      if (value !== undefined && !mayRun(value.raw)) out.push({ start: value.start, end: value.end, text: dataPlaceholder(texts[index + 1] ?? value.raw) });
+      handled.add(index + 1);
+      index += 1;
+      continue;
+    }
+    const assigned = [...flags.text].find((flag) => flag.startsWith("--") && word.raw.startsWith(`${flag}=`));
+    if (assigned !== undefined) {
+      if (!mayRun(word.raw.slice(assigned.length + 1))) out.push({ start: word.start + assigned.length + 1, end: word.end, text: dataPlaceholder(tokenize(word.raw.slice(assigned.length + 1))[0] ?? "") });
+      handled.add(index);
     }
   }
+
+  // A command line handed to another program is read again as one.
+  let end = segment.length;
+  const handOff = depth < VIEW_MAX_DEPTH ? commandHandOff(texts) : null;
+  const first = handOff === null ? undefined : segment[handOff.index];
+  const last = segment.at(-1);
+  if (handOff !== null && first !== undefined && last !== undefined) {
+    if (handOff.kind === "command-line") {
+      const rest = command.slice(first.start, last.end);
+      const viewed = shellWordsForJev(rest, depth + 1);
+      if (viewed !== rest) out.push({ start: first.start, end: last.end, text: viewed });
+      end = handOff.index;
+    } else {
+      const upTo = handOff.kind === "dash-c" ? handOff.index + 1 : segment.length;
+      const script = texts.slice(handOff.index, upTo).join(" ");
+      const viewed = commandLineForJev(script, depth + 1);
+      const lastWord = segment[upTo - 1] ?? first;
+      if (viewed !== script) out.push({ start: first.start, end: lastWord.end, text: upTo - handOff.index === 1 ? inQuotesOf(first.raw, viewed) : viewed });
+      for (let index = handOff.index; index < upTo; index += 1) handedOff.add(index);
+    }
+  }
+
+  const runs = runArgumentPositions(texts);
+  for (let index = 0; index < end; index += 1) {
+    const word = segment[index];
+    const text = texts[index] ?? "";
+    if (word === undefined || handedOff.has(index)) continue;
+    if (mayRun(word.raw)) {
+      // A `$( )` or backtick runs wherever it sits: its command line is read again as one.
+      if (!word.raw.includes("\u0000")) {
+        for (const body of substitutionBodies(word.raw)) {
+          const inner = word.raw.slice(body.start, body.end);
+          const viewed = commandLineForJev(inner, depth + 1);
+          if (viewed !== inner) out.push({ start: word.start + body.start, end: word.start + body.end, text: viewed });
+        }
+      }
+      continue;
+    }
+    if (handled.has(index)) continue;
+    const run = runs.get(index);
+    if (run !== undefined) {
+      // A SQL statement or a command-running awk/sed program stays as written; an interpreter's source is read as its language reads it.
+      const language = run.kind === "interpreter" ? languageOfProgram(run.program) : null;
+      const viewed = language === null ? text : programTextAsPlaceholders(text, language, DATA_TEXT_PLACEHOLDER);
+      if (viewed !== text) out.push({ start: word.start, end: word.end, text: inQuotesOf(word.raw, viewed) });
+      continue;
+    }
+    // `--flag=value` and `NAME=value`: the value is what is judged, and what becomes the placeholder.
+    const prefix = /^(?:-{1,2}[A-Za-z][\w-]*=|[A-Za-z_]\w*=)/.exec(word.raw)?.[0] ?? "";
+    const value = text.slice(prefix.length);
+    if (!/\s/.test(value) || looksLikeOnePath(value)) continue;
+    out.push({ start: word.start + prefix.length, end: word.end, text: dataPlaceholder(value) });
+  }
+  return out;
+}
+
+/** Where each outermost `$( )` or backtick substitution's command line sits in one shell word. */
+function substitutionBodies(raw: string): readonly { readonly start: number; readonly end: number }[] {
+  const out: { readonly start: number; readonly end: number }[] = [];
+  const runs = (stack: QuoteState): boolean => stack.some((frame) => frame === "$(" || frame === "`");
+  let stack: QuoteState = [];
+  let index = 0;
+  let openedAt = -1;
+  while (index < raw.length) {
+    const step = frameStep(raw, index, stack);
+    if (!runs(stack) && runs(step.stack)) openedAt = step.index;
+    if (runs(stack) && !runs(step.stack) && openedAt !== -1) {
+      out.push({ start: openedAt, end: index });
+      openedAt = -1;
+    }
+    stack = step.stack;
+    index = step.index;
+  }
+  return out;
+}
+
+/** `command`'s shell words as Jev reads them, heredoc bodies already set aside. */
+function shellWordsForJev(command: string, depth: number): string {
+  const segments = spanSegments(command);
+  // Each segment's pipe to the next one: a bare `|` (never `||`) right after its last word.
+  const pipes = segments.map((segment) => /^\s*\|(?!\|)/.test(command.slice(segment.at(-1)?.end ?? 0)));
+  const runners = segments.map((segment) => runsItsInput(segment.map((word) => tokenize(word.raw)[0] ?? word.raw)));
+  const feedsARunner = (at: number): boolean => {
+    for (let next = at; pipes[next] === true && next + 1 < segments.length; next += 1) if (runners[next + 1] === true) return true;
+    return false;
+  };
+  const replacements = segments.flatMap((segment, at) => segmentReplacements(command, segment, depth, feedsARunner(at)));
   let result = command;
   for (const { start, end, text } of [...replacements].sort((a, b) => b.start - a.start)) {
     result = result.slice(0, start) + text + result.slice(end);
@@ -512,23 +498,29 @@ function withTextFlagValuesAsPlaceholders(command: string): string {
   return result;
 }
 
-/**
- * The command as Jev reads it (0.6.13 T1): the value of a message/body flag of
- * `git commit|tag`, `gh pr|issue|release create|edit|comment` and `orca
- * terminal send`, and a heredoc body written to a file or read as a message,
- * each become DATA_TEXT_PLACEHOLDER. Every other heredoc body is set aside
- * while the flags are read (its text is not shell syntax) and put back as it
- * was. The local rules and the cache key never read this copy.
- */
-export function withDataTextAsPlaceholders(command: string): string {
-  const bodies: (readonly string[])[] = [];
+/** One command line as Jev reads it, heredocs included (see withDataTextAsPlaceholders). */
+function commandLineForJev(command: string, depth: number): string {
+  if (depth > VIEW_MAX_DEPTH) return command;
+  const bodies: string[] = [];
   const masked = mapHeredocBodies(command, (heredoc) => {
     if (heredoc.body.length === 0) return heredoc.terminator;
-    bodies.push(heredocBodyIsData(heredoc.openerLine, heredoc.openerIndex) ? [dataPlaceholder(heredoc.body.join("\n"))] : heredoc.body);
+    bodies.push(heredocBodyForJev(heredoc, depth));
     return [`\u0000${bodies.length - 1}\u0000`, ...heredoc.terminator];
   });
-  const flagged = withTextFlagValuesAsPlaceholders(masked);
-  return flagged.replace(/\u0000(\d+)\u0000/g, (_match, at: string) => (bodies[Number(at)] ?? []).join("\n"));
+  const viewed = shellWordsForJev(masked, depth);
+  return viewed.replace(/\u0000(\d+)\u0000/g, (_match, at: string) => bodies[Number(at)] ?? "");
+}
+
+/**
+ * The command as Jev reads it: the words in command position, the paths and
+ * refs they act on, and the text a program runs (0.6.15 T1, see the notes
+ * above); every other quoted text, a known CLI's message/body flag and a
+ * heredoc body only read as text become DATA_TEXT_PLACEHOLDER (an AI
+ * attribution line stays readable inside it). The local rules and the cache
+ * key never read this copy.
+ */
+export function withDataTextAsPlaceholders(command: string): string {
+  return commandLineForJev(command, 0);
 }
 
 /**

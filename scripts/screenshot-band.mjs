@@ -30,7 +30,7 @@ import { register } from '../adapters/claude/mod-skills/hooks/index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outFlag = process.argv.indexOf('--out')
-const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.14')
+const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.15')
 const COLUMNS = [200, 120, 80, 40]
 const THEMES = {
   dark: { background: '#1e1e1e', foreground: '#d4d4d4', label: '#8a8a8a' },
@@ -41,9 +41,9 @@ const LOCALES = ['es', 'en']
 // The owner's four agents, with a neutral project prefix. agent-0 has no
 // record: it started before the plugin reloaded.
 const RECORDED = [
-  { id: 'agent-1', type: 'acme-frontend-developer', description: 'Adding Definition of Done to spec.md', label: 'Opus 5.5', effort: 'xhigh', why: 'explicit', wouldUse: null },
-  { id: 'agent-2', type: 'general-purpose', description: 'Creating a worktree for verify-report generation', label: 'Sonnet 5.5', effort: 'medium', why: 'lowered', wouldUse: null },
-  { id: 'agent-3', type: 'acme-backend-developer', description: 'Watching CI checks on PR 867', label: 'Sonnet 5.5', effort: 'high', why: 'explicit', wouldUse: null },
+  { id: 'agent-1', type: 'acme-frontend-developer', description: 'Adding Definition of Done to spec.md', label: 'Opus 5.5', effort: 'xhigh', effortSource: 'inherited', why: 'explicit', wouldUse: null },
+  { id: 'agent-2', type: 'general-purpose', description: 'Creating a worktree for verify-report generation', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'lowered', wouldUse: null },
+  { id: 'agent-3', type: 'acme-backend-developer', description: 'Watching CI checks on PR 867', label: 'Sonnet 5.5', effort: 'high', effortSource: 'inherited', why: 'explicit', wouldUse: null },
 ]
 const LISTED = [
   ...RECORDED.map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, status: 'running' })),

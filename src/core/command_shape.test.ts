@@ -267,3 +267,21 @@ test("a secret never enters the shape through an identity argument", () => {
   assert.equal(shape("git push https://dev:push-secret@example.com/acme/app.git main"), shape("git push https://example.com/acme/app.git main"));
   assert.equal(leaks(shape("git push -o token=option-secret origin main"), "option-secret"), false, "a push option leaked into the shape");
 });
+
+// 0.6.15 T3 (N-08, qa-0.6.13): which volume, container, pod, release or
+// service a tool acts on is the question too. A deny cached for `docker volume
+// rm prod_pgdata` answered `docker volume rm dev_pgdata`.
+test("a different named resource, or the environment a tool is pointed at, never shares an entry", () => {
+  assert.notEqual(shape("docker volume rm prod_pgdata"), shape("docker volume rm dev_pgdata"));
+  assert.notEqual(shape("docker rm -f web-prod"), shape("docker rm -f web-dev"));
+  assert.notEqual(shape("kubectl delete pod api-7f9"), shape("kubectl delete pod worker-1"));
+  assert.notEqual(shape("kubectl --context=prod get pods"), shape("kubectl --context=dev get pods"));
+  assert.notEqual(shape("kubectl -n prod delete pod api"), shape("kubectl -n dev delete pod api"));
+  assert.notEqual(shape("helm uninstall shop-prod"), shape("helm uninstall shop-dev"));
+  assert.notEqual(shape("systemctl stop postgresql"), shape("systemctl stop nginx"));
+  assert.notEqual(shape("dropdb shop_prod"), shape("dropdb shop_dev"));
+  // What this does not touch: in-tree targets of a file tool still fold, and a flag value that may be a secret stays out.
+  assert.equal(shape("rm -rf dist"), shape("rm -rf build"));
+  assert.equal(shape("docker login -p s3cret-one registry.example.com"), shape("docker login -p s3cret-two registry.example.com"));
+  assert.ok(!(shape("docker login -p s3cret-one registry.example.com") ?? "").includes("s3cret"));
+});

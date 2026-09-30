@@ -34,6 +34,9 @@ export type ModelRouterKey =
   | "why.context-window"
   | "agents.count"
   | "agents.heading"
+  | "agents.effort.withSource"
+  | "agents.effort.source.inherited"
+  | "agents.effort.source.jev"
   | "agents.row.wouldUse"
   | "agents.row.wouldUse.short"
   | "agents.why.explicit"
@@ -94,6 +97,9 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     // row for each (subagent_band.ts).
     "agents.count": "agentes: {{n}}",
     "agents.heading": "Agentes en curso: {{n}}",
+    "agents.effort.withSource": "{{level}} ({{source}})",
+    "agents.effort.source.inherited": "heredado",
+    "agents.effort.source.jev": "Jev",
     "agents.row.wouldUse": "{{why}} · mediría: {{model}}",
     "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "pedido explícito",
@@ -152,6 +158,9 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.context-window": "the context does not fit a smaller model",
     "agents.count": "agents: {{n}}",
     "agents.heading": "Running agents: {{n}}",
+    "agents.effort.withSource": "{{level}} ({{source}})",
+    "agents.effort.source.inherited": "inherited",
+    "agents.effort.source.jev": "Jev",
     "agents.row.wouldUse": "{{why}} · would use: {{model}}",
     "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "explicit request",

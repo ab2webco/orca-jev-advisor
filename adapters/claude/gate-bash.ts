@@ -83,7 +83,7 @@ import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/co
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
-import { buildCrossRepoSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
+import { buildCrossRepoSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
 import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
@@ -107,7 +107,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
-import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
+import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolveImplicitPushDestination, resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -606,7 +606,9 @@ const NEVER_SILENTLY: readonly {
   // inside a `psql -c`/`mysql -e` argument is unambiguous SQL execution, not
   // ambiguous interpreter code -- see git_discard.ts's SQL_EXEC_FLAGS -- so
   // it keeps denying outright, never softening to 'code'/advice.
-  { evaluate: segmentRule(/\b(DROP|TRUNCATE)\s+(TABLE|DATABASE|SCHEMA)\b/i), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
+  // 0.6.15 T3 (N-07): SQL fed to the client on stdin (a pipe, a here-string,
+  // a heredoc) is the same statement, read by droppedTableOutcome.
+  { evaluate: (ctx) => droppedTableOutcome(ctx.command), why: 'rule.dropTable', denyToggle: 'denyDropTable' },
   // The tools' own global options may come before the verb (`kubectl
   // --context prod delete`, `-n web`, `terraform -chdir=infra apply`): the
   // same command as the plain spelling (0.6.13 T3), as git's are for a push.
@@ -1950,11 +1952,18 @@ async function main(): Promise<void> {
   // text the cache key has always folded in; `jevContext` is the copy Jev
   // reads, every repository, branch and path swapped through `jevNames` --
   // the same table then redacts the destination label and the policy rules.
+  //
+  // 0.6.15 T3 (N-06): a push also names where it goes -- the branch and
+  // remote the local rule already read -- so Jev judges `git push origin
+  // main` by its destination, not by the checkout's own branch. Only Jev's
+  // copy carries it: the key already holds the destination (commandShape
+  // keeps it literal) and the repository and branch it is pushed from.
   const repoFacts = readRepoFacts(actingCwd)
   const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
   const jevNames = createJevPseudonyms()
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
-  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '')
+  const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head })), jevNames)
+  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '')
   // The destination is resolved once, above (folding in every target's own
   // repository too -- see pickStricterDestination): it is part of the cache
   // key, because two repositories with different thresholds must never

@@ -30,6 +30,31 @@ export const MIN_STEWARD_THRESHOLD = 10_000;
 export const MAX_STEWARD_THRESHOLD = 2_000_000;
 /** At this share of the window the steward compacts whatever Jev says. */
 export const HARD_LIMIT_PERCENT = 80;
+/**
+ * 0.6.15 T4 (odd/research/steward-1m.md): the hard limit never waits past
+ * 600k tokens. On a 1M window 80% was 800k, and sessions ran on to Claude
+ * Code's own auto-compact at ~967k, which fires mid-turn (median 145 s);
+ * calls at 400k and above were 68% of the account's spend.
+ */
+export const HARD_LIMIT_TOKENS = 600_000;
+/** The soft tier: from here up to the hard limit, compact at turn end unless Jev is sure the work is mid-task. */
+export const SOFT_LIMIT_TOKENS = 400_000;
+/** How sure Jev must be that the work is mid-task for the soft tier to wait. */
+export const SOFT_MID_TASK_FLOOR = 0.8;
+
+/** Whether the soft tier compacts (`active`) or only logs what it would do (`measure`, the default). */
+export type StewardSoftMode = "measure" | "active";
+export const STEWARD_SOFT_MODES: readonly StewardSoftMode[] = ["measure", "active"];
+export const DEFAULT_STEWARD_SOFT_MODE: StewardSoftMode = "measure";
+
+export function parseStewardSoftMode(value: unknown): StewardSoftMode {
+  return typeof value === "string" && (STEWARD_SOFT_MODES as readonly string[]).includes(value) ? (value as StewardSoftMode) : DEFAULT_STEWARD_SOFT_MODE;
+}
+
+/** The hard limit for a session whose main model has `mainWindow` tokens: 80% of it, never past HARD_LIMIT_TOKENS. */
+export function hardLimitTokens(mainWindow: number): number {
+  return Math.min(Math.floor((mainWindow * HARD_LIMIT_PERCENT) / 100), HARD_LIMIT_TOKENS);
+}
 /** Person turns that must pass between two compactions. */
 export const STEWARD_COOLDOWN_TURNS = 3;
 export const STEWARD_CONFIDENCE_FLOOR = 0.7;
@@ -53,7 +78,12 @@ export interface StewardGateInput {
   readonly isSubagent: boolean;
   /** The live context (`$.session.usage().context.tokens`); null before any response reported one. */
   readonly contextTokens: number | null;
-  readonly contextPercent: number | null;
+  /**
+   * The context window of the session's MAIN model, in tokens (0.6.15 T4),
+   * or null when unknown. Not the current model's: a router step on a 200k
+   * model in a 1M session compacted it at 160-230k, nine times in one session.
+   */
+  readonly mainWindow: number | null;
   readonly threshold: number;
   /** Person turns since the last compaction this steward made (or would have, in measure mode); null when none. */
   readonly turnsSinceCompaction: number | null;
@@ -61,16 +91,18 @@ export interface StewardGateInput {
 
 export type StewardSkipReason = "off" | "subagent" | "no-usage" | "below-threshold" | "cooldown";
 
-export type StewardGate = { readonly ask: true; readonly hardLimit: boolean } | { readonly ask: false; readonly reason: StewardSkipReason };
+export type StewardGate = { readonly ask: true; readonly hardLimit: boolean; readonly softLimit: boolean } | { readonly ask: false; readonly reason: StewardSkipReason };
 
 export function stewardGate(input: StewardGateInput): StewardGate {
   if (input.mode === "off") return { ask: false, reason: "off" };
   if (input.isSubagent) return { ask: false, reason: "subagent" };
   if (input.contextTokens === null) return { ask: false, reason: "no-usage" };
-  const hardLimit = (input.contextPercent ?? 0) >= HARD_LIMIT_PERCENT;
-  if (input.contextTokens < input.threshold && !hardLimit) return { ask: false, reason: "below-threshold" };
+  const limit = input.mainWindow === null ? null : hardLimitTokens(input.mainWindow);
+  const hardLimit = limit !== null && input.contextTokens >= limit;
+  const softLimit = limit !== null && !hardLimit && input.contextTokens >= SOFT_LIMIT_TOKENS;
+  if (input.contextTokens < input.threshold && !hardLimit && !softLimit) return { ask: false, reason: "below-threshold" };
   if (input.turnsSinceCompaction !== null && input.turnsSinceCompaction < STEWARD_COOLDOWN_TURNS) return { ask: false, reason: "cooldown" };
-  return { ask: true, hardLimit };
+  return { ask: true, hardLimit, softLimit };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,7 +214,7 @@ export function interpretSteward(answers: Record<string, Answer>): StewardJudgme
 // The decision
 // ---------------------------------------------------------------------------
 
-export type StewardDecisionKind = "boundary" | "new-topic" | "hard-limit" | "mid-task" | "low-confidence" | "jev-failed";
+export type StewardDecisionKind = "boundary" | "new-topic" | "hard-limit" | "soft-limit" | "mid-task" | "low-confidence" | "jev-failed";
 
 export interface StewardDecision {
   readonly decision: StewardDecisionKind;
@@ -193,13 +225,25 @@ export interface StewardDecision {
   readonly confidence: number | null;
 }
 
-export function decideSteward(input: { readonly jev: StewardJudgment | null; readonly hardLimit: boolean }): StewardDecision {
+/** Whether the soft tier would compact: above it, unless Jev says mid-task with confidence at least SOFT_MID_TASK_FLOOR (a failure included). */
+export function softTierFires(input: { readonly jev: StewardJudgment | null; readonly softLimit: boolean }): boolean {
+  if (!input.softLimit) return false;
+  return !(input.jev !== null && input.jev.verdict === "mid-task" && input.jev.confidence >= SOFT_MID_TASK_FLOOR);
+}
+
+/**
+ * The decision. `softActive` is the soft tier's own switch (0.6.15 T4,
+ * measure by default): off, a soft-tier turn is decided as before and only
+ * its log says the tier would have fired.
+ */
+export function decideSteward(input: { readonly jev: StewardJudgment | null; readonly hardLimit: boolean; readonly softLimit?: boolean; readonly softActive?: boolean }): StewardDecision {
   const jev = input.jev;
   const confidence = jev?.confidence ?? null;
   const confident = jev !== null && jev.confidence >= STEWARD_CONFIDENCE_FLOOR;
   if (confident && jev.verdict === "boundary") return { decision: "boundary", compact: true, suggestClear: false, confidence };
   if (confident && jev.verdict === "new-topic") return { decision: "new-topic", compact: true, suggestClear: true, confidence };
   if (input.hardLimit) return { decision: "hard-limit", compact: true, suggestClear: false, confidence };
+  if (input.softActive === true && softTierFires({ jev, softLimit: input.softLimit === true })) return { decision: "soft-limit", compact: true, suggestClear: false, confidence };
   if (jev === null) return { decision: "jev-failed", compact: false, suggestClear: false, confidence };
   return { decision: confident ? "mid-task" : "low-confidence", compact: false, suggestClear: false, confidence };
 }
@@ -285,6 +329,17 @@ export function stewardInstructions(facts: StewardFacts): string {
 // Record and status line
 // ---------------------------------------------------------------------------
 
+/** The tier that fires a compaction, as the research names them (odd/research/steward-1m.md §6). */
+export type StewardTier = "boundary" | "new-topic" | "soft-400k" | "hard-600k";
+
+/** The tier behind a decision that compacts (or, measuring, would), or null. */
+export function stewardTier(decision: StewardDecisionKind): StewardTier | null {
+  if (decision === "boundary" || decision === "new-topic") return decision;
+  if (decision === "soft-limit") return "soft-400k";
+  if (decision === "hard-limit") return "hard-600k";
+  return null;
+}
+
 /** The hourly steward logs, the hour captured: listed, read and pruned like the router's. */
 export const STEWARD_DECISIONS_FILE_PATTERN = /^context-steward-decisions-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/;
 
@@ -312,6 +367,19 @@ export interface StewardRecord {
   readonly applied: boolean;
   readonly contextAfter: number | null;
   readonly notApplied: StewardNotApplied | null;
+  /** 0.6.15 T4: Jev's verdict on every row, a low-confidence one included; null when Jev failed. */
+  readonly verdict: StewardVerdict | null;
+  readonly sessionId: string | null;
+  /** The person turn this decision closed (the cooldown's count). */
+  readonly turnIndex: number;
+  /** The main model's window, in tokens, the hard limit was measured against; null when unknown. */
+  readonly mainWindow: number | null;
+  /** The model the turn ran on, when known. */
+  readonly currentModel: string | null;
+  /** The tier that fired, or would have in measure mode. */
+  readonly tier: StewardTier | null;
+  /** A tier that would have fired but is only measured: the soft tier while its switch is on measure. */
+  readonly wouldFire: StewardTier | null;
 }
 
 export interface StewardRecordInput {
@@ -324,6 +392,12 @@ export interface StewardRecordInput {
   readonly applied: boolean;
   readonly contextAfter: number | null;
   readonly notApplied: StewardNotApplied | null;
+  readonly verdict: StewardVerdict | null;
+  readonly sessionId: string | null;
+  readonly turnIndex: number;
+  readonly mainWindow: number | null;
+  readonly currentModel: string | null;
+  readonly wouldFire: StewardTier | null;
 }
 
 /** One log line: numbers and names only, never prompt text. */
@@ -340,6 +414,13 @@ export function stewardDecisionRecord(input: StewardRecordInput): StewardRecord 
     applied: input.applied,
     contextAfter: input.contextAfter,
     notApplied: input.notApplied,
+    verdict: input.verdict,
+    sessionId: input.sessionId,
+    turnIndex: input.turnIndex,
+    mainWindow: input.mainWindow,
+    currentModel: input.currentModel,
+    tier: stewardTier(input.decision.decision),
+    wouldFire: input.wouldFire,
   };
 }
 
@@ -357,7 +438,7 @@ export interface StewardStatusInput {
 
 /** The steward's part of the status line, or null when nothing was (or, measuring, would be) compacted. */
 export function stewardStatusPart(locale: Locale, input: StewardStatusInput): string | null {
-  if (input.decision !== "boundary" && input.decision !== "new-topic" && input.decision !== "hard-limit") return null;
+  if (input.decision !== "boundary" && input.decision !== "new-topic" && input.decision !== "hard-limit" && input.decision !== "soft-limit") return null;
   const why = translate(CONTEXT_STEWARD_CATALOG, locale, `why.${input.decision}`);
   const before = formatContextTokens(input.before);
   if (input.mode === "measure") return translate(CONTEXT_STEWARD_CATALOG, locale, "status.measure", { before, why });

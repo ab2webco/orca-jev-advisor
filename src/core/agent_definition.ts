@@ -11,6 +11,8 @@
 export interface AgentDefinition {
   readonly name: string | null;
   readonly model: string | null;
+  /** 0.6.15 T4c: its frontmatter `effort`, present only when it sets one. */
+  readonly effort?: string;
 }
 
 function unquote(value: string): string {
@@ -27,6 +29,7 @@ export function parseAgentDefinition(text: string): AgentDefinition {
   if (end === -1) return { name: null, model: null };
   let name: string | null = null;
   let model: string | null = null;
+  let effort: string | null = null;
   for (const line of lines.slice(1, end)) {
     const match = /^([A-Za-z_-]+)\s*:\s*(.*)$/.exec(line);
     if (match === null) continue;
@@ -34,8 +37,9 @@ export function parseAgentDefinition(text: string): AgentDefinition {
     if (value.length === 0) continue;
     if (match[1] === "name") name = value;
     else if (match[1] === "model") model = value;
+    else if (match[1] === "effort") effort = value;
   }
-  return { name, model };
+  return effort === null ? { name, model } : { name, model, effort };
 }
 
 export interface AgentDefinitionFile {
@@ -51,6 +55,16 @@ export function agentDefinitionModel(files: readonly AgentDefinitionFile[], suba
     const name = definition.name ?? file.replace(/\.md$/i, "");
     if (name !== subagentType) continue;
     return definition.model === null || definition.model === "inherit" ? null : definition.model;
+  }
+  return null;
+}
+
+/** 0.6.15 T4c: the effort the definition of `subagentType` sets in its frontmatter, or null; the same lookup as agentDefinitionModel. */
+export function agentDefinitionEffort(files: readonly AgentDefinitionFile[], subagentType: string): string | null {
+  for (const { file, text } of files) {
+    const definition = parseAgentDefinition(text);
+    const name = definition.name ?? file.replace(/\.md$/i, "");
+    if (name === subagentType) return definition.effort ?? null;
   }
   return null;
 }

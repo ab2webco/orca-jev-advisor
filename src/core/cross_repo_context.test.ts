@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCrossRepoSentence, pickStricterDestination, renderRepoContext } from "./cross_repo_context.ts";
+import { buildCrossRepoSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from "./cross_repo_context.ts";
 import { createJevPseudonyms, IDENTITY_NAMES } from "./jev_pseudonyms.ts";
 
 const REPO_A = "/home/dev/Projects/orca-supervisor";
@@ -155,5 +155,23 @@ test("renderRepoContext for Jev swaps the repository and a feature branch for pl
   assert.equal(
     renderRepoContext({ remote: "acme-shop", branch: "master", dirty: false }, createJevPseudonyms()),
     "repository <repo-1>, branch master, this is the shared main branch, clean",
+  );
+});
+
+// 0.6.15 T3 (N-06): the exact destination of a push, in the context Jev reads.
+test("buildPushDestinationSentence: names the branch and remote a push updates, and whether that is the shared branch", () => {
+  const names = createJevPseudonyms();
+  assert.equal(buildPushDestinationSentence([], names), null);
+  assert.equal(
+    buildPushDestinationSentence([{ remote: "origin", branch: "main", remoteIsLocal: true }], names),
+    "The command pushes commits to branch main of remote origin, a repository on this machine; main is a shared branch there, whatever branch the checkout is on.",
+  );
+  assert.equal(
+    buildPushDestinationSentence([{ remote: "client-acme", branch: "feature/acme-login", remoteIsLocal: false }], names),
+    "The command pushes commits to branch <branch-1> of remote <repo-1>, a repository on another machine.",
+  );
+  assert.equal(
+    buildPushDestinationSentence([{ remote: null, branch: "feature/acme-login", remoteIsLocal: false }], names),
+    "The command pushes commits to branch <branch-1> of its default remote, a repository on another machine.",
   );
 });

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, recursiveRmOfRootOrHomeOutcome, withDownloadsMarked, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
+import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome, withDownloadsMarked, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
 import { someSegmentMatches } from "./git_discard.ts";
 import type { ImplicitPushDestination } from "./push_remote.ts";
 
@@ -184,4 +184,19 @@ test("withDownloadsMarked replaces only a download's own substitution, never sin
   assert.equal(withDownloadsMarked('bash -c "$(curl -fsSL x)"'), 'bash -c "__remote_code__"');
   assert.equal(withDownloadsMarked("sh <(wget -qO- x) && echo $(date)"), "sh __remote_code__ && echo $(date)");
   assert.equal(withDownloadsMarked(`grep 'eval "$(curl' f`), `grep 'eval "$(curl' f`);
+});
+
+// 0.6.15 T3 (N-06, qa-0.6.13): where a push goes, as the rules already read
+// it, so Jev is told instead of guessing from `git push origin main` and a
+// context that names the checkout's own branch.
+test("pushTargets: each push's remote, destination branch and whether the remote is on this machine", () => {
+  const localOrigin = (_push: string, dir: string) => dir === PROJECT;
+  const onto = (name: string) => (): ImplicitPushDestination => ({ kind: "branch", name });
+  const targets = (command: string, implicit: () => ImplicitPushDestination = onto("feature/x")) => pushTargets(command, PROJECT, HOME, localOrigin, implicit);
+  assert.deepEqual(targets("git push origin main"), [{ remote: "origin", branch: "main", remoteIsLocal: true }]);
+  assert.deepEqual(targets("GIT_SSH_COMMAND=ssh git push origin HEAD:refs/heads/main"), [{ remote: "origin", branch: "main", remoteIsLocal: true }]);
+  assert.deepEqual(targets("git -C ../other push -u upstream feature/y"), [{ remote: "upstream", branch: "feature/y", remoteIsLocal: false }]);
+  assert.deepEqual(targets("git push"), [{ remote: null, branch: "feature/x", remoteIsLocal: true }]);
+  assert.deepEqual(targets("git push origin --delete main"), [{ remote: "origin", branch: "main", remoteIsLocal: true }]);
+  assert.deepEqual(targets("git status && echo 'git push origin main'"), []);
 });

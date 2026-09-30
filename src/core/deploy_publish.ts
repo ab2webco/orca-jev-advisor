@@ -10,7 +10,10 @@
 // every NEVER_SILENTLY rule uses (src/core/git_discard.ts's
 // someSegmentMatches): a phrase sitting inside a grep pattern or a quoted
 // argument is data, not a real invocation, and must never trigger this
-// floor. Pure: no I/O.
+// floor. A heredoc body is read the way the local rules read it (0.6.15 T1):
+// a body written to a file is text, one a shell reads is commands. Pure: no
+// I/O.
+import { withoutHeredocBodies, withoutLineContinuations } from "./command_text.ts";
 import { someSegmentMatches } from "./git_discard.ts";
 
 export interface DeployPublishPattern {
@@ -59,8 +62,9 @@ export interface DeployPublishDetection {
  * pattern's own description and kind, or null when none match.
  */
 export function detectDeployPublish(command: string): DeployPublishDetection | null {
+  const inspected = withoutLineContinuations(withoutHeredocBodies(command));
   for (const { pattern, description, kind } of DEPLOY_PUBLISH_PATTERNS) {
-    if (someSegmentMatches(command, pattern) === "deny") return { description, kind };
+    if (someSegmentMatches(inspected, pattern) === "deny") return { description, kind };
   }
   return null;
 }

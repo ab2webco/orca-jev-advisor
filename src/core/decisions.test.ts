@@ -57,6 +57,11 @@ function violationAnswer(choice: string, confidence: number): Record<string, Ans
   return { violation: { type: "choice", choice, probabilities: { [choice]: confidence }, confidence } };
 }
 
+/** 0.6.15 T2: the `needs_person` answer -- which rule reserving an action for a person the action does, or `none`. */
+function needsPersonAnswer(choice: string, confidence: number): Record<string, Answer> {
+  return { needs_person: { type: "choice", choice, probabilities: { [choice]: confidence }, confidence } };
+}
+
 // --- helpers shared by decideAction / decideGateAction tests ---------------
 
 function noulAnswer(value: number): NoulAnswer {
@@ -72,12 +77,13 @@ function riskAnswers(reversible: number, external: number, consequence: number):
 }
 
 function combinedAnswers(
-  policy: { choice: string; confidence: number; match: number; violation?: string } | null,
+  policy: { choice: string; confidence: number; match: number; violation?: string; needsPerson?: string } | null,
   risk: { reversible: number; external: number; consequence: number },
 ): Record<string, Answer> {
   return {
     ...(policy ? answers(policy.choice, policy.confidence, policy.match) : {}),
     ...(policy?.violation !== undefined ? violationAnswer(policy.violation, policy.confidence) : {}),
+    ...(policy?.needsPerson !== undefined ? needsPersonAnswer(policy.needsPerson, policy.confidence) : {}),
     ...riskAnswers(risk.reversible, risk.external, risk.consequence),
   };
 }
@@ -99,7 +105,8 @@ test("permits + no match -> falls through (null)", () => {
 });
 
 test("requires_human + match -> ask", () => {
-  const decision = interpretDestinationPolicy(ACTION, policies("requires_human"), answers("rule", 0.9, 0.9));
+  // 0.6.15 T2: a requires_human rule is judged on effect (needs_person), as a prohibition is on violation.
+  const decision = interpretDestinationPolicy(ACTION, policies("requires_human"), { ...answers("rule", 0.9, 0.9), ...needsPersonAnswer("rule", 0.9) });
   assert.notEqual(decision, null);
   assert.equal(decision?.outcome, "ask");
   assert.equal(decision?.source, "policy");
@@ -107,7 +114,7 @@ test("requires_human + match -> ask", () => {
 });
 
 test("requires_human + no match -> falls through (null)", () => {
-  const decision = interpretDestinationPolicy(ACTION, policies("requires_human"), answers("rule", 0.9, 0.1));
+  const decision = interpretDestinationPolicy(ACTION, policies("requires_human"), { ...answers("rule", 0.9, 0.1), ...needsPersonAnswer("none", 0.9) });
   assert.equal(decision, null);
 });
 
@@ -447,7 +454,7 @@ test("decideGateAction: a prohibits policy match turns what would otherwise be a
 
 test("decideGateAction: a requires_human policy match also produces ask", () => {
   const requiresHuman: Policy = { id: "rule", rule: "needs a human", kind: "requires_human" };
-  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
+  const safe = combinedAnswers({ choice: "rule", confidence: 0.9, match: 0.9, needsPerson: "rule" }, { reversible: 0.9, external: 0.1, consequence: 0.2 });
 
   const result = decideGateAction({ action: ACTION, policies: [requiresHuman], answers: safe });
   assert.equal(result.verdict, "ask");
@@ -550,7 +557,7 @@ test("decideGateAction: localAllowQualifies allows even a high-consequence risk 
 
 test("decideGateAction: localAllowQualifies still asks when a policy resolves to requires_human", () => {
   const policies: Policy[] = [{ id: "client_always_asks", rule: "Anything touching a client is confirmed with a human.", kind: "requires_human" }];
-  const covered = combinedAnswers({ choice: "client_always_asks", confidence: 0.9, match: 0.9 }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
+  const covered = combinedAnswers({ choice: "client_always_asks", confidence: 0.9, match: 0.9, needsPerson: "client_always_asks" }, { reversible: 0.9, external: 0.1, consequence: 0.1 });
 
   const result = decideGateAction({ action: ACTION, policies, answers: covered, localAllowQualifies: true });
   assert.equal(result.verdict, "ask");
@@ -669,8 +676,10 @@ test("buildActionGateState: data text reaches Jev as a placeholder, the command 
   assert.equal(sent.proposed_command, "orca terminal send --terminal t --enter --text ‹text›");
   const written = buildActionGateState("cat > /tmp/x.mjs <<'EOF'\nconst s = 'git push --force origin main'\nEOF", "some context");
   assert.equal(written.proposed_command, "cat > /tmp/x.mjs <<'EOF'\n‹text›\nEOF");
+  // 0.6.15 T1 (JEVADV-83): a script's own argument is text too; until 0.6.14
+  // it reached Jev in full, as if the script might run it.
   const script = buildActionGateState("node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'", "some context");
-  assert.equal(script.proposed_command, "node probe.mjs '[[\"O\",\"git push origin HEAD:main\"]]'");
+  assert.equal(script.proposed_command, "node probe.mjs ‹text›");
 });
 
 // 0.6.13 T4 (F-06): the request the gate sends Jev carries no home or volume
@@ -701,9 +710,13 @@ const T3_POLICIES: Policy[] = [
 test("buildPolicyQuestions: Jev sees neutral keys and redacted rules, never a policy id or a secret", () => {
   const names = createJevPseudonyms();
   names.name("repo", "acme-shop");
-  const criteria = (buildPolicyQuestions(T3_POLICIES, names).coverage as { criteria: Record<string, string> }).criteria;
-  assert.deepEqual(Object.keys(criteria), ["policy_1", "policy_2", "no_policy"]);
-  assert.equal(criteria["policy_1"], "Deploying <repo-1> needs a person; the token is TOKEN=[REDACTED]");
+  const questions = buildPolicyQuestions(T3_POLICIES, names);
+  // 0.6.15 T2: the requires_human rule is asked in needs_person, the permits rule in coverage; both under their neutral key.
+  const person = (questions.needs_person as { criteria: Record<string, string> }).criteria;
+  const criteria = (questions.coverage as { criteria: Record<string, string> }).criteria;
+  assert.deepEqual(Object.keys(person), ["policy_1", "none"]);
+  assert.deepEqual(Object.keys(criteria), ["policy_2", "no_policy"]);
+  assert.equal(person["policy_1"], "Deploying <repo-1> needs a person; the token is TOKEN=[REDACTED]");
   assert.equal(criteria["policy_2"], "Running the tests is always fine.");
 });
 
@@ -733,7 +746,8 @@ test("buildPolicyQuestions: prohibitions are asked as a violation, the rest as c
   assert.match(violation.instructions, /Tagging, fetching/, "what writing on a branch means is stated, not left to the topic");
   assert.match(violation.instructions, /pushing commits to it/, "a push to a branch writes its history, whatever the checkout's own branch");
   const coverage = questions["coverage"] as { criteria: Record<string, string> };
-  assert.deepEqual(Object.keys(coverage.criteria), ["policy_1", "policy_3", "no_policy"], "coverage no longer lists a prohibition");
+  // 0.6.15 T2: nor a requires_human rule, asked in needs_person.
+  assert.deepEqual(Object.keys(coverage.criteria), ["policy_1", "no_policy"], "coverage no longer lists a prohibition");
 });
 
 test("buildPolicyQuestions: no violation question without a prohibition, no coverage question with prohibitions only", () => {
@@ -761,19 +775,19 @@ test("interpretDestinationPolicy: a violation below the gate, or naming a non-pr
 });
 
 test("interpretDestinationPolicy: a violation wins over a requires_human coverage -- a refusal, not a question", () => {
-  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("policy_3", 0.95, 0.9), ...violationAnswer("policy_2", 0.9) });
+  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("policy_3", 0.95, 0.9), ...violationAnswer("policy_2", 0.9), ...needsPersonAnswer("policy_3", 0.95) });
   assert.equal(decision?.outcome, "do_not");
   assert.equal(decision?.policyId, "never_write_to_main");
 });
 
 test("interpretDestinationPolicy: a neutral key Jev answers resolves to the real policy, and the decision names the real id", () => {
-  const decision = interpretDestinationPolicy(ACTION, T3_POLICIES, answers("policy_1", 0.9, 0.9));
+  const decision = interpretDestinationPolicy(ACTION, T3_POLICIES, { ...answers("policy_1", 0.9, 0.9), ...needsPersonAnswer("policy_1", 0.9) });
   assert.equal(decision?.outcome, "ask");
   assert.equal(decision?.policyId, "acme_prod_needs_a_human");
 });
 
 test("interpretDestinationPolicy: a neutral key past the end of the list resolves to nothing", () => {
-  assert.equal(interpretDestinationPolicy(ACTION, T3_POLICIES, answers("policy_3", 0.9, 0.9)), null);
+  assert.equal(interpretDestinationPolicy(ACTION, T3_POLICIES, { ...answers("policy_3", 0.9, 0.9), ...needsPersonAnswer("policy_3", 0.9) }), null);
 });
 
 test("buildDestinationState (advisor.decide): the action and every policy are redacted; no id, destination or scope is sent", () => {
@@ -814,4 +828,50 @@ test("buildActionGateState: secrets are removed first, then names, so a secret n
   names.name("repo", "acme-shop");
   const state = buildActionGateState("cd acme-shop && export TOKEN=abc123456789", "ctx", undefined, undefined, names);
   assert.equal(state.proposed_command, "cd <repo-1> && export TOKEN=[REDACTED]");
+});
+
+// ===========================================================================
+// 0.6.15 T2 (JEVADV-84, N-05): a `requires_human` rule is judged on effect,
+// as a prohibition is on violation (0.6.13 T2). Jev is asked which rule
+// reserving an action for a person the action does (a choice over those
+// rules only, or `none`); coverage keeps only the permits. `terraform plan`
+// shares its topic with infrastructure_changes and no longer asks.
+// ===========================================================================
+
+test("buildPolicyQuestions: a requires_human rule is asked as needs_person, on effect", () => {
+  const questions = buildPolicyQuestions(T2_POLICIES);
+  const person = questions["needs_person"] as { type: string; instructions: string; criteria: Record<string, string> } | undefined;
+  assert.ok(person !== undefined, "a needs_person question is asked when a requires_human rule is in scope");
+  assert.equal(person.type, "choice");
+  assert.deepEqual(Object.keys(person.criteria), ["policy_3", "none"]);
+  assert.equal(person.criteria["policy_3"], "Deploying to production is decided by a person.");
+  assert.match(person.instructions, /itself does what the rule reserves for a person/);
+  assert.match(person.instructions, /says happens without asking/, "what the rule itself lets run is not doing it");
+  assert.match(person.instructions, /one nothing here shows is not met/, "a merge is not someone else's PR unless something shows it is");
+  assert.equal("needs_person" in buildPolicyQuestions([T2_POLICIES[0] as Policy]), false);
+});
+
+test("interpretDestinationPolicy: a needs_person answer naming a requires_human rule asks, with the real id", () => {
+  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("no_policy", 0.9, 0.1), ...needsPersonAnswer("policy_3", 0.9) });
+  assert.equal(decision?.outcome, "ask");
+  assert.equal(decision?.policyId, "prod_needs_a_human");
+});
+
+test("interpretDestinationPolicy: a requires_human rule the action only shares a topic with does not ask (N-05)", () => {
+  const decision = interpretDestinationPolicy(ACTION, T2_POLICIES, { ...answers("policy_3", 0.95, 0.9), ...needsPersonAnswer("none", 0.9) });
+  assert.equal(decision, null);
+});
+
+test("interpretDestinationPolicy: needs_person below its gate, or naming a rule that is not requires_human, does not ask", () => {
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.5)), null);
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_2", 0.95)), null);
+});
+
+test("GATE_DECISION_RULES_VERSION: 6 since requires_human is judged on effect, so a cached ask on topic is judged again", () => {
+  assert.equal(GATE_DECISION_RULES_VERSION, 6);
+});
+
+test("interpretDestinationPolicy: needs_person asks only above the measured band (0.78 for an unrelated merge, 0.96 for a reserved action)", () => {
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.8)), null);
+  assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.95))?.outcome, "ask");
 });

@@ -16,13 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
-## What changed in 0.6.14
+## What changed in 0.6.15
 
-Every running agent gets its own row above the prompt, with what it is
-doing, its model, its effort and why, and an agent started before a plugin
-reload is no longer dropped from the list. A call quoted inside a string in
-a Python or Node heredoc is no longer judged as a call, and the Models tab
-explains an empty catalog on a new install.
+The gate reads only what runs, so a quoted command in a script's argument,
+a loop's list or a heredoc no longer stops anything; `requires_human`
+policies are judged on what the action does (`terraform plan` passes); SQL
+fed on stdin is refused like `psql -c`. The context steward now acts on
+1M-token sessions (600k, and a 400k tier in measure mode), and the agents
+band shows each agent's real effort and where it comes from.
 
 Every release is in [CHANGELOG.md](CHANGELOG.md).
 

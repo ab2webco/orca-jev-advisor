@@ -17,23 +17,26 @@ import {
   stewardGate,
   stewardInstructions,
   stewardStatusPart,
+  softTierFires,
+  stewardTier,
   summarizeStewardActivity,
 } from "./context_steward.ts";
 import type { StewardGateInput } from "./context_steward.ts";
 import type { ActivityMessage } from "./model_router_stage.ts";
 
-const ABOVE: StewardGateInput = { mode: "active", isSubagent: false, contextTokens: 150_000, contextPercent: 15, threshold: DEFAULT_STEWARD_THRESHOLD, turnsSinceCompaction: null };
+// 0.6.15 T4: the gate reads the session's MAIN model window (`mainWindow`), not the current model's percentage.
+const ABOVE: StewardGateInput = { mode: "active", isSubagent: false, contextTokens: 150_000, mainWindow: 1_000_000, threshold: DEFAULT_STEWARD_THRESHOLD, turnsSinceCompaction: null };
 
 // ---------------------------------------------------------------------------
 // The gate: whether Jev is asked at all
 // ---------------------------------------------------------------------------
 
 test("gate: above the threshold on the main conversation asks Jev", () => {
-  assert.deepEqual(stewardGate(ABOVE), { ask: true, hardLimit: false });
+  assert.deepEqual(stewardGate(ABOVE), { ask: true, hardLimit: false, softLimit: false });
 });
 
 test("gate: measure mode asks too (it logs what it would do)", () => {
-  assert.deepEqual(stewardGate({ ...ABOVE, mode: "measure" }), { ask: true, hardLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, mode: "measure" }), { ask: true, hardLimit: false, softLimit: false });
 });
 
 test("gate: below the threshold asks nothing", () => {
@@ -50,16 +53,16 @@ test("gate: off mode and a subagent never ask", () => {
 });
 
 test("gate: no usage reading asks nothing", () => {
-  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: null, contextPercent: null }), { ask: false, reason: "no-usage" });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: null }), { ask: false, reason: "no-usage" });
 });
 
 test("gate: 80% of the window is the hard limit, even under the threshold", () => {
-  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 800_000, contextPercent: 80 }), { ask: true, hardLimit: true });
+  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 160_000, mainWindow: 200_000 }), { ask: true, hardLimit: true, softLimit: false });
 });
 
 test("gate: never twice within 3 person turns, the hard limit included", () => {
   assert.deepEqual(stewardGate({ ...ABOVE, turnsSinceCompaction: 2 }), { ask: false, reason: "cooldown" });
-  assert.deepEqual(stewardGate({ ...ABOVE, turnsSinceCompaction: 0, contextPercent: 95 }), { ask: false, reason: "cooldown" });
+  assert.deepEqual(stewardGate({ ...ABOVE, turnsSinceCompaction: 0, contextTokens: 950_000 }), { ask: false, reason: "cooldown" });
   assert.equal(stewardGate({ ...ABOVE, turnsSinceCompaction: 3 }).ask, true);
 });
 
@@ -215,8 +218,9 @@ test("threshold: 120k by default; a whole number of tokens between 10k and 2M", 
 
 test("record: hourly file, the brief's fields and no prompt text", () => {
   assert.equal(stewardDecisionFileName("2026-09-28T14:05:00.000Z"), "context-steward-decisions-2026-09-28T14.jsonl");
-  const record = stewardDecisionRecord({ at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: { decision: "boundary", compact: true, suggestClear: false, confidence: 0.8 }, applied: true, contextAfter: 30_000, notApplied: null });
-  assert.deepEqual(record, { at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.8, compact: true, applied: true, contextAfter: 30_000, notApplied: null });
+  // 0.6.15 T4: the record also carries Jev's verdict, the session, the turn, the main window, the current model and the tier.
+  const record = stewardDecisionRecord({ at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: { decision: "boundary", compact: true, suggestClear: false, confidence: 0.8 }, applied: true, contextAfter: 30_000, notApplied: null, verdict: "boundary", sessionId: "s-1", turnIndex: 7, mainWindow: 1_000_000, currentModel: "claude-opus-5-5", wouldFire: null });
+  assert.deepEqual(record, { at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.8, compact: true, applied: true, contextAfter: 30_000, notApplied: null, verdict: "boundary", sessionId: "s-1", turnIndex: 7, mainWindow: 1_000_000, currentModel: "claude-opus-5-5", tier: "boundary", wouldFire: null });
 });
 
 test("tokens read as k", () => {
@@ -275,4 +279,54 @@ test("summary: nothing applied reads freed as unknown, not zero", () => {
 test("file pattern: the hourly steward logs only", () => {
   assert.equal(STEWARD_DECISIONS_FILE_PATTERN.exec("context-steward-decisions-2026-09-28T14.jsonl")?.[1], "2026-09-28T14");
   assert.equal(STEWARD_DECISIONS_FILE_PATTERN.exec("model-router-decisions-2026-09-28T14.jsonl"), null);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.15 T4 (JEVADV-87, odd/research/steward-1m.md): two tiers for 1M windows.
+// ---------------------------------------------------------------------------
+
+test("gate: the hard limit is 80% of the session's MAIN window, capped at 600k", () => {
+  assert.equal((stewardGate({ ...ABOVE, contextTokens: 600_000 }) as { hardLimit: boolean }).hardLimit, true);
+  assert.equal((stewardGate({ ...ABOVE, contextTokens: 599_999 }) as { hardLimit: boolean }).hardLimit, false);
+  // The measured defect: a router drop to a 200k model in a 1M session compacted at 160-230k.
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 180_000, mainWindow: 1_000_000 }), { ask: true, hardLimit: false, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 160_000, mainWindow: 200_000 }), { ask: true, hardLimit: true, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 500_000, mainWindow: null }), { ask: false, reason: "below-threshold" });
+});
+
+test("gate: the soft tier runs from 400k up to the hard limit, only where the window is larger", () => {
+  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 400_000 }), { ask: true, hardLimit: false, softLimit: true });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 399_999 }), { ask: true, hardLimit: false, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 700_000 }), { ask: true, hardLimit: true, softLimit: false });
+});
+
+test("soft tier: fires unless Jev says mid-task with confidence at least 0.8", () => {
+  assert.equal(softTierFires({ jev: { verdict: "mid-task", confidence: 0.8 }, softLimit: true }), false);
+  assert.equal(softTierFires({ jev: { verdict: "mid-task", confidence: 0.79 }, softLimit: true }), true);
+  assert.equal(softTierFires({ jev: { verdict: "boundary", confidence: 0.5 }, softLimit: true }), true);
+  assert.equal(softTierFires({ jev: null, softLimit: true }), true);
+  assert.equal(softTierFires({ jev: { verdict: "mid-task", confidence: 0.2 }, softLimit: false }), false);
+});
+
+test("decision: the soft tier compacts only when switched on; measure-only leaves the decision as it was", () => {
+  const midTask = { verdict: "mid-task" as const, confidence: 0.7 };
+  assert.deepEqual(decideSteward({ jev: midTask, hardLimit: false, softLimit: true, softActive: true }), { decision: "soft-limit", compact: true, suggestClear: false, confidence: 0.7 });
+  assert.deepEqual(decideSteward({ jev: midTask, hardLimit: false, softLimit: true, softActive: false }), { decision: "mid-task", compact: false, suggestClear: false, confidence: 0.7 });
+  assert.deepEqual(decideSteward({ jev: { verdict: "mid-task", confidence: 0.9 }, hardLimit: false, softLimit: true, softActive: true }), { decision: "mid-task", compact: false, suggestClear: false, confidence: 0.9 });
+  assert.equal(decideSteward({ jev: { verdict: "boundary", confidence: 0.9 }, hardLimit: false, softLimit: true, softActive: true }).decision, "boundary");
+});
+
+test("tier: the one that fired, named as the research names it", () => {
+  assert.equal(stewardTier("boundary"), "boundary");
+  assert.equal(stewardTier("new-topic"), "new-topic");
+  assert.equal(stewardTier("soft-limit"), "soft-400k");
+  assert.equal(stewardTier("hard-limit"), "hard-600k");
+  assert.equal(stewardTier("mid-task"), null);
+  assert.equal(stewardTier("low-confidence"), null);
+  assert.equal(stewardTier("jev-failed"), null);
+});
+
+test("status: the soft tier reads as such, both locales", () => {
+  assert.equal(stewardStatusPart("es", { mode: "active", decision: "soft-limit", applied: true, before: 420_000, after: 70_000 }), "contexto 420k → 70k (límite suave de 400k)");
+  assert.equal(stewardStatusPart("en", { mode: "active", decision: "soft-limit", applied: true, before: 420_000, after: 70_000 }), "context 420k → 70k (400k soft limit)");
 });
