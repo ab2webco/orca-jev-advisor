@@ -8,6 +8,7 @@ import { parseModelSeedEntries, type ModelEntry } from "./model_catalog.ts";
 import {
   ANTHROPIC_PRICES,
   collapseTier,
+  contextWindowOfModel,
   isGatewayEnv,
   modelRank,
   parseVaultEnv,
@@ -225,4 +226,13 @@ test("two rows of one tier at the same rank: the later one (a newer offer the pe
   const newer: ModelEntry = { ...entry("claude-sonnet-6", 3, true), tier: "standard" };
   const tiers = resolveAccountTiers({ env: {}, catalog: [...SEED_CATALOG, newer], quota: null });
   assert.equal(tiers.standard.modelId, "claude-sonnet-6");
+});
+
+// 0.6.15 T4: the steward measures its hard limit against the session's main model's window.
+test("contextWindowOfModel: the built-in windows, a [1m] suffix, and null for an unknown model", () => {
+  assert.equal(contextWindowOfModel("claude-haiku-4-5"), 200_000);
+  assert.equal(contextWindowOfModel("claude-haiku-4-5-20251001"), 200_000);
+  assert.equal(contextWindowOfModel("claude-opus-5-5"), 1_000_000);
+  assert.equal(contextWindowOfModel("claude-sonnet-4-5[1m]"), 1_000_000);
+  assert.equal(contextWindowOfModel("gateway/some-model"), null);
 });

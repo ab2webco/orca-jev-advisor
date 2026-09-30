@@ -18,8 +18,8 @@
 import { ROUTER_TIERS } from "./model_router_accounts.ts";
 import { EFFORT_LEVELS, TIER_EFFORT } from "./model_router_decide.ts";
 import type { TierEffort, TierEffortMap } from "./model_router_decide.ts";
-import { MAX_STEWARD_THRESHOLD, MIN_STEWARD_THRESHOLD, STEWARD_MODES, parseStewardMode, parseStewardThreshold } from "./context_steward.ts";
-import type { StewardMode } from "./context_steward.ts";
+import { MAX_STEWARD_THRESHOLD, MIN_STEWARD_THRESHOLD, STEWARD_MODES, STEWARD_SOFT_MODES, parseStewardMode, parseStewardSoftMode, parseStewardThreshold } from "./context_steward.ts";
+import type { StewardMode, StewardSoftMode } from "./context_steward.ts";
 
 export type RouterMode = "off" | "measure" | "active";
 
@@ -234,23 +234,38 @@ export function planRouterEffortWrite(raw: string | null, map: TierEffortMap): R
 export interface StewardSettings {
   readonly mode: StewardMode;
   readonly threshold: number;
+  /** 0.6.15 T4: the 400k soft tier's own switch (`stewardSoftMode`), measure by default. */
+  readonly softMode: StewardSoftMode;
+}
+
+/** What a writer stores: `softMode` absent leaves the stored switch as it is. */
+export interface StewardSettingsWrite {
+  readonly mode: StewardMode;
+  readonly threshold: number;
+  readonly softMode?: StewardSoftMode;
 }
 
 export function stewardFromSettings(settings: unknown): StewardSettings {
-  return { mode: parseStewardMode(routerOption(settings, "stewardMode")), threshold: parseStewardThreshold(routerOption(settings, "stewardThreshold")) };
+  return {
+    mode: parseStewardMode(routerOption(settings, "stewardMode")),
+    threshold: parseStewardThreshold(routerOption(settings, "stewardThreshold")),
+    softMode: parseStewardSoftMode(routerOption(settings, "stewardSoftMode")),
+  };
 }
 
-/** The steward settings as a writer receives them: a known mode and a threshold within range, or null -- a writer rejects, never guesses. */
-export function parseStewardSettingsStrict(value: unknown): StewardSettings | null {
+/** The steward settings as a writer receives them: a known mode, a threshold within range and, when given, a known soft-tier switch, or null -- a writer rejects, never guesses. */
+export function parseStewardSettingsStrict(value: unknown): StewardSettingsWrite | null {
   if (!isObject(value)) return null;
-  const { mode, threshold } = value;
+  const { mode, threshold, softMode } = value;
   if (typeof mode !== "string" || !(STEWARD_MODES as readonly string[]).includes(mode)) return null;
   if (typeof threshold !== "number" || !Number.isInteger(threshold) || threshold < MIN_STEWARD_THRESHOLD || threshold > MAX_STEWARD_THRESHOLD) return null;
-  return { mode: mode as StewardMode, threshold };
+  if (softMode === undefined) return { mode: mode as StewardMode, threshold };
+  if (typeof softMode !== "string" || !(STEWARD_SOFT_MODES as readonly string[]).includes(softMode)) return null;
+  return { mode: mode as StewardMode, threshold, softMode: softMode as StewardSoftMode };
 }
 
 /** What writing `steward` into a settings.json whose text is `raw` (null: no file yet) should do: the same contract as planRouterModeWrite. */
-export function planStewardWrite(raw: string | null, steward: StewardSettings): RouterModeWritePlan {
+export function planStewardWrite(raw: string | null, steward: StewardSettingsWrite): RouterModeWritePlan {
   let parsed: unknown = {};
   if (raw !== null) {
     try {
@@ -264,8 +279,10 @@ export function planStewardWrite(raw: string | null, steward: StewardSettings): 
   const configs = isObject(base.pluginConfigs) ? base.pluginConfigs : {};
   const own = isObject(configs[ROUTER_SETTINGS_KEY]) ? (configs[ROUTER_SETTINGS_KEY] as Record<string, unknown>) : {};
   const options = isObject(own.options) ? own.options : {};
-  if (options.stewardMode === steward.mode && options.stewardThreshold === steward.threshold) return { kind: "unchanged" };
-  const next = { ...base, pluginConfigs: { ...configs, [ROUTER_SETTINGS_KEY]: { ...own, options: { ...options, stewardMode: steward.mode, stewardThreshold: steward.threshold } } } };
+  const softUnchanged = steward.softMode === undefined || options.stewardSoftMode === steward.softMode;
+  if (options.stewardMode === steward.mode && options.stewardThreshold === steward.threshold && softUnchanged) return { kind: "unchanged" };
+  const soft = steward.softMode === undefined ? {} : { stewardSoftMode: steward.softMode };
+  const next = { ...base, pluginConfigs: { ...configs, [ROUTER_SETTINGS_KEY]: { ...own, options: { ...options, stewardMode: steward.mode, stewardThreshold: steward.threshold, ...soft } } } };
   if (raw === null) return { kind: "write", text: `${JSON.stringify(next, null, 2)}\n` };
   const text = JSON.stringify(next, null, detectIndent(raw));
   return { kind: "write", text: raw.endsWith("\n") ? `${text}\n` : text };

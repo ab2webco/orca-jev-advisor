@@ -31,6 +31,8 @@ interface FakeHost {
   timers: TimerFn[];
   messages: unknown[];
   usage: { tokens: number | undefined; percent: number | undefined; window: number };
+  /** What `$.session.model()` answers (0.6.15 T4). */
+  model: string;
   compactResult: { messages: unknown[]; tokensBefore?: number; tokensAfter?: number } | { skip: string } | "reject" | "headless";
 }
 
@@ -52,6 +54,7 @@ function makeHost(): FakeHost {
     timers: [],
     messages: [],
     usage: { tokens: 150_000, percent: 15, window: 1_000_000 },
+    model: "claude-opus-5-5",
     compactResult: { messages: [], tokensBefore: 150_000, tokensAfter: 30_000 },
   };
 }
@@ -62,6 +65,8 @@ function makeEngine(host: FakeHost): unknown {
     session: {
       cwd: async () => "/home/dev/Projects/project-c",
       root: async () => "/home/dev/Projects/project-c",
+      id: async () => "session-1",
+      model: async () => host.model,
       messages: async () => host.messages,
       usage: async () => ({ startedAt: 0, context: host.usage, rateLimits: [] }),
       compact: async (args?: { instructions?: string }) => {
@@ -134,9 +139,10 @@ function load(host: FakeHost): unknown {
   return makeEngine(host);
 }
 
-function setSteward(host: FakeHost, mode: string, threshold = 120_000): void {
+function setSteward(host: FakeHost, mode: string, threshold = 120_000, softMode?: string): void {
   host.files.set(`${HOME}/.config/orca-supervisor/locale`, "es\n");
-  host.files.set(`${VAULT}/settings.json`, JSON.stringify({ pluginConfigs: { [ROUTER_KEY]: { options: { stewardMode: mode, stewardThreshold: threshold } } } }));
+  const soft = softMode === undefined ? {} : { stewardSoftMode: softMode };
+  host.files.set(`${VAULT}/settings.json`, JSON.stringify({ pluginConfigs: { [ROUTER_KEY]: { options: { stewardMode: mode, stewardThreshold: threshold, ...soft } } } }));
 }
 
 function verdict(choice: string, confidence: number): unknown {
@@ -206,7 +212,8 @@ test("steward, active: a confident boundary above the threshold compacts once wi
   for (const needle of ["odd/tasks/feature-a.md", "open checklist items", "next step", "feat-x", "1a2b3c4 feat: one (feat-x)", "pending"]) assert.ok(instructions.includes(needle), `keeps ${needle}`);
   const log = stewardLog(host);
   assert.equal(log.length, 1);
-  assert.deepEqual({ ...log[0], at: "x" }, { at: "x", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.85, compact: true, applied: true, contextAfter: 30_000, notApplied: null });
+  // 0.6.15 T4: every row also names Jev's verdict, the session, the turn, the main window, the current model and the tier.
+  assert.deepEqual({ ...log[0], at: "x" }, { at: "x", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: "boundary", confidence: 0.85, compact: true, applied: true, contextAfter: 30_000, notApplied: null, verdict: "boundary", sessionId: "session-1", turnIndex: 1, mainWindow: 1_000_000, currentModel: "claude-opus-5-5", tier: "boundary", wouldFire: null });
   assert.ok(host.statusLines.some((line) => line?.includes("150k → 30k (tarea cerrada)")), `status: ${host.statusLines.join(" | ")}`);
   assert.deepEqual(host.toasts, []);
 });
@@ -262,6 +269,8 @@ test("steward, active: at 80% of the window it compacts even mid-task", async ()
   const host = makeHost();
   const engine = load(host);
   setSteward(host, "active");
+  // 0.6.15 T4: the limit follows the session's main model, here a 200k one.
+  host.model = "claude-haiku-4-5";
   host.usage = { tokens: 170_000, percent: 85, window: 200_000 };
   await personTurn(host, engine, "sigue", verdict("mid-task", 0.9));
   assert.equal(host.compactCalls.length, 1);
@@ -281,6 +290,8 @@ test("steward, active: a Jev failure at the hard limit still compacts", async ()
   const host = makeHost();
   const engine = load(host);
   setSteward(host, "active");
+  // 0.6.15 T4: the limit follows the session's main model, here a 200k one.
+  host.model = "claude-haiku-4-5";
   host.usage = { tokens: 170_000, percent: 85, window: 200_000 };
   await personTurn(host, engine, "sigue", "fail");
   assert.equal(host.compactCalls.length, 1);
@@ -414,4 +425,65 @@ test("steward: a headless session, where the engine refuses compaction, is logge
   await personTurn(host, engine, "commit it", verdict("boundary", 0.9));
   assert.equal(host.compactCalls.length, 1);
   assert.equal(stewardLog(host)[0]?.notApplied, "headless");
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.15 T4 (JEVADV-87, odd/research/steward-1m.md): the hard limit is 80% of
+// the MAIN model's window, never past 600k; a 400k soft tier ships measured.
+// ---------------------------------------------------------------------------
+
+test("steward, active: a router step on a 200k model does not trip the hard limit of a 1M session", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.state.set("routerSticky", { model: "claude-haiku-4-5", effort: null, rewrite: true, configuredModel: "claude-opus-5-5[1m]", configuredEffort: "high", tier: "simple", pendingLower: null, stats: {}, lastPrompt: null });
+  host.usage = { tokens: 180_000, percent: 90, window: 200_000 };
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.9));
+  assert.equal(host.compactCalls.length, 0);
+  const row = stewardLog(host)[0];
+  assert.equal(row?.decision, "mid-task");
+  assert.equal(row?.mainWindow, 1_000_000);
+  assert.equal(row?.currentModel, "claude-haiku-4-5");
+});
+
+test("steward, active: at 600k of a 1M window it compacts even mid-task", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.usage = { tokens: 620_000, percent: 62, window: 1_000_000 };
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.9));
+  assert.equal(host.compactCalls.length, 1);
+  assert.equal(stewardLog(host)[0]?.decision, "hard-limit");
+  assert.equal(stewardLog(host)[0]?.tier, "hard-600k");
+});
+
+test("steward, active: the 400k soft tier only logs that it would fire while its switch is on measure", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.usage = { tokens: 450_000, percent: 45, window: 1_000_000 };
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.7));
+  assert.equal(host.compactCalls.length, 0);
+  const row = stewardLog(host)[0];
+  assert.equal(row?.decision, "mid-task");
+  assert.equal(row?.tier, null);
+  assert.equal(row?.wouldFire, "soft-400k");
+  assert.equal(row?.verdict, "mid-task");
+});
+
+test("steward, active: with the soft tier switched on it compacts at 400k unless Jev is sure the work is mid-task", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active", 120_000, "active");
+  host.usage = { tokens: 450_000, percent: 45, window: 1_000_000 };
+  await personTurn(host, engine, "uno", verdict("mid-task", 0.85));
+  assert.equal(host.compactCalls.length, 0, "a sure mid-task waits");
+  await personTurn(host, engine, "dos", verdict("boundary", 0.5));
+  assert.equal(host.compactCalls.length, 1);
+  const row = stewardLog(host)[1];
+  assert.equal(row?.decision, "soft-limit");
+  assert.equal(row?.tier, "soft-400k");
+  assert.equal(row?.wouldFire, null);
+  assert.equal(row?.verdict, "boundary", "a low-confidence verdict is logged too");
+  assert.ok(host.statusLines.some((line) => line?.includes("(límite suave de 400k)")), `status: ${host.statusLines.join(" | ")}`);
 });

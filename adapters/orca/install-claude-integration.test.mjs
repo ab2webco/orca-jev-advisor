@@ -1091,9 +1091,10 @@ test('router-mode-status: each target reports its context steward mode and thres
   const home = makeHome()
   writeSettings(home, { pluginConfigs: { [ROUTER_SETTINGS_KEY]: { options: { stewardMode: 'active', stewardThreshold: 150000 } } } })
   const result = runRouter(['router-mode-status'], home)
-  assert.deepEqual(result.targets[0].steward, { mode: 'active', threshold: 150000 })
+  // 0.6.15 T4: with the 400k soft tier's switch, measure by default.
+  assert.deepEqual(result.targets[0].steward, { mode: 'active', threshold: 150000, softMode: 'measure' })
   const fresh = runRouter(['router-mode-status'], makeHome())
-  assert.deepEqual(fresh.targets[0].steward, { mode: 'measure', threshold: 120000 })
+  assert.deepEqual(fresh.targets[0].steward, { mode: 'measure', threshold: 120000, softMode: 'measure' })
 })
 
 test('steward-set: writes the steward mode and threshold next to the router mode, keeping every other key', () => {

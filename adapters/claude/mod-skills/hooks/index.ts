@@ -136,7 +136,7 @@ import { computeHomePaths, orcaCliCommandFor, parseEnvFile, resolveUserSkillsDir
 import type { ModHomePaths } from './runtime.ts'
 import { parseQuota } from '../../../../src/core/consumption.ts'
 import { parseModelsMirror } from '../../../../src/core/model_mirror.ts'
-import { parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
+import { contextWindowOfModel, parseVaultEnv, resolveAccountTiers, tierOfModel } from '../../../../src/core/model_router_accounts.ts'
 import type { ResolvedTiers } from '../../../../src/core/model_router_accounts.ts'
 import { buildTierQuestions, buildTierState, decideStart, interpretTier, routerDecisionFileName, routerDecisionRecord, toRouterEffort } from '../../../../src/core/model_router_decide.ts'
 import type { RouterDecision, TierJudgment } from '../../../../src/core/model_router_decide.ts'
@@ -162,8 +162,8 @@ import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_r
 import type { SubagentDecision } from '../../../../src/core/model_router_subagent.ts'
 import { isPersonPromptOrigin } from '../../../../src/core/model_router_origin.ts'
 import type { RouterPromptOrigin, RouterSessionStats, RouterSticky, StewardState } from '../types/index.d.ts'
-import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
-import type { StewardDecision, StewardJudgment, StewardMode, StewardNotApplied } from '../../../../src/core/context_steward.ts'
+import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, softTierFires, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
+import type { StewardDecision, StewardJudgment, StewardMode, StewardNotApplied, StewardTier } from '../../../../src/core/context_steward.ts'
 import { stewardFromSettings } from '../../../../src/core/model_router_mode.ts'
 
 const DEFAULT_BUDGET_MS = 800
@@ -1391,6 +1391,43 @@ interface StewardPlan {
   readonly instructions: string
   readonly personTurns: number
   readonly locale: Locale
+  /** 0.6.15 T4: what each log row also names (odd/research/steward-1m.md §6). */
+  readonly verdict: StewardJudgment['verdict'] | null
+  readonly sessionId: string | null
+  readonly mainWindow: number | null
+  readonly currentModel: string | null
+  readonly wouldFire: StewardTier | null
+}
+
+/**
+ * 0.6.15 T4: the session's MAIN model and the model this turn ran on. The
+ * router keeps the session's own model when it takes over (configuredModel)
+ * and, while it rewrites steps, the one it sends; without it, the engine's
+ * main-loop model is both. The main model's window is what the hard limit is
+ * measured against: a router step on a 200k model is not the session's.
+ */
+async function stewardModels($: EngineInterface): Promise<{ readonly mainModel: string | null; readonly currentModel: string | null }> {
+  let own: string | null = null
+  try {
+    own = await $.session.model()
+  } catch {
+    own = null
+  }
+  try {
+    const sticky = (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value
+    if (sticky !== undefined) return { mainModel: sticky.configuredModel, currentModel: sticky.rewrite ? sticky.model : sticky.configuredModel }
+  } catch {
+    // No router state: the engine's own model is the main one.
+  }
+  return { mainModel: own, currentModel: own }
+}
+
+async function stewardSessionId($: EngineInterface): Promise<string | null> {
+  try {
+    return await $.session.id()
+  } catch {
+    return null
+  }
 }
 
 async function readStewardState($: EngineInterface): Promise<StewardState> {
@@ -1455,11 +1492,17 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
     const state = await readStewardState($)
     const turnsSinceCompaction = state.lastCompactionTurn === null ? null : state.personTurns - state.lastCompactionTurn
     const contextTokens = usage.context.tokens ?? null
-    const gate = stewardGate({ mode, isSubagent: false, contextTokens, contextPercent: usage.context.percent ?? null, threshold: settings.threshold, turnsSinceCompaction })
+    const models = await stewardModels($)
+    const mainWindow = (models.mainModel === null ? null : contextWindowOfModel(models.mainModel)) ?? usage.context.window ?? null
+    const gate = stewardGate({ mode, isSubagent: false, contextTokens, mainWindow, threshold: settings.threshold, turnsSinceCompaction })
     if (!gate.ask || contextTokens === null) return
     const messages = await $.session.messages()
     const jev = await askStewardJudgment($, options, messages, contextTokens, turnsSinceCompaction)
-    const decision = decideSteward({ jev, hardLimit: gate.hardLimit })
+    const softActive = settings.softMode === 'active'
+    const decision = decideSteward({ jev, hardLimit: gate.hardLimit, softLimit: gate.softLimit, softActive })
+    // The soft tier ships measured: while its switch is on measure, a turn it
+    // would have compacted is decided as before and logged as `wouldFire`.
+    const wouldFire: StewardTier | null = !softActive && !decision.compact && softTierFires({ jev, softLimit: gate.softLimit }) ? 'soft-400k' : null
     const plan: StewardPlan = {
       mode,
       account: await resolveAccountId($),
@@ -1469,6 +1512,11 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       instructions: decision.compact ? stewardInstructions(collectStewardFacts(messages)) : '',
       personTurns: state.personTurns,
       locale: await resolveLocale($),
+      verdict: jev?.verdict ?? null,
+      sessionId: await stewardSessionId($),
+      mainWindow,
+      currentModel: models.currentModel,
+      wouldFire,
     }
     if (mode === 'active' && decision.compact) {
       await attemptStewardCompaction($, plan, 1, host)
@@ -1522,7 +1570,10 @@ async function attemptStewardCompaction($: EngineInterface, plan: StewardPlan, a
 async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boolean, contextAfter: number | null, notApplied: StewardNotApplied | null, host: StewardHost): Promise<void> {
   if (applied) await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'steward' }, { ...(await readStewardState($)), lastCompactionTurn: plan.personTurns })
   const at = new Date(await $.clock.now()).toISOString()
-  const record = stewardDecisionRecord({ at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied })
+  const record = stewardDecisionRecord({
+    at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied,
+    verdict: plan.verdict, sessionId: plan.sessionId, turnIndex: plan.personTurns, mainWindow: plan.mainWindow, currentModel: plan.currentModel, wouldFire: plan.wouldFire,
+  })
   await appendStewardDecision($, at, `${JSON.stringify(record)}\n`)
   host.show(stewardStatusPart(plan.locale, { mode: plan.mode, decision: plan.decision.decision, applied, before: plan.contextBefore, after: contextAfter }))
   if (applied && plan.decision.suggestClear) $.ui.toast(stewardClearHint(plan.locale), { timeoutMs: 15000 })
