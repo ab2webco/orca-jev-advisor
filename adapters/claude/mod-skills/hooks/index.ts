@@ -145,12 +145,13 @@ import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '..
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
-import { subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
+import { parseRunningSubagents, reconcileRunning, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
 import { agentDefinitionModel } from '../../../../src/core/agent_definition.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
-import type { RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import type { ListedAgent, RunningSubagent, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
 import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
@@ -650,21 +651,79 @@ async function readAgentDefinitionModel($: EngineInterface, subagentType: string
 }
 
 /**
+ * 0.6.14 T1: the subagents running now, in the order they started. The Map
+ * is this load's; `$.state` (`runningSubagents`) keeps a copy so a plugin
+ * reload in the same session does not forget them. `hydrated` reads that
+ * copy back once per load, before anything is written over it; `writes`
+ * chains the writes, each one the whole set as it is when it runs, so an
+ * older snapshot never lands after a newer one.
+ */
+interface RunningSet {
+  readonly agents: Map<string, RunningSubagent>
+  hydrated: Promise<void> | null
+  writes: Promise<void>
+}
+
+/** Reads the kept copy back into this load's set, once. What this load already recorded wins, after the kept ones (they started earlier). Fails open: nothing kept, nothing added. */
+function hydrateRunning($: EngineInterface, set: RunningSet): Promise<void> {
+  set.hydrated ??= (async () => {
+    try {
+      const stored = parseRunningSubagents((await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'runningSubagents' })).value)
+      const fresh = [...set.agents.values()]
+      set.agents.clear()
+      for (const agent of [...stored, ...fresh]) set.agents.set(agent.id, agent)
+    } catch {
+      // Nothing kept: this load's own records stand.
+    }
+  })()
+  return set.hydrated
+}
+
+/** Writes the set to `$.state`, after any write already queued. Best-effort. */
+function persistRunning($: EngineInterface, set: RunningSet): Promise<void> {
+  set.writes = set.writes.then(async () => {
+    try {
+      await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'runningSubagents' }, { agents: [...set.agents.values()].map((agent) => ({ ...agent })) })
+    } catch {
+      // A lost copy only costs a reload's memory, never the spawn or the step.
+    }
+  })
+  return set.writes
+}
+
+/** `$.agent.list()` as the fields the running set reads; null when the host has none or it fails. */
+async function listAgents($: EngineInterface): Promise<ListedAgent[] | null> {
+  try {
+    return (await $.agent.list()).map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, status: agent.status }))
+  } catch {
+    return null
+  }
+}
+
+/**
  * 0.6.8 T6: the status-line part for the subagents running now. First
  * drops, through `$.agent.list()`, any subagent that ended without its
  * turn.complete reaching this module (killed, failed): one the host lists
  * as not running, or no longer lists at all -- never `keep`, the one just
- * started. Fails open: no list, no pruning.
+ * started. Fails open: no list, no pruning. 0.6.14 T1: an agent the host
+ * runs that nothing recorded (it started before this plugin loaded) is
+ * counted too, as "no data"; the pruned set is kept in `$.state`.
  */
-async function runningSubagentsStatus($: EngineInterface, running: Map<string, RunningSubagent>, keep: string | null): Promise<string | null> {
-  try {
-    const listed = await $.agent.list()
-    const live = new Set(listed.filter((agent) => agent.status === 'running').map((agent) => agent.id))
-    for (const id of [...running.keys()]) if (id !== keep && !live.has(id)) running.delete(id)
-  } catch {
-    // No list: keep what spawn and turn.complete already said.
-  }
-  return subagentsStatusPart(await resolveLocale($), [...running.values()])
+async function runningSubagentsStatus($: EngineInterface, running: RunningSet, keep: string | null): Promise<string | null> {
+  await hydrateRunning($, running)
+  const { kept, shown } = reconcileRunning([...running.agents.values()], await listAgents($), keep)
+  if (kept.length !== running.agents.size) for (const id of [...running.agents.keys()]) if (!kept.some((agent) => agent.id === id)) running.agents.delete(id)
+  await persistRunning($, running)
+  return subagentsStatusPart(await resolveLocale($), shown)
+}
+
+/** 0.6.14 T1: the effort a subagent's step was sent with, onto its record (only when it changed). Best-effort. */
+async function noteSubagentEffort($: EngineInterface, running: RunningSet, agentId: string, effort: SessionEffort | null): Promise<void> {
+  await hydrateRunning($, running)
+  const agent = running.agents.get(agentId)
+  if (agent === undefined || agent.effort === effort) return
+  running.agents.set(agentId, { ...agent, effort })
+  await persistRunning($, running)
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,9 +1195,15 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
   // 0.6.8 T6: every started subagent is remembered with the model it runs
   // and why, for the status line -- in every mode, a fork and a failure
   // included. Visibility only: this never changes what is spawned.
+  // 0.6.14 T1: with what it is and does (its type and description), and in
+  // measure mode the model the router would have given it; its effort
+  // comes with its first step (noteSubagentEffort).
   const explicitModelGiven = e.model !== undefined && e.model !== 'inherit'
+  let wouldUse: string | null = null
   const remember = (result: AgentSpawnResult, tiers: ResolvedTiers | null, why: SubagentWhy): void => {
-    if ('agentId' in result && result.agentId !== undefined) runningSubagents.set(result.agentId, { label: subagentModelLabel(result.model ?? e.parentModel, tiers), why })
+    if ('agentId' in result && result.agentId !== undefined) {
+      runningSubagents.set(result.agentId, { id: result.agentId, type: e.subagentType, description: e.description, label: subagentModelLabel(result.model ?? e.parentModel, tiers), effort: null, why, wouldUse })
+    }
   }
   if (mode === 'off' || e.fork) {
     const result = await next(e)
@@ -1183,6 +1248,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const applied = mode === 'active' && decision.changed
     pending = { effort: targetEffort, guarded, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
     why = subagentWhy({ decision, applied, explicit: modelFixed })
+    if (mode === 'measure' && decision.changed) wouldUse = subagentModelLabel(decision.model, tiers)
     if (applied) input = { ...e, model: decision.model }
   } catch {
     input = e
@@ -1212,7 +1278,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
  * pre-computed target (a guard can hold a higher inherited value than the
  * tier's own target, which spawn time never sees).
  */
-async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null): StreamHookBody<TurnStepChunk, TurnStepResult> {
+async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null) => Promise<void>): StreamHookBody<TurnStepChunk, TurnStepResult> {
   let input: TurnStepInput | Frozen<TurnStepInput> = e
   if (mode !== 'off' && e.agentId === undefined) {
     let held: RouterSticky | undefined
@@ -1262,6 +1328,14 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
         // Best-effort: a lost log line never affects the step itself.
       }
       subagentEffortTarget.set(e.agentId, { ...target, logged: true })
+    }
+  }
+  if (e.agentId !== undefined) {
+    // 0.6.14 T1: the effort this subagent step is actually sent with, for its row.
+    try {
+      await noteEffort(e.agentId, input.effort ?? null)
+    } catch {
+      // Visibility only: never a reason to hold the step.
     }
   }
   const r = yield* next(input)
@@ -1581,8 +1655,9 @@ export function register(on: On, options: PluginOptions): void {
   // The context steward's part, set by its timer after a turn ends.
   let stewardStatusText: string | null = null
   // 0.6.8 T6: the subagents running now (agent.spawn adds one, its own
-  // turn.complete removes it) and their status-line part.
-  const runningSubagents = new Map<string, RunningSubagent>()
+  // turn.complete removes it) and their status-line part. 0.6.14 T1: kept
+  // in `$.state` too, so a reload does not forget them (RunningSet).
+  const runningSubagents: RunningSet = { agents: new Map<string, RunningSubagent>(), hydrated: null, writes: Promise.resolve() }
   let agentsStatusText: string | null = null
   const statusLine = (): string | null => composeStatusLine([promptStatusText, routerStatusText, agentsStatusText, stewardStatusText])
   // The main turn running now (turn.start → turn.complete), so the steward
@@ -2003,11 +2078,12 @@ export function register(on: On, options: PluginOptions): void {
     // no prompt has resolved it yet this session (an honest "not yet
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
-    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project)
+    const noteEffort = (agentId: string, effort: SessionEffort | null): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort)
+    return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort)
   })
 
   on('agent.spawn', async ($, e, next) => {
-    const result = await routeSubagent($, e, next, routerMode, options, subagentEffortTarget, modSkillsProjectName(orcaContextCache), runningSubagents)
+    const result = await routeSubagent($, e, next, routerMode, options, subagentEffortTarget, modSkillsProjectName(orcaContextCache), runningSubagents.agents)
     if ('agentId' in result && result.agentId !== undefined) {
       try {
         agentsStatusText = await runningSubagentsStatus($, runningSubagents, result.agentId)
@@ -2019,6 +2095,29 @@ export function register(on: On, options: PluginOptions): void {
     return result
   })
 
+  // 0.6.14 T2: one row per running subagent, above the prompt -- what it
+  // is, what it is doing, its model, its effort and why. Drawn from the copy
+  // in `$.state` (reading it subscribes this band, so every write of the
+  // running set redraws it) against `$.agent.list()`, so the count is the
+  // host's. Passes while nothing runs, while a survey holds the band, and
+  // whenever a plugin beneath already drew one: never a second band over it.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.props.hasSurvey) return next(e)
+    const beneath = await next(e)
+    if (beneath.type !== 'engine') return beneath
+    try {
+      const stored = parseRunningSubagents((await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'runningSubagents' })).value)
+      const { shown } = reconcileRunning(stored, await listAgents($), null)
+      const band = subagentBand(await resolveLocale($), shown, e.props.bodyColumns)
+      if (band === null) return beneath
+      const { Box, Text } = $.ui.resolve(e)
+      const rows = band.rows.map((row) => Text({ wrap: 'truncate-end', children: row.why.length > 0 ? [row.text, Text({ dimColor: true, children: row.why })] : row.text }))
+      return Box({ flexDirection: 'column', children: [Text({ bold: true, wrap: 'truncate-end', children: band.heading }), ...rows] })
+    } catch {
+      return beneath
+    }
+  })
+
   // The context steward (stewardAfterTurn): a subagent's run raises no
   // turn.start, and its turn.complete carries an agentId, so both hooks see
   // the main conversation alone. The steward's work runs on a timer, once
@@ -2028,9 +2127,23 @@ export function register(on: On, options: PluginOptions): void {
     return next(e)
   })
 
+  // 0.6.14 T1: a reload runs register again and raises session.start again;
+  // the running set kept in `$.state` (and any agent the host runs that
+  // nothing recorded) is shown at once, not at the next spawn.
+  on('session.start', async ($, e, next) => {
+    try {
+      agentsStatusText = await runningSubagentsStatus($, runningSubagents, null)
+      const line = statusLine()
+      if (line !== null) $.ui.status(line)
+    } catch {
+      // The status line is never a reason to fail a start.
+    }
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     // 0.6.8 T6: a subagent's own answer ends it; the status line drops it.
-    if (e.agentId !== undefined && runningSubagents.delete(e.agentId)) {
+    if (e.agentId !== undefined && runningSubagents.agents.delete(e.agentId)) {
       try {
         agentsStatusText = await runningSubagentsStatus($, runningSubagents, null)
         $.ui.status(statusLine() ?? undefined)

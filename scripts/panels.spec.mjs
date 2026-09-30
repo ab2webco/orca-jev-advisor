@@ -932,6 +932,39 @@ test('an empty model catalog says so in words and still offers the add form', { 
   }
 })
 
+// 0.6.14 T4 (JEVADV-85): an empty catalog that was never seeded is not one
+// the person emptied. It says the plugin's own models load when its worker
+// starts, and what the plugin log says if they did not; one the person
+// emptied (the seed marker is set) keeps the plain "add a model" text.
+test('a never-seeded empty catalog names the shipped models and what the log should say', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const shipped = JSON.parse(await readFile(join(ROOT, 'seed/models.json'), 'utf8')).models.map((row) => row.label)
+  const { browser, page, errors } = await openPanel({ models: [] })
+  try {
+    const text = await page.evaluate(() => document.getElementById('models-empty-catalog-hint').textContent)
+    for (const label of shipped) assert.ok(text.includes(label), `the hint must name ${label}: ${text}`)
+    assert.ok(text.includes('model catalog seed planted') && text.includes('initial model seeding failed'), `the hint must say what the log shows: ${text}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('an empty catalog the person emptied keeps the plain text', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ models: [], modelsSeeded: true })
+  try {
+    const hint = await page.evaluate(() => {
+      const node = document.getElementById('models-empty-catalog-hint')
+      return { text: node.textContent, visible: getComputedStyle(node).display !== 'none' }
+    })
+    assert.ok(hint.visible)
+    assert.ok(!hint.text.includes('seed') && !hint.text.includes('Claude Opus'), `the emptied catalog must not blame the seed: ${hint.text}`)
+    assert.ok(/form below|formulario de abajo/.test(hint.text), hint.text)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('adding a model with a duplicate id is refused, and a valid one lands unranked and unavailable', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const models = [modelRow({ id: 'existing', label: 'Existing', rank: 1, available: true })]
   const { browser, page } = await openPanel({ models })

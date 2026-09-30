@@ -2,6 +2,36 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.14
+
+- **Every running agent on its own row, above the prompt.** The status line
+  used to group subagents by model (`agentes: 1 en Opus 5.5 (pedido
+  explícito), 1 en Sonnet 5.5 (Jev lo bajó) …`), so it did not say which
+  agent ran which model. A band above the prompt now lists each one while it
+  runs: its type (a prefix every row shares, such as `acme-`, dropped), what
+  it is doing, its model, its effort and why (asked for explicitly, lowered
+  or raised by Jev, inherited…). Two agents of the same type are told apart
+  by what they are doing. The band fits the terminal's width (narrow
+  terminals drop the effort column first, then give each agent two lines),
+  gives way to a question with options, and disappears when no agent runs.
+  The status line keeps the main session and says `agentes: N`.
+- **An agent started before the plugin reloaded is no longer lost.** The list
+  of running agents is kept in the session's state and checked against the
+  agents Claude Code says are running, so a reload no longer drops one from
+  the count; one the plugin never saw start is shown as "no data: started
+  before the plugin reloaded".
+- **A call quoted inside a string is not a call.** 0.6.13 read the commands
+  a `python`, `node`, `perl` or `ruby` heredoc runs by their text, so a
+  script that only wrote a document quoting a force push was refused as a
+  force push. Each body is now read the way its own language reads it:
+  strings and comments are text, and only a call in the code counts. The
+  same call written as code (`x = os.system(…)` included) is still refused.
+- **The Models tab explains an empty catalog on a new install.** Before the
+  plugin's worker has loaded the shipped models, the tab names them and says
+  what to look for in the plugin's log if they do not appear after
+  restarting Orca, instead of only "add a model with the form below". A
+  catalog someone emptied on purpose keeps the old text.
+
 ## 0.6.13
 
 Fewer false stops, one verdict per effect for team prohibitions, no private

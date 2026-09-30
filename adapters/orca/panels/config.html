@@ -445,7 +445,15 @@
         <h2 data-i18n="models.heading"></h2>
         <p class="hint" data-i18n="models.hint"></p>
         <p class="hint" id="models-source-line"><a href="https://platform.claude.com/docs/en/about-claude/models/overview" target="_blank" rel="noopener" data-i18n="models.sourceLine"></a></p>
-        <p class="hint" id="models-empty-catalog-hint" style="display:none" data-i18n="models.emptyCatalog"></p>
+        <p class="hint" id="models-empty-catalog-hint" style="display:none"></p>
+        <!--
+          0.6.14 T4 (JEVADV-85): the models seed/models.json ships, named on a
+          never-seeded empty catalog. The worker that plants them is exactly
+          what has not run then, and this sandboxed panel reads nothing but
+          storage, so the names live here; adapters/orca/panels-shipped-models.test.mjs
+          holds them to seed/models.json.
+        -->
+        <script type="application/json" id="models-shipped-labels">["Claude Fable 5.1","Claude Opus 5.5","Claude Sonnet 5.5","Claude Haiku 4.5"]</script>
 
         <div id="models-seed-notice" style="display:none; margin-bottom: 14px">
           <p class="hint info" id="models-seed-notice-text"></p>
@@ -822,6 +830,7 @@
           'models.hint': 'Esta escalera es el conjunto de modelos disponibles para el enrutador de Jev: solo elige entre los marcados como disponibles. El interruptor del enrutador de cada cuenta (apagado, medir o activo), más abajo, decide si solo mide o si también actúa. El esfuerzo que pide cada etapa se ajusta en la tabla de cada cuenta.',
           'models.sourceLine': 'Datos de los modelos tomados de la documentación de modelos de Anthropic',
           'models.emptyCatalog': 'El catálogo está vacío: por ahora cada llamada a una subtarea pasa sin cambios. Usa el formulario de abajo para agregar un modelo.',
+          'models.emptyCatalogUnseeded': 'El catálogo está vacío porque los modelos del plugin ({{models}}) todavía no se cargaron: se cargan cuando arranca su proceso de fondo (el worker). Si no aparecen después de reiniciar Orca, el registro del plugin debería decir «model catalog seed planted» o «initial model seeding failed». Mientras tanto, cada llamada a una subtarea pasa sin cambios.',
           'models.unrankedBadge': 'sin clasificar',
           'models.rankLabel': 'Puesto {{rank}}',
           'models.availableLabel': 'Disponible',
@@ -1133,6 +1142,7 @@
           'models.hint': "This ladder is the set of models available to the router: Jev only picks among the ones marked available. Each account's router switch (off, measure or active), further down, decides whether it only measures or also acts. The effort each tier asks for is set in each account's table.",
           'models.sourceLine': "Model data from Anthropic's models documentation",
           'models.emptyCatalog': 'The catalog is empty, so every subagent call passes through unchanged for now. Use the form below to add a model.',
+          'models.emptyCatalogUnseeded': 'The catalog is empty because the plugin\'s models ({{models}}) have not been loaded yet: they load when its background process (the worker) starts. If they do not appear after restarting Orca, the plugin log should say "model catalog seed planted" or "initial model seeding failed". Until then, every subagent call passes through unchanged.',
           'models.unrankedBadge': 'unranked',
           'models.rankLabel': 'Rank {{rank}}',
           'models.availableLabel': 'Available',
@@ -3597,6 +3607,9 @@
       var MODELS_SEED_REQUEST_KEY = 'modelsSeedRequest'
       var MODELS_SEED_RESULT_KEY = 'modelsSeedResult'
       var MODEL_MEASUREMENTS_KEY = 'modelMeasurements'
+      // src/core/model_seed_notice.ts's MODEL_SEED_MARKER_KEY: true once the
+      // worker planted the shipped models (0.6.14 T4).
+      var MODEL_SEED_MARKER_KEY = 'modelsSeeded'
 
       // Mirrors DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS
       // (src/core/mod_skills_readiness.ts), the same way READINESS_FALLBACK
@@ -3761,8 +3774,24 @@
 
       var modelsLadderListEl = el('models-ladder-list')
 
+      // 0.6.14 T4 (JEVADV-85): whether the worker ever planted the shipped
+      // models. An empty catalog it never seeded is not one the person
+      // emptied: it names the plugin's models and what the log should say.
+      var modelsSeeded = false
+
+      function modelsShippedLabels () {
+        try {
+          var labels = JSON.parse(el('models-shipped-labels').textContent)
+          return Array.isArray(labels) ? labels.filter(function (label) { return typeof label === 'string' }) : []
+        } catch (_error) {
+          return []
+        }
+      }
+
       function modelsRenderLadder () {
-        el('models-empty-catalog-hint').style.display = modelsLadder.length === 0 ? '' : 'none'
+        var emptyHint = el('models-empty-catalog-hint')
+        emptyHint.style.display = modelsLadder.length === 0 ? '' : 'none'
+        emptyHint.textContent = modelsSeeded ? t('models.emptyCatalog') : t('models.emptyCatalogUnseeded', { models: modelsShippedLabels().join(', ') })
         modelsLadderListEl.innerHTML = ''
         var rankedCount = modelsLadder.filter(function (r) { return r.rank !== null }).length
 
@@ -4146,8 +4175,10 @@
           read(MODELS_KEY, false),
           read(MODELS_CONFIG_KEY, false),
           read(MODELS_SEED_NOTICE_KEY, false),
-          read(MODEL_MEASUREMENTS_KEY, false)
+          read(MODEL_MEASUREMENTS_KEY, false),
+          read(MODEL_SEED_MARKER_KEY, false)
         ]).then(function (results) {
+          modelsSeeded = results[4] === true
           // A never-seeded or freshly-emptied catalog reads as [], same as
           // FRESH: every subagent call passes through unchanged, which
           // modelsRenderLadder's own empty-state hint says in words.

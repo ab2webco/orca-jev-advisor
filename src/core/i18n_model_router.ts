@@ -20,6 +20,7 @@ export type ModelRouterKey =
   | "effort.medium"
   | "effort.high"
   | "effort.xhigh"
+  | "effort.max"
   | "stage.simple"
   | "stage.standard"
   | "stage.complex"
@@ -31,8 +32,10 @@ export type ModelRouterKey =
   | "why.unknown-savings"
   | "why.pointer-prompt"
   | "why.context-window"
-  | "agents.lead"
-  | "agents.group"
+  | "agents.count"
+  | "agents.heading"
+  | "agents.row.wouldUse"
+  | "agents.row.wouldUse.short"
   | "agents.why.explicit"
   | "agents.why.lowered"
   | "agents.why.raised"
@@ -42,7 +45,19 @@ export type ModelRouterKey =
   | "agents.why.kept-pointer"
   | "agents.why.measuring"
   | "agents.why.inherited"
-  | "agents.why.no-jev";
+  | "agents.why.no-jev"
+  | "agents.why.unknown"
+  | "agents.short.explicit"
+  | "agents.short.lowered"
+  | "agents.short.raised"
+  | "agents.short.chosen"
+  | "agents.short.same"
+  | "agents.short.kept-unsure"
+  | "agents.short.kept-pointer"
+  | "agents.short.measuring"
+  | "agents.short.inherited"
+  | "agents.short.no-jev"
+  | "agents.short.unknown";
 
 export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
   es: {
@@ -62,6 +77,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "effort.medium": "medio",
     "effort.high": "alto",
     "effort.xhigh": "muy alto",
+    "effort.max": "máximo",
     "stage.simple": "consultar",
     "stage.standard": "implementar",
     "stage.complex": "analizar",
@@ -74,8 +90,12 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.pointer-prompt": "el mensaje remite a un documento",
     "why.context-window": "el contexto no cabe en un modelo menor",
     // 0.6.8 T6: the subagents running now (subagent_status.ts).
-    "agents.lead": "agentes: {{groups}}",
-    "agents.group": "{{n}} en {{model}} ({{why}})",
+    // 0.6.14 T2: the line only counts them; the band above the prompt has a
+    // row for each (subagent_band.ts).
+    "agents.count": "agentes: {{n}}",
+    "agents.heading": "Agentes en curso: {{n}}",
+    "agents.row.wouldUse": "{{why}} · mediría: {{model}}",
+    "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "pedido explícito",
     "agents.why.lowered": "Jev lo bajó",
     "agents.why.raised": "Jev lo subió",
@@ -86,6 +106,20 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.measuring": "heredado, midiendo",
     "agents.why.inherited": "heredado",
     "agents.why.no-jev": "heredado, sin respuesta de Jev",
+    // 0.6.14 T1: an agent the host runs that no spawn recorded.
+    "agents.why.unknown": "sin datos: empezó antes de recargar el plugin",
+    // The same reasons where the band is narrow.
+    "agents.short.explicit": "explícito",
+    "agents.short.lowered": "Jev lo bajó",
+    "agents.short.raised": "Jev lo subió",
+    "agents.short.chosen": "Jev",
+    "agents.short.same": "igual",
+    "agents.short.kept-unsure": "Jev duda",
+    "agents.short.kept-pointer": "documento",
+    "agents.short.measuring": "midiendo",
+    "agents.short.inherited": "heredado",
+    "agents.short.no-jev": "sin Jev",
+    "agents.short.unknown": "sin datos: antes de recargar",
   },
   en: {
     "status.active.effort": "model: {{model}} · {{effort}} effort",
@@ -104,6 +138,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "effort.medium": "medium",
     "effort.high": "high",
     "effort.xhigh": "extra high",
+    "effort.max": "max",
     "stage.simple": "ask",
     "stage.standard": "implement",
     "stage.complex": "analyse",
@@ -115,8 +150,10 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.unknown-savings": "saving not measured yet",
     "why.pointer-prompt": "the prompt points to a document",
     "why.context-window": "the context does not fit a smaller model",
-    "agents.lead": "agents: {{groups}}",
-    "agents.group": "{{n}} on {{model}} ({{why}})",
+    "agents.count": "agents: {{n}}",
+    "agents.heading": "Running agents: {{n}}",
+    "agents.row.wouldUse": "{{why}} · would use: {{model}}",
+    "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "explicit request",
     "agents.why.lowered": "lowered by Jev",
     "agents.why.raised": "raised by Jev",
@@ -127,5 +164,17 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.measuring": "inherited, measuring",
     "agents.why.inherited": "inherited",
     "agents.why.no-jev": "inherited, no answer from Jev",
+    "agents.why.unknown": "no data: started before the plugin reloaded",
+    "agents.short.explicit": "explicit",
+    "agents.short.lowered": "lowered",
+    "agents.short.raised": "raised",
+    "agents.short.chosen": "Jev",
+    "agents.short.same": "same",
+    "agents.short.kept-unsure": "unsure",
+    "agents.short.kept-pointer": "document",
+    "agents.short.measuring": "measuring",
+    "agents.short.inherited": "inherited",
+    "agents.short.no-jev": "no Jev",
+    "agents.short.unknown": "no data: before a reload",
   },
 };

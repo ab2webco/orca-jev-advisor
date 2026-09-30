@@ -77,8 +77,29 @@ export type StewardState = {
   lastCompactionTurn: number | null
 }
 
+/**
+ * 0.6.14 T1: the subagents running now, in the order they started, each as
+ * `agent.spawn` recorded it (and `turn.step` updated its effort). Kept here
+ * so a plugin reload in the same session does not forget them; pruned
+ * against `$.agent.list()`. Read back through `parseRunningSubagents`
+ * (src/core/subagent_status.ts), which drops anything malformed.
+ */
+export type RunningSubagentsState = {
+  agents: {
+    id: string
+    type: string
+    description: string
+    /** The model as a person reads it (`Opus 5.5`). */
+    label: string | null
+    effort: RouterStickyEffort | null
+    /** A `SubagentWhy` (src/core/subagent_status.ts). */
+    why: string
+    wouldUse: string | null
+  }[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'orca-jev-mod-skills': { routerSticky: RouterSticky; routerPromptOrigin: RouterPromptOrigin; steward: StewardState }
+    'orca-jev-mod-skills': { routerSticky: RouterSticky; routerPromptOrigin: RouterPromptOrigin; steward: StewardState; runningSubagents: RunningSubagentsState }
   }
 }

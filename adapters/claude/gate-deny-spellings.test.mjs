@@ -419,3 +419,26 @@ test('0.6.13 T5: an interpreter heredoc that runs a force push is refused, and s
 test('0.6.13 T5: an interpreter heredoc that only prints the text is not refused', () => {
   assertNotRefused("python3 - <<'PY'\nprint('git push --force origin x')\nPY")
 })
+
+// 0.6.14 T3 (N-09, qa-0.6.13): the doc-editing heredoc that 0.6.13 refused as
+// a force push -- its new text, a Python string, quotes the call -- is data;
+// the same call as code (N28, N30, or assigned) is still refused.
+test('0.6.14 T3: a heredoc that writes a document quoting a force push is not refused', () => {
+  assertNotRefused([
+    "python3 - <<'EOF'",
+    'from pathlib import Path',
+    'p = Path("odd/qa/qa-0.6.13.md")',
+    'text = p.read_text()',
+    "new = \"\"\"| K-py | `os.system('git push --force origin feature/qa-work')` | refuse |",
+    '| K-mirror | `git push --mirror` | refuse |"""',
+    'text = text.replace("<!-- rows -->", new)',
+    'p.write_text(text)',
+    'EOF',
+  ].join('\n'))
+})
+
+test('0.6.14 T3: the same call as code is still refused, however it is spelled', () => {
+  assertRefusedTwice("python3 <<'EOF'\nimport os\nos.system('git push --force origin x')\nEOF", FORCE_RULE)
+  assertRefusedTwice("python3 - <<'PY'\nimport os\nx = os.system('git push --force origin x')\nPY", FORCE_RULE)
+  assertRefusedTwice("node <<'EOF'\nrequire('child_process').execSync('rm -rf ~')\nEOF", RM_RULE)
+})

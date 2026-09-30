@@ -251,3 +251,62 @@ test("an interpreter heredoc that only prints or holds the text keeps it out of 
     assert.ok(!withoutHeredocBodies(command).includes(text), command);
   }
 });
+
+// 0.6.14 T3 (N-09, qa-0.6.13): 0.6.13 T5 found the calls by their text, so a
+// call spelled inside a string literal -- a document the program writes,
+// quoting `os.system('git push --force ...')` -- was read as one and the
+// write was refused as a force push. Only a call in the program's code runs.
+test("a call spelled inside a string literal or a comment of an interpreter heredoc is data", () => {
+  const force = phrase("git", "push", "--force", "origin", "feature/qa-work");
+  const rm = phrase("rm", "-rf", "~");
+  const cases: readonly [string, string][] = [
+    // The reproduction: a doc-editing script whose NEW text quotes the call.
+    [
+      [
+        "python3 - <<'EOF'",
+        "from pathlib import Path",
+        'p = Path("odd/qa/qa-0.6.13.md")',
+        "text = p.read_text()",
+        `new = """| K-py | \`os.system('${force}')\` | refuse |`,
+        `| K-mirror | \`${phrase("git", "push", "--mirror")}\` | refuse |"""`,
+        'text = text.replace("<!-- rows -->", new)',
+        "p.write_text(text)",
+        "EOF",
+      ].join("\n"),
+      force,
+    ],
+    [`python3 - <<'PY'\nopen("notes.md", "w").write("run os.system('${force}') to see it refused")\nPY`, force],
+    [`python3 - <<'PY'\nrow = 'subprocess.run("${force}", shell=True)'\nPY`, force],
+    [`python3 - <<'PY'\n# os.system('${force}')\nprint("ok")\nPY`, force],
+    [`python3 - <<'PY'\ndoc = r'''os.system("${force}")'''\nPY`, force],
+    [`node <<'JS'\nconst doc = \`execSync('${rm}')\`\nrequire('fs').writeFileSync('n.md', doc)\nJS`, rm],
+    [`node <<'JS'\nconst doc = 'execSync("${rm}")'\nJS`, rm],
+    [`node <<'JS'\n// execSync('${rm}')\n/* spawnSync('${rm}') */\nJS`, rm],
+    [`perl <<'PL'\nprint "system '${rm}' and \`${rm}\`\\n";\nPL`, rm],
+    [`ruby <<'RB'\nputs 'system("${rm}") or \`${rm}\`'\n# \`${rm}\`\nRB`, rm],
+  ];
+  for (const [command, text] of cases) {
+    const inspected = withoutHeredocBodies(command);
+    assert.ok(!inspected.includes(text), `${command}\n=> ${inspected}`);
+  }
+});
+
+test("a call in code still runs wherever it sits: assigned, nested, after a string, inside a template's ${}", () => {
+  const force = phrase("git", "push", "--force", "origin", "x");
+  const rm = phrase("rm", "-rf", "~");
+  const cases: readonly [string, string][] = [
+    [`python3 - <<'PY'\nimport os\nx = os.system('${force}')\nPY`, force],
+    [`python3 - <<'PY'\nimport subprocess\nif True:\n    code = subprocess.call("${force}", shell=True)\nPY`, force],
+    [`python3 - <<'PY'\nnote = "it's fine"; import os; os.system('${force}')\nPY`, force],
+    [`python3 - <<'PY'\ndoc = """a quoted os.system('x')"""\nimport os\nos.system("${force}")\nPY`, force],
+    [`node <<'JS'\nconst { execSync } = require('child_process')\nconsole.log(\`\${execSync('${rm}')}\`)\nJS`, rm],
+    [`node <<'JS'\nconst s = "a \\"quote\\""; require('child_process').execSync('${rm}')\nJS`, rm],
+    [`perl <<'PL'\nmy $n = "x"; system "${rm}";\nPL`, rm],
+    [`perl <<'PL'\nmy $last = $#ARGV; system "${rm}";\nPL`, rm],
+    [`ruby <<'RB'\nlabel = "x"\nout = \`${rm}\`\nRB`, rm],
+  ];
+  for (const [command, expected] of cases) {
+    const inspected = withoutHeredocBodies(command);
+    assert.ok(inspected.split("\n").includes(expected), `${command}\n=> ${inspected}`);
+  }
+});

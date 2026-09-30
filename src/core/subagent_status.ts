@@ -1,7 +1,8 @@
-// 0.6.8 T6: the subagents running now, in the status line -- which model
-// each one runs and why that model (`agentes: 2 en Opus 5.5 (pedido
-// explícito)`). Visibility only: nothing here decides anything; it reads
-// what the router (model_router_subagent.ts) already decided at spawn.
+// 0.6.8 T6: the subagents running now -- which model each one runs and why
+// that model. Visibility only: nothing here decides anything; it reads what
+// the router (model_router_subagent.ts) already decided at spawn. 0.6.14:
+// the status line only counts them (`agentes: 4`); each one's row is drawn
+// above the prompt (subagent_band.ts).
 //
 // Pure: the hooks module keeps the running set (agent.spawn adds, the
 // subagent's own turn.complete or `$.agent.list()` removes) and passes it in.
@@ -9,18 +10,86 @@
 import { translate } from "./i18n.ts";
 import type { Locale } from "./i18n.ts";
 import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
-import type { ModelRouterKey } from "./i18n_model_router.ts";
 import { baseModelId, tierOfModel } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
+import type { SessionEffort } from "./model_router_decide.ts";
 
 /** Why a running subagent is on the model it is on. */
-export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev";
+/** Why a running subagent is on the model it is on; `unknown` when nothing recorded it (0.6.14 T1: it started before the plugin loaded). */
+export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "unknown";
 
+const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "unknown"];
+
+/**
+ * One subagent running now (0.6.14 T1): what it is and what it is doing,
+ * as the tasks list shows it, and what the router gave it at spawn.
+ */
 export interface RunningSubagent {
-  /** The model as a person reads it (`Opus 5.5`). */
-  readonly label: string;
+  /** `$.agent.list()`'s id, the one its loop's events carry as `agentId`. */
+  readonly id: string;
+  /** The agent definition it runs as (`general-purpose`, `acme-frontend-developer`). */
+  readonly type: string;
+  /** Its row's label in the tasks list: the Agent call's `description`. */
+  readonly description: string;
+  /** The model as a person reads it (`Opus 5.5`); null when nothing recorded it. */
+  readonly label: string | null;
+  /** The effort its last step was sent with; null when none was sent (or none seen yet). */
+  readonly effort: SessionEffort | null;
   readonly why: SubagentWhy;
+  /** Measure mode: the model the router would have given it, when that is another one. */
+  readonly wouldUse: string | null;
+}
+
+/** An agent as `$.agent.list()` returns it, the fields read here. */
+export interface ListedAgent {
+  readonly id: string;
+  readonly type: string;
+  readonly description: string;
+  readonly status: string;
+}
+
+/**
+ * The running set against what the host runs now: `kept` is what stays
+ * recorded (a recorded agent the host lists as running, or `keep`, the one
+ * just started), `shown` adds a row for each agent the host runs that no
+ * spawn recorded (it started before this plugin loaded), first, in the
+ * host's order -- so the count always matches the host's. With no list
+ * (the host has none, or it failed) what spawn recorded stands.
+ */
+export function reconcileRunning(recorded: readonly RunningSubagent[], listed: readonly ListedAgent[] | null, keep: string | null): { kept: RunningSubagent[]; shown: RunningSubagent[] } {
+  if (listed === null) return { kept: [...recorded], shown: [...recorded] };
+  const live = listed.filter((agent) => agent.status === "running");
+  const liveIds = new Set(live.map((agent) => agent.id));
+  const kept = recorded.filter((agent) => agent.id === keep || liveIds.has(agent.id));
+  const known = new Set(kept.map((agent) => agent.id));
+  const unknown: RunningSubagent[] = live
+    .filter((agent) => !known.has(agent.id))
+    .map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, label: null, effort: null, why: "unknown", wouldUse: null }));
+  return { kept, shown: [...unknown, ...kept] };
+}
+
+function isEffort(value: unknown): value is SessionEffort {
+  return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" || (typeof value === "number" && Number.isFinite(value));
+}
+
+function parseOne(value: unknown): RunningSubagent | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.id !== "string" || typeof v.type !== "string" || typeof v.description !== "string") return null;
+  if (v.label !== null && typeof v.label !== "string") return null;
+  if (v.effort !== null && !isEffort(v.effort)) return null;
+  if (!WHYS.includes(v.why as SubagentWhy)) return null;
+  if (v.wouldUse !== null && typeof v.wouldUse !== "string") return null;
+  return { id: v.id, type: v.type, description: v.description, label: v.label, effort: v.effort, why: v.why as SubagentWhy, wouldUse: v.wouldUse };
+}
+
+/** The running set as `$.state` keeps it (`{ agents }`); anything malformed is dropped, never thrown. */
+export function parseRunningSubagents(value: unknown): RunningSubagent[] {
+  if (typeof value !== "object" || value === null) return [];
+  const agents = (value as { agents?: unknown }).agents;
+  if (!Array.isArray(agents)) return [];
+  return agents.map(parseOne).filter((agent): agent is RunningSubagent => agent !== null);
 }
 
 export interface SubagentWhyInput {
@@ -68,30 +137,13 @@ export function subagentModelLabel(model: string, tiers: ResolvedTiers | null): 
   return ALIAS_FAMILY[alias] ?? (family !== undefined ? (ALIAS_FAMILY[family] as string) : model);
 }
 
-const WHY_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
-  explicit: "agents.why.explicit",
-  lowered: "agents.why.lowered",
-  raised: "agents.why.raised",
-  chosen: "agents.why.chosen",
-  same: "agents.why.same",
-  "kept-unsure": "agents.why.kept-unsure",
-  "kept-pointer": "agents.why.kept-pointer",
-  measuring: "agents.why.measuring",
-  inherited: "agents.why.inherited",
-  "no-jev": "agents.why.no-jev",
-};
-
-/** One status-line part for every subagent running now, grouped by model and reason in the order they started; null when none runs. */
-export function subagentsStatusPart(locale: Locale, running: readonly RunningSubagent[]): string | null {
+/**
+ * The status-line part for the subagents running now: how many (0.6.14 T2).
+ * Which one runs what, and why, is the band's (subagent_band.ts): grouped
+ * by model on one line, the person could not tell the agents apart. null
+ * when none runs.
+ */
+export function subagentsStatusPart(locale: Locale, running: readonly unknown[]): string | null {
   if (running.length === 0) return null;
-  const groups: { label: string; why: SubagentWhy; count: number }[] = [];
-  for (const agent of running) {
-    const group = groups.find((g) => g.label === agent.label && g.why === agent.why);
-    if (group !== undefined) group.count += 1;
-    else groups.push({ label: agent.label, why: agent.why, count: 1 });
-  }
-  const parts = groups.map((g) =>
-    translate(MODEL_ROUTER_CATALOG, locale, "agents.group", { n: String(g.count), model: g.label, why: translate(MODEL_ROUTER_CATALOG, locale, WHY_KEY[g.why]) }),
-  );
-  return translate(MODEL_ROUTER_CATALOG, locale, "agents.lead", { groups: parts.join(", ") });
+  return translate(MODEL_ROUTER_CATALOG, locale, "agents.count", { n: String(running.length) });
 }
