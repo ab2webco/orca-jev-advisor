@@ -46,7 +46,86 @@ const SHELL_READERS = /(^|[\s|;&(])(ba|z|k|da|fi)?sh\b/;
  * (fed to some non-shell program) visible too.
  */
 export function withoutHeredocBodies(command: string): string {
-  return mapHeredocBodies(command, (heredoc) => (bodyStaysVisible(heredoc) ? [...heredoc.body, ...heredoc.terminator] : []));
+  return mapHeredocBodies(command, (heredoc) => {
+    if (bodyStaysVisible(heredoc)) return [...heredoc.body, ...heredoc.terminator];
+    if (!heredoc.nested && INTERPRETER_READERS.test(heredoc.openerLine)) return commandsRunByProgram(heredoc.body.join("\n"), heredoc.openerLine);
+    return [];
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.13 T5 (JEVADV-63): a heredoc body fed to python, node, perl or ruby is
+// a program. Stripping it whole hid what the program hands a shell -- the
+// 0.6.12 QA ran `python3 - <<'PY'` with `os.system('git push --force origin
+// x')` and got only advice. Keeping it whole would read Python as shell. So
+// the body is replaced by the command lines it runs: the string arguments of
+// a call that hands them to a shell or runs them as a program (os.system,
+// subprocess.*, child_process exec/spawn, system, exec, popen, Open3), and a
+// backtick, `qx` or `%x` string for perl and ruby. Each becomes its own line,
+// read by the rules in command position; a print or a string the program
+// only holds stays out of view, as before.
+// ---------------------------------------------------------------------------
+
+/** Programs whose heredoc body is a program in their own language. */
+const INTERPRETER_READERS = /(^|[\s|;&(])(?:\S*\/)?(?:python[\d.]*|node|perl|ruby)\b/;
+/** A call that runs its string arguments; `(` or, for perl and ruby, a string right after the name. */
+const RUNS_COMMAND_CALL = /(?<![\w$])(?:os\.(?:system|popen|exec\w*|spawn\w*)|subprocess\.\w+|execSync|execFileSync|execFile|spawnSync|spawn|exec|system|popen|Open3\.\w+)\s*(?:(\()|(?=["']))/g;
+/** perl's and ruby's own command strings: `qx{...}`/`qx(...)` and `%x(...)`/`%x{...}`. */
+const QUOTED_COMMAND = /(?:\bqx|%x)([({[])/g;
+const CLOSING: Readonly<Record<string, string>> = { "(": ")", "{": "}", "[": "]" };
+
+/** Every string literal in `text` ('...', "...", `...`), escapes kept as written. */
+function stringLiterals(text: string): string[] {
+  const out: string[] = [];
+  for (let at = 0; at < text.length; at += 1) {
+    const quote = text[at] ?? "";
+    if (quote !== "'" && quote !== '"' && quote !== "`") continue;
+    let end = at + 1;
+    while (end < text.length && text[end] !== quote) end += text[end] === "\\" ? 2 : 1;
+    out.push(text.slice(at + 1, end));
+    at = end;
+  }
+  return out;
+}
+
+/** The text from `from` up to the bracket that closes the one before it, strings skipped. */
+function bracketBody(text: string, from: number, open: string): string {
+  const close = CLOSING[open] ?? ")";
+  let depth = 1;
+  let at = from;
+  while (at < text.length && depth > 0) {
+    const char = text[at] ?? "";
+    if (char === "'" || char === '"' || char === "`") {
+      at += 1;
+      while (at < text.length && text[at] !== char) at += text[at] === "\\" ? 2 : 1;
+    } else if (char === open) depth += 1;
+    else if (char === close) depth -= 1;
+    at += 1;
+  }
+  return text.slice(from, Math.max(from, at - 1));
+}
+
+/** perl and ruby run a backtick string as a shell command; python has none and node's is a template. */
+const BACKTICK_RUNNERS = /(^|[\s|;&(])(?:\S*\/)?(?:perl|ruby)\b/;
+
+/** The command lines a program body runs through a shell or as a program (see the note above). */
+function commandsRunByProgram(body: string, openerLine: string): string[] {
+  const out: string[] = [];
+  const add = (line: string): void => {
+    if (line.length > 0) out.push(line);
+  };
+  for (const match of body.matchAll(RUNS_COMMAND_CALL)) {
+    const after = (match.index ?? 0) + match[0].length;
+    // `system("git", "push")`, `run(["git", "push"])`: every string argument, in order.
+    // `system "git push"` (perl, ruby): the one string right after the name.
+    const strings = match[1] === "(" ? stringLiterals(bracketBody(body, after, "(")) : stringLiterals(body.slice(after)).slice(0, 1);
+    add(strings.filter((part) => part.length > 0).join(" "));
+  }
+  if (BACKTICK_RUNNERS.test(openerLine)) {
+    for (const match of body.matchAll(QUOTED_COMMAND)) add(bracketBody(body, (match.index ?? 0) + match[0].length, match[1] ?? "(").trim());
+    for (const match of body.matchAll(/`([^`]*)`/g)) add((match[1] ?? "").trim());
+  }
+  return out;
 }
 
 /**

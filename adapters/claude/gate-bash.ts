@@ -61,7 +61,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -669,7 +669,10 @@ function emit(decision: Decision, reason: string, systemMessage?: string): void 
     },
   }
   if (systemMessage !== undefined) payload['systemMessage'] = systemMessage
-  process.stdout.write(JSON.stringify(payload))
+  // 0.6.13 T5 (JEVADV-68): written synchronously, because the process exits
+  // as soon as main() returns (see the end of this file); a pipe write on
+  // macOS is asynchronous and could be cut off by that exit.
+  writeSync(1, JSON.stringify(payload))
 }
 
 /** No verdict: the permission follows its normal course. This is the default exit. */
@@ -690,7 +693,7 @@ function passThroughWithNotice(message: string): void {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
     systemMessage: t('notice', { message }),
   }
-  process.stdout.write(JSON.stringify(payload))
+  writeSync(1, JSON.stringify(payload))
   process.exit(0)
 }
 
@@ -939,7 +942,7 @@ function emitAdvice(segment: string, effect: string, modelText: string): void {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: modelText },
     systemMessage: t('advisedLine', { segment, effect }),
   }
-  process.stdout.write(JSON.stringify(payload))
+  writeSync(1, JSON.stringify(payload))
 }
 
 /**
@@ -2189,4 +2192,9 @@ async function main(): Promise<void> {
   emit(resolved.decision, finalReason, finalSystemMessage)
 }
 
+// 0.6.13 T5 (JEVADV-68): exit as soon as the verdict is written. Every write
+// above is synchronous (writeSync, appendFileSync), so nothing is lost; what
+// this cuts is whatever timer is still pending -- before 0.6.13 the losing
+// Jev budget timer kept the process alive a median 1.4 s past its verdict.
 await main()
+process.exit(0)

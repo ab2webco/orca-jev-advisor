@@ -195,8 +195,13 @@ export interface JevFetchResponse {
 
 export type JevFetch = (url: string, init: JevFetchInit) => Promise<JevFetchResponse>;
 
-/** Resolves after `ms` milliseconds; satisfied by `$.clock.sleep` or a `setTimeout` wrapper. */
-export type JevSleep = (ms: number) => Promise<void>;
+/**
+ * Resolves after `ms` milliseconds; satisfied by `$.clock.sleep` or a
+ * `setTimeout` wrapper. `signal`, when given and honoured, ends the wait
+ * early and releases the timer (0.6.13 T5: the default one does, so the
+ * gate hook's process is free to exit once its verdict is written).
+ */
+export type JevSleep = (ms: number, signal?: AbortSignal) => Promise<void>;
 
 /** The global `fetch`, narrowly cast -- never named directly (see above). Null where there is none. */
 function defaultFetch(): JevFetch | null {
@@ -204,12 +209,30 @@ function defaultFetch(): JevFetch | null {
   return typeof candidate === "function" ? (candidate as JevFetch) : null;
 }
 
-/** The global timer, narrowly cast -- never named directly (see above). Null where there is none. */
-function defaultSleep(): JevSleep | null {
+/**
+ * The global timer, narrowly cast -- never named directly (see above). Null
+ * where there is none. An aborted `signal` clears the timer and resolves at
+ * once (JEVADV-68: the losing budget timer kept the gate process alive for
+ * the rest of the budget, a median 1.4 s after the verdict was written).
+ */
+export function defaultSleep(): JevSleep | null {
   const candidate = (globalThis as { setTimeout?: unknown }).setTimeout;
   if (typeof candidate !== "function") return null;
   const schedule = candidate as (fn: () => void, ms: number) => unknown;
-  return (ms: number) => new Promise((resolvePromise) => void schedule(() => resolvePromise(), ms));
+  const clearCandidate = (globalThis as { clearTimeout?: unknown }).clearTimeout;
+  const clear = typeof clearCandidate === "function" ? (clearCandidate as (handle: unknown) => void) : null;
+  return (ms: number, signal?: AbortSignal) =>
+    new Promise((resolvePromise) => {
+      const handle = schedule(() => resolvePromise(), ms);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          clear?.(handle);
+          resolvePromise();
+        },
+        { once: true },
+      );
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -292,8 +315,13 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
     // The loser of the race is never awaited again, but `Promise.race`
     // attaches a handler to every promise it is given up front, so this
     // one's eventual settlement (after the fetch already won) never
-    // surfaces as an unhandled rejection.
-    const budget = doSleep(budgetMs).then((): never => {
+    // surfaces as an unhandled rejection. 0.6.13 T5: once the race is
+    // settled the budget's sleep is aborted, so its timer is released and a
+    // short-lived caller (the gate hook) exits right after its verdict; a
+    // sleep that ignores the signal just runs out as before.
+    const budgetSettled = new AbortController();
+    const budget = doSleep(budgetMs, budgetSettled.signal).then((): Promise<never> => {
+      if (budgetSettled.signal.aborted) return new Promise<never>(() => undefined);
       timedOut = true;
       controller.abort();
       throw new JevTimeoutError(budgetMs);
@@ -314,6 +342,8 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
       if (timedOut || error instanceof JevTimeoutError) throw new JevTimeoutError(budgetMs);
       if (error instanceof Error && error.name === "AbortError") throw new JevTimeoutError(budgetMs);
       throw new JevRequestError(`Couldn't reach Jev: ${error instanceof Error ? error.message : String(error)}`, null);
+    } finally {
+      budgetSettled.abort();
     }
 
     if (response.ok) {

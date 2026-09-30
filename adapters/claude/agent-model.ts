@@ -196,8 +196,8 @@ async function main(): Promise<void> {
   // alive for up to BUDGET_MS after the real work is done. `writeSync`
   // blocks until the write completes, so the exit right after it can never
   // race a partially-flushed rewrite off to Claude Code. gate-bash.ts does
-  // not need this: it returns from `emit()` and lets main() finish normally
-  // instead of calling `process.exit` itself.
+  // the same since 0.6.13 (JEVADV-68): its verdicts are written with
+  // `writeSync` and it exits as soon as main() returns.
   if (result.stdout !== null) writeSync(1, result.stdout)
   process.exit(0)
 }

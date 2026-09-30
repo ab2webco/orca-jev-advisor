@@ -176,7 +176,28 @@ F-10..F-14, the rest of the backlog.
   (under home, `~/...`, `$HOME/...`, another volume, `/mnt/x/y`) is a `<path-N>`, the same
   value the same placeholder in one request. Not covered: relative paths, Windows paths, and
   skill/tool candidate descriptions (plugin text, not the person's).
-- [ ] T5 interpreter heredocs and gate tail
+- [x] T5 interpreter heredocs and gate tail. Proof: `command_text.test.ts` 2 new,
+  `gate-deny-spellings.test.mjs` 2 new, new `src/core/jev.test.ts` 2 (real timers): RED 4/6
+  (the two print-only cases already held; jev.test.ts failed on the missing `defaultSleep`
+  export), GREEN 6/6; `npm test` 2757/2757. Live probe (working-tree hook): the 0.6.12 row
+  K-py-heredoc-force (`python3 - <<'PY'` + `os.system('git push --force origin x')`)
+  `REFUSED` forcePush, retry too (was advice); a node heredoc `execSync('git push -f ...')`
+  `REFUSED` forcePush; a python heredoc `subprocess.run(['rm', '-rf', '/'])` `REFUSED` rmRf;
+  a python heredoc that only prints the same text allowed. Tail (scratchpad harness: spawn
+  the hook, time from the verdict's first stdout byte to process exit, a fresh cache dir per
+  run so Jev is really called, `touch` in feat-app): before, 5 runs, median 1395 ms (min
+  1357, max 1426; total median 1999 ms, verdict at 604 ms); after, 10 runs, median 9 ms (min
+  7, max 12; total median 536 ms). A local-rule refusal: 11 ms before, 2 ms after.
+  Decisions: an interpreter heredoc body is replaced by the command lines it runs (every
+  string argument of `os.system`, `os.popen`, `os.exec*`, `subprocess.*`, `exec`/`execSync`/
+  `execFile*`/`spawn*`, `system`, `popen`, `Open3.*`; for perl and ruby also backtick, `qx`
+  and `%x` strings), one per line, read in command position; the rest of the program stays
+  out of view, so a print or a held string is still data. A shell reader keeps its whole
+  body, as before. `python3 -c "..."` keeps its 0.6.x treatment (interpreter code is
+  advice). Tail: both halves -- `callJev` aborts the budget's sleep once the race settles
+  and the default sleep clears its timer on abort (a sleep that ignores the signal, like the
+  mod's `$.clock.sleep`, runs out as before); and the hook writes its verdict with
+  `writeSync` and exits when main() returns, like agent-model.ts.
 - [ ] T6 README, QA, release, live check
 
 ## Acceptance criteria

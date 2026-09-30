@@ -221,3 +221,33 @@ test("a real command next to data text keeps its own text", () => {
     `cat > f.txt <<'EOF'\n${PLACEHOLDER}\nEOF\n${run}`,
   );
 });
+
+// 0.6.13 T5 (JEVADV-63): a heredoc body fed to an interpreter is a program.
+// What it hands a shell -- the string given to os.system, subprocess,
+// execSync, system, backticks -- reaches the rules as a command line; the
+// rest of the program (a print, a string it only holds) stays out of view.
+test("the commands an interpreter heredoc runs reach the rules, its other text does not", () => {
+  const run = phrase("git", "push", "--force", "origin", "x");
+  const cases: readonly [string, string][] = [
+    [`python3 - <<'PY'\nimport os\nos.system('${run}')\nPY`, run],
+    [`python3 <<'PY'\nimport subprocess\nsubprocess.run(["git", "push", "--force", "origin", "x"], check=True)\nPY`, run],
+    [`node <<'JS'\nconst { execSync } = require('child_process')\nexecSync("${run}")\nJS`, run],
+    [`node - <<'JS'\nrequire('child_process').spawnSync('git', ['push', '--force', 'origin', 'x'])\nJS`, run],
+    [`perl <<'PL'\nsystem "${run}";\nPL`, run],
+    [`ruby <<'RB'\nout = \`${run}\`\nRB`, run],
+  ];
+  for (const [command, expected] of cases) {
+    const inspected = withoutHeredocBodies(command);
+    assert.ok(inspected.split("\n").includes(expected), `${command}\n=> ${inspected}`);
+  }
+});
+
+test("an interpreter heredoc that only prints or holds the text keeps it out of the rules", () => {
+  const text = phrase("git", "push", "--force", "origin", "x");
+  for (const command of [
+    `python3 - <<'PY'\nprint('${text}')\nPY`,
+    `node <<'JS'\nconst note = "${text}"\nconsole.log(note)\nJS`,
+  ]) {
+    assert.ok(!withoutHeredocBodies(command).includes(text), command);
+  }
+});

@@ -381,3 +381,14 @@ test('F-05: a refusal of a push reached through cd or git -C is recorded under t
     assert.equal(record.commandFamily, 'git push', `${command}: recorded under the family of what it runs, never cd`)
   }
 })
+
+// 0.6.13 T5 (JEVADV-63): the 0.6.12 QA row K-py-heredoc-force -- a python
+// heredoc whose program runs a force push -- is the forcePush rule.
+test('0.6.13 T5: an interpreter heredoc that runs a force push is refused, and so is its retry', () => {
+  assertRefusedTwice("python3 - <<'PY'\nimport os\nos.system('git push --force origin x')\nPY", FORCE_RULE)
+  assertRefusedTwice("node <<'JS'\nrequire('child_process').execSync('git push -f origin x')\nJS", FORCE_RULE)
+})
+
+test('0.6.13 T5: an interpreter heredoc that only prints the text is not refused', () => {
+  assertNotRefused("python3 - <<'PY'\nprint('git push --force origin x')\nPY")
+})
