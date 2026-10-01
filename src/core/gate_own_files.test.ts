@@ -56,6 +56,21 @@ test("commandWritesGateOwnFile: a redirect, tee, sed -i, cp/mv over it, rm, trun
   assert.equal(writes("echo x > ~/.config/orca-supervisor/env"), `${CONFIG}/env`);
 });
 
+test("0.6.21 T2: `&>`, `&>>` and a redirection glued to a word reach a protected file as the spaced form does", () => {
+  const file = `${CONFIG}/policies.json`;
+  for (const command of [
+    "echo '[]'>~/.config/orca-supervisor/policies.json",
+    "echo '[]'>>~/.config/orca-supervisor/policies.json",
+    "some-tool &>~/.config/orca-supervisor/policies.json",
+    "some-tool &>> ~/.config/orca-supervisor/policies.json",
+    'printf x>"$HOME/.config/orca-supervisor/policies.json"',
+  ]) {
+    assert.equal(writes(command), file, command);
+  }
+  assert.equal(writes('echo "x>~/.config/orca-supervisor/policies.json"'), null);
+  assert.equal(writes("some-tool 2>&1 >/tmp/out.log"), null);
+});
+
 test("commandWritesGateOwnFile: an interpreter that opens one for writing, through the real home", () => {
   const file = `${CONFIG}/deny-tier-config.json`;
   assert.equal(writes("python3 - <<'EOF'\nimport os, json\np = os.path.expanduser('~/.config/orca-supervisor/deny-tier-config.json')\nopen(p, 'w').write('{}')\nEOF"), file);
