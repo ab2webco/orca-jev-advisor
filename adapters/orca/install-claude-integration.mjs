@@ -26,6 +26,7 @@
  *   PreToolUse         adapters/claude/agent-model.ts   asks Jev which model a subagent needs (matcher Agent)
  *   PostToolUse        adapters/claude/agent-model.ts   records the model the subagent ran on (matcher Agent)
  *   PostToolUseFailure adapters/claude/agent-model.ts   records the model, run status "failed" (matcher Agent)
+ *   PreToolUse         adapters/claude/gate-files.mjs   refuses an edit of the gate's own rules (matcher Edit|Write|MultiEdit|NotebookEdit)
  *
  * install     Idempotent. Adds our entry to the right matcher group (`Bash`
  *             for the command gate, `Agent` for the model-reclassification
@@ -262,6 +263,13 @@ const OUTCOME_HOOK_TIMEOUT_SECONDS = 2
 // hook's short timeout -- see agent-model.ts's own module note.
 const AGENT_OUTCOME_STATUS_MESSAGE = 'orca-jev-advisor: recording which model the subagent ran on'
 
+// 0.6.17 T2 (JEVADV-90): the file tools' guard (adapters/claude/gate-files.mjs)
+// -- its own matcher group, since the gate's are Bash and Agent only. It
+// decides from a fixed list with no Jev call, so its timeout is the outcome
+// hooks' short one.
+const FILE_TOOLS_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit'
+const FILE_GUARD_TIMEOUT_SECONDS = 2
+
 /**
  * 0.5.3: while a hook runs, Claude Code shows its own `statusMessage` to the
  * PERSON -- used to be English always, even on a Spanish locale. Only the
@@ -286,6 +294,11 @@ const HOOK_STATUS_MESSAGES = {
   agentModel: {
     en: 'orca-jev-advisor: asking Jev which model this subagent needs',
     es: 'orca-jev-advisor: Jev elige el modelo para este subagente'
+  },
+  // Localized like the two above: it decides (refuses an edit) while shown.
+  fileGuard: {
+    en: "orca-jev-advisor: checking the edit leaves the gate's own rules alone",
+    es: 'orca-jev-advisor: Jev comprueba que la edición no toque las reglas del gate'
   }
 }
 
@@ -324,6 +337,7 @@ function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE, node = resolveNodeComma
   const gatePath = join(pluginRoot, 'adapters', 'claude', 'gate-bash.ts')
   const outcomePath = join(pluginRoot, 'adapters', 'claude', 'gate-outcome.ts')
   const agentModelPath = join(pluginRoot, 'adapters', 'claude', 'agent-model.ts')
+  const fileGuardPath = join(pluginRoot, 'adapters', 'claude', 'gate-files.mjs')
   const gateMarker = localizedMarker('gate', locale)
   const agentModelMarker = localizedMarker('agentModel', locale)
   return {
@@ -343,7 +357,9 @@ function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE, node = resolveNodeComma
       // without disturbing any of that.
       { event: 'PreToolUse', matcher: 'Agent', markers: localizedMarkers('agentModel'), path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, HOOK_TIMEOUT_SECONDS, agentModelMarker) },
       { event: 'PostToolUse', matcher: 'Agent', markers: [AGENT_OUTCOME_STATUS_MESSAGE], path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
-      { event: 'PostToolUseFailure', matcher: 'Agent', markers: [AGENT_OUTCOME_STATUS_MESSAGE], path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) }
+      { event: 'PostToolUseFailure', matcher: 'Agent', markers: [AGENT_OUTCOME_STATUS_MESSAGE], path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
+      // 0.6.17 T2: appended at [7] for the same positional reason.
+      { event: 'PreToolUse', matcher: FILE_TOOLS_MATCHER, markers: localizedMarkers('fileGuard'), path: fileGuardPath, entry: agentModelHookEntry(node.command, fileGuardPath, FILE_GUARD_TIMEOUT_SECONDS, localizedMarker('fileGuard', locale)) }
     ]
   }
 }
@@ -535,6 +551,7 @@ async function backupSettingsOnce (backupPath, currentRawText) {
   await writeFile(tempPath, currentRawText, 'utf8')
   await rename(tempPath, backupPath)
 }
+
 
 // ---------------------------------------------------------------------------
 // Install-state bookkeeping -- what the env var held before we ever touched
@@ -1020,7 +1037,7 @@ async function install (pluginRoot) {
       })
       await backupSettingsOnce(backupPathFor(target), rawBefore)
 
-      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
+      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, fileGuardChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
         hookChanged: installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, specs[0].entry, state),
         postChanged: installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, specs[1].entry, state),
         deniedChanged: installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, specs[2].entry, state),
@@ -1028,6 +1045,7 @@ async function install (pluginRoot) {
         agentPreChanged: installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, specs[4].entry, state),
         agentPostChanged: installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, specs[5].entry, state),
         agentPostFailureChanged: installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, specs[6].entry, state),
+        fileGuardChanged: installHookEntry(settings, specs[7].event, specs[7].matcher, specs[7].markers, specs[7].entry, state),
         envChanged: installEnvVar(settings, state)
       }))
       states[target.id] = state
@@ -1043,6 +1061,7 @@ async function install (pluginRoot) {
           hook: hookChanged,
           outcomeHook: postChanged || deniedChanged || postFailureChanged,
           agentModelHook: agentPreChanged || agentPostChanged || agentPostFailureChanged,
+          fileGuardHook: fileGuardChanged,
           env: envChanged,
           modCopy: modResult.changed
         },
@@ -1088,6 +1107,7 @@ async function install (pluginRoot) {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
       outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
       agentModelHook: perTarget.some((t) => t.ok && t.changes.agentModelHook),
+      fileGuardHook: perTarget.some((t) => t.ok && t.changes.fileGuardHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
       modCopy: perTarget.some((t) => t.ok && t.changes.modCopy)
     },
@@ -1104,7 +1124,7 @@ async function install (pluginRoot) {
  *  `uninstall`'s own state fallback). `groupExistedBefore` covers every
  *  non-`Bash` matcher this installer manages (today: `Agent`) the same way. */
 function defaultEventState () {
-  return { arrayExistedBefore: true, bashGroupExistedBefore: true, groupExistedBefore: { Agent: true } }
+  return { arrayExistedBefore: true, bashGroupExistedBefore: true, groupExistedBefore: { Agent: true, [FILE_TOOLS_MATCHER]: true } }
 }
 
 async function uninstall (pluginRoot) {
@@ -1138,7 +1158,7 @@ async function uninstall (pluginRoot) {
     }
     migrateLegacyPreToolUseFlags(state)
     try {
-      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
+      const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, fileGuardChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
         hookChanged: uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, state),
         postChanged: uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, state),
         deniedChanged: uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, state),
@@ -1146,6 +1166,7 @@ async function uninstall (pluginRoot) {
         agentPreChanged: uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, state),
         agentPostChanged: uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, state),
         agentPostFailureChanged: uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, state),
+        fileGuardChanged: uninstallHookEntry(settings, specs[7].event, specs[7].matcher, specs[7].markers, state),
         envChanged: uninstallEnvVar(settings, state)
       }))
       const modCopyPath = modCopyPathFor(target)
@@ -1157,6 +1178,7 @@ async function uninstall (pluginRoot) {
           hook: hookChanged,
           outcomeHook: postChanged || deniedChanged || postFailureChanged,
           agentModelHook: agentPreChanged || agentPostChanged || agentPostFailureChanged,
+          fileGuardHook: fileGuardChanged,
           env: envChanged,
           modCopy: modResult.changed
         },
@@ -1175,6 +1197,7 @@ async function uninstall (pluginRoot) {
       hook: perTarget.some((t) => t.ok && t.changes.hook),
       outcomeHook: perTarget.some((t) => t.ok && t.changes.outcomeHook),
       agentModelHook: perTarget.some((t) => t.ok && t.changes.agentModelHook),
+      fileGuardHook: perTarget.some((t) => t.ok && t.changes.fileGuardHook),
       env: perTarget.some((t) => t.ok && t.changes.env),
       modCopy: perTarget.some((t) => t.ok && t.changes.modCopy)
     },
@@ -1202,7 +1225,7 @@ async function status (pluginRoot) {
   // every locale, so "installed" is answered correctly whether or not the
   // entry on disk carries the CURRENTLY active locale's own text.
   const { specs } = hookSpecs(pluginRoot)
-  const [gateSpec, postSpec, deniedSpec, postFailureSpec, agentPreSpec, agentPostSpec, agentPostFailureSpec] = specs
+  const [gateSpec, postSpec, deniedSpec, postFailureSpec, agentPreSpec, agentPostSpec, agentPostFailureSpec, fileGuardSpec] = specs
   const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
   const discovery = await discoverTargets()
   // Best-effort: an unreadable pluginRoot (a missing package.json, a
@@ -1231,6 +1254,7 @@ async function status (pluginRoot) {
     const ownAgentPreHook = findMarkedHook(findGroup(settings, agentPreSpec.event, agentPreSpec.matcher), agentPreSpec.markers)
     const ownAgentPostHook = findMarkedHook(findGroup(settings, agentPostSpec.event, agentPostSpec.matcher), agentPostSpec.markers)
     const ownAgentPostFailureHook = findMarkedHook(findGroup(settings, agentPostFailureSpec.event, agentPostFailureSpec.matcher), agentPostFailureSpec.markers)
+    const ownFileGuardHook = findMarkedHook(findGroup(settings, fileGuardSpec.event, fileGuardSpec.matcher), fileGuardSpec.markers)
     const modCopyPath = modCopyPathFor(target)
     const modCopy = await modCopyState(modCopyPath, modCopyMarkerPathFor(modCopyPath), modSource, modPlan?.digest ?? null).catch(() => ({ exists: false, ours: false, current: false, hasManifest: false }))
     perTarget.push({
@@ -1256,6 +1280,8 @@ async function status (pluginRoot) {
           ownAgentPostHook !== undefined && Array.isArray(ownAgentPostHook.args) && ownAgentPostHook.args.includes(agentPostSpec.path) &&
           ownAgentPostFailureHook !== undefined && Array.isArray(ownAgentPostFailureHook.args) && ownAgentPostFailureHook.args.includes(agentPostFailureSpec.path)
       },
+      // 0.6.17 T2: the file tools' guard (gate-files.mjs).
+      fileGuardHook: { installed: ownFileGuardHook !== undefined, pathMatches: ownFileGuardHook !== undefined && Array.isArray(ownFileGuardHook.args) && ownFileGuardHook.args.includes(fileGuardSpec.path) },
       env: { installed: isRecord(settings.env) && settings.env[ENV_VAR_NAME] === ENV_VAR_VALUE },
       // `installed` keeps its old meaning (this exact plugin root's copy is
       // in place, AND current for it -- JEVADV-43: `current` now also
@@ -1310,6 +1336,14 @@ async function status (pluginRoot) {
       orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.agentModelHook.installed),
       orcaPaneCount: orcaTargets.length
     },
+    fileGuardHook: {
+      installed: perTarget.every((t) => t.fileGuardHook.installed),
+      pathMatches: perTarget.every((t) => t.fileGuardHook.pathMatches),
+      installedCount: perTarget.filter((t) => t.fileGuardHook.installed).length,
+      totalCount: perTarget.length,
+      orcaPanesCovered: orcaTargets.length > 0 && orcaTargets.every((t) => t.fileGuardHook.installed),
+      orcaPaneCount: orcaTargets.length
+    },
     env: { installed: perTarget.every((t) => t.env.installed), name: ENV_VAR_NAME },
     modCopy: {
       installed: perTarget.every((t) => t.modCopy.installed),
@@ -1332,7 +1366,9 @@ function hookCheckPayloads () {
   return {
     'gate-bash': { ...base, hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
     'gate-outcome': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
-    'agent-model': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } }
+    'agent-model': { ...base, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'pwd' } },
+    // A write the guard lets through (the hook only decides, it writes nothing).
+    'gate-files': { ...base, hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: { file_path: join(tmpdir(), 'orca-jev-hooks-check.txt'), content: '' } }
   }
 }
 
@@ -1366,7 +1402,7 @@ function runHookOnce (command, args, payload) {
  */
 async function hooksCheck (pluginRoot) {
   const { specs } = hookSpecs(pluginRoot)
-  const families = [['gate-bash', specs[0]], ['gate-outcome', specs[1]], ['agent-model', specs[4]]]
+  const families = [['gate-bash', specs[0]], ['gate-outcome', specs[1]], ['agent-model', specs[4]], ['gate-files', specs[7]]]
   const payloads = hookCheckPayloads()
   const discovery = await discoverTargets()
   const runs = new Map()

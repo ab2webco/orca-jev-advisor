@@ -61,7 +61,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -78,8 +78,7 @@ import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
-import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
-import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
+import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
@@ -114,6 +113,7 @@ import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/g
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
+import { commandWritesGateOwnFile, gateOwnFiles } from '../../src/core/gate_own_files.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
@@ -1663,57 +1663,36 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
   }
 }
 
-/**
- * True when Orca has this plugin switched off.
- *
- * The gate is a Claude Code hook, so nothing about it stopped when the plugin
- * was disabled in Orca: it kept judging every command, and kept interrupting,
- * with the plugin visibly off. It consults Orca's own `disabledPlugins` now.
- *
- * That file holds the whole profile and runs to megabytes, so parsing it on
- * every command would cost more than the judgement does. The answer is cached
- * against the file's size and mtime -- a stat, measured at a fifth of a
- * millisecond -- and only re-read when Orca has actually written to it.
- *
- * Every failure answers false and leaves the gate running. A plugin that
- * silently stops protecting because a file moved is worse than one that keeps
- * asking after being switched off: the second at least announces itself to
- * the person it annoys.
- */
-function pluginDisabledInOrca(): boolean {
+/** `path` with its symlinks resolved, as far as it exists; the path as written when nothing of it does. */
+function canonicalPath(path: string): string {
   try {
-    const userData = resolveOrcaUserDataDir(PLATFORM, {
-      home: HOME_PATHS.home,
-      appDataDir: process.env.APPDATA,
-      xdgConfigHome: process.env.XDG_CONFIG_HOME,
-      orcaUserDataPath: process.env[ORCA_USER_DATA_ENV],
-    })
-    const profileId = activeProfileId(JSON.parse(readFileSync(join(userData.path, 'orca-profile-index.json'), 'utf8')))
-    if (profileId === null) return false
-    const dataPath = profileDataPath(PLATFORM, userData.path, profileId)
-    const stat = statSync(dataPath)
-    const stamp = `${stat.size}:${stat.mtimeMs}`
-
-    try {
-      const cached: unknown = JSON.parse(readFileSync(ENABLEMENT_CACHE_PATH, 'utf8'))
-      if (typeof cached === 'object' && cached !== null) {
-        const record = cached as Record<string, unknown>
-        if (record['stamp'] === stamp && typeof record['disabled'] === 'boolean') return record['disabled']
-      }
-    } catch {
-      // No usable cache yet; fall through and read the file once.
-    }
-
-    const disabled = isPluginDisabled(JSON.parse(readFileSync(dataPath, 'utf8')))
-    try {
-      mkdirSync(CACHE_DIR, { recursive: true })
-      writeFileSync(ENABLEMENT_CACHE_PATH, JSON.stringify({ stamp, disabled }))
-    } catch {
-      // A cache that cannot be written only costs the next command a re-read.
-    }
-    return disabled
+    return realpathSync(path)
   } catch {
-    return false
+    try {
+      return join(realpathSync(dirname(path)), basename(path))
+    } catch {
+      return path
+    }
+  }
+}
+
+/** A protected path as the person and the model read it: under home, spelled from `~`. */
+function displayPath(path: string): string {
+  const home = HOME_PATHS.home
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
+
+/**
+ * 0.6.17 T2 (JEVADV-90): the protected file `command` writes, or null --
+ * src/core/gate_own_files.ts reads the command; this resolves the real
+ * directories it is matched against.
+ */
+function gateOwnFileWritten(command: string, cwd: string): string | null {
+  try {
+    const own = gateOwnFiles({ configDir: CONFIG_DIR, cacheDir: CACHE_DIR, orcaUserDataDir: orcaUserDataPath(PLATFORM, HOME_PATHS.home) }, canonicalPath)
+    return commandWritesGateOwnFile(command, cwd, homedir(), own, canonicalPath)
+  } catch {
+    return null
   }
 }
 
@@ -1724,7 +1703,20 @@ async function main(): Promise<void> {
 
   // Before anything else, and before any work: if Orca has the plugin
   // switched off, this hook has no business judging anything.
-  if (pluginDisabledInOrca()) passThrough()
+  if (pluginDisabledInOrca(PLATFORM, HOME_PATHS.home, ENABLEMENT_CACHE_PATH)) passThrough()
+
+  // 0.6.17 T2 (JEVADV-90): the model cannot rewrite its own judge. A write
+  // to a file the gate or the router decides from is refused here, before
+  // the safe list (a plain `echo > file` would pass it), any key, cache or
+  // Jev call. It has no switch: the switches live in one of those files.
+  const ownFile = gateOwnFileWritten(command, cwd)
+  if (ownFile !== null) {
+    appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
+    appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
+    const file = displayPath(ownFile)
+    emit('deny', tEnglish('localRuleDeny', { why: tEnglish('rule.ownConfig', { file }) }), t('blockedLine', { segment: truncateForPersonLine(affectedSegments(command)[0] ?? command), rule: t('rule.ownConfig', { file }) }))
+    return
+  }
 
   if (isObviouslySafeCommand(command)) passThrough()
   // Naming one of these is not running it. Measured live: searching this

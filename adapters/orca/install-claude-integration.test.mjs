@@ -108,6 +108,9 @@ const GATE_MARKER = 'orca-jev-advisor: asking Jev before running this command'
 const OUTCOME_MARKER = 'orca-jev-advisor: recording what you decided'
 const AGENT_MODEL_MARKER = 'orca-jev-advisor: asking Jev which model this subagent needs'
 const AGENT_OUTCOME_MARKER = 'orca-jev-advisor: recording which model the subagent ran on'
+const FILE_GUARD_MARKER = "orca-jev-advisor: checking the edit leaves the gate's own rules alone"
+const FILE_GUARD_MARKER_ES = 'orca-jev-advisor: Jev comprueba que la edición no toque las reglas del gate'
+const FILE_TOOLS_MATCHER = 'Edit|Write|MultiEdit|NotebookEdit'
 
 test('a relative plugin root is written as an absolute path, so the hook runs from any repository', () => {
   const home = makeHome()
@@ -1260,7 +1263,7 @@ function fakeNode (home, name, version) {
   return path
 }
 
-const NODE_HOOK_EVENTS = [['PreToolUse', 'Bash'], ['PostToolUse', 'Bash'], ['PermissionDenied', 'Bash'], ['PostToolUseFailure', 'Bash'], ['PreToolUse', 'Agent'], ['PostToolUse', 'Agent'], ['PostToolUseFailure', 'Agent']]
+const NODE_HOOK_EVENTS = [['PreToolUse', 'Bash'], ['PostToolUse', 'Bash'], ['PermissionDenied', 'Bash'], ['PostToolUseFailure', 'Bash'], ['PreToolUse', 'Agent'], ['PostToolUse', 'Agent'], ['PostToolUseFailure', 'Agent'], ['PreToolUse', FILE_TOOLS_MATCHER]]
 
 function hookCommands (settings) {
   return NODE_HOOK_EVENTS.flatMap(([event, matcher]) => (group(settings, event, matcher)?.hooks ?? [])
@@ -1274,7 +1277,7 @@ test('T2a: every hook command is the absolute Node >= 24 found at install time',
   assert.deepEqual(result.node, { state: 'ok', path: good, version: 'v26.9.0' })
   assert.equal(result.nodeCommandVerified, true)
   const commands = hookCommands(readSettings(home))
-  assert.equal(commands.length, 7)
+  assert.equal(commands.length, 8)
   assert.deepEqual([...new Set(commands)], [good])
 })
 
@@ -1295,7 +1298,7 @@ test('T2a: only an old Node -> too-old with the version seen; the hooks are stil
   assert.equal(result.ok, true)
   assert.deepEqual(result.node, { state: 'too-old', path: old, version: 'v20.11.0' })
   assert.equal(result.nodeCommandVerified, false)
-  assert.equal(hookCommands(readSettings(home)).length, 7)
+  assert.equal(hookCommands(readSettings(home)).length, 8)
   assert.ok(!hookCommands(readSettings(home)).includes(old), 'a too-old Node must not become the hook command')
 })
 
@@ -1304,7 +1307,7 @@ test('T2a: no Node at all -> missing, hooks still written', () => {
   const result = run('install', home, PLUGIN_ROOT, { ORCA_JEV_NODE_CANDIDATES: join(home, 'nowhere', 'node') })
   assert.equal(result.ok, true)
   assert.deepEqual(result.node, { state: 'missing', path: null, version: null })
-  assert.equal(hookCommands(readSettings(home)).length, 7)
+  assert.equal(hookCommands(readSettings(home)).length, 8)
 })
 
 test('T2a: status probes the command the installed hooks actually use', () => {
@@ -1345,7 +1348,7 @@ test('T2b: hooks-check runs each installed hook as written and every one exits c
   run('install', home)
   const result = run('hooks-check', home, PLUGIN_ROOT, { ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor') })
   assert.equal(result.ok, true)
-  assert.deepEqual(result.results.map((r) => r.hook).sort(), ['agent-model', 'gate-bash', 'gate-outcome'])
+  assert.deepEqual(result.results.map((r) => r.hook).sort(), ['agent-model', 'gate-bash', 'gate-files', 'gate-outcome'])
   for (const r of result.results) assert.equal(r.ok, true, `${r.hook}: ${r.reason} ${r.detail}`)
 })
 
@@ -1359,9 +1362,12 @@ test('T2b: hooks-check sends the exact command and args from settings, with a ha
   const result = run('hooks-check', home)
   assert.equal(result.results.every((r) => r.ok), true)
   const runs = readdirSync(dirname(recorder)).filter((f) => f.endsWith('.run')).map((f) => readFileSync(join(dirname(recorder), f), 'utf8').split('\n'))
-  assert.deepEqual(runs.map(([arg]) => arg).sort(), ['gate-bash.ts', 'gate-outcome.ts', 'agent-model.ts'].map((f) => join(PLUGIN_ROOT, 'adapters', 'claude', f)).sort())
+  assert.deepEqual(runs.map(([arg]) => arg).sort(), ['gate-bash.ts', 'gate-outcome.ts', 'agent-model.ts', 'gate-files.mjs'].map((f) => join(PLUGIN_ROOT, 'adapters', 'claude', f)).sort())
   const payloads = runs.map(([, json]) => JSON.parse(json))
-  const gate = payloads.find((p) => p.hook_event_name === 'PreToolUse')
+  const gate = payloads.find((p) => p.hook_event_name === 'PreToolUse' && p.tool_name === 'Bash')
+  const files = payloads.find((p) => p.hook_event_name === 'PreToolUse' && p.tool_name === 'Write')
+  assert.equal(typeof files.tool_input.file_path, 'string')
+  assert.ok(!files.tool_input.file_path.includes('orca-supervisor'), 'the check edits nothing the guard protects')
   assert.equal(gate.tool_name, 'Bash')
   assert.equal(gate.tool_input.command, 'pwd')
 })
@@ -1414,4 +1420,66 @@ test('T2b: a hook that is not installed is not run and not reported', () => {
   const result = run('hooks-check', home)
   assert.equal(result.ok, true)
   assert.deepEqual(result.results, [])
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.17 T2 (JEVADV-90): the file tools' guard (adapters/claude/gate-files.mjs),
+// one PreToolUse entry in its own `Edit|Write|MultiEdit|NotebookEdit` group.
+// ---------------------------------------------------------------------------
+
+test('T2 0.6.17: a fresh install registers the file tools\' guard in its own matcher group, and status reports it', () => {
+  const home = makeHome()
+  const result = run('install', home)
+  assert.equal(result.changes.fileGuardHook, true)
+  const settings = readSettings(home)
+  const entries = ownEntries(settings, 'PreToolUse', FILE_GUARD_MARKER, FILE_TOOLS_MATCHER)
+  assert.equal(entries.length, 1)
+  assert.deepEqual(entries[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', 'gate-files.mjs')])
+  assert.equal(entries[0].timeout, 2)
+  assert.equal(ownEntries(settings, 'PreToolUse', GATE_MARKER).length, 1, 'the Bash gate is untouched')
+  const status = run('status', home)
+  assert.deepEqual({ installed: status.fileGuardHook.installed, pathMatches: status.fileGuardHook.pathMatches, installedCount: status.fileGuardHook.installedCount }, { installed: true, pathMatches: true, installedCount: 1 })
+  assert.equal(status.targets[0].fileGuardHook.installed, true)
+  run('install', home)
+  assert.equal(ownEntries(readSettings(home), 'PreToolUse', FILE_GUARD_MARKER, FILE_TOOLS_MATCHER).length, 1, 'idempotent')
+})
+
+test('T2 0.6.17: an install made before the guard existed gains it on the next install, and uninstall restores the original bytes', () => {
+  const home = makeHome()
+  writeSettings(home, { permissions: { allow: ['Bash(ls:*)'] } })
+  const before = readFileSync(settingsPathFor(home), 'utf8')
+  run('install', home)
+  const settings = readSettings(home)
+  settings.hooks.PreToolUse = settings.hooks.PreToolUse.filter((g) => g.matcher !== FILE_TOOLS_MATCHER)
+  writeSettings(home, settings)
+  assert.equal(run('status', home).fileGuardHook.installed, false)
+  const result = run('install', home)
+  assert.equal(result.changes.fileGuardHook, true)
+  assert.equal(result.changes.hook, false, 'the gate entry was already in place')
+  assert.equal(ownEntries(readSettings(home), 'PreToolUse', FILE_GUARD_MARKER, FILE_TOOLS_MATCHER).length, 1)
+  const removed = run('uninstall', home)
+  assert.equal(removed.changes.fileGuardHook, true)
+  assert.equal(readFileSync(settingsPathFor(home), 'utf8'), before)
+})
+
+test('T2 0.6.17: uninstall keeps a third party\'s hook in the same file-tools group', () => {
+  const home = makeHome()
+  writeSettings(home, { hooks: { PreToolUse: [{ matcher: FILE_TOOLS_MATCHER, hooks: [{ type: 'command', command: 'formatter', args: [], statusMessage: 'someone else, on edits' }] }] } })
+  const before = readFileSync(settingsPathFor(home), 'utf8')
+  run('install', home)
+  assert.equal(group(readSettings(home), 'PreToolUse', FILE_TOOLS_MATCHER).hooks.length, 2)
+  run('uninstall', home)
+  assert.equal(readFileSync(settingsPathFor(home), 'utf8'), before)
+})
+
+test('T2 0.6.17: the guard\'s status line follows the locale, and either spelling is recognised as ours', () => {
+  const home = makeHome()
+  writeLocale(home, 'es')
+  run('install', home)
+  assert.equal(ownEntries(readSettings(home), 'PreToolUse', FILE_GUARD_MARKER_ES, FILE_TOOLS_MATCHER).length, 1)
+  writeLocale(home, 'en')
+  run('install', home)
+  const settings = readSettings(home)
+  assert.equal(group(settings, 'PreToolUse', FILE_TOOLS_MATCHER).hooks.length, 1, 'switching locale replaces, never duplicates')
+  assert.equal(run('status', home).fileGuardHook.installed, true)
 })

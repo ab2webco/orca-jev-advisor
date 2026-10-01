@@ -3030,3 +3030,37 @@ function writeQueueModeMirror (home, enabled) {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, JSON.stringify({ enabled }))
 }
+
+// ---------------------------------------------------------------------------
+// 0.6.17 T2 (JEVADV-90): a write to one of the gate's own decision inputs is
+// a local refusal, before any key, cache or Jev call; reading them is not.
+// The throwaway HOME's own config directory is the real one for this run
+// (ORCA_SUPERVISOR_CONFIG_DIR, see run() above).
+// ---------------------------------------------------------------------------
+
+test("T2: writing the gate's own policies mirror is refused locally, and recorded", () => {
+  const home = makeHome()
+  for (const command of [
+    "echo '[]' > ~/.config/orca-supervisor/policies.json",
+    'sed -i "" "s/never/always/" "$HOME/.config/orca-supervisor/deny-tier-config.json"',
+    `cp /tmp/x.json ${join(home, '.config', 'orca-supervisor', 'team-owners.json')}`,
+    "python3 - <<'EOF'\nimport os\nopen(os.path.expanduser('~/.config/orca-supervisor/policies.json'), 'w').write('[]')\nEOF"
+  ]) {
+    const payload = JSON.parse(run(home, command))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', command)
+    assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^REFUSED: edits the gate's own rules \(~\/\.config\/orca-supervisor\/[\w.-]+\); change them in the Advisor panel\./, command)
+    assert.match(payload.systemMessage, /^jev · blocked `.+`: edits the gate's own rules/, command)
+  }
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 4)
+  assert.ok(records.every((r) => r.source === 'local-rule' && r.verdict === 'deny'))
+})
+
+test("T2: reading the gate's own files, or writing another HOME's, is not refused", () => {
+  const home = makeHome()
+  for (const command of ['cat ~/.config/orca-supervisor/policies.json', "echo '[]' > /tmp/orca-jev-test-home/.config/orca-supervisor/policies.json"]) {
+    const stdout = run(home, command)
+    const decision = stdout.trim().length === 0 ? null : JSON.parse(stdout).hookSpecificOutput?.permissionDecision
+    assert.notEqual(decision, 'deny', command)
+  }
+})

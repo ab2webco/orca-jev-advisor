@@ -13,6 +13,8 @@ export type GateKey =
   | "rule.terraformApply"
   | "rule.terraformDestroy"
   | "rule.curlPipeShell"
+  | "rule.ownConfig"
+  | "ownFileEditDeny"
   | "localRule"
   | "localRuleDeny"
   | "policyDeny"
@@ -58,10 +60,13 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "rule.terraformApply": "crea o cambia infraestructura real",
     "rule.terraformDestroy": "destruye infraestructura real",
     "rule.curlPipeShell": "descarga y ejecuta un script en tu máquina, sin revisarlo",
+    "rule.ownConfig": "edita las reglas del propio gate ({{file}}); cámbialas en el panel del Advisor",
     localRule: "regla local — {{why}}",
     // Deliberately identical to the English entry: this string is read by the
     // model, not by a person. See the note on the English one.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    // 0.6.17 T2: the file tools' counterpart of localRuleDeny, English in both catalogs for the same reason.
+    ownFileEditDeny: "REFUSED: {{why}}. You cannot make this edit. Do not retry it, and do not reach the same result by another tool, command or script. If it genuinely needs to change, say so and let the person change it in the Advisor panel. Continue with the rest of the work.",
     // A `prohibits` team policy match: the same REFUSED wording pattern as
     // localRuleDeny above, naming the policy instead of a local rule -- also
     // deliberately identical in both catalogs (model-facing, never a person).
@@ -160,6 +165,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "rule.terraformApply": "creates or changes real infrastructure",
     "rule.terraformDestroy": "destroys real infrastructure",
     "rule.curlPipeShell": "downloads and runs a script on your machine, unreviewed",
+    "rule.ownConfig": "edits the gate's own rules ({{file}}); change them in the Advisor panel",
     localRule: "local rule — {{why}}",
     // English in BOTH catalogs, on purpose. A `deny` reason is delivered to
     // the model, not to a person -- Claude Code's contract: "Refuses the call;
@@ -171,6 +177,8 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // model that only learns "this was blocked" tends to try the same effect
     // by another route, which is the outcome the rule exists to prevent.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    // 0.6.17 T2: the file tools' counterpart of localRuleDeny, English in both catalogs for the same reason.
+    ownFileEditDeny: "REFUSED: {{why}}. You cannot make this edit. Do not retry it, and do not reach the same result by another tool, command or script. If it genuinely needs to change, say so and let the person change it in the Advisor panel. Continue with the rest of the work.",
     policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     advisedLine: "jev · advised the model before `{{segment}}`: {{effect}}",
     advisedRetryLine: "jev · the model confirmed it and it ran: `{{segment}}`",

@@ -254,6 +254,8 @@ const READY = {
     // PreToolUse/PostToolUse/PostToolUseFailure hooks -- same fields as
     // `hook` above.
     agentModelHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+    // 0.6.17 T2: the file tools' guard, same aggregate shape.
+    fileGuardHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
     // install-claude-integration.mjs's status().node: the Node the hooks run on.
     node: { state: 'ok', path: '/opt/homebrew/bin/node', version: 'v26.9.0' },
     // statMirror()'s real shape. `{ ok: true }` alone left `exists` and

@@ -2612,6 +2612,9 @@ function describeClaudeIntegration (status, hookRuns) {
   // T6a's Agent-matcher hooks (adapters/claude/agent-model.ts).
   if (status.agentModelHook?.installed !== true) parts.push('missing the Agent model PreToolUse/PostToolUse hooks')
   else if (!status.agentModelHook.pathMatches) parts.push('the Agent model hooks point at a different agent-model.ts path')
+  // 0.6.17 T2: the file tools' guard (adapters/claude/gate-files.mjs).
+  if (status.fileGuardHook?.installed !== true) parts.push("missing the file tools' guard (PreToolUse on Edit/Write/MultiEdit/NotebookEdit)")
+  else if (!status.fileGuardHook.pathMatches) parts.push("the file tools' guard points at a different gate-files.mjs path")
   if (status.node?.state === 'too-old') parts.push(`Node 24 or newer is required; found ${status.node.version} at ${status.node.path}`)
   else if (status.node?.state === 'missing') parts.push('Node 24 or newer is required; none was found')
   if (hookRuns && hookRuns.ok) {

@@ -1501,6 +1501,34 @@ test('the Agent model hooks line renders only when the field exists, and never a
   }
 })
 
+// 0.6.17 T2 -- the file tools' guard: its own line, in both languages, only
+// when the worker reports the field.
+for (const [locale, installedText, missingText] of [['en', /Edit guard \(the gate's own rules\): installed in 2 of 2 places/, /Edit guard \(the gate's own rules\): not installed/], ['es', /Guarda de ediciones \(reglas del propio gate\): puesta en 2 de 2 sitios/, /Guarda de ediciones \(reglas del propio gate\): no puesta/]]) {
+  test(`the file tools' guard line says where it is installed (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    for (const [fileGuardHook, expected] of [[{ installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 }, installedText], [{ installed: false, installedCount: 1, totalCount: 2, orcaPaneCount: 2 }, missingText], [undefined, null]]) {
+      const { browser, page, errors } = await openPanel({
+        claudeIntegrationStatus: {
+          ok: true,
+          hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+          ...(fileGuardHook === undefined ? {} : { fileGuardHook }),
+          env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+          secretMirror: { ok: true, exists: false },
+          checkedAt: new Date().toISOString()
+        }
+      }, locale)
+      try {
+        const lines = await page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+        if (expected === null) assert.ok(!lines.some((line) => /Edit guard|Guarda de ediciones/.test(line)), `a guard line rendered with no status field: ${JSON.stringify(lines)}`)
+        else assert.ok(lines.some((line) => expected.test(line)), `no matching guard line: ${JSON.stringify(lines)}`)
+        assert.ok(!lines.some((line) => /undefined|\{\{/.test(line)), `an integration line leaked a missing value: ${JSON.stringify(lines)}`)
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    }
+  })
+}
+
 // 0.6.11 T2a -- the Node the installed hooks run on: a clear line when it is
 // too old or missing, a plain confirmation when it is fine, nothing when an
 // older worker never reported it.
