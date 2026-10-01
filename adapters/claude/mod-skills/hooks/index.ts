@@ -2373,7 +2373,8 @@ export function register(on: On, options: PluginOptions): void {
     // 0.6.16 T4: a failed main-loop call marks its step for the measure-only hold rule.
     if (e.agentId === undefined && phaseHolder.turn !== null) {
       try {
-        if (toolFailed(e.tool, e.input, result)) phaseHolder.turn = withLastFailed(phaseHolder.turn)
+        // The tool's arguments are on the event itself (`e.command` for Bash); there is no `e.input`.
+        if (toolFailed(e.tool, e, result)) phaseHolder.turn = withLastFailed(phaseHolder.turn)
       } catch {
         // Measure-only: never a reason to touch the call.
       }

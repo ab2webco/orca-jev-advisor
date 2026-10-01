@@ -298,7 +298,7 @@ function spanSegments(command: string): readonly (readonly SpanWord[])[] {
   const segments: SpanWord[][] = [];
   let words: SpanWord[] = [];
   let start = -1;
-  let stack: Frame[] = [];
+  let stack: QuoteState = [];
   const endWord = (end: number): void => {
     if (start !== -1) words.push({ start, end, raw: command.slice(start, end) });
     start = -1;

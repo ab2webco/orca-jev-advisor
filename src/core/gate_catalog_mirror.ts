@@ -23,7 +23,7 @@
 import { isArrayOf, isNumber, isRecord, isString } from '../guards.ts'
 import type { MatchableDestination } from './destination_match.ts'
 import { migratePolicyKind, withNormalizedPolicyScope } from './decisions.ts'
-import type { Policy, PolicyKind } from './decisions.ts'
+import type { GateDestinationContext, Policy, PolicyKind } from './decisions.ts'
 
 /**
  * A catalog destination as read from the mirror, narrowed to only what
@@ -31,6 +31,14 @@ import type { Policy, PolicyKind } from './decisions.ts'
  * per-destination override decideGateAction can use.
  */
 export interface MirroredDestination extends MatchableDestination {
+  /**
+   * The panel writes its whole catalog row, so `label` and `kind` are there
+   * too. Not validated here, on purpose: a malformed one must not take the
+   * row's policies and ceiling away with it. Read them through
+   * mirroredDestinationContext, which checks them.
+   */
+  readonly label?: unknown
+  readonly kind?: unknown
   readonly autonomy?: {
     readonly consequenceCeiling?: number
   }
@@ -85,6 +93,17 @@ function isMirroredCatalog(value: unknown): value is MirroredCatalog {
  */
 export function parseMirroredCatalog(value: unknown): MirroredCatalog | null {
   return isMirroredCatalog(value) ? value : null
+}
+
+/**
+ * What the gate tells Jev about the matched destination: its label and kind,
+ * or nothing when the mirror row lacks a string for either. The panel always
+ * writes both; a hand-edited or older row without them is still matched (its
+ * policies and ceiling apply), it just goes to Jev without a description.
+ */
+export function mirroredDestinationContext(destination: MirroredDestination): GateDestinationContext | undefined {
+  if (!isString(destination.label) || !isString(destination.kind)) return undefined
+  return { label: destination.label, kind: destination.kind }
 }
 
 /** Shape check for everything except `scope`'s VALUE -- see

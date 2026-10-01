@@ -2835,10 +2835,16 @@ function toolStep(index: number, tools: { name: string; input: Record<string, un
   return turnStepResult({ index, toolUses: tools, stopReason, usage: { model: "claude-opus-5-5", input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 100 } });
 }
 
+/**
+ * A `tool.call` event as Claude Code delivers it: the tool's arguments on the
+ * event itself (`e.command` for Bash), never under an `input` key. 0.6.18 T2:
+ * this helper used to send `{ tool, input }`, the one shape the hook read and
+ * the engine never sends, so a failed test run never reached the hold rule.
+ */
 async function toolCallThrough(handlers: Map<string, Hook>, engine: unknown, tool: string, input: Record<string, unknown>, outcome: Record<string, unknown>): Promise<void> {
   const hook = handlers.get("tool.call");
   assert.ok(hook);
-  await hook(engine, { tool, input, tool_use_id: "toolu_x" }, async () => outcome);
+  await hook(engine, { ...input, tool, tool_use_id: "toolu_x" }, async () => outcome);
 }
 
 test("0.6.16 T4: each main step logs its phase, the previous one, the EXEC run and what the hold rule would send; nothing sent changes", async () => {

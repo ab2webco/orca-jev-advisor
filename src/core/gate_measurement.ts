@@ -311,8 +311,12 @@ export interface BuildGateDecisionRecordInput {
   readonly source: GateSource;
   readonly verdict: GateVerdict;
   readonly latencyMs: number | null;
-  /** Required at construction time: whoever builds a record today always knows the build producing it. */
-  readonly pluginVersion: string;
+  /**
+   * Required at construction time: whoever builds a record names the build
+   * producing it. `undefined` only where that is read from disk and the read
+   * failed (gate-bash.ts); the record then carries no key, see below.
+   */
+  readonly pluginVersion: string | undefined;
   /** Required at construction time: whoever builds a record today always knows why (see GateStopReason above). */
   readonly stopReason: GateStopReason;
   /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */

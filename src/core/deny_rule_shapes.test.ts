@@ -201,6 +201,24 @@ test("pushTargets: each push's remote, destination branch and whether the remote
   assert.deepEqual(targets("git status && echo 'git push origin main'"), []);
 });
 
+// 0.6.18 T2: a push whose directory cannot be known (`git -C "$X"`, `cd "$X"`)
+// was read in the session's own checkout, so Jev was told it went to that
+// checkout's branch; the directory reached the callbacks as null otherwise.
+// protectedPushOutcome already treats it as unknown: no implicit destination,
+// and a remote that is not known to be local.
+test("pushTargets: a push in a directory that cannot be known is never read in the session's checkout", () => {
+  const dirs: string[] = [];
+  const localOrigin = (_push: string, dir: string) => { dirs.push(dir); return dir === PROJECT; };
+  const implicit = (dir: string): ImplicitPushDestination => { dirs.push(dir); return { kind: "branch", name: "feature/x" }; };
+  const targets = (command: string) => pushTargets(command, PROJECT, HOME, localOrigin, implicit);
+  assert.deepEqual(targets('git -C "$X" push'), []);
+  assert.deepEqual(targets('git -C "$X" push origin HEAD'), []);
+  assert.deepEqual(targets('cd "$X" && git push'), []);
+  assert.deepEqual(targets('git -C "$X" push origin main'), [{ remote: "origin", branch: "main", remoteIsLocal: false }]);
+  assert.deepEqual(targets('cd "$X" && git push origin main'), [{ remote: "origin", branch: "main", remoteIsLocal: false }]);
+  assert.deepEqual(dirs, []);
+});
+
 // 0.6.17 T1 (JEVADV-93): what a `gh` merge does, read from the command, so
 // Jev is told a pull request merge is the reviewed path and an API branch
 // merge is not, whatever branch the checkout is on.
