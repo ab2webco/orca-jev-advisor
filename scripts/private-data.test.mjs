@@ -184,6 +184,11 @@ test("no email outside example.com/example.org is tracked", (t) => {
   if (!insideGitCheckout()) return t.skip(NOT_A_CHECKOUT);
   const hits = [];
   for (const document of documents()) {
+    // 0.6.23: a binary blob (a NUL byte, git's own test) is skipped by this
+    // rule only: compressed PNG bytes spelled `CB@G8.Zx` once, and an email
+    // in a screenshot lives in its pixels, not its bytes. The path and
+    // private-terms rules still read every blob.
+    if (document.content.includes("\0")) continue;
     forEachLine(document, (line, lineNumber) => {
       for (const match of line.matchAll(EMAIL_RE)) {
         const domain = match[0].slice(match[0].indexOf("@") + 1).toLowerCase();
