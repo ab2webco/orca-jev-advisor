@@ -95,6 +95,7 @@ import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
+import { jevStateExceedsCap } from '../../src/core/jev_state_cap.ts'
 import { callJev, jevFailureOf, JevRequestError, type JevFailure } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -1575,6 +1576,7 @@ type JevOutcome =
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
   | { readonly kind: 'none'; readonly failure: JevFailure | null }
+  | { readonly kind: 'oversized' }
 
 /**
  * Calls Jev (src/core) and translates the verdict into the hook's decision.
@@ -1631,7 +1633,11 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // a destination policy (client_always_asks, ...) can recognise it too --
     // see decisions.ts's own doc on buildActionGateState's deployPublishSignal.
     const deployPublish = detectDeployPublish(command)
-    const response = await callJev(apiKey, buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames), questions, { budgetMs: BUDGET_MS })
+    const state = buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames)
+    // JEVADV-96 T5: a state over the cap would only be refused (HTTP 400) after
+    // spending the time budget, so Jev is not asked at all.
+    if (jevStateExceedsCap(state)) return { kind: 'oversized' }
+    const response = await callJev(apiKey, state, questions, { budgetMs: BUDGET_MS })
     const gate = decideGateAction({
       action: command,
       policies: commandScopedPolicies,
@@ -2102,6 +2108,14 @@ async function main(): Promise<void> {
     if (unreachableNotice.nextConsecutiveFailures !== previousUnreachableFailures) writeUnreachableFailures(unreachableNotice.nextConsecutiveFailures)
     if (unreachableNotice.shouldWarn) passThroughWithNotice(t('jevUnreachable'))
     passThrough()
+  }
+
+  if (outcome.kind === 'oversized') {
+    // Only the local rules judged this command (they already ran above), and
+    // the person is told so on every such command: it is rare, and a silent
+    // pass would look like a judged one.
+    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'local-allow', null, teamInternal, { kind: 'oversized' })
+    passThroughWithNotice(t('commandTooLarge'))
   }
 
   if (outcome.kind === 'auth-rejected') {

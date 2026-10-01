@@ -3216,3 +3216,22 @@ test('0.6.19 M3: directories that cannot be resolved at load end silently too: e
   assert.equal(result.stderr, '')
   assert.equal(result.stdout, '')
 })
+
+// JEVADV-96 T5: a command whose state is over the cap is never put to Jev.
+// An unmeasured tool with a very long argument reaches the Jev stage; with a
+// key present it would call the network, so these assert it does not: the
+// notice is shown, the row says oversized, and no unreachable row exists.
+test('JEVADV-96: an oversized command is not put to Jev, says so, and records the class', () => {
+  const home = makeHome()
+  const huge = `${MIDDLE_TIER_COMMAND} ${'a'.repeat(20000)}`
+  const payload = JSON.parse(run(home, huge, { apiKey: 'not-a-real-key' }))
+  assert.equal(payload.hookSpecificOutput, undefined, 'no verdict: the permission follows its normal course')
+  assert.match(payload.systemMessage, /too large/i, 'the note says the command was too large to judge')
+  const records = gateLogText(home).trim().split('\n').map((line) => JSON.parse(line))
+  assert.equal(records.length, 1)
+  assert.equal(records[0].failureClass, 'oversized')
+  assert.equal(records[0].source, 'local-rule')
+  assert.equal(records[0].verdict, 'allow')
+  assert.equal(records[0].commandFamily, 'some-unmeasured-tool')
+  assert.equal(JSON.stringify(records[0]).includes('aaaa'), false, 'the row never carries the command')
+})
