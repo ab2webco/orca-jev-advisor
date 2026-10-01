@@ -2,6 +2,27 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.21
+
+- **Gate logs stop growing forever.** Gate decision files older than 8 days
+  are folded into a small running-totals file and then deleted. The board's
+  "all time" and "this version" windows and the A/B count read the totals
+  plus the live files, so no number changes across a fold. The fold writes
+  its totals atomically before it deletes anything, never counts a file
+  twice, and runs at most once a day.
+- **The last redirection forms are read.** `&>file`, `&>>file`, `>|file`
+  and a redirection glued to the word before it (`echo hi>x`) name their
+  file, like the spaced form; `2>&1` and `>&2` do not. The gate's own-file
+  protection reads them too.
+- **A failed Jev call says why.** Unjudged gate rows record the failure
+  class (timeout, network, 4xx, 5xx, overload, malformed) and its status.
+- **A transient Jev failure is retried once.** A 5xx or network failure is
+  retried after `Retry-After` (or 250 ms), only when at least 1.5 s of the
+  gate's budget remain; never more than one retry per call.
+- **Oversized commands.** A state over 16,000 characters is first condensed
+  (long words and blobs elided) and judged by Jev. If it is still too large,
+  Jev is not asked: only the local rules apply and the gate says so.
+
 ## 0.6.20
 
 - **Agent-team teammates are routed.** Claude Code never fires `agent.spawn`
