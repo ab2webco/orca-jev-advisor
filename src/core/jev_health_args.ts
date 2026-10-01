@@ -3,10 +3,12 @@
 
 export type JevHealthArgs =
   | { readonly command: "usage"; readonly days: number }
+  | { readonly command: "flips"; readonly runs: number; readonly commandsFile: string | null }
   | { readonly command: "help" }
   | { readonly command: "error"; readonly message: string };
 
 export const DEFAULT_USAGE_DAYS = 7;
+export const DEFAULT_FLIP_RUNS = 5;
 
 function flagValue(argv: readonly string[], flag: string): { readonly present: boolean; readonly value: string | null } {
   const index = argv.indexOf(flag);
@@ -26,6 +28,14 @@ export function parseJevHealthArgs(argv: readonly string[]): JevHealthArgs {
     if (!days.present) return { command: "usage", days: DEFAULT_USAGE_DAYS };
     const parsed = positiveInteger(days.value);
     return parsed === null ? { command: "error", message: "--days needs a positive whole number" } : { command: "usage", days: parsed };
+  }
+  if (command === "flips") {
+    const runs = flagValue(rest, "--runs");
+    const file = flagValue(rest, "--commands-file");
+    const parsedRuns = runs.present ? positiveInteger(runs.value) : DEFAULT_FLIP_RUNS;
+    if (parsedRuns === null) return { command: "error", message: "--runs needs a positive whole number" };
+    if (file.present && file.value === null) return { command: "error", message: "--commands-file needs a path" };
+    return { command: "flips", runs: parsedRuns, commandsFile: file.value };
   }
   return { command: "help" };
 }

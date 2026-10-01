@@ -19,3 +19,13 @@ test("no command or an unknown one is help", () => {
   assert.deepEqual(parseJevHealthArgs([]), { command: "help" });
   assert.deepEqual(parseJevHealthArgs(["bogus"]), { command: "help" });
 });
+
+test("flips: --runs defaults to 5, --commands-file to none (the default corpus)", () => {
+  assert.deepEqual(parseJevHealthArgs(["flips"]), { command: "flips", runs: 5, commandsFile: null });
+  assert.deepEqual(parseJevHealthArgs(["flips", "--runs", "3", "--commands-file", "c.txt"]), { command: "flips", runs: 3, commandsFile: "c.txt" });
+});
+
+test("flips: a bad --runs, or a --commands-file with no path, is an error", () => {
+  assert.equal(parseJevHealthArgs(["flips", "--runs", "0"]).command, "error");
+  assert.equal(parseJevHealthArgs(["flips", "--commands-file"]).command, "error");
+});

@@ -625,8 +625,8 @@ export interface GateDecision {
   readonly consequence: number | null;
 }
 
-const GATE_REVERSIBLE_GATE = 0.7;
-const GATE_EXTERNAL_GATE = 0.5;
+export const GATE_REVERSIBLE_GATE = 0.7;
+export const GATE_EXTERNAL_GATE = 0.5;
 /**
  * Measured across BOTH populations the gate actually sees, not one.
  *
