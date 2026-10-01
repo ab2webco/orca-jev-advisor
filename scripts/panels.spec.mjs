@@ -3922,3 +3922,103 @@ test('no append-failure chip when every decision was written, and the card shows
     await browser.close()
   }
 })
+
+// 0.6.19 M14 (JEVADV-72): hostile names in every field. Each fixture below
+// is a real scenario with a hostile tail appended to every string that is
+// data -- a project, a branch, a command, a policy id or rule, a destination
+// or model name -- carrying all five characters that can open markup or close
+// an attribute. A timestamp keeps its value, or the rows it dates would not
+// render at all. The panel must show the tail as text and build nothing from
+// it. panel_markup_sinks.test.mjs pins the escaping these runs stand on.
+const HOSTILE_TAIL = `"'><img data-pwn src=x onerror="window.__pwned=1">&amp;`
+
+function withHostileNames (value) {
+  if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}T/.test(value) ? value : value + HOSTILE_TAIL
+  if (Array.isArray(value)) return value.map(withHostileNames)
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, withHostileNames(inner)]))
+  }
+  return value
+}
+
+async function hostileFindings (page) {
+  return page.evaluate((tail) => ({
+    built: document.querySelectorAll('[data-pwn], [onerror], [onmouseover]').length,
+    ran: window.__pwned === 1,
+    shownAsText: document.body.textContent.split(tail).length - 1,
+    inAttributes: Array.from(document.querySelectorAll('*')).filter((node) => Array.from(node.attributes).some((attr) => attr.value.includes(tail))).length
+  }), HOSTILE_TAIL)
+}
+
+for (const scenario of ['ready', 'consumption-ready', 'router-ready', 'degraded']) {
+  test(`board: hostile names in the ${scenario} scenario stay text and build nothing`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openBoardPanel(withHostileNames(SCENARIOS[scenario]))
+    try {
+      const found = await hostileFindings(page)
+      assert.equal(found.built, 0, 'a hostile name became an element or a handler')
+      assert.equal(found.ran, false)
+      assert.ok(found.shownAsText + found.inAttributes > 0, `no hostile name reached the page at all, so this proves nothing: ${JSON.stringify(found)}`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+for (const scenario of ['ready', 'seeds', 'baseline', 'catalog-proposals', 'router-ready']) {
+  test(`config: hostile catalog, policy, destination and model names in the ${scenario} scenario stay text and build nothing`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel(withHostileNames(SCENARIOS[scenario]))
+    try {
+      const found = await hostileFindings(page)
+      const values = await page.$$eval('input, textarea', (fields, tail) => fields.filter((field) => field.value.includes(tail)).length, HOSTILE_TAIL)
+      assert.equal(found.built, 0, 'a hostile name became an element or a handler')
+      assert.equal(found.ran, false)
+      assert.ok(found.shownAsText + found.inAttributes + values > 0, `no hostile name reached the page at all, so this proves nothing: ${JSON.stringify(found)}`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+// 0.6.19 (JEVADV-72): every label names its control, and <html lang> is the
+// language the panel paints in.
+for (const scenario of ['ready', 'seeds', 'router-ready']) {
+  test(`config: every label in the ${scenario} scenario is tied to a control, and every id is unique`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel(SCENARIOS[scenario])
+    try {
+      const found = await page.evaluate(() => {
+        const ids = Array.from(document.querySelectorAll('[id]')).map((node) => node.id)
+        return {
+          labels: document.querySelectorAll('label').length,
+          // A label that names a button group through aria-labelledby is the
+          // group's name, not a field's; it has no single control to name.
+          orphans: Array.from(document.querySelectorAll('label'))
+            .filter((label) => label.control === null && !(label.id && document.querySelector(`[role="group"][aria-labelledby="${label.id}"]`)))
+            .map((label) => label.textContent.trim() || label.outerHTML.slice(0, 80)),
+          duplicateIds: ids.filter((id, index) => ids.indexOf(id) !== index)
+        }
+      })
+      assert.ok(found.labels > 0)
+      assert.deepEqual(found.orphans, [], 'a label with no control is read by no screen reader and focuses nothing on click')
+      assert.deepEqual(found.duplicateIds, [])
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+for (const locale of ['en', 'es']) {
+  test(`both panels set <html lang> to the language they paint in (${locale})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    for (const open of [openPanel, openBoardPanel]) {
+      const { browser, page, errors } = await open(SCENARIOS.ready, locale)
+      try {
+        assert.equal(await page.evaluate(() => document.documentElement.lang), locale)
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    }
+  })
+}

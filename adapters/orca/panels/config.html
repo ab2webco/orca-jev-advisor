@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -335,7 +335,7 @@
           <div><label for="consequenceCeiling" data-i18n="thresholds.ceilingLabel"></label>
             <output id="consequenceCeiling"></output></div>
           <div><label for="logMaxEntries" data-i18n="thresholds.logMaxEntries"></label>
-            <input id="logMaxEntries" type="number" step="1" min="1" /></div>
+            <input id="logMaxEntries" type="number" step="1" min="1" required /></div>
         </div>
       </section>
       </div>
@@ -446,7 +446,7 @@
       <section id="models-section">
         <h2 data-i18n="models.heading"></h2>
         <p class="hint" data-i18n="models.hint"></p>
-        <p class="hint" id="models-source-line"><a href="https://platform.claude.com/docs/en/about-claude/models/overview" target="_blank" rel="noopener" data-i18n="models.sourceLine"></a></p>
+        <p class="hint" id="models-source-line"><a id="models-source-link" href="https://platform.claude.com/docs/en/about-claude/models/overview" target="_blank" rel="noopener" data-i18n="models.sourceLine"></a></p>
         <p class="hint" id="models-empty-catalog-hint" style="display:none"></p>
         <!--
           0.6.14 T4 (JEVADV-85): the models seed/models.json ships, named on a
@@ -1951,6 +1951,8 @@
       // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
+        // 0.6.19: <html lang> is the language this panel paints in.
+        document.documentElement.lang = currentLocale
         document.querySelectorAll('[data-i18n]').forEach(function (node) {
           node.textContent = t(node.getAttribute('data-i18n'))
         })
@@ -2102,11 +2104,23 @@
         return e
       }
 
+      // 0.6.19 (JEVADV-72): a label built here names its control through
+      // `for`, so a click focuses it and a screen reader reads the two
+      // together. The rows are rebuilt on every render, so the ids come from
+      // a counter, never from row data.
+      var nextControlId = 0
+      function labelControl (label, control) {
+        nextControlId += 1
+        control.id = 'field-' + nextControlId
+        label.htmlFor = control.id
+      }
+
       function fieldInput (labelText, value, placeholder, type) {
         var wrap = elMake('div')
         var label = elMake('label')
         label.textContent = labelText
         var input = elMake('input')
+        labelControl(label, input)
         input.type = type || 'text'
         input.value = value || ''
         if (placeholder) input.placeholder = placeholder
@@ -2212,6 +2226,7 @@
         var kindLabel = elMake('label')
         kindLabel.textContent = t('catalog.fieldKind')
         var kindSelect = elMake('select')
+        labelControl(kindLabel, kindSelect)
         DESTINATION_KINDS.forEach(function (k) {
           var opt = elMake('option')
           opt.value = k
@@ -2450,6 +2465,7 @@
         var kindLabel = elMake('label')
         kindLabel.textContent = t('policies.fieldKind')
         var kindSelect = elMake('select')
+        labelControl(kindLabel, kindSelect)
         // A row loaded from storage without a valid kind (written before
         // `kind` existed, or with a typo'd value) never gets guessed into one
         // of the three real options -- it lands on the '' sentinel instead,
@@ -3241,9 +3257,22 @@
         el('logMaxEntries').value = config.logMaxEntries != null ? config.logMaxEntries : 500
       }
 
+      /** 0.6.19 M13 (JEVADV-72): the cap handed to storage is a whole number
+       *  of at least 1, else the one already stored, else 500 -- an emptied
+       *  or zeroed field never reaches storage as 0, which trimmed the whole
+       *  decision history on the next record. The input is `required` and
+       *  `min="1"` too, so save-all stops on it first; this is the backstop. */
+      function logMaxEntriesFrom (raw, previous) {
+        var text = String(raw).trim()
+        var n = Number(text)
+        if (text !== '' && isFinite(n) && Math.floor(n) === n && n >= 1) return n
+        var stored = previous && previous.logMaxEntries
+        return typeof stored === 'number' && Math.floor(stored) === stored && stored >= 1 ? stored : 500
+      }
+
       function readConfig (previous) {
         return {
-          logMaxEntries: Number(el('logMaxEntries').value),
+          logMaxEntries: logMaxEntriesFrom(el('logMaxEntries').value, previous),
           jevBudgetMs: (previous && previous.jevBudgetMs) || 4000
         }
       }
@@ -3901,7 +3930,7 @@
 
           // 0.6.2: the Anthropic docs are named once, above the ladder; a
           // card links only a source of its own (a model added by hand).
-          if (row.source && /^https?:\/\//i.test(row.source) && row.source !== el('models-source-line').querySelector('a').href) {
+          if (row.source && /^https?:\/\//i.test(row.source) && row.source !== el('models-source-link').href) {
             var link = elMake('a')
             link.href = row.source
             link.target = '_blank'

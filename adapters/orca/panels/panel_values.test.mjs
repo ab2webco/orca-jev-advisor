@@ -14,32 +14,62 @@
 
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
-import { buildDestinationRow, buildPolicyRow, defaultWindowKey, liveEntryView, relativeAge, stripUndefinedValues } from './panel_values.mjs'
+import * as original from './panel_values.mjs'
+import { loadPanelFunctions, panelStringVar } from './panel_html_copies.mjs'
+
+// 0.6.19 (JEVADV-72): every case runs against the tested original AND the
+// hand-copied ES5 copy each panel ships, so a copy that drifts fails here
+// instead of on a person's screen. A panel's copy reads `t` and
+// FLOATING_TERMINAL_WORKTREE_ID as globals; they are handed in by name.
+const LIVE_LABELS = {
+  'live.floatingTerminal': 'Floating terminal',
+  'stats.unknownProject': 'Unknown project',
+  'live.unknownWorktree': 'Unknown worktree',
+}
+const t = (key) => LIVE_LABELS[key] ?? key
+const IMPLEMENTATIONS = [
+  ['panel_values.mjs', original],
+  ['config.html', loadPanelFunctions('config.html', ['stripUndefinedValues', 'buildDestinationRow', 'buildPolicyRow'])],
+  ['board.html', loadPanelFunctions('board.html', ['defaultWindowKey', 'relativeAge', 'liveEntryView'], { t, FLOATING_TERMINAL_WORKTREE_ID: original.FLOATING_TERMINAL_WORKTREE_ID })],
+]
+
+/** Registers `body` once per implementation that carries `name`. */
+function each (name, title, body) {
+  for (const [where, impl] of IMPLEMENTATIONS) {
+    if (typeof impl[name] === 'function') test(`${where}: ${title}`, () => body(impl[name]))
+  }
+}
+
+test('every hand-copied helper exists in its panel, and the board names the floating terminal as the original does', () => {
+  const names = IMPLEMENTATIONS.slice(1).flatMap(([, impl]) => Object.keys(impl)).sort()
+  assert.deepEqual(names, ['buildDestinationRow', 'buildPolicyRow', 'defaultWindowKey', 'liveEntryView', 'relativeAge', 'stripUndefinedValues'])
+  assert.equal(panelStringVar('board.html', 'FLOATING_TERMINAL_WORKTREE_ID'), original.FLOATING_TERMINAL_WORKTREE_ID)
+})
 
 // ---------- stripUndefinedValues --------------------------------------------
 
-test('stripUndefinedValues: a top-level undefined-valued key is removed entirely', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: a top-level undefined-valued key is removed entirely', (stripUndefinedValues) => {
   const result = stripUndefinedValues({ a: 1, b: undefined })
   assert.equal(Object.hasOwn(result, 'b'), false, 'the key itself must be gone, not just falsy')
   assert.equal(result.a, 1)
 })
 
-test('stripUndefinedValues: every key undefined leaves an empty object, not a crash', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: every key undefined leaves an empty object, not a crash', (stripUndefinedValues) => {
   assert.deepEqual(stripUndefinedValues({ a: undefined }), {})
 })
 
-test('stripUndefinedValues: recurses into nested objects', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: recurses into nested objects', (stripUndefinedValues) => {
   const result = stripUndefinedValues({ outer: { kept: 1, dropped: undefined } })
   assert.equal(Object.hasOwn(result.outer, 'dropped'), false)
   assert.equal(result.outer.kept, 1)
 })
 
-test('stripUndefinedValues: recurses into array elements', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: recurses into array elements', (stripUndefinedValues) => {
   const result = stripUndefinedValues([{ a: 1, b: undefined }, { c: undefined }])
   assert.deepEqual(result, [{ a: 1 }, {}])
 })
 
-test('stripUndefinedValues: falsy-but-real values are preserved, only undefined is stripped', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: falsy-but-real values are preserved, only undefined is stripped', (stripUndefinedValues) => {
   const result = stripUndefinedValues({ zero: 0, empty: '', no: false, nothing: null, missing: undefined })
   assert.equal(result.zero, 0)
   assert.equal(result.empty, '')
@@ -48,13 +78,13 @@ test('stripUndefinedValues: falsy-but-real values are preserved, only undefined 
   assert.equal(Object.hasOwn(result, 'missing'), false)
 })
 
-test('stripUndefinedValues: never mutates its input', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: never mutates its input', (stripUndefinedValues) => {
   const input = { a: 1, b: undefined }
   stripUndefinedValues(input)
   assert.equal(Object.hasOwn(input, 'b'), true, 'the original object is untouched')
 })
 
-test('stripUndefinedValues: a plain scalar passes through unchanged', () => {
+each('stripUndefinedValues', 'stripUndefinedValues: a plain scalar passes through unchanged', (stripUndefinedValues) => {
   assert.equal(stripUndefinedValues('hello'), 'hello')
   assert.equal(stripUndefinedValues(42), 42)
   assert.equal(stripUndefinedValues(null), null)
@@ -66,7 +96,7 @@ test('stripUndefinedValues: a plain scalar passes through unchanged', () => {
 // fixed at the source here by omitting the key entirely instead of setting
 // it to `undefined`.
 
-test('buildDestinationRow: a blank terminalTitleMatch produces an object with NO such key at all', () => {
+each('buildDestinationRow', 'buildDestinationRow: a blank terminalTitleMatch produces an object with NO such key at all', (buildDestinationRow) => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
     terminalTitleMatch: '',
@@ -80,7 +110,7 @@ test('buildDestinationRow: a blank terminalTitleMatch produces an object with NO
 // AutonomyConfig) and removed -- autonomy is an empty object now, since
 // there is no panel control left for consequenceCeiling (AutonomyConfig's
 // one surviving field) either.
-test('buildDestinationRow: autonomy is an empty object -- no invented literal for a field no decision reads', () => {
+each('buildDestinationRow', 'buildDestinationRow: autonomy is an empty object -- no invented literal for a field no decision reads', (buildDestinationRow) => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
     terminalTitleMatch: '',
@@ -88,7 +118,7 @@ test('buildDestinationRow: autonomy is an empty object -- no invented literal fo
   assert.deepEqual(row.autonomy, {})
 })
 
-test('buildDestinationRow: a non-blank terminalTitleMatch is kept', () => {
+each('buildDestinationRow', 'buildDestinationRow: a non-blank terminalTitleMatch is kept', (buildDestinationRow) => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
     terminalTitleMatch: 'repo-a*',
@@ -96,7 +126,7 @@ test('buildDestinationRow: a non-blank terminalTitleMatch is kept', () => {
   assert.equal(row.terminalTitleMatch, 'repo-a*')
 })
 
-test('buildDestinationRow: the result never carries an explicit undefined value anywhere', () => {
+each('buildDestinationRow', 'buildDestinationRow: the result never carries an explicit undefined value anywhere', (buildDestinationRow) => {
   const row = buildDestinationRow({
     id: 'repo-a', label: 'Repo A', kind: 'project', worktreePath: '/repo',
     terminalTitleMatch: '',
@@ -107,22 +137,22 @@ test('buildDestinationRow: the result never carries an explicit undefined value 
 
 // ---------- buildPolicyRow ---------------------------------------------------
 
-test('buildPolicyRow: an unset kind ("") produces an object with NO kind key at all', () => {
+each('buildPolicyRow', 'buildPolicyRow: an unset kind ("") produces an object with NO kind key at all', (buildPolicyRow) => {
   const row = buildPolicyRow({ id: 'p1', rule: 'never force push', kind: '', destinations: [] })
   assert.equal(Object.hasOwn(row, 'kind'), false)
 })
 
-test('buildPolicyRow: a chosen kind is kept', () => {
+each('buildPolicyRow', 'buildPolicyRow: a chosen kind is kept', (buildPolicyRow) => {
   const row = buildPolicyRow({ id: 'p1', rule: 'never force push', kind: 'prohibits', destinations: [] })
   assert.equal(row.kind, 'prohibits')
 })
 
-test('buildPolicyRow: an empty destinations scope produces an object with NO destinations key at all', () => {
+each('buildPolicyRow', 'buildPolicyRow: an empty destinations scope produces an object with NO destinations key at all', (buildPolicyRow) => {
   const row = buildPolicyRow({ id: 'p1', rule: 'never force push', kind: 'prohibits', destinations: [] })
   assert.equal(Object.hasOwn(row, 'destinations'), false)
 })
 
-test('buildPolicyRow: a non-empty destinations scope is kept', () => {
+each('buildPolicyRow', 'buildPolicyRow: a non-empty destinations scope is kept', (buildPolicyRow) => {
   const row = buildPolicyRow({ id: 'p1', rule: 'never force push', kind: 'prohibits', destinations: ['repo-a'] })
   assert.deepEqual(row.destinations, ['repo-a'])
 })
@@ -136,17 +166,17 @@ function boardWindow (overrides = {}) {
   return { available: true, totalDecisions: 10, ...overrides }
 }
 
-test('defaultWindowKey: the current plugin version when it is available and has decisions', () => {
+each('defaultWindowKey', 'defaultWindowKey: the current plugin version when it is available and has decisions', (defaultWindowKey) => {
   const windows = { version: boardWindow(), day: boardWindow(), week: boardWindow(), all: boardWindow() }
   assert.equal(defaultWindowKey(windows), 'version')
 })
 
-test('defaultWindowKey: the last 7 days when no record carries a version yet', () => {
+each('defaultWindowKey', 'defaultWindowKey: the last 7 days when no record carries a version yet', (defaultWindowKey) => {
   const windows = { version: boardWindow({ available: false, totalDecisions: 0 }), day: boardWindow(), week: boardWindow(), all: boardWindow() }
   assert.equal(defaultWindowKey(windows), 'week')
 })
 
-test('defaultWindowKey: all time when the last 7 days are empty but older decisions exist', () => {
+each('defaultWindowKey', 'defaultWindowKey: all time when the last 7 days are empty but older decisions exist', (defaultWindowKey) => {
   const windows = {
     version: boardWindow({ available: false, totalDecisions: 0 }),
     day: boardWindow({ totalDecisions: 0 }),
@@ -156,7 +186,7 @@ test('defaultWindowKey: all time when the last 7 days are empty but older decisi
   assert.equal(defaultWindowKey(windows), 'all')
 })
 
-test('defaultWindowKey: all time for an empty log, and for a summary with no windows at all', () => {
+each('defaultWindowKey', 'defaultWindowKey: all time for an empty log, and for a summary with no windows at all', (defaultWindowKey) => {
   const empty = boardWindow({ totalDecisions: 0 })
   assert.equal(defaultWindowKey({ version: { ...empty, available: false }, day: empty, week: empty, all: empty }), 'all')
   assert.equal(defaultWindowKey(undefined), 'all')
@@ -165,38 +195,43 @@ test('defaultWindowKey: all time for an empty log, and for a summary with no win
 
 const NOW = Date.parse('2026-09-24T12:00:00.000Z')
 
-test('relativeAge: under a minute is "now", including a timestamp slightly in the future', () => {
+each('relativeAge', 'relativeAge: under a minute is "now", including a timestamp slightly in the future', (relativeAge) => {
   assert.deepEqual(relativeAge('2026-09-24T11:59:30.000Z', NOW), { unit: 'now', n: 0 })
   assert.deepEqual(relativeAge('2026-09-24T12:00:05.000Z', NOW), { unit: 'now', n: 0 })
 })
 
-test('relativeAge: minutes, then hours, then days, always whole and rounded down', () => {
+each('relativeAge', 'relativeAge: minutes, then hours, then days, always whole and rounded down', (relativeAge) => {
   assert.deepEqual(relativeAge('2026-09-24T11:55:59.000Z', NOW), { unit: 'min', n: 4 })
   assert.deepEqual(relativeAge('2026-09-24T09:30:00.000Z', NOW), { unit: 'h', n: 2 })
   assert.deepEqual(relativeAge('2026-09-21T11:00:00.000Z', NOW), { unit: 'd', n: 3 })
 })
 
-test('relativeAge: null for a missing or unparseable timestamp, never NaN or "undefined"', () => {
+each('relativeAge', 'relativeAge: null for a missing or unparseable timestamp, never NaN or "undefined"', (relativeAge) => {
   assert.equal(relativeAge(null, NOW), null)
   assert.equal(relativeAge(undefined, NOW), null)
   assert.equal(relativeAge('not a date', NOW), null)
 })
 
-test('liveEntryView: project and branch as the chips, the pane and worktree ids only in the tooltip', () => {
-  const view = liveEntryView({ worktreeId: 'wt-1', project: 'orca-supervisor', rama: 'feat/board', paneKey: '1e1fff06-aaaa:a62d09bd-bbbb' })
+each('liveEntryView', 'liveEntryView: the project name and branch as the chips; the project, worktree and pane ids only in the tooltip', (liveEntryView) => {
+  const view = liveEntryView({ worktreeId: 'wt-1', project: 'github:example/orca-supervisor', projectName: 'orca-supervisor', rama: 'feat/board', paneKey: '1e1fff06-aaaa:a62d09bd-bbbb' }, t)
   assert.deepEqual(view, {
     name: 'orca-supervisor',
     branch: 'feat/board',
-    title: 'wt-1 · 1e1fff06-aaaa:a62d09bd-bbbb',
+    title: 'github:example/orca-supervisor · wt-1 · 1e1fff06-aaaa:a62d09bd-bbbb',
   })
 })
 
-test('liveEntryView: an unresolved worktree has no name and no branch, and its ids still land in the tooltip only', () => {
-  const view = liveEntryView({ worktreeId: null, project: null, rama: null, paneKey: '1e1fff06-aaaa:a62d09bd-bbbb' })
-  assert.deepEqual(view, { name: null, branch: null, title: '1e1fff06-aaaa:a62d09bd-bbbb' })
+each('liveEntryView', 'liveEntryView: the floating terminal is named as such, not as an unknown worktree', (liveEntryView) => {
+  const view = liveEntryView({ worktreeId: original.FLOATING_TERMINAL_WORKTREE_ID, project: null, projectName: null, rama: null, paneKey: 'pane-f' }, t)
+  assert.deepEqual(view, { name: 'Floating terminal', branch: null, title: 'global-floating-terminal · pane-f' })
 })
 
-test('liveEntryView: empty strings count as missing, and a malformed entry never throws', () => {
-  assert.deepEqual(liveEntryView({ project: '', rama: '', paneKey: '' }), { name: null, branch: null, title: '' })
-  assert.deepEqual(liveEntryView(null), { name: null, branch: null, title: '' })
+each('liveEntryView', 'liveEntryView: a project with no name is an unknown project; no project at all is an unknown worktree', (liveEntryView) => {
+  assert.equal(liveEntryView({ worktreeId: 'wt-gone', project: 'repo:5c1d0e4f', projectName: null, rama: 'main', paneKey: 'pane-r' }, t).name, 'Unknown project')
+  assert.deepEqual(liveEntryView({ worktreeId: null, project: null, rama: null, paneKey: '1e1fff06-aaaa:a62d09bd-bbbb' }, t), { name: 'Unknown worktree', branch: null, title: '1e1fff06-aaaa:a62d09bd-bbbb' })
+})
+
+each('liveEntryView', 'liveEntryView: empty strings count as missing, and a malformed entry never throws', (liveEntryView) => {
+  assert.deepEqual(liveEntryView({ projectName: '', project: '', rama: '', paneKey: '' }, t), { name: 'Unknown worktree', branch: null, title: '' })
+  assert.deepEqual(liveEntryView(null, t), { name: 'Unknown worktree', branch: null, title: '' })
 })

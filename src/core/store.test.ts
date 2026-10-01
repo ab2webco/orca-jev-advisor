@@ -386,3 +386,13 @@ test("getExplicitModels: a stored keep reads as keep, anything malformed as judg
   assert.equal(await getExplicitModels(fakeHost({ explicitModels: { mode: "keep" } })), "keep");
   assert.equal(await getExplicitModels(fakeHost({ explicitModels: "keep" })), "judge");
 });
+
+// 0.6.19 M13 (JEVADV-72): a cap below 1 would trim the whole decision
+// history on the next record. It is not a valid config: the default stands.
+test("getConfig: a logMaxEntries below 1, or not a whole number, fails validation and falls back to the default config", async () => {
+  for (const logMaxEntries of [0, -5, 0.5, 2.5]) {
+    const config = await getConfig(fakeHost({ config: { logMaxEntries, jevBudgetMs: 9000 } }));
+    assert.deepEqual(config, { logMaxEntries: 500, jevBudgetMs: 4_000 }, String(logMaxEntries));
+  }
+  assert.equal((await getConfig(fakeHost({ config: { logMaxEntries: 1, jevBudgetMs: 9000 } }))).logMaxEntries, 1);
+});

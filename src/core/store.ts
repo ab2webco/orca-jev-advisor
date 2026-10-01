@@ -420,8 +420,14 @@ export interface PluginConfig {
   readonly jevBudgetMs: number;
 }
 
+/**
+ * 0.6.19 M13 (JEVADV-72): `logMaxEntries` must be a whole number of at least
+ * 1. A 0 saved from an emptied panel field used to pass as a number, and the
+ * next recorded decision trimmed the whole history; now such a config is
+ * invalid and the default stands, like any other malformed config.
+ */
 function isPluginConfig(value: unknown): value is PluginConfig {
-  return isRecord(value) && isNumber(value.logMaxEntries) && isNumber(value.jevBudgetMs);
+  return isRecord(value) && isNumber(value.logMaxEntries) && Number.isInteger(value.logMaxEntries) && value.logMaxEntries >= 1 && isNumber(value.jevBudgetMs);
 }
 
 const DEFAULT_CONFIG: PluginConfig = {

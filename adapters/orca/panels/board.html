@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -950,6 +950,8 @@
         })
       }
       function applyStaticI18n () {
+        // 0.6.19: <html lang> is the language this board paints in.
+        document.documentElement.lang = currentLocale
         document.querySelectorAll('[data-i18n]').forEach(function (node) { node.textContent = t(node.getAttribute('data-i18n')) })
         document.querySelectorAll('[data-i18n-title]').forEach(function (node) { node.title = t(node.getAttribute('data-i18n-title')) })
         document.querySelectorAll('[data-i18n-aria]').forEach(function (node) { node.setAttribute('aria-label', t(node.getAttribute('data-i18n-aria'))) })
