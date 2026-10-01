@@ -33,4 +33,18 @@ Run 2026-10-01 against the 0.6.20 release branch (the worktree's own `npm instal
 
 ## Live check after the release
 
-Pending.
+Released as v0.6.20 at 027e0f5 (#30, CI green in 26 min). The dev copy `orca-jev-advisor-dev` was pulled to 027e0f5. The five installed `orca-jev-mod-skills` copies hold `src/core/teammate_route.ts` and match it, except for the test and tsconfig files that are not shipped. The five Claude Code settings files each hold 8 gate hook entries with no duplicate.
+
+A real Claude Code session (Sonnet 5.5, the second Orca account, router mode active, work-kind switch on measure) ran in an Orca terminal with `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` and `--teammate-mode in-process`. It was told to create one teammate named `reader` (list the files) and then one unnamed subagent (print the directory). Results from the shared decision log and the session's transcripts:
+
+| # | Scenario | Expected | Result |
+|---|---|---|---|
+| L1 | Teammate `reader`, first step | A `teammate` row, task matched, judged like a subagent | Row `point: "teammate"`, agentId `areader-<hex>`, `teammateTask: "matched"`, tier simple (confidence 1), Sonnet 5.5 → Haiku 4.5, `applied: true`, work kind execute (measure) |
+| L2 | Teammate's model on every step | The decided model | All 4 model fields in the teammate's transcript are `claude-haiku-4-5-20251001`; the lead's 9 stay `claude-sonnet-5-5` |
+| L3 | Unnamed control subagent | Routed at spawn as in 0.6.19 | Row `point: "subagent"`, tier simple, Sonnet 5.5 → Haiku 4.5, applied; its 4 model fields are Haiku 4.5 |
+
+## Observations
+
+- **N-22.** A first attempt ran the same session in a private tmux server outside Orca. The plugin was listed as enabled, but it wrote no row of any kind: no teammate, no subagent, no measurement. The same session in an Orca terminal wrote every row. The mod depends on what an Orca terminal provides; launches outside Orca are not a supported way to check it. Not investigated further.
+- The band was only seen in passing in the terminal tail while the teammate ran ("Haiku 4.5"), not captured cleanly; the band's layout is covered by the 16 screenshots above.
+- Whether the effort sent with a teammate's step takes effect is still not observable: the transcript records no effort.

@@ -52,7 +52,7 @@ Plane: JEVADV-99.
   - RED: teammate_route.test.ts failed at import. The band test failed 2 of 16. hooks.test.ts had 5 RED of 138: the off-mode and named-subagent cases passed from the start, as expected. GREEN: `npm test` 3028/3028. `npm run typecheck` exits 0.
   - Shots: the band fixture's reviewer is now a routed teammate. 16 images were retaken under `odd/qa/shots-0.6.20/`, and all 16 were opened.
   - Not verified: anything live. The model a routed teammate really runs on and whether its effort takes effect need a real agent team (T4). The work-kind effort cap reads the routed model, or the lead's when the router left the model alone, because the teammate's own fixed model is not reported before its answer.
-- [ ] T4 README, CHANGELOG, QA, release, live check
+- [x] T4 README, CHANGELOG, QA, release, live check (v0.6.20 at 027e0f5, #30; live check in odd/qa/qa-0.6.20.md)
 
 ## Acceptance criteria
 - Strict TDD for each behaviour change.
