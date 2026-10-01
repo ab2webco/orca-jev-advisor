@@ -259,7 +259,7 @@ test("the CLI runs from a path with a space in it", () => {
     const here = join(import.meta.dirname, "..", "..");
     for (const dir of ["src", join("adapters", "cli")]) cpSync(join(here, dir), join(repo, dir), { recursive: true });
     cpSync(join(here, "package.json"), join(repo, "package.json"));
-    const env = { ...process.env, ORCA_SUPERVISOR_CONFIG_DIR: join(root, "config"), ORCA_SUPERVISOR_CACHE_DIR: join(root, "cache") };
+    const env: NodeJS.ProcessEnv = { ...process.env, ORCA_SUPERVISOR_CONFIG_DIR: join(root, "config"), ORCA_SUPERVISOR_CACHE_DIR: join(root, "cache") };
     delete env.NODE_TEST_CONTEXT;
     const result = spawnSync(process.execPath, ["--experimental-strip-types", join(repo, "adapters", "cli", "ab_benchmark_cli.ts"), "help"], { env, encoding: "utf8" });
     assert.equal(result.status, 0, result.stderr);

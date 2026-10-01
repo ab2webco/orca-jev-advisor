@@ -2496,7 +2496,9 @@ test("0.6.14 T2: the owner's four agents, each on its own row with its own model
   const first = loadHooksWith(host, { routerMode: "active" });
   // One agent started before the reload, when nothing recorded it.
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
-  const keep = (): void => host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  const keep = (): void => {
+    host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
+  };
   void first;
   keep();
   await spawnAs(handlers, engine, spawnEvent({ model: "opus", subagentType: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" }), "agent-1", "claude-opus-5-5");

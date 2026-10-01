@@ -178,7 +178,7 @@ test("pressure shift (G4, owner rule): only at >= 95%, standard goes to simple, 
   // Only standard moves; any guard stops it.
   assert.equal(shiftForPressure("complex", "strong-economy", [], READ_ONLY), "complex");
   assert.equal(shiftForPressure("simple", "strong-economy", [], READ_ONLY), "simple");
-  assert.equal(shiftForPressure("standard", "strong-economy", ["sensitive-topic"], READ_ONLY), "standard");
+  assert.equal(shiftForPressure("standard", "strong-economy", ["low-confidence"], READ_ONLY), "standard");
 });
 
 test("stage under strong economy: a standard turn after a read-only turn runs on the simple tier", () => {

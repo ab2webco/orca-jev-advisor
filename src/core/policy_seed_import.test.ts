@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { applyPolicySeedChoices, mergePolicySeeds, resolvePolicySeedImport } from "./policy_seed_import.ts";
+import type { PolicySeedLike } from "./policy_seed_import.ts";
 
 test("mergePolicySeeds adds only ids not already present, appended after the existing rows", () => {
   const existing = [{ id: "a", rule: "rule a", kind: "permits" }];
@@ -159,7 +160,7 @@ test("mergePolicySeeds: a stored kind that fails to normalize (blank/invalid) ag
 
 test("mergePolicySeeds: a stored row missing scope next to a seed that declares one is NOT reported as differing -- it already resolves to the seed's own value under the T2 default rule", () => {
   const existing = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits" }];
-  const seeds = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "process" }];
+  const seeds: PolicySeedLike[] = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "process" }];
   const result = mergePolicySeeds(existing, seeds);
   assert.deepEqual(result.differing, []);
 });
@@ -168,8 +169,8 @@ test("mergePolicySeeds: an explicit scope that disagrees with the seed's resolve
   // Unlike the omitted-scope case above, this row has genuinely opted out --
   // a person set scope: 'command' on purpose, and the seed now says
   // 'process'. That changes what the gate does with it, so it must surface.
-  const existing = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "command" }];
-  const seeds = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "process" }];
+  const existing: PolicySeedLike[] = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "command" }];
+  const seeds: PolicySeedLike[] = [{ id: "visual_evidence", rule: "screenshots get looked at", kind: "prohibits", scope: "process" }];
   const result = mergePolicySeeds(existing, seeds);
   assert.deepEqual(result.differing.map((d) => d.fields), [["scope"]]);
 });
@@ -183,15 +184,15 @@ test("mergePolicySeeds: an explicit scope that disagrees with the seed's resolve
 // offer; a row that simply never mentioned scope silently follows the seed,
 // exactly like T2's own "missing scope" case above.
 test("mergePolicySeeds: a stored row with the OLD explicit 'command' scope next to a seed newly marking it 'local-rule' IS a real, reportable difference", () => {
-  const existing = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "command" }];
-  const seeds = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "local-rule" }];
+  const existing: PolicySeedLike[] = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "command" }];
+  const seeds: PolicySeedLike[] = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "local-rule" }];
   const result = mergePolicySeeds(existing, seeds);
   assert.deepEqual(result.differing.map((d) => d.fields), [["scope"]]);
 });
 
 test("mergePolicySeeds: a stored row missing scope next to a seed newly marking it 'local-rule' is NOT reported -- it already resolves to the seed's value", () => {
   const existing = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits" }];
-  const seeds = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "local-rule" }];
+  const seeds: PolicySeedLike[] = [{ id: "no_force_push", rule: "never rewrites history on a remote", kind: "prohibits", scope: "local-rule" }];
   const result = mergePolicySeeds(existing, seeds);
   assert.deepEqual(result.differing, []);
 });

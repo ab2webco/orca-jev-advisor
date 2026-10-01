@@ -22,7 +22,7 @@ test("a SIBLING sharing a name prefix is NOT covered and must survive", () => {
   // directories. Collapsing them would judge one under the other's
   // thresholds, silently.
   const paths = [`${P}repo`, `${P}repo-hero197`, `${P}repo/sub-133`];
-  assert.deepEqual(coveringPaths(paths).sort(), [`${P}repo`, `${P}repo-hero197`]);
+  assert.deepEqual([...coveringPaths(paths)].sort(), [`${P}repo`, `${P}repo-hero197`]);
 });
 
 test("identical paths collapse to one", () => {
@@ -36,7 +36,7 @@ test("a trailing separator does not create a second root", () => {
 
 test("Windows separators are compared by segment too", () => {
   const paths = ["C:\\src\\repo", "C:\\src\\repo\\feature", "C:\\src\\repo-2"];
-  assert.deepEqual(coveringPaths(paths).sort(), ["C:\\src\\repo", "C:\\src\\repo-2"]);
+  assert.deepEqual([...coveringPaths(paths)].sort(), ["C:\\src\\repo", "C:\\src\\repo-2"]);
 });
 
 test("one destination per repository when it has a single root", () => {
