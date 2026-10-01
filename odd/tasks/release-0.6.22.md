@@ -38,7 +38,7 @@ Authorized by the owner on 2026-10-01 ("sigue con la 98 y si puedes las demas en
 - [x] T3 `jev-health flips`
 - [x] T4 `jev-health redaction`
 - [x] T5 run the probes, record findings
-- [ ] T6 README, CHANGELOG, QA, release, live check
+- [x] T6 README, CHANGELOG, QA, release, live check
 
 ## Acceptance criteria
 - Strict TDD for each behaviour change (RED observed, then GREEN).
@@ -55,3 +55,4 @@ Authorized by the owner on 2026-10-01 ("sigue con la 98 y si puedes las demas en
   - 7cc0437 makes `usage` need 30 answers before a finding (RED 1, GREEN 11/11).
 - T5: findings in `odd/qa/qa-0.6.22.md`. No local rule was added, because none of the redaction flips does real harm. The unused options are filed as JEVADV-101.
 - Integrated branch (lead): typecheck 0, npm test 3142/3142, privacy 0, all six replay sets unchanged.
+- T6: released as v0.6.22 at cf459b4 (#34); live check L1-L3 in `odd/qa/qa-0.6.22.md`.
