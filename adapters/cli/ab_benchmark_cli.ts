@@ -33,7 +33,7 @@
 // spawn, the real Jev network call, argv and console.log.
 
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -42,6 +42,8 @@ import { promisify } from "node:util";
 import { buildActionGateQuestions, buildActionGateState, decideAction } from "../../src/core/decisions.ts";
 import { commandFamily, parseGateDecisionRecords } from "../../src/core/gate_measurement.ts";
 import { gateDecisionFilesToRead } from "../../src/core/measurement_files.ts";
+import { emptyGateDecisionTotals, GATE_DECISION_TOTALS_FILE, isFoldedFile, parseGateDecisionTotals } from "../../src/core/gate_decision_totals.ts";
+import type { GateDecisionTotals } from "../../src/core/gate_decision_totals.ts";
 import { callJev } from "../../src/core/jev.ts";
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from "../../src/core/paths.ts";
 import { resolveApiKey } from "../../src/core/secrets.ts";
@@ -274,8 +276,12 @@ function readTextOrEmpty(path: string): string {
  * Real "source":"jev" decisions in the gate's own decision log, for
  * AbBenchmarkReport.decisionsBigModelSkipped -- read-only, never written by
  * this CLI. 0.6.17 T4: the log is one file per UTC hour plus the single file
- * written before 0.6.17 (src/core/measurement_files.ts); null when there is
- * none at all.
+ * written before 0.6.17 (src/core/measurement_files.ts). 0.6.21 T1: files
+ * older than 8 days are folded into running totals and deleted
+ * (src/core/gate_decision_totals.ts), so their count comes from the totals,
+ * and a file the totals already name is skipped. The files are read before
+ * the totals, as adapters/orca/log-files.mjs does. Null when nothing was
+ * ever logged: no file, and none ever folded.
  */
 export function countRealJevDecisions(cacheDir: string = CACHE_DIR): number | null {
   let names: string[];
@@ -284,10 +290,31 @@ export function countRealJevDecisions(cacheDir: string = CACHE_DIR): number | nu
   } catch {
     return null;
   }
-  const files = gateDecisionFilesToRead(names);
-  if (files.length === 0) return null;
-  const raw = files.map((name) => readTextOrEmpty(join(cacheDir, name))).join("\n");
-  return parseGateDecisionRecords(raw).filter((r) => r.source === "jev").length;
+  const files = gateDecisionFilesToRead(names).map((name) => ({ name, text: readTextOrEmpty(join(cacheDir, name)) }));
+  const totals = readGateDecisionTotals(cacheDir);
+  const live = files.filter((file) => !isFoldedFile(totals, file.name, seenAs(join(cacheDir, file.name))));
+  if (live.length === 0 && totals.foldedFiles === 0) return null;
+  const raw = live.map((file) => file.text).join("\n");
+  return totals.jevRecordsForAb + parseGateDecisionRecords(raw).filter((r) => r.source === "jev").length;
+}
+
+/** A file's size and modification time, or null when it is gone or cannot be looked at. */
+function seenAs(path: string): { size: number; mtimeMs: number } | null {
+  try {
+    const info = statSync(path);
+    return { size: info.size, mtimeMs: info.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+/** The gate's running totals; the empty totals when there are none or they cannot be read. */
+function readGateDecisionTotals(cacheDir: string): GateDecisionTotals {
+  try {
+    return parseGateDecisionTotals(JSON.parse(readFileSync(join(cacheDir, GATE_DECISION_TOTALS_FILE), "utf8"))) ?? emptyGateDecisionTotals();
+  } catch {
+    return emptyGateDecisionTotals();
+  }
 }
 
 /**

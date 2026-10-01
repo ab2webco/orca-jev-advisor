@@ -16,6 +16,18 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.21
+
+The gate's decision files no longer grow forever: files older than 8 days
+are folded into running totals and deleted, and every number on the board
+stays the same across a fold. `&>file` and redirections glued to a word
+(`echo hi>x`) now name their file. A failed Jev call records why it failed,
+a 5xx or network failure is retried once when the time budget allows, and a
+command too large for Jev is condensed first; if it is still too large, only
+the local rules judge it and the gate says so. A large heredoc fed to a
+shell (`bash <<EOF`) is code and is never condensed, so it takes that
+local-rules-only path.
+
 ## What changed in 0.6.20
 
 Agent-team teammates are seen and routed. Claude Code creates a teammate

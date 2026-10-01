@@ -29,6 +29,7 @@ export type GateKey =
   | "authRejected"
   | "noApiKey"
   | "jevUnreachable"
+  | "commandTooLarge"
   | "notice"
   | "reason.allowClear"
   | "reason.incompleteAnswers"
@@ -127,6 +128,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     authRejected: "sin opinar: la llave fue rechazada ({{status}})",
     noApiKey: "sin llave configurada: la mitad del gate que juzga con Jev no está corriendo — solo las reglas locales siguen activas. Configúrala en el panel de ajustes del plugin en Orca.",
     jevUnreachable: "no se pudo contactar a Jev: la mitad del gate que juzga con Jev no está corriendo ahora mismo — solo las reglas locales siguen activas. Se va a intentar de nuevo con el próximo comando.",
+    commandTooLarge: "este comando es demasiado grande para que Jev lo juzgue: solo se aplicaron las reglas locales y no se consultó a Jev.",
     notice: "jev · {{message}}",
     "reason.allowClear": "reversible, local y barato",
     "reason.incompleteAnswers": "Jev no devolvió respuestas completas para 'reversible', 'externa' o 'consecuencia'.",
@@ -191,6 +193,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     authRejected: "not judging: the key was rejected ({{status}})",
     noApiKey: "no key configured: the Jev-backed half of the gate is not running — only the local rules are still active. Set one in the plugin's settings panel in Orca.",
     jevUnreachable: "couldn't reach Jev: the Jev-backed half of the gate is not running right now — only the local rules are still active. It'll try again on the next command.",
+    commandTooLarge: "this command is too large for Jev to judge: only the local rules were applied and Jev was not asked.",
     notice: "jev · {{message}}",
     "reason.allowClear": "reversible, local and cheap",
     "reason.incompleteAnswers": "Jev didn't return complete answers for 'reversible', 'external' or 'consequence'.",

@@ -19,6 +19,7 @@ import { basename, isAbsolute, join, normalize, resolve } from "node:path";
 import { commandWords, locateCommandSegments } from "./command_locations.ts";
 import { interpreterHeredocBodies, withoutHeredocBodies, withoutLineContinuations } from "./command_text.ts";
 import { tokenize } from "./git_discard.ts";
+import { outputRedirectionTargets } from "./redirections.ts";
 import { gateOwnFileAt, identity } from "./gate_own_paths.ts";
 import type { GateOwnFiles } from "./gate_own_paths.ts";
 
@@ -194,10 +195,8 @@ export function commandWritesGateOwnFile(command: string, cwd: string, home: str
       if (path === null) return null;
       return removes ? ownUnder(path, own, canonical) : gateOwnFileAt(path, own, canonical);
     };
-    for (let index = 0; index < words.length; index += 1) {
-      const word = words[index] ?? "";
-      const target = REDIRECT.test(word) ? words[index + 1] : GLUED_REDIRECT.test(word) ? word.replace(GLUED_REDIRECT, "") : undefined;
-      if (target === undefined) continue;
+    // 0.6.21 T2: read from the text, so `&>`, `&>>` and `echo hi>x` count too.
+    for (const target of outputRedirectionTargets(segment)) {
       const found = hit(target, false);
       if (found !== null) return found;
     }

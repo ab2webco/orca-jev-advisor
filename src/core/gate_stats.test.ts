@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { foldGateDecisions } from "./gate_stats.ts";
+import { emptyGateTally, foldGateDecisions, summarizeGateTally, tallyGateDecisions } from "./gate_stats.ts";
 import type { GateDecisionRecord } from "./gate_measurement.ts";
 
 let nextId = 0;
@@ -247,4 +247,53 @@ test("byPluginVersion and noPluginVersionCount are empty/zero for an empty summa
   const summary = foldGateDecisions([]);
   assert.deepEqual(summary.byPluginVersion, []);
   assert.equal(summary.noPluginVersionCount, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.21 T1 (JEVADV-98): the fold as a running tally. Old decision files are
+// folded into a totals file and deleted, so a summary must come out of a
+// tally of the old records continued with the live ones exactly as it comes
+// out of the records themselves: same counts, same latency figures, same
+// order among families, projects and builds that tie.
+// ---------------------------------------------------------------------------
+
+function mixedRecords(): GateDecisionRecord[] {
+  return [
+    record({ verdict: "allow", source: "jev", latencyMs: 300, commandFamily: "grep", project: "a", pluginVersion: "0.6.16" }),
+    record({ verdict: "ask", source: "local-rule", commandFamily: "terraform", project: null }),
+    record({ verdict: "allow", source: "cache", commandFamily: "ls", project: "b", pluginVersion: "0.6.17" }),
+    record({ verdict: "deny", source: "local-rule", commandFamily: "git push", project: "a", pluginVersion: "0.6.17" }),
+    record({ verdict: "allow", source: "jev", latencyMs: 120, commandFamily: "grep", project: "b", pluginVersion: "0.6.17" }),
+    record({ verdict: "advise", source: "jev", latencyMs: 300, commandFamily: "rm", project: "c", pluginVersion: "0.6.16" }),
+    record({ verdict: "allow", source: "none", commandFamily: "ls", project: null, pluginVersion: "0.6.17" }),
+    record({ verdict: "allow", source: "jev", latencyMs: 75.5, commandFamily: "terraform", project: "c" }),
+    record({ verdict: "ask", source: "jev", latencyMs: 4000, commandFamily: "rm", project: "a", pluginVersion: "0.6.18" }),
+    record({ verdict: "allow", source: "jev", latencyMs: null, commandFamily: "cat", project: "b", pluginVersion: "0.6.18" }),
+  ];
+}
+
+test("T1: a tally of every record summarizes exactly as foldGateDecisions does", () => {
+  const records = mixedRecords();
+  assert.deepEqual(summarizeGateTally(tallyGateDecisions(emptyGateTally(), records)), foldGateDecisions(records));
+  assert.deepEqual(summarizeGateTally(emptyGateTally()), foldGateDecisions([]));
+});
+
+test("T1: a tally continued with later records equals the tally of all of them, at every split point", () => {
+  const records = mixedRecords();
+  const whole = summarizeGateTally(tallyGateDecisions(emptyGateTally(), records));
+  for (let split = 0; split <= records.length; split += 1) {
+    const head = tallyGateDecisions(emptyGateTally(), records.slice(0, split));
+    const continued = tallyGateDecisions(head, records.slice(split));
+    assert.deepEqual(summarizeGateTally(continued), whole, `split at ${split}`);
+  }
+});
+
+test("T1: a tally survives a JSON round trip unchanged, so it can be stored on disk", () => {
+  const tally = tallyGateDecisions(emptyGateTally(), mixedRecords());
+  assert.deepEqual(JSON.parse(JSON.stringify(tally)), tally);
+});
+
+test("T1: latencies are kept as counted values, not one entry per sample", () => {
+  const tally = tallyGateDecisions(emptyGateTally(), mixedRecords());
+  assert.deepEqual(tally.jevLatencies, [[75.5, 1], [120, 1], [300, 2], [4000, 1]]);
 });

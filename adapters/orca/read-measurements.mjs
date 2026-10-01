@@ -40,13 +40,14 @@ import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
-import { foldGateDecisions } from '../../src/core/gate_stats.ts'
+import { foldGateDecisions, summarizeGateTally } from '../../src/core/gate_stats.ts'
+import { addGateDecisions, gateHealthOf } from '../../src/core/gate_decision_totals.ts'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
 import { modSkillsProjectName } from '../../src/core/project_name.ts'
-import { readGateAppendFailures, readGateDecisionLog, toGateDecisionRecord } from './log-files.mjs'
+import { guardGateDecisionRows, readGateAppendFailures, readGateDecisionLog } from './log-files.mjs'
 import { HUMAN_QUEUE_FILE, parseHumanQueue, waitingItems } from '../../src/core/human_queue.ts'
 import { measurementFilesToRead } from '../../src/core/measurement_files.ts'
 
@@ -102,50 +103,35 @@ function topByCount (counts, limit) {
     .slice(0, limit)
 }
 
-// toGateDecisionRecord lives in ./log-files.mjs (JEVADV-63, A3): shared
-// with read-activity.mjs so the two readers of gate-decisions.jsonl can
-// never drift onto two different guards.
+// toGateDecisionRecord lives in ./log-files.mjs (JEVADV-63, A3), behind
+// guardGateDecisionRows: shared with read-activity.mjs and the fold, so the
+// readers of the gate log can never drift onto two different guards.
 
 async function aggregateGate () {
   // 0.6.17 T4: the hourly files and the legacy single file, in order.
-  const { rows, corrupt } = await readGateDecisionLog(CACHE_DIR)
-  const candidates = rows.filter((r) => r.type === 'gate-decision')
-  const decisions = []
-  let malformed = 0
-  for (const candidate of candidates) {
-    const record = toGateDecisionRecord(candidate)
-    if (record === null) malformed += 1
-    else decisions.push(record)
-  }
+  // 0.6.21 T1: after the totals of the files already folded, which every
+  // figure below continues -- a fold never moves one of them.
+  const { rows, corrupt, totals } = await readGateDecisionLog(CACHE_DIR)
+  const { records: decisions, malformed } = guardGateDecisionRows(rows)
+  const combined = addGateDecisions(totals, { records: decisions, corruptLines: corrupt, malformedRows: malformed, jevRecordsForAb: 0 })
 
-  // foldGateDecisions (src/core/gate_stats.ts) is the pure, unit-tested
+  // summarizeGateTally (src/core/gate_stats.ts) is the pure, unit-tested
   // fold; this function's own job is only I/O plus the "recent" slice,
-  // which stays here because it is not a summary statistic -- it is the
-  // last few actual records, kept readable (project/family/source/
-  // verdict/latency), never the raw `id`.
-  const summary = foldGateDecisions(decisions)
+  // which is not a summary statistic -- it is the last few actual records,
+  // kept readable (project/family/source/verdict/latency), never the raw `id`.
+  const summary = summarizeGateTally(combined.all)
   const { pending, outcomes } = await readApprovalRecords()
   const now = Date.now()
 
   return {
     ...summary,
-    windows: buildGateWindows(decisions, pending, outcomes, now),
+    windows: buildGateWindows(combined, summary, decisions, pending, outcomes, now),
     // 0.6.17 T4: records the gate could not write, so a log that stopped
     // growing is never read as a quiet gate.
-    health: { ...gateHealth(decisions), appendFailures: await readGateAppendFailures(CACHE_DIR) },
-    corruptLines: corrupt + malformed,
+    health: { ...gateHealthOf(combined), appendFailures: await readGateAppendFailures(CACHE_DIR) },
+    corruptLines: combined.corruptLines + combined.malformedRows,
     cacheHitRate: summary.totalDecisions > 0 ? summary.bySource.cache / summary.totalDecisions : null,
-    recent: decisions
-      .slice(-10)
-      .reverse()
-      .map((d) => ({
-        at: d.at,
-        project: d.project,
-        commandFamily: d.commandFamily,
-        source: d.source,
-        verdict: d.verdict,
-        latencyMs: d.latencyMs,
-      })),
+    recent: [...combined.recent].reverse(),
     notRunByCommandFamily: await aggregateNotRunByCommandFamily(),
     ...(await aggregateWaiting(now)),
   }
@@ -238,8 +224,7 @@ function approvalsSummary (pending, outcomes, now) {
   }
 }
 
-function gateWindow (fields, decisions, pending, outcomes, now) {
-  const summary = foldGateDecisions(decisions)
+function gateWindow (fields, summary, pending, outcomes, now) {
   return {
     ...fields,
     totalDecisions: summary.totalDecisions,
@@ -252,52 +237,42 @@ function gateWindow (fields, decisions, pending, outcomes, now) {
 }
 
 /**
- * The build that wrote the most recent stamped record. Records carry no
- * version until the writer stamps one (see gate_measurement.ts's doc on
- * `pluginVersion`), so this can honestly be null.
- */
-function currentPluginVersion (decisions) {
-  let best = null
-  for (const d of decisions) {
-    if (d.pluginVersion === undefined) continue
-    const ms = atMs(d.at) ?? -Infinity
-    if (best === null || ms >= best.ms) best = { ms, version: d.pluginVersion }
-  }
-  return best === null ? null : best.version
-}
-
-/**
  * odd/tasks/panel-interventions-and-mod-copy.md T10 -- the same aggregate for
  * each window the board lets a person pick. A time window cannot separate
  * rule semantics across releases (five pipe-to-shell asks from before the
  * deny tier existed look like the deny tier failing), which is why `version`
- * exists: it counts only the records the current build wrote. Pending asks
- * carry no build, so its approvals are bounded by the first decision that
- * build wrote -- `since` says exactly which bound was applied.
+ * exists: it counts only the records the current build wrote -- the build
+ * that wrote the most recent stamped record (records carry no version until
+ * the writer stamps one, see gate_measurement.ts, so it can honestly be
+ * null). Pending asks carry no build, so its approvals are bounded by the
+ * first decision that build wrote -- `since` says exactly which bound was
+ * applied.
+ *
+ * 0.6.21 T1: `combined` is the totals continued with the live `decisions`
+ * (src/core/gate_decision_totals.ts): "all" and "version" read it; the day
+ * and week windows read only the live decisions, because a folded file is
+ * more than 8 days old.
  */
-function buildGateWindows (decisions, pending, outcomes, now) {
+function buildGateWindows (combined, allSummary, decisions, pending, outcomes, now) {
   const timeWindow = (key, spanMs) => {
     const sinceMs = now - spanMs
     return gateWindow(
       { key, available: true, pluginVersion: null, since: new Date(sinceMs).toISOString() },
-      decisions.filter((d) => isAtOrAfter(d.at, sinceMs)),
+      foldGateDecisions(decisions.filter((d) => isAtOrAfter(d.at, sinceMs))),
       pending.filter((p) => isAtOrAfter(p.at, sinceMs)),
       outcomes, now)
   }
 
-  const version = currentPluginVersion(decisions)
+  const version = combined.latestStamped === null ? null : combined.latestStamped.pluginVersion
+  const ofVersion = version === null ? undefined : combined.byVersion.find(([name]) => name === version)?.[1]
   let versionWindow
-  if (version === null) {
-    versionWindow = gateWindow({ key: 'version', available: false, pluginVersion: null, since: null }, [], [], outcomes, now)
+  if (version === null || ofVersion === undefined) {
+    versionWindow = gateWindow({ key: 'version', available: false, pluginVersion: null, since: null }, foldGateDecisions([]), [], outcomes, now)
   } else {
-    const ofVersion = decisions.filter((d) => d.pluginVersion === version)
-    const firstMs = ofVersion.reduce((min, d) => {
-      const ms = atMs(d.at)
-      return ms !== null && (min === null || ms < min) ? ms : min
-    }, null)
+    const firstMs = ofVersion.firstAtMs
     versionWindow = gateWindow(
       { key: 'version', available: true, pluginVersion: version, since: firstMs === null ? null : new Date(firstMs).toISOString() },
-      ofVersion,
+      summarizeGateTally(ofVersion.tally),
       firstMs === null ? [] : pending.filter((p) => isAtOrAfter(p.at, firstMs)),
       outcomes, now)
   }
@@ -306,38 +281,7 @@ function buildGateWindows (decisions, pending, outcomes, now) {
     version: versionWindow,
     day: timeWindow('day', DAY_MS),
     week: timeWindow('week', 7 * DAY_MS),
-    all: gateWindow({ key: 'all', available: true, pluginVersion: null, since: null }, decisions, pending, outcomes, now),
-  }
-}
-
-/**
- * Is Jev answering right now -- which is about the present, so it belongs to
- * no window. Only `jev` and `none` records ever asked Jev; local-rule and
- * cache decisions in between neither break nor extend a failure streak.
- * Ordered by timestamp, not by file position: two sessions append to the same
- * log. A record whose time does not parse cannot be placed and is left out.
- */
-function gateHealth (decisions) {
-  let lastJevMs = null
-  let lastJevAt = null
-  let lastFailureMs = null
-  let lastFailureAt = null
-  const failureTimes = []
-  for (const d of decisions) {
-    if (d.source !== 'jev' && d.source !== 'none') continue
-    const ms = atMs(d.at)
-    if (ms === null) continue
-    if (d.source === 'jev') {
-      if (lastJevMs === null || ms > lastJevMs) { lastJevMs = ms; lastJevAt = d.at }
-    } else {
-      failureTimes.push(ms)
-      if (lastFailureMs === null || ms > lastFailureMs) { lastFailureMs = ms; lastFailureAt = d.at }
-    }
-  }
-  return {
-    lastJevAt,
-    consecutiveFailures: failureTimes.filter((ms) => lastJevMs === null || ms > lastJevMs).length,
-    lastFailureAt,
+    all: gateWindow({ key: 'all', available: true, pluginVersion: null, since: null }, allSummary, pending, outcomes, now),
   }
 }
 

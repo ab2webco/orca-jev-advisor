@@ -19,11 +19,11 @@
 //   - `rm <targets...>`: every non-flag argument.
 //   - `mv <src...> <dest>` / `cp <src...> <dest>`: the LAST non-flag
 //     argument only (the destination) -- a source is read, never written.
-//   - a redirection to a file, `>`/`>>`, with or without a descriptor
-//     number (`1>`, `2>>`): the token right after it, or the rest of the
-//     same token when written without a space (`>../x`, `2>>err.log`).
-//     A descriptor duplication (`2>&1`, `>&2`) never names a path at all
-//     and is never matched; nor is `&>`, which is not read here.
+//   - a redirection to a file, `>`/`>>`/`>|`, with or without a descriptor
+//     number (`1>`, `2>>`), and `&>`/`&>>`: the word after it, spaced or
+//     not, also when glued to the word before it (`echo hi>x`), read by
+//     redirections.ts from the segment's text (0.6.21 T2). A descriptor
+//     duplication (`2>&1`, `>&2`) never names a path, and quoted text is data.
 //
 // A shell variable or a glob (the same check git_recoverability.ts's own
 // isResolvableTarget uses) is never guessed at -- it changes nothing, same
@@ -33,6 +33,7 @@
 // filesystem.
 import { isAbsolute, resolve } from "node:path";
 import { splitOnCommandSeparators, tokenize } from "./git_discard.ts";
+import { outputRedirectionTargets } from "./redirections.ts";
 
 function isResolvableTarget(raw: string): boolean {
   return raw.length > 0 && !/[$*?[]/.test(raw);
@@ -58,27 +59,6 @@ function gitDashCDir(tokens: readonly string[]): string | null {
 
 function pushResolvable(raw: string, dir: string, out: string[]): void {
   if (isResolvableTarget(raw)) out.push(resolveAgainst(dir, raw));
-}
-
-// An output redirection at the start of a token: an optional file
-// descriptor number, then `>` or `>>`, then the file when it is written
-// without a space (`>../x`, `2>>err.log`).
-const OUTPUT_REDIRECTION = /^\d*>>?/;
-
-/**
- * The file the redirection at `tokens[index]` writes, or null when that
- * token is not an output redirection or names no file. Spaced (`> x`,
- * `1> x`) and unspaced (`>x`, `1>x`, `2>>x`) forms read alike; a
- * descriptor duplication (`2>&1`, `>&2`) names none.
- */
-function redirectionTarget(tokens: readonly string[], index: number): string | null {
-  const token = tokens[index] ?? "";
-  const operator = OUTPUT_REDIRECTION.exec(token);
-  if (operator === null) return null;
-  const rest = token.slice(operator[0].length);
-  if (rest.startsWith("&")) return null;
-  if (rest.length > 0) return rest;
-  return tokens[index + 1] ?? null;
 }
 
 export function resolveCommandTargetDirs(command: string, cwd: string): readonly string[] {
@@ -107,10 +87,7 @@ export function resolveCommandTargetDirs(command: string, cwd: string): readonly
       if (dest !== undefined && plain.length >= 3) pushResolvable(dest, segmentDir, targets);
     }
 
-    for (let index = 0; index < tokens.length; index += 1) {
-      const target = redirectionTarget(tokens, index);
-      if (target !== null) pushResolvable(target, segmentDir, targets);
-    }
+    for (const target of outputRedirectionTargets(segment)) pushResolvable(target, segmentDir, targets);
   }
 
   return [...new Set(targets)];

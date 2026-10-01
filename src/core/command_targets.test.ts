@@ -51,6 +51,27 @@ test("0.6.19 M12: a numbered redirection followed by a space names the next toke
   assert.deepEqual(resolveCommandTargetDirs("some-tool 2>> /tmp/err.log", CWD), ["/tmp/err.log"]);
 });
 
+test("0.6.21 T2: `&>`, `&>>` and a redirection glued to a word name their file, as the spaced form does", () => {
+  const other = join(CWD, "..", "other-repo", "x");
+  for (const command of [
+    "echo hi > ../other-repo/x",
+    "echo hi &>../other-repo/x",
+    "echo hi &> ../other-repo/x",
+    "echo hi &>>../other-repo/x",
+    "echo hi>../other-repo/x",
+    "echo hi>>../other-repo/x",
+    "echo hi>../other-repo/x 2>&1",
+  ]) {
+    assert.deepEqual(resolveCommandTargetDirs(command, CWD), [other], command);
+  }
+});
+
+test("0.6.21 T2: a descriptor copy and quoted text still name nothing", () => {
+  for (const command of ["some-tool 2>&1", "some-tool >&2", 'echo "a>b"', "echo 'a > ../other-repo/x'", 'echo "x &> ../other-repo/x"']) {
+    assert.deepEqual(resolveCommandTargetDirs(command, CWD), [], command);
+  }
+});
+
 test("git -C <dir>: the named directory is THIS segment's own target, never persisted to a later segment", () => {
   const targets = resolveCommandTargetDirs('git -C /other/repo rm tracked.txt && rm untracked.txt', CWD)
   assert.deepEqual(targets, [join(CWD, "untracked.txt")], "git rm is not one of the recognised shapes, but the later rm must resolve against cwd, not /other/repo")

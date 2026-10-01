@@ -104,7 +104,8 @@ function makeEngine(host: FakeHost): unknown {
     },
     clock: {
       now: async () => clockNow++,
-      sleep: async () => new Promise<void>(() => {}),
+      // callJev waits through this both for its budget (seconds: never fires here) and for a retry backoff (under a second: elapses at once).
+      sleep: async (ms: number) => (ms <= 1_000 ? undefined : new Promise<void>(() => {})),
       after: (_ms: number, fn: TimerFn) => {
         host.timers.push(fn);
         return { cancel: () => undefined };
