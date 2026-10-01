@@ -16,6 +16,24 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.22
+
+Jev's answers can now be checked with one command:
+- `npm run jev-health -- usage` shows how often Jev picks each option on your real traffic.
+- `flips` puts the gate questions about a fixed set of commands to Jev several times and shows how much the answers move.
+- `redaction` compares Jev's answers on a command with and without its secrets masked.
+
+Router and steward decisions now log the margin between Jev's top two options, next to its confidence. No floor changed. The margin is only recorded, so a later release can tell which of the two predicts outcomes better.
+
+The redaction probe found password forms that reached Jev unmasked:
+- `PGPASSWORD=`;
+- `--password <value>`;
+- `docker login -p`;
+- `gh secret set --body`;
+- openssl's `-k` and `pass:`.
+
+All of them are masked now.
+
 ## What changed in 0.6.21
 
 The gate's decision files no longer grow forever: files older than 8 days
