@@ -23,7 +23,7 @@
 // Pure: no I/O.
 // ---------------------------------------------------------------------------
 
-import { getChoiceAnswer } from "./jev.ts";
+import { answerMargin, getChoiceAnswer } from "./jev.ts";
 import type { Answer, Question } from "./jev.ts";
 import { baseModelId } from "./model_router_accounts.ts";
 import type { RouterTier } from "./model_router_accounts.ts";
@@ -49,6 +49,8 @@ export interface WorkKindJudgment {
   readonly kind: WorkKind;
   readonly confidence: number | null;
   readonly source: "jev" | "keywords";
+  /** 0.6.22 T1 (JEVADV-97): top probability minus runner-up; absent for the keyword fallback and when Jev's probabilities give none. Log only. */
+  readonly margin?: number;
 }
 
 const KIND_CRITERIA: Readonly<Record<WorkKind, string>> = {
@@ -87,7 +89,8 @@ function isWorkKind(value: string): value is WorkKind {
 export function interpretWorkKind(answers: Record<string, Answer>): WorkKindJudgment | null {
   const answer = getChoiceAnswer(answers, "kind");
   if (answer === null || !isWorkKind(answer.choice)) return null;
-  return { kind: answer.choice, confidence: answer.confidence, source: "jev" };
+  const margin = answerMargin(answer.probabilities);
+  return { kind: answer.choice, confidence: answer.confidence, source: "jev", ...(margin === undefined ? {} : { margin }) };
 }
 
 // The research's categories on the description (§3, §5), in its order: the

@@ -14,7 +14,7 @@
 // Pure: no I/O, no clock. The hooks module gathers the inputs.
 // ---------------------------------------------------------------------------
 
-import { getChoiceAnswer } from "./jev.ts";
+import { answerMargin, getChoiceAnswer } from "./jev.ts";
 import type { Answer, JsonValue, Question } from "./jev.ts";
 import { baseModelId, collapseTier, modelRank, ROUTER_TIERS, tierOfModel } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
@@ -145,6 +145,8 @@ export function buildTierQuestions(): Record<string, Question> {
 export interface TierJudgment {
   readonly tier: RouterTier;
   readonly confidence: number;
+  /** 0.6.22 T1 (JEVADV-97): top probability minus runner-up; absent when Jev's probabilities give none. Log only. */
+  readonly margin?: number;
 }
 
 function isRouterTier(value: string): value is RouterTier {
@@ -155,7 +157,8 @@ function isRouterTier(value: string): value is RouterTier {
 export function interpretTier(answers: Record<string, Answer>): TierJudgment | null {
   const answer = getChoiceAnswer(answers, "tier");
   if (answer === null || !isRouterTier(answer.choice)) return null;
-  return { tier: answer.choice, confidence: answer.confidence };
+  const margin = answerMargin(answer.probabilities);
+  return { tier: answer.choice, confidence: answer.confidence, ...(margin === undefined ? {} : { margin }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -446,6 +449,10 @@ export interface RouterDecisionRecord {
   readonly workKind: WorkKindRecord | null;
   /** 0.6.20 T3: on a teammate row only. */
   readonly teammateTask?: TeammateTaskSeen;
+  /** 0.6.22 T1 (JEVADV-97): the tier answer's top-two probability gap; absent when there is none. */
+  readonly margin?: number;
+  /** 0.6.22 T1: the same for the work-kind answer, on a row that logs one. */
+  readonly workKindMargin?: number;
 }
 
 export interface RouterDecisionRecordInput {
@@ -468,6 +475,8 @@ export interface RouterDecisionRecordInput {
   readonly agentId?: string | null;
   readonly workKind?: WorkKindRecord | null;
   readonly teammateTask?: TeammateTaskSeen;
+  readonly margin?: number;
+  readonly workKindMargin?: number;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -497,5 +506,7 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     agentId: input.agentId ?? null,
     workKind: input.workKind ?? null,
     ...(input.teammateTask === undefined ? {} : { teammateTask: input.teammateTask }),
+    ...(input.margin === undefined ? {} : { margin: input.margin }),
+    ...(input.workKindMargin === undefined ? {} : { workKindMargin: input.workKindMargin }),
   };
 }

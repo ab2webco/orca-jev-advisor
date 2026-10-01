@@ -63,6 +63,19 @@ export interface JevRequest {
 // Response types
 // ---------------------------------------------------------------------------
 
+/**
+ * 0.6.22 T1 (JEVADV-97): the top probability minus the runner-up, how far
+ * ahead Jev's first option is. Undefined, never 0 or NaN, when the map has
+ * fewer than two entries or any value is not a finite number.
+ */
+export function answerMargin(probabilities: unknown): number | undefined {
+  if (!isRecord(probabilities)) return undefined;
+  const values = Object.values(probabilities);
+  if (values.length < 2 || !values.every(isNumber)) return undefined;
+  const [top, runnerUp] = [...values].sort((a, b) => b - a);
+  return top === undefined || runnerUp === undefined ? undefined : top - runnerUp;
+}
+
 export interface ChoiceAnswer {
   type: "choice";
   choice: string;

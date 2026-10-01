@@ -532,3 +532,22 @@ test("F11: a trivial prompt in a client project is routed down", () => {
   const state = buildTierState({ promptText: "hola", activity: null, destinationKind: "client-site", quotaBand: "normal" }) as Record<string, unknown>;
   assert.equal(state.destination_kind, "client-site", "still a fact Jev reads");
 });
+
+test("0.6.22 T1 tier answer: the margin rides along only when the probabilities give one", () => {
+  const two: Record<string, Answer> = { tier: { type: "choice", choice: "complex", probabilities: { complex: 0.75, standard: 0.25 }, confidence: 0.75 } };
+  assert.deepEqual(interpretTier(two), { tier: "complex", confidence: 0.75, margin: 0.5 });
+  const one: Record<string, Answer> = { tier: { type: "choice", choice: "complex", probabilities: { complex: 1 }, confidence: 0.9 } };
+  assert.ok(!("margin" in (interpretTier(one) ?? {})));
+});
+
+test("0.6.22 T1 record: margin and workKindMargin are written when given, and the keys are absent otherwise", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const base = { at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: false, quotaBand: "normal" } as const;
+  const with_ = routerDecisionRecord({ ...base, margin: 0.4, workKindMargin: 0.25 });
+  assert.equal(with_.margin, 0.4);
+  assert.equal(with_.workKindMargin, 0.25);
+  const without = routerDecisionRecord(base);
+  assert.ok(!("margin" in without));
+  assert.ok(!("workKindMargin" in without));
+  assert.ok(!JSON.stringify(without).includes("margin"));
+});

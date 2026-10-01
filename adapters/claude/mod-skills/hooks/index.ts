@@ -1173,7 +1173,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   })
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId, ...(jev?.margin === undefined ? {} : { margin: jev.margin }) }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey }
   const next: RouterSticky = decision.changed
@@ -1242,7 +1242,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId, ...(jev?.margin === undefined ? {} : { margin: jev.margin }) })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
@@ -1322,6 +1322,9 @@ interface SubagentEffortTarget {
   readonly workKindMode: WorkKindMode
   readonly kind: WorkKindJudgment | null
   readonly keywordKind: WorkKindJudgment['kind'] | null
+  /** 0.6.22 T1 (JEVADV-97): the top-two probability gap of the tier and of the work-kind answer, for the row; absent when Jev gave none. */
+  readonly margin?: number
+  readonly workKindMargin?: number
   readonly text: string
   readonly destinationKind: DestinationKind | null
   readonly effortEligible: boolean
@@ -1399,7 +1402,7 @@ async function decideAgentRoute($: EngineInterface, task: AgentRouteTask, mode: 
   // 0.6.16 T1: the router's own low only on confident read or execute work, with the switch active.
   const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
   const applied = mode === 'active' && decision.changed
-  const pending = { effort: targetEffort, guarded, declared: task.declared, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
+  const pending = { effort: targetEffort, guarded, declared: task.declared, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project, ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(judged.kind?.margin === undefined ? {} : { workKindMargin: judged.kind.margin }) }
   const wouldUse = mode === 'measure' && decision.changed ? subagentModelLabel(decision.model, tiers) : null
   return { pending, why: subagentWhy({ decision, applied, explicit: modelFixed }), wouldUse, tiers }
 }
@@ -1577,6 +1580,8 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           turnId: e.turnId,
           agentId: e.agentId,
           workKind,
+          ...(target.margin === undefined ? {} : { margin: target.margin }),
+          ...(target.workKindMargin === undefined || workKind === null ? {} : { workKindMargin: target.workKindMargin }),
           ...(target.teammateTask === undefined ? {} : { teammateTask: target.teammateTask }),
         })
         await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
@@ -1668,6 +1673,8 @@ interface StewardPlan {
   readonly mainWindow: number | null
   readonly currentModel: string | null
   readonly wouldFire: StewardTier | null
+  /** 0.6.22 T1 (JEVADV-97): the verdict's top-two probability gap; absent when Jev gave none. */
+  readonly margin?: number
 }
 
 /**
@@ -1788,6 +1795,7 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       mainWindow,
       currentModel: models.currentModel,
       wouldFire,
+      ...(jev?.margin === undefined ? {} : { margin: jev.margin }),
     }
     if (mode === 'active' && decision.compact) {
       await attemptStewardCompaction($, plan, 1, host)
@@ -1844,6 +1852,7 @@ async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boo
   const record = stewardDecisionRecord({
     at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied,
     verdict: plan.verdict, sessionId: plan.sessionId, turnIndex: plan.personTurns, mainWindow: plan.mainWindow, currentModel: plan.currentModel, wouldFire: plan.wouldFire,
+    ...(plan.margin === undefined ? {} : { margin: plan.margin }),
   })
   await appendStewardDecision($, at, `${JSON.stringify(record)}\n`)
   host.show(stewardStatusPart(plan.locale, { mode: plan.mode, decision: plan.decision.decision, applied, before: plan.contextBefore, after: contextAfter }))
