@@ -29,3 +29,9 @@ test("flips: a bad --runs, or a --commands-file with no path, is an error", () =
   assert.equal(parseJevHealthArgs(["flips", "--runs", "0"]).command, "error");
   assert.equal(parseJevHealthArgs(["flips", "--commands-file"]).command, "error");
 });
+
+test("redaction: --commands-file is required, there is no default corpus", () => {
+  assert.deepEqual(parseJevHealthArgs(["redaction", "--commands-file", "c.txt"]), { command: "redaction", commandsFile: "c.txt" });
+  assert.equal(parseJevHealthArgs(["redaction"]).command, "error");
+  assert.equal(parseJevHealthArgs(["redaction", "--commands-file"]).command, "error");
+});

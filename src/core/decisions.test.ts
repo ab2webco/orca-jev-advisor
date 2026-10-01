@@ -875,3 +875,25 @@ test("interpretDestinationPolicy: needs_person asks only above the measured band
   assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.8)), null);
   assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_3", 0.95))?.outcome, "ask");
 });
+
+// 0.6.22 T4 (JEVADV-97): the redactor is an injected function, so the
+// redaction-impact probe can ask Jev about the raw state. Never a flag.
+test("buildActionGateState: an injected redactor replaces the default one for the command, the context and the destination", () => {
+  const seen: string[] = [];
+  const mark = (text: string) => {
+    seen.push(text);
+    return { text: text.replaceAll("secret", "MARKED"), redactedCount: 1 };
+  };
+  const state = buildActionGateState("echo secret", "ctx secret", { kind: "client", label: "label secret" }, undefined, undefined, { redact: mark });
+  assert.equal(state["proposed_command"], "echo MARKED");
+  assert.equal(state["context"], "ctx MARKED");
+  assert.ok(seen.length >= 3);
+});
+
+test("buildActionGateState: with an identity redactor a secret-shaped value stays in the state; by default it does not", () => {
+  const secret = "sk-" + "x".repeat(40);
+  const command = `deploy --token ${secret}`;
+  const raw = buildActionGateState(command, "", undefined, undefined, undefined, { redact: (text) => ({ text, redactedCount: 0 }) });
+  assert.ok(JSON.stringify(raw).includes(secret));
+  assert.equal(JSON.stringify(buildActionGateState(command, "")).includes(secret), false);
+});

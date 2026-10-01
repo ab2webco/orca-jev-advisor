@@ -4,6 +4,7 @@
 export type JevHealthArgs =
   | { readonly command: "usage"; readonly days: number }
   | { readonly command: "flips"; readonly runs: number; readonly commandsFile: string | null }
+  | { readonly command: "redaction"; readonly commandsFile: string }
   | { readonly command: "help" }
   | { readonly command: "error"; readonly message: string };
 
@@ -36,6 +37,10 @@ export function parseJevHealthArgs(argv: readonly string[]): JevHealthArgs {
     if (parsedRuns === null) return { command: "error", message: "--runs needs a positive whole number" };
     if (file.present && file.value === null) return { command: "error", message: "--commands-file needs a path" };
     return { command: "flips", runs: parsedRuns, commandsFile: file.value };
+  }
+  if (command === "redaction") {
+    const file = flagValue(rest, "--commands-file");
+    return file.value === null ? { command: "error", message: "redaction needs --commands-file PATH (there is no default corpus)" } : { command: "redaction", commandsFile: file.value };
   }
   return { command: "help" };
 }

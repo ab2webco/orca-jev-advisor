@@ -6,11 +6,15 @@
 //
 //   node --experimental-strip-types adapters/cli/jev_health_cli.ts usage [--days N]
 //   node --experimental-strip-types adapters/cli/jev_health_cli.ts flips [--commands-file F] [--runs N]
+//   node --experimental-strip-types adapters/cli/jev_health_cli.ts redaction --commands-file F
 //
 // `usage` only reads the router's and the steward's decision logs; it never
 // calls Jev. `flips` calls the real Jev (never the `claude` CLI), runs x
 // commands times, one call after another; without --commands-file it uses
-// adapters/cli/fixtures/jev-health-corpus.txt. The logic lives in src/core/jev_health_*.ts and is unit-tested
+// adapters/cli/fixtures/jev-health-corpus.txt.
+// `redaction` puts each command of a file you supply (there is no default
+// corpus: it is meant for commands that hold secret-shaped values, which
+// never belong in the repository) to Jev twice, redacted and raw. The logic lives in src/core/jev_health_*.ts and is unit-tested
 // there; this file is the IO shell: argv, the cache directory, the files and
 // the printing.
 
@@ -25,6 +29,7 @@ import { parseJevHealthArgs } from "../../src/core/jev_health_args.ts";
 import type { JevHealthArgs } from "../../src/core/jev_health_args.ts";
 import { formatFlipReport, runFlips } from "../../src/core/jev_health_flips.ts";
 import type { AnswersCaller } from "../../src/core/jev_health_flips.ts";
+import { formatRedactionReport, runRedaction } from "../../src/core/jev_health_redaction.ts";
 import { formatUsageReport, parseJsonlRows, summarizeUsage, usageFilesToRead } from "../../src/core/jev_health_usage.ts";
 import { normalizePlatform, resolveCacheDir } from "../../src/core/paths.ts";
 import { resolveApiKey } from "../../src/core/secrets.ts";
@@ -89,10 +94,22 @@ async function runFlipsCommand(args: Extract<JevHealthArgs, { command: "flips" }
   for (const line of formatFlipReport(report)) console.log(line);
 }
 
+async function runRedactionCommand(args: Extract<JevHealthArgs, { command: "redaction" }>): Promise<void> {
+  const apiKey = await resolveApiKey();
+  if (apiKey === null) {
+    console.error("no Jev API key configured: nothing to measure");
+    process.exitCode = 2;
+    return;
+  }
+  const report = await runRedaction({ commands: parseCommandsFile(readFileSync(args.commandsFile, "utf8")), caller: realAnswersCaller(apiKey) });
+  for (const line of formatRedactionReport(report)) console.log(line);
+}
+
 function printHelp(): void {
   console.log("Usage:");
   console.log("  jev-health usage [--days N]    how often Jev picks each option (default 7 days)");
   console.log("  jev-health flips [--commands-file F] [--runs N]    how often Jev's gate answers change (default 5 runs, the committed corpus)");
+  console.log("  jev-health redaction --commands-file F    whether taking secrets out of a command changes Jev's answer (file required)");
 }
 
 async function main(): Promise<void> {
@@ -103,6 +120,10 @@ async function main(): Promise<void> {
   }
   if (args.command === "flips") {
     await runFlipsCommand(args);
+    return;
+  }
+  if (args.command === "redaction") {
+    await runRedactionCommand(args);
     return;
   }
   if (args.command === "error") {
