@@ -93,4 +93,15 @@ The corpus was 30 commands with fake secrets, kept in the scratchpad and never c
 
 ## Live check after the release
 
-Pending.
+Released as v0.6.22 at cf459b4 (#34, CI green in 26 min). The dev copy `orca-jev-advisor-dev` was pulled to cf459b4.
+
+The five installed `orca-jev-mod-skills` copies match the dev copy and carry `answerMargin`. One of them was being rewritten by Orca at the first look, and it matched on the second look a few seconds later. The five Claude Code settings files each hold 8 gate hook entries.
+
+| # | Scenario | Expected | Result |
+|---|---|---|---|
+| L1 | A real Claude Code session in an Orca terminal (Sonnet 5.5, second account) runs three short steps | A router `start` row with `margin` | Row `point: "start"`, tier `simple`, confidence 0.82, `margin` 0.77, same session id |
+| L2 | A steward decision under 0.6.22 | A steward row with `margin` | A real steward decision from another session on the same account, after the update: `mid-task`, confidence 0.98, `margin` 0.98 |
+| L3 | Every router row written since the update | Each carries `margin` | 1 of 1 |
+
+- L2 was not triggered by the check. It is ordinary traffic that happened during it.
+- The work-kind margin (`workKindMargin`) was not observed live, because no subagent was spawned. Tests cover it.
