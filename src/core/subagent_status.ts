@@ -36,11 +36,12 @@ export function subagentEffortSource(carried: SessionEffort | null, sent: Sessio
  * spawn recorded says only what is known about it -- `teammate` (an
  * agent-team teammate, which Claude Code creates outside the router),
  * `before-load` (the host already ran it when this plugin load started), or
- * `unseen` (neither can be shown). A reload is never guessed.
+ * `unseen` (neither can be shown). A reload is never guessed. 0.6.20 T3:
+ * `teammate-routed`, a teammate the router judged at its first step.
  */
-export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "teammate" | "before-load" | "unseen";
+export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "teammate" | "teammate-routed" | "before-load" | "unseen";
 
-const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "teammate", "before-load", "unseen"];
+const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "teammate", "teammate-routed", "before-load", "unseen"];
 
 /** The engine's type for an in-process agent-team teammate (`$.agent.list()`). */
 export const TEAMMATE_TYPE = "teammate";
@@ -53,7 +54,7 @@ export function unseenWhy(type: string, startedBeforeLoad: boolean): SubagentWhy
 
 /** Whether a row's reason says no spawn recorded it (its model and effort come from its own steps). */
 export function isUnseenWhy(why: SubagentWhy): boolean {
-  return why === "teammate" || why === "before-load" || why === "unseen";
+  return why === "teammate" || why === "teammate-routed" || why === "before-load" || why === "unseen";
 }
 
 /**
@@ -91,6 +92,8 @@ export interface ListedAgent {
   readonly type: string;
   readonly description: string;
   readonly status: string;
+  /** 0.6.20 T3: what SendMessage addresses it by, when it has one (a teammate's Agent `name`). */
+  readonly name?: string;
 }
 
 /**

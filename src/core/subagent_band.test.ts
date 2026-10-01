@@ -109,7 +109,7 @@ test("subagentBand: no effort sent reads as a dash, a max or a token budget as i
 });
 
 test("subagentBand: every reason has words in both languages, full and short", () => {
-  for (const why of ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "teammate", "before-load", "unseen"] as const) {
+  for (const why of ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "teammate", "teammate-routed", "before-load", "unseen"] as const) {
     for (const locale of ["es", "en"] as const) {
       for (const columns of [200, 40]) {
         const text = lines(columns, locale, [{ id: "a", type: "general-purpose", description: "x", label: "Opus 5.5", effort: "high", why, wouldUse: null }]).join("\n");
@@ -183,4 +183,20 @@ test("0.6.20 T2 subagentBand: an agent not seen at spawn names why, in both lang
       for (const line of lines(columns, locale, agents)) assert.ok(line.length <= columns, `${locale}@${columns}: ${line}`);
     }
   }
+});
+
+// 0.6.20 T3: a teammate the router judged at its first step says so; one it
+// did not keeps "created outside the router", with what it would use in
+// measure mode.
+test("0.6.20 T3 subagentBand: a teammate routed at its first step, and one only measured", () => {
+  const agents: RunningSubagent[] = [
+    { id: "t-1", type: "teammate", description: "researcher", label: "Sonnet 5.5", effort: "medium", effortSource: "jev", why: "teammate-routed", wouldUse: null },
+    { id: "t-2", type: "teammate", description: "reviewer", label: "Opus 5.5", effort: "high", effortSource: "inherited", why: "teammate", wouldUse: "Haiku 4.5" },
+  ];
+  const [, es1, es2] = lines(200, "es", agents);
+  assert.match(es1 ?? "", /^teammate +researcher +Sonnet 5\.5 +medio \(Jev\) +teammate: enrutado en su primer paso$/);
+  assert.match(es2 ?? "", /teammate: lo creó Claude Code fuera del router · mediría: Haiku 4\.5$/);
+  const [, en1, en2] = lines(200, "en", agents);
+  assert.match(en1 ?? "", /^teammate +researcher +Sonnet 5\.5 +medium \(Jev\) +teammate: routed at its first step$/);
+  assert.match(en2 ?? "", /teammate: created outside the router · would use: Haiku 4\.5$/);
 });

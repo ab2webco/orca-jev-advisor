@@ -11,9 +11,10 @@
  *      the plugin ships) against a minimal host that holds the owner's case
  *      of 2026-09-30 in `$.state` and `$.agent.list()`: four agents running,
  *      two of the same type, one started before the plugin loaded (the
- *      hook's own session.start sees it running, 0.6.20 T2). 0.6.20 T2 adds
- *      two agent-team teammates (one before its first step, one after it),
- *      and an agent nothing recorded that started after the load.
+ *      hook's own session.start sees it running, 0.6.20 T2). 0.6.20 adds
+ *      two agent-team teammates (one before its first step, one the router
+ *      judged at its first step) and an agent nothing recorded that started
+ *      after the load.
  *   2. It paints the returned tree as a terminal would -- one cell per
  *      character, `bold` bold, `dimColor` dim -- at 200, 120, 80 and 40
  *      columns, dark and light, and photographs each with Playwright.
@@ -42,14 +43,14 @@ const THEMES = {
 const LOCALES = ['es', 'en']
 
 // The owner's four agents, with a neutral project prefix. agent-0 has no
-// record: it started before the plugin loaded. 0.6.20 T2: tm-2 is a teammate
-// recorded at its first step, with the model its answer reported; tm-1 is a
-// teammate before its first step; agent-9 started after the load, unseen.
+// record: it started before the plugin loaded. 0.6.20: the reviewer is a
+// teammate the router judged at its first step (T3), the researcher a teammate
+// before its first step (T2), and agent-9 started after the load, unseen.
 const RECORDED = [
   { id: 'agent-1', type: 'acme-frontend-developer', description: 'Adding Definition of Done to spec.md', label: 'Opus 5.5', effort: 'xhigh', effortSource: 'inherited', why: 'explicit', wouldUse: null },
   { id: 'agent-2', type: 'general-purpose', description: 'Creating a worktree for verify-report generation', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'lowered', wouldUse: null },
   { id: 'agent-3', type: 'acme-backend-developer', description: 'Watching CI checks on PR 867', label: 'Sonnet 5.5', effort: 'high', effortSource: 'inherited', why: 'explicit', wouldUse: null },
-  { id: 'areviewer-1a2b', type: 'teammate', description: 'reviewer', label: 'Opus 5.5', effort: 'high', effortSource: 'inherited', why: 'teammate', wouldUse: null },
+  { id: 'areviewer-1a2b', type: 'teammate', description: 'reviewer', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'teammate-routed', wouldUse: null },
 ]
 /** What the host runs at the load's session.start: agent-0 is already there. */
 const AT_LOAD = [

@@ -51,6 +51,7 @@ export type ModelRouterKey =
   | "agents.why.inherited"
   | "agents.why.no-jev"
   | "agents.why.teammate"
+  | "agents.why.teammate-routed"
   | "agents.why.before-load"
   | "agents.why.unseen"
   | "agents.short.explicit"
@@ -64,6 +65,7 @@ export type ModelRouterKey =
   | "agents.short.inherited"
   | "agents.short.no-jev"
   | "agents.short.teammate"
+  | "agents.short.teammate-routed"
   | "agents.short.before-load"
   | "agents.short.unseen";
 
@@ -120,6 +122,8 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.no-jev": "heredado, sin respuesta de Jev",
     // 0.6.20 T2: an agent the host runs that no spawn recorded, by what is known about it.
     "agents.why.teammate": "teammate: lo creó Claude Code fuera del router",
+    // 0.6.20 T3: a teammate the router judged at its first step.
+    "agents.why.teammate-routed": "teammate: enrutado en su primer paso",
     "agents.why.before-load": "empezó antes de cargar el plugin",
     "agents.why.unseen": "no visto al lanzarse",
     // The same reasons where the band is narrow.
@@ -134,6 +138,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.short.inherited": "heredado",
     "agents.short.no-jev": "sin Jev",
     "agents.short.teammate": "fuera del router",
+    "agents.short.teammate-routed": "enrutado",
     "agents.short.before-load": "antes de cargar",
     "agents.short.unseen": "no visto",
   },
@@ -185,6 +190,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.inherited": "inherited",
     "agents.why.no-jev": "inherited, no answer from Jev",
     "agents.why.teammate": "teammate: created outside the router",
+    "agents.why.teammate-routed": "teammate: routed at its first step",
     "agents.why.before-load": "started before the plugin loaded",
     "agents.why.unseen": "not seen at launch",
     "agents.short.explicit": "explicit",
@@ -198,6 +204,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.short.inherited": "inherited",
     "agents.short.no-jev": "no Jev",
     "agents.short.teammate": "outside router",
+    "agents.short.teammate-routed": "routed",
     "agents.short.before-load": "before load",
     "agents.short.unseen": "not seen",
   },

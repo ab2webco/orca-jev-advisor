@@ -161,7 +161,9 @@ import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
 import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
-import type { DestinationKind, QuotaBand, QuotaSource, SessionEffort, TierEffort, TierEffortMap, TurnActivity } from '../../../../src/core/model_router_decide.ts'
+import type { DestinationKind, QuotaBand, QuotaSource, SessionEffort, TeammateTaskSeen, TierEffort, TierEffortMap, TurnActivity } from '../../../../src/core/model_router_decide.ts'
+import { isTeammateCall, matchTeammateTask, rememberTeammateTask } from '../../../../src/core/teammate_route.ts'
+import type { TeammateTask } from '../../../../src/core/teammate_route.ts'
 import { resolveRouterDestination } from '../../../../src/core/model_router_destination.ts'
 import type { RouterDestination } from '../../../../src/core/model_router_destination.ts'
 import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_router_subagent.ts'
@@ -787,7 +789,7 @@ function persistRunning($: EngineInterface, set: RunningSet): Promise<void> {
 /** `$.agent.list()` as the fields the running set reads; null when the host has none or it fails. */
 async function listAgents($: EngineInterface): Promise<ListedAgent[] | null> {
   try {
-    return (await $.agent.list()).map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, status: agent.status }))
+    return (await $.agent.list()).map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, status: agent.status, ...(agent.name === undefined ? {} : { name: agent.name }) }))
   } catch {
     return null
   }
@@ -819,6 +821,15 @@ async function noteSubagentEffort($: EngineInterface, running: RunningSet, agent
   await persistRunning($, running)
 }
 
+/** The account's model tiers, for a model's label; null when no account is at hand (the label is then its family or its id). */
+async function accountTiers($: EngineInterface): Promise<ResolvedTiers | null> {
+  try {
+    return (await resolveRouterAccount($, await resolveAccountId($))).tiers
+  } catch {
+    return null
+  }
+}
+
 /**
  * 0.6.20 T2: an agent no spawn recorded (an agent-team teammate: agent.spawn
  * never fires for one) is recorded once one of its steps has answered, if
@@ -829,18 +840,17 @@ async function noteSubagentEffort($: EngineInterface, running: RunningSet, agent
  */
 async function observeUnseenAgent($: EngineInterface, running: RunningSet, agentId: string, answeredBy: string | null, effort: SessionEffort | null, effortSource: SubagentEffortSource): Promise<void> {
   await hydrateRunning($, running)
-  if (running.agents.has(agentId)) return
+  const recorded = running.agents.get(agentId)
+  if (recorded !== undefined) {
+    // 0.6.20 T3: a teammate judged at its first step but left on its model has none on its row until an answer names it.
+    if (recorded.label !== null || answeredBy === null) return
+    running.agents.set(agentId, { ...recorded, label: subagentModelLabel(answeredBy, await accountTiers($)) })
+    await persistRunning($, running)
+    return
+  }
   const listed = (await listAgents($))?.find((row) => row.id === agentId && row.status === 'running')
   if (listed === undefined) return
-  let tiers: ResolvedTiers | null = null
-  if (answeredBy !== null) {
-    try {
-      tiers = (await resolveRouterAccount($, await resolveAccountId($))).tiers
-    } catch {
-      // No account at hand: the model reads as its family or its id.
-    }
-  }
-  const label = answeredBy === null ? null : subagentModelLabel(answeredBy, tiers)
+  const label = answeredBy === null ? null : subagentModelLabel(answeredBy, await accountTiers($))
   running.agents.set(agentId, observedSubagent(listed, { label, effort, effortSource }, running.beforeLoad?.has(agentId) ?? false))
   await persistRunning($, running)
 }
@@ -1322,6 +1332,76 @@ interface SubagentEffortTarget {
   readonly quotaBand: QuotaBand
   readonly quotaSource: QuotaSource
   readonly project: string | null
+  /** 0.6.20 T3: the decision row's point -- `teammate` for one judged at its first step. */
+  readonly point: 'subagent' | 'teammate'
+  /** 0.6.20 T3: the model every step of this agent is sent on; null for a subagent (its spawn already set it) and when nothing changes. */
+  readonly model: string | null
+  /** 0.6.20 T3: on a teammate's row, whether its task was kept to judge it by. */
+  readonly teammateTask?: TeammateTaskSeen
+}
+
+/** What a spawn (or a teammate's first step) gives the router to judge: its task, the model it would run on, and what its definition fixes. */
+interface AgentRouteTask {
+  readonly description: string
+  readonly prompt: string
+  readonly parentModel: string
+  /** The model the Agent call or the agent definition fixes; null when neither does. */
+  readonly fixedModel: string | null
+  /** The effort the agent definition declares; null when none. */
+  readonly declared: SessionEffort | null
+  readonly cwd: string
+}
+
+/** What the router decided for one agent, before it starts its work. */
+interface AgentRoute {
+  readonly pending: Omit<SubagentEffortTarget, 'logged' | 'point' | 'model'>
+  readonly why: SubagentWhy
+  readonly wouldUse: string | null
+  readonly tiers: ResolvedTiers
+}
+
+/**
+ * The spawn decision (point B), shared by `routeSubagent` and, 0.6.20 T3, a
+ * teammate's first step: the tier and work kind in one Jev call, the
+ * guards, the quota band, the explicit-model rule and the definition's
+ * effort floor. Throws on a failure; each caller fails open its own way.
+ */
+async function decideAgentRoute($: EngineInterface, task: AgentRouteTask, mode: RouterMode, options: PluginOptions, project: string | null, onTiers: (tiers: ResolvedTiers) => void = () => {}): Promise<AgentRoute> {
+  const modelFixed = task.fixedModel !== null
+  const account = await resolveAccountId($)
+  const { tiers, band, quotaSource, tierEffort, personTiers, workKindMode } = await resolveRouterAccount($, account)
+  // The account's own model labels, for the caller's row even if what follows fails.
+  onTiers(tiers)
+  const text = `${task.description}\n${task.prompt}`
+  const destination = await resolveSessionDestination($, task.cwd)
+  // 0.6.16 T2: the work kind is one more question in this same call.
+  const judged = await askTierAndKind($, options, text, null, band, destination.destinationKind, workKindMode !== 'off')
+  const jev = judged.tier
+  const keywordKind = workKindMode === 'off' ? null : keywordWorkKind(task.description)
+  const kind: WorkKindJudgment | null = workKindMode === 'off' ? null : (judged.kind ?? (keywordKind === null ? null : { kind: keywordKind, confidence: null, source: 'keywords' }))
+  const decision = decideSubagent({
+    tiers,
+    jev,
+    parentModel: task.parentModel,
+    explicitModel: task.fixedModel ?? undefined,
+    guards: { text, activity: null, confidence: jev?.confidence ?? null },
+    band,
+    // 0.6.8 T7: a model the spawn already fixed is judged unless the
+    // person chose to keep them (the Models tab); only applied below in
+    // active mode, like every other router decision.
+    explicitModels: await readExplicitModels($),
+    destinationKind: destination.destinationKind,
+  })
+  // A guard no longer makes the effort ineligible: it only stops it from
+  // falling (0.6.2 F0, review finding 2).
+  const guarded = decision.guard !== null
+  const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
+  // 0.6.16 T1: the router's own low only on confident read or execute work, with the switch active.
+  const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
+  const applied = mode === 'active' && decision.changed
+  const pending = { effort: targetEffort, guarded, declared: task.declared, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
+  const wouldUse = mode === 'measure' && decision.changed ? subagentModelLabel(decision.model, tiers) : null
+  return { pending, why: subagentWhy({ decision, applied, explicit: modelFixed }), wouldUse, tiers }
 }
 
 async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, next: Next<'agent.spawn'>, mode: RouterMode, options: PluginOptions, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, runningSubagents: Map<string, RunningSubagent>): Promise<AgentSpawnResult> {
@@ -1344,7 +1424,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     return result
   }
   let input: AgentSpawnInput | Frozen<AgentSpawnInput> = e
-  let pending: Omit<SubagentEffortTarget, 'logged'> | null = null
+  let pending: AgentRoute['pending'] | null = null
   let labelTiers: ResolvedTiers | null = null
   let why: SubagentWhy = explicitModelGiven ? 'explicit' : 'inherited'
   try {
@@ -1353,50 +1433,68 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
     const cwd = e.cwd ?? (await $.session.cwd())
     const definition = await readAgentDefinition($, e.subagentType, cwd)
     const fixedModel = explicitModelGiven ? (e.model as string) : definition.model
-    const modelFixed = fixedModel !== null
-    if (modelFixed) why = 'explicit'
-    const account = await resolveAccountId($)
-    const { tiers, band, quotaSource, tierEffort, personTiers, workKindMode } = await resolveRouterAccount($, account)
-    labelTiers = tiers
-    const text = `${e.description}\n${e.prompt}`
-    const destination = await resolveSessionDestination($, cwd)
-    // 0.6.16 T2: the work kind is one more question in this same call.
-    const judged = await askTierAndKind($, options, text, null, band, destination.destinationKind, workKindMode !== 'off')
-    const jev = judged.tier
-    const keywordKind = workKindMode === 'off' ? null : keywordWorkKind(e.description)
-    const kind: WorkKindJudgment | null = workKindMode === 'off' ? null : (judged.kind ?? (keywordKind === null ? null : { kind: keywordKind, confidence: null, source: 'keywords' }))
-    const decision = decideSubagent({
-      tiers,
-      jev,
-      parentModel: e.parentModel,
-      explicitModel: fixedModel ?? undefined,
-      guards: { text, activity: null, confidence: jev?.confidence ?? null },
-      band,
-      // 0.6.8 T7: a model the spawn already fixed is judged unless the
-      // person chose to keep them (the Models tab); only applied below in
-      // active mode, like every other router decision.
-      explicitModels: await readExplicitModels($),
-      destinationKind: destination.destinationKind,
+    if (fixedModel !== null) why = 'explicit'
+    const route = await decideAgentRoute($, { description: e.description, prompt: e.prompt, parentModel: e.parentModel, fixedModel, declared: definition.effort, cwd }, mode, options, project, (tiers) => {
+      labelTiers = tiers
     })
-    // A guard no longer makes the effort ineligible: it only stops it from
-    // falling (0.6.2 F0, review finding 2).
-    const guarded = decision.guard !== null
-    const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
-    // 0.6.16 T1: the router's own low only on confident read or execute work, with the switch active.
-    const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
-    const applied = mode === 'active' && decision.changed
-    pending = { effort: targetEffort, guarded, declared: definition.effort, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project }
-    why = subagentWhy({ decision, applied, explicit: modelFixed })
-    if (mode === 'measure' && decision.changed) wouldUse = subagentModelLabel(decision.model, tiers)
-    if (applied) input = { ...e, model: decision.model }
+    pending = route.pending
+    why = route.why
+    wouldUse = route.wouldUse
+    if (route.pending.applied) input = { ...e, model: route.pending.decision.model }
   } catch {
     input = e
     pending = null
   }
   const result = await next(input)
-  if (pending !== null && 'agentId' in result && result.agentId !== undefined) subagentEffortTarget.set(result.agentId, { ...pending, logged: false })
+  if (pending !== null && 'agentId' in result && result.agentId !== undefined) subagentEffortTarget.set(result.agentId, { ...pending, logged: false, point: 'subagent', model: null })
   remember(result, labelTiers, why)
   return result
+}
+
+/** 0.6.20 T3: this load's teammate routing -- the lead's Agent calls kept by name, and the agents already judged. */
+interface TeammateRouting {
+  tasks: TeammateTask[]
+  readonly judged: Set<string>
+}
+
+/**
+ * 0.6.20 T3: an agent-team teammate is judged at the first step this load
+ * sees from it, with the spawn's decision (decideAgentRoute) over the task
+ * the lead's Agent call gave it, and that decision is applied to every later
+ * step (`subagentEffortTarget`, with the model to send). Its step event names
+ * the lead's model and effort (T1 probe): the lead's model is what the
+ * teammate inherits, and its effort follows the lead's. With no task kept
+ * (a reload forgot it) nothing changes -- its cache is warm by then -- and
+ * the row says the task was missing, the way a spawn with Jev down keeps
+ * its model. Only an agent the host lists as a teammate, and only one no
+ * spawn recorded. Throws on a failure; the caller fails open.
+ */
+async function routeTeammate($: EngineInterface, e: Frozen<TurnStepInput>, mode: RouterMode, options: PluginOptions, project: string | null, teammates: TeammateRouting, targets: Map<string, SubagentEffortTarget>, running: RunningSet): Promise<void> {
+  const agentId = e.agentId
+  if (mode === 'off' || agentId === undefined || targets.has(agentId) || teammates.judged.has(agentId)) return
+  teammates.judged.add(agentId)
+  await hydrateRunning($, running)
+  if (running.agents.has(agentId)) return
+  const listed = (await listAgents($))?.find((row) => row.id === agentId)
+  if (listed === undefined || listed.type !== TEAMMATE_TYPE) return
+  const task = matchTeammateTask(teammates.tasks, listed)
+  if (task === null) {
+    const account = await resolveAccountId($)
+    const { tiers, band, quotaSource } = await resolveRouterAccount($, account)
+    const decision = decideSubagent({ tiers, jev: null, parentModel: e.model, explicitModel: undefined, guards: { text: '', activity: null, confidence: null }, band })
+    targets.set(agentId, { effort: null, guarded: false, declared: null, workKindMode: 'off', kind: null, keywordKind: null, text: '', destinationKind: null, effortEligible: false, logged: false, account, decision, applied: false, quotaBand: band, quotaSource, project, point: 'teammate', model: null, teammateTask: 'missing' })
+    return
+  }
+  teammates.tasks = teammates.tasks.filter((kept) => kept !== task)
+  const cwd = await $.session.cwd()
+  const definition = await readAgentDefinition($, task.subagentType ?? TEAMMATE_TYPE, cwd)
+  const fixedModel = task.model ?? definition.model
+  const route = await decideAgentRoute($, { description: task.description, prompt: task.prompt, parentModel: e.model, fixedModel, declared: definition.effort, cwd }, mode, options, project)
+  const { applied, decision } = route.pending
+  targets.set(agentId, { ...route.pending, logged: false, point: 'teammate', model: applied ? decision.model : null, teammateTask: 'matched' })
+  const routed = mode === 'active' && decision.reason !== 'jev-failed'
+  running.agents.set(agentId, { id: agentId, type: listed.type, description: listed.description, label: applied ? subagentModelLabel(decision.model, route.tiers) : null, effort: null, effortSource: null, why: routed ? 'teammate-routed' : 'teammate', wouldUse: route.wouldUse })
+  await persistRunning($, running)
 }
 
 /**
@@ -1442,7 +1540,8 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
       if (target !== undefined) {
         const tiered = target.effortEligible ? subagentStepEffort(target.effort, e.effort, target.guarded, target.declared) : e.effort
         // 0.6.16 T2: the work kind's effort, set from the step it would send; the same on every step of the run.
-        const outcome = kindStepEffort({ kind: target.kind, model: e.model, effort: tiered, declared: target.declared, guard: target.decision.guard, text: target.text, destinationKind: target.destinationKind })
+        // 0.6.20 T3: a routed teammate runs on its own model; its step event names the lead's.
+        const outcome = kindStepEffort({ kind: target.kind, model: target.model ?? e.model, effort: tiered, declared: target.declared, guard: target.decision.guard, text: target.text, destinationKind: target.destinationKind })
         const kindActs = target.workKindMode === 'active' && outcome.hold === null
         const sent = kindActs ? outcome.effort : tiered
         if (target.workKindMode !== 'off') {
@@ -1458,13 +1557,16 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     } catch {
       input = e
     }
-    if (target !== undefined && !target.logged && e.index === 0) {
+    // 0.6.20 T3: a teammate's model is set on every step of its life, never left to the lead's.
+    if (target !== undefined && target.model !== null) input = { ...input, model: target.model }
+    // A teammate is judged at the first step this load sees, which is where its row is written.
+    if (target !== undefined && !target.logged && (e.index === 0 || target.point === 'teammate')) {
       try {
         const at = new Date(await $.clock.now()).toISOString()
         const record = routerDecisionRecord({
           at,
           account: target.account,
-          point: 'subagent',
+          point: target.point,
           decision: { ...target.decision, effort: null },
           applied: target.applied,
           quotaBand: target.quotaBand,
@@ -1475,6 +1577,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
           turnId: e.turnId,
           agentId: e.agentId,
           workKind,
+          ...(target.teammateTask === undefined ? {} : { teammateTask: target.teammateTask }),
         })
         await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
       } catch {
@@ -1881,6 +1984,7 @@ export function register(on: On, options: PluginOptions): void {
   // turn.complete removes it) and their status-line part. 0.6.14 T1: kept
   // in `$.state` too, so a reload does not forget them (RunningSet).
   const runningSubagents: RunningSet = { agents: new Map<string, RunningSubagent>(), hydrated: null, writes: Promise.resolve(), beforeLoad: null }
+  const teammateRouting: TeammateRouting = { tasks: [], judged: new Set<string>() }
   let agentsStatusText: string | null = null
   const statusLine = (): string | null => composeStatusLine([promptStatusText, routerStatusText, agentsStatusText, stewardStatusText])
   // The main turn running now (turn.start → turn.complete), so the steward
@@ -2310,6 +2414,13 @@ export function register(on: On, options: PluginOptions): void {
     // Before the step (answeredBy undefined): a recorded agent's effort. After it: an agent no spawn recorded (0.6.20 T2).
     const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource, answeredBy?: string | null): Promise<void> =>
       answeredBy === undefined ? noteSubagentEffort($, runningSubagents, agentId, effort, source) : observeUnseenAgent($, runningSubagents, agentId, answeredBy, effort, source)
+    if (e.agentId !== undefined) {
+      try {
+        await routeTeammate($, e, routerMode, options, project, teammateRouting, subagentEffortTarget, runningSubagents)
+      } catch {
+        // A teammate the router could not judge runs as it came.
+      }
+    }
     return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, async (step, input, r) => ({ ...(await effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget)), ...phaseLogFields(step, input, r, phaseHolder) }))
   })
 
@@ -2417,6 +2528,10 @@ export function register(on: On, options: PluginOptions): void {
   // make many, immediately) would almost always swallow the correlation
   // before the main loop's own first tool call ever happened.
   on('tool.call', async ($, e, next) => {
+    // 0.6.20 T3: the lead's Agent call that makes a teammate carries its task; keep it for the teammate's first step.
+    if (e.agentId === undefined && e.tool === 'Agent' && isTeammateCall(e)) {
+      teammateRouting.tasks = rememberTeammateTask(teammateRouting.tasks, { name: e.name, subagentType: e.subagent_type ?? null, description: e.description, prompt: e.prompt, model: e.model ?? null })
+    }
     if (pendingToolMeasurementId !== null && e.agentId === undefined) {
       const id = pendingToolMeasurementId
       pendingToolMeasurementId = null

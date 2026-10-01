@@ -76,6 +76,7 @@ const WHY_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
   inherited: "agents.why.inherited",
   "no-jev": "agents.why.no-jev",
   teammate: "agents.why.teammate",
+  "teammate-routed": "agents.why.teammate-routed",
   "before-load": "agents.why.before-load",
   unseen: "agents.why.unseen",
 };
@@ -92,6 +93,7 @@ const WHY_SHORT_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
   inherited: "agents.short.inherited",
   "no-jev": "agents.short.no-jev",
   teammate: "agents.short.teammate",
+  "teammate-routed": "agents.short.teammate-routed",
   "before-load": "agents.short.before-load",
   unseen: "agents.short.unseen",
 };

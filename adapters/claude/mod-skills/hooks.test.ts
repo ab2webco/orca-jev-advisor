@@ -2997,3 +2997,124 @@ test("skill.prompt: a rejected clock read still hands the event to next, and rec
   assert.equal(handed, event, "next(e) must always be reached");
   assert.equal(host.files.get(SKILL_MEASUREMENTS_PATH), before, "no observation is written without a time");
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.20 T3: an agent-team teammate is routed at its first step. agent.spawn
+// never fires for one (T1 probe); the lead's own Agent tool.call carries its
+// task, and its first turn.step comes before anything else about it. The
+// decision is the spawn's (same Jev call, guards, work kind, definition
+// floor), made once and applied to every later step of that teammate. Its
+// step event names the lead's model and effort, not its own.
+// ---------------------------------------------------------------------------
+
+const TEAMMATE = { id: "aresearcher-1a2b", status: "running", type: "teammate", name: "researcher", description: "researcher" };
+const TEAMMATE_CALL = { name: "researcher", description: "List files", prompt: "List every file under src/ and summarise what each one does in one line." };
+
+/** The lead's Agent call that makes the teammate, on the main loop. */
+async function leadCallsTeammate(handlers: Map<string, Hook>, engine: unknown, call: Record<string, unknown> = TEAMMATE_CALL): Promise<void> {
+  await toolCallThrough(handlers, engine, "Agent", call, { result: { status: "teammate_spawned" } });
+}
+
+/** One of the teammate's steps: the event names the lead's model and effort (T1 probe). */
+function teammateStep(index: number): Record<string, unknown> {
+  return turnStepEvent({ agentId: TEAMMATE.id, turnId: "tm-turn-1", index, model: "claude-opus-5-5", effort: "xhigh" });
+}
+
+test("0.6.20 T3 (active): a teammate is routed at its first step and kept there, with one Jev call and a teammate decision row", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await leadCallsTeammate(handlers, engine);
+  host.agents = [TEAMMATE];
+  const first = await stepThrough(handlers, engine, teammateStep(0));
+  assert.deepEqual([first.model, first.effort], ["claude-sonnet-5-5", "medium"]);
+  const later = await stepThrough(handlers, engine, teammateStep(1));
+  assert.deepEqual([later.model, later.effort], ["claude-sonnet-5-5", "medium"], "the decision holds for the teammate's life");
+  assert.equal(host.fetchCalls.length, 1, "decided once");
+  const rows = routerDecisionLines(host);
+  assert.equal(rows.length, 1);
+  assert.deepEqual([rows[0]?.point, rows[0]?.agentId, rows[0]?.applied, rows[0]?.effort, rows[0]?.teammateTask], ["teammate", TEAMMATE.id, true, "medium", "matched"]);
+  assert.equal(JSON.stringify(rows[0]).includes("summarise"), false, "no prompt text in the log");
+  assert.match(await bandText(handlers, engine), /^teammate +researcher +Sonnet 5\.5 +medium \(Jev\) +teammate: routed at its first step$/m);
+});
+
+test("0.6.20 T3 (measure, the default): a teammate's decision is logged and nothing sent changes", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  await leadCallsTeammate(handlers, engine);
+  host.agents = [TEAMMATE];
+  const event = teammateStep(0);
+  assert.deepEqual(await stepThrough(handlers, engine, event, turnStepResult({ usage: { ...(turnStepResult().usage as Record<string, unknown>), model: "claude-opus-5-5" } })), event);
+  const [row] = routerDecisionLines(host);
+  assert.deepEqual([row?.point, row?.applied, row?.proposed], ["teammate", false, "claude-haiku-4-5-20251001"]);
+  assert.match(await bandText(handlers, engine), /^teammate +researcher +Opus 5\.5 +.*teammate: created outside the router · would use: Haiku 4\.5$/m);
+});
+
+test("0.6.20 T3: with no task kept for it (a reload forgot it) a teammate is not routed, and the row says the task was missing", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [TEAMMATE];
+  const event = turnStepEvent({ ...FRESH_START, agentId: TEAMMATE.id });
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  assert.equal(host.fetchCalls.length, 0);
+  const rows = routerDecisionLines(host);
+  assert.deepEqual(rows.map((row) => [row.point, row.reason, row.applied, row.teammateTask]), [["teammate", "jev-failed", false, "missing"]]);
+  assert.equal(host.state.get("routerSticky"), undefined, "never taken for a main-loop step");
+  assert.match(await bandText(handlers, engine), /teammate: created outside the router$/m);
+});
+
+test("0.6.20 T3: with Jev down a teammate is left as it came, like a spawn", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await leadCallsTeammate(handlers, engine);
+  host.agents = [TEAMMATE];
+  const event = teammateStep(0);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  const [row] = routerDecisionLines(host);
+  assert.deepEqual([row?.point, row?.reason, row?.applied, row?.teammateTask], ["teammate", "jev-failed", false, "matched"]);
+});
+
+test("0.6.20 T3 (off): a teammate is neither routed nor logged", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await leadCallsTeammate(handlers, engine);
+  host.agents = [TEAMMATE];
+  const event = teammateStep(0);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  assert.deepEqual(routerDecisionLines(host), []);
+  assert.equal(host.fetchCalls.length, 0);
+});
+
+test("0.6.20 T3 (active): a teammate whose agent definition declares an effort never goes below it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.files.set(`${CWD}/.claude/agents/checker.md`, "---\nname: checker\neffort: high\n---\nCheck.\n");
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await leadCallsTeammate(handlers, engine, { ...TEAMMATE_CALL, subagent_type: "checker" });
+  host.agents = [TEAMMATE];
+  const first = await stepThrough(handlers, engine, teammateStep(0));
+  assert.deepEqual([first.model, first.effort], ["claude-sonnet-5-5", "high"]);
+});
+
+test("0.6.20 T3: an ordinary subagent's named Agent call that agent.spawn routes is routed there, never twice", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await leadCallsTeammate(handlers, engine);
+  await spawnThrough(handlers, engine, spawnEvent());
+  host.agents = [{ id: "agent-1", status: "running", type: "general-purpose", description: "List files" }];
+  const first = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
+  assert.equal(first.effort, "medium");
+  assert.deepEqual(routerDecisionLines(host).map((row) => row.point), ["subagent"]);
+  assert.equal(host.fetchCalls.length, 1);
+});
