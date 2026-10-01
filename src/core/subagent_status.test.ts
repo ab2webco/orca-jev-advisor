@@ -170,3 +170,22 @@ test("0.6.16 T3 parseRunningSubagents: a stored frontmatter source reads back", 
   const [agent] = parseRunningSubagents({ agents: [{ id: "a-1", type: "reviewer", description: "d", label: "Opus 5.5", effort: "high", effortSource: "frontmatter", why: "inherited", wouldUse: null }] });
   assert.equal(agent?.effortSource, "frontmatter");
 });
+
+test("0.6.23 T1 (JEVADV-102) parseRunningSubagents: a stored place reads back, pending isolation included", () => {
+  const apart = agent("a-1", { place: { worktree: "app-feature", branch: "feature/login", apart: true } });
+  const pending = agent("a-2", { place: { worktree: null, branch: null, apart: true, pendingIsolation: true } });
+  const detached = agent("a-3", { place: { worktree: "app", branch: null, apart: false } });
+  const stored = [apart, pending, detached];
+  assert.deepEqual(parseRunningSubagents({ agents: JSON.parse(JSON.stringify(stored)) }), stored);
+});
+
+test("0.6.23 T1 (JEVADV-102) parseRunningSubagents: a row stored before 0.6.23 has no place, and a malformed place is dropped, never the row", () => {
+  const old = { id: "a-1", type: "reviewer", description: "d", label: "Opus 5.5", effort: "high", effortSource: "inherited", why: "inherited", wouldUse: null };
+  const [read] = parseRunningSubagents({ agents: [old] });
+  assert.deepEqual(read, old);
+  assert.equal(Object.hasOwn(read ?? {}, "place"), false);
+  const malformed = [null, "app", { worktree: 3, branch: "main", apart: false }, { worktree: "app", branch: "main" }, { worktree: "app", branch: false, apart: true }, { worktree: "app", branch: "main", apart: false, pendingIsolation: false }];
+  const rows = parseRunningSubagents({ agents: malformed.map((place, index) => ({ ...old, id: `a-${index}`, place })) });
+  assert.equal(rows.length, malformed.length, "every row kept");
+  assert.equal(rows.some((row) => Object.hasOwn(row, "place")), false, "every bad place dropped");
+});

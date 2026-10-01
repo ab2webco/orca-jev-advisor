@@ -70,6 +70,12 @@ interface FakeHost {
   rateLimits: { kind: string; percentUsed: number; resetsAt?: string }[];
   /** When true, `$.session.usage()` rejects. */
   failUsage: boolean;
+  /** 0.6.23 T1: `$.session.root()`; null answers CWD. */
+  root: string | null;
+  /** 0.6.23 T1: what `git -C <dir> rev-parse --show-toplevel` / `branch --show-current` answer, by `<dir>`; any other dir exits 1. */
+  readonly gitRepos: Map<string, { toplevel: string; branch: string }>;
+  /** 0.6.23 T1: every `$.process.run` argv, joined with spaces. */
+  readonly processCalls: string[];
 }
 
 function makeFakeHost(): FakeHost {
@@ -88,6 +94,9 @@ function makeFakeHost(): FakeHost {
     agents: null,
     rateLimits: [],
     failUsage: false,
+    root: null,
+    gitRepos: new Map<string, { toplevel: string; branch: string }>(),
+    processCalls: [],
   };
 }
 
@@ -118,6 +127,7 @@ function makeFakeEngine(host: FakeHost): unknown {
   return {
     session: {
       cwd: async () => CWD,
+      root: async () => host.root ?? CWD,
       id: async () => "session-1",
       usage: async () => {
         if (host.failUsage) throw new Error("fake host: session.usage failed");
@@ -184,8 +194,13 @@ function makeFakeEngine(host: FakeHost): unknown {
     process: {
       // No real `orca` binary: resolveOrcaContext falls back to its
       // cwd-only shape, deterministically, on any non-success exit.
-      run: async () => {
+      run: async (argv: readonly string[]) => {
+        host.processCalls.push(argv.join(" "));
         if (host.failProcess) throw new Error("fake host: process.run failed");
+        // 0.6.23 T1: a seeded repository answers git's top level and branch.
+        const repo = argv[0] === "git" && argv[1] === "-C" ? host.gitRepos.get(argv[2] ?? "") : undefined;
+        if (repo !== undefined && argv[3] === "rev-parse") return { exitCode: 0, stdout: `${repo.toplevel}\n`, stderr: "" };
+        if (repo !== undefined && argv[3] === "branch") return { exitCode: 0, stdout: `${repo.branch}\n`, stderr: "" };
         return { exitCode: 1, stdout: "", stderr: "" };
       },
     },
@@ -2348,6 +2363,8 @@ interface StoredSubagent {
   effortSource?: string | null;
   why: string;
   wouldUse: string | null;
+  /** 0.6.23 T1. */
+  place?: { worktree: string | null; branch: string | null; apart: boolean; pendingIsolation?: true };
 }
 
 /** Raises session.start, as a load (or a reload) does. */
@@ -3117,4 +3134,144 @@ test("0.6.20 T3: an ordinary subagent's named Agent call that agent.spawn routes
   assert.equal(first.effort, "medium");
   assert.deepEqual(routerDecisionLines(host).map((row) => row.point), ["subagent"]);
   assert.equal(host.fetchCalls.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.23 T1 (JEVADV-102): where each running agent works. Its place is set at
+// agent.spawn (the spawn's cwd, a pending isolation, or the lead's own) and
+// moved by the agent's own writes and `cd`s, never by its reads. The git
+// lookup runs off the call: `settle()` lets it land.
+// ---------------------------------------------------------------------------
+
+/** Lets the work a hook left running unawaited (the place lookup) settle: every fake here answers without a timer. */
+async function settle(): Promise<void> {
+  for (let round = 0; round < 3; round += 1) await new Promise<void>((done) => setImmediate(done));
+}
+
+/** A lead on `/repo/app` (main) with a sibling worktree `/repo/app-feature` (feature/login). */
+function seedWorktrees(host: FakeHost): void {
+  host.root = "/repo/app";
+  for (const dir of ["/repo/app", "/repo/app/src"]) host.gitRepos.set(dir, { toplevel: "/repo/app", branch: "main" });
+  for (const dir of ["/repo/app-feature", "/repo/app-feature/src"]) host.gitRepos.set(dir, { toplevel: "/repo/app-feature", branch: "feature/login" });
+}
+
+/** One tool call through the hook, in `agentId`'s loop (the main one when undefined); returns what the call resolved to and how many times `next` ran, with what. */
+async function agentToolCall(handlers: Map<string, Hook>, engine: unknown, agentId: string | undefined, tool: string, args: Record<string, unknown>, toolUseId = "toolu_c"): Promise<{ result: unknown; nexts: unknown[] }> {
+  const hook = handlers.get("tool.call");
+  assert.ok(hook, "tool.call was never registered");
+  const nexts: unknown[] = [];
+  const event = { ...args, tool, tool_use_id: toolUseId, ...(agentId === undefined ? {} : { agentId }) };
+  const result = await hook(engine, event, async (e: unknown) => {
+    nexts.push(e);
+    return { result: "ok" };
+  });
+  return { result, nexts };
+}
+
+function placeOf(host: FakeHost, agentId: string): StoredSubagent["place"] {
+  return storedSubagents(host).find((agent) => agent.id === agentId)?.place;
+}
+
+test("0.6.23 T1: a spawn with no cwd works where the lead does", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1");
+  await settle();
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app", branch: "main", apart: false });
+});
+
+test("0.6.23 T1: a spawn with a cwd in another worktree works apart, on that worktree's branch", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent({ cwd: "/repo/app-feature" }), "agent-1");
+  await settle();
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app-feature", branch: "feature/login", apart: true });
+});
+
+test("0.6.23 T1: a spawn outside any repository gets no place", async () => {
+  const host = makeFakeHost();
+  host.root = "/repo/plain";
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1");
+  await settle();
+  assert.equal(placeOf(host, "agent-1"), undefined);
+  assert.equal(storedSubagents(host).length, 1, "the row itself stands");
+});
+
+test("0.6.23 T1: an Agent call asking for a worktree is pending until the agent's own write shows where", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await agentToolCall(handlers, engine, undefined, "Agent", { description: "List files", prompt: "p", isolation: "worktree" }, "toolu_iso");
+  await spawnAs(handlers, engine, spawnEvent({ tool_use_id: "toolu_iso" }), "agent-1");
+  await settle();
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: null, branch: null, apart: true, pendingIsolation: true });
+  host.agents = [{ id: "agent-1", status: "running", type: "general-purpose", description: "List files" }];
+  await agentToolCall(handlers, engine, "agent-1", "Edit", { file_path: "/repo/app-feature/src/login.ts", old_string: "a", new_string: "b" });
+  await settle();
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app-feature", branch: "feature/login", apart: true });
+});
+
+test("0.6.23 T1: an agent's `cd` moves it, its reads never do, and a directory runs git once", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1");
+  await settle();
+  await agentToolCall(handlers, engine, "agent-1", "Read", { file_path: "/repo/app-feature/odd/plan.md" });
+  await agentToolCall(handlers, engine, "agent-1", "Grep", { pattern: "x", path: "/repo/app-feature" });
+  await settle();
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app", branch: "main", apart: false }, "reading a sibling worktree does not move it");
+  await agentToolCall(handlers, engine, "agent-1", "Bash", { command: "cd /repo/app-feature && npm test" });
+  await settle();
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app-feature", branch: "feature/login", apart: true });
+  const gitCalls = (): number => host.processCalls.filter((call) => call.startsWith("git -C /repo/app-feature ")).length;
+  const before = gitCalls();
+  await agentToolCall(handlers, engine, "agent-1", "Bash", { command: "cd /repo/app-feature && git status" });
+  await agentToolCall(handlers, engine, "agent-1", "Bash", { command: "cd /repo/app && ls" });
+  await agentToolCall(handlers, engine, "agent-1", "Bash", { command: "cd /repo/app-feature" });
+  await settle();
+  assert.equal(gitCalls(), before, "a directory seen before is not looked up again");
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app-feature", branch: "feature/login", apart: true });
+});
+
+test("0.6.23 T1: a call in no recorded agent's loop, or the lead's own, sets no place", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await agentToolCall(handlers, engine, "agent-9", "Bash", { command: "cd /repo/app-feature" });
+  await agentToolCall(handlers, engine, undefined, "Bash", { command: "cd /repo/app-feature" });
+  await settle();
+  assert.deepEqual(storedSubagents(host), []);
+});
+
+test("0.6.23 T1: the call goes through exactly once, unchanged, and a failing lookup never fails it", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent(), "agent-1");
+  await settle();
+  host.failProcess = true;
+  const args = { command: "cd /repo/app-feature && npm test" };
+  const { result, nexts } = await agentToolCall(handlers, engine, "agent-1", "Bash", args);
+  await settle();
+  assert.deepEqual(result, { result: "ok" });
+  assert.deepEqual(nexts, [{ ...args, tool: "Bash", tool_use_id: "toolu_c", agentId: "agent-1" }]);
+  assert.deepEqual(placeOf(host, "agent-1"), { worktree: "app", branch: "main", apart: false }, "an unknown place keeps the last known one");
+});
+
+test("0.6.23 T1: drawing the band never runs git", async () => {
+  const host = makeFakeHost();
+  seedWorktrees(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "off" });
+  await spawnAs(handlers, engine, spawnEvent({ cwd: "/repo/app-feature" }), "agent-1");
+  await settle();
+  host.agents = [{ id: "agent-1", status: "running", type: "general-purpose", description: "List files" }];
+  const before = host.processCalls.length;
+  await renderBand(handlers, engine, 200);
+  await renderBand(handlers, engine, 80);
+  await settle();
+  assert.equal(host.processCalls.length, before);
 });

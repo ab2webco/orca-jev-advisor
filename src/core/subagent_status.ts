@@ -165,10 +165,23 @@ function parseOne(value: unknown): RunningSubagent | null {
   if (v.effort !== null && !isEffort(v.effort)) return null;
   if (!WHYS.includes(v.why as SubagentWhy)) return null;
   if (v.wouldUse !== null && typeof v.wouldUse !== "string") return null;
-  const base = { id: v.id, type: v.type, description: v.description, label: v.label, effort: v.effort, why: v.why as SubagentWhy, wouldUse: v.wouldUse };
+  const place = parsePlace(v.place);
+  const base = { id: v.id, type: v.type, description: v.description, label: v.label, effort: v.effort, why: v.why as SubagentWhy, wouldUse: v.wouldUse, ...(place === undefined ? {} : { place }) };
   if (v.effortSource === undefined) return base;
   if (v.effortSource !== null && !EFFORT_SOURCES.includes(v.effortSource as SubagentEffortSource)) return null;
   return { ...base, effortSource: v.effortSource as SubagentEffortSource | null };
+}
+
+/** 0.6.23 T1 (JEVADV-102): a stored place, or undefined when there is none or it is malformed (the row stands without it). */
+function parsePlace(value: unknown): AgentPlace | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  if (v.worktree !== null && typeof v.worktree !== "string") return undefined;
+  if (v.branch !== null && typeof v.branch !== "string") return undefined;
+  if (typeof v.apart !== "boolean") return undefined;
+  if (v.pendingIsolation !== undefined && v.pendingIsolation !== true) return undefined;
+  const place = { worktree: v.worktree, branch: v.branch, apart: v.apart };
+  return v.pendingIsolation === true ? { ...place, pendingIsolation: true } : place;
 }
 
 /** The running set as `$.state` keeps it (`{ agents }`); anything malformed is dropped, never thrown. */
