@@ -12,7 +12,8 @@
 // to run it.
 
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -245,5 +246,25 @@ test("countRealJevDecisions: counts Jev decisions across the legacy file and eve
     assert.equal(countRealJevDecisions(dir), 3);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 0.6.17 T5 (JEVADV-67, A7): the entry check compared import.meta.url with
+// `file://` + argv[1], which differ as soon as the path holds a character a
+// URL escapes (a space is %20), so the CLI printed nothing and did nothing.
+test("the CLI runs from a path with a space in it", () => {
+  const root = mkdtempSync(join(tmpdir(), "orca jev ab cli "));
+  try {
+    const repo = join(root, "plugin copy");
+    const here = join(import.meta.dirname, "..", "..");
+    for (const dir of ["src", join("adapters", "cli")]) cpSync(join(here, dir), join(repo, dir), { recursive: true });
+    cpSync(join(here, "package.json"), join(repo, "package.json"));
+    const env = { ...process.env, ORCA_SUPERVISOR_CONFIG_DIR: join(root, "config"), ORCA_SUPERVISOR_CACHE_DIR: join(root, "cache") };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", join(repo, "adapters", "cli", "ab_benchmark_cli.ts"), "help"], { env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /ab-benchmark compare/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

@@ -33,9 +33,10 @@
 // spawn, the real Jev network call, argv and console.log.
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 import { buildActionGateQuestions, buildActionGateState, decideAction } from "../../src/core/decisions.ts";
@@ -411,8 +412,22 @@ async function main(): Promise<void> {
 
 // Only run when invoked directly (`node ab_benchmark_cli.ts ...`), never
 // when imported by ab_benchmark_cli.test.ts -- same guard shape as any
-// other dual-purpose entry point in this codebase.
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+// other dual-purpose entry point in this codebase. 0.6.17 T5 (JEVADV-67):
+// compared as URLs, so a path with a space (`%20` in the URL) still matches,
+// and through its real path, which is what import.meta.url holds when the
+// script is reached through a symlink (macOS's /var is /private/var).
+function isEntryPoint(argvPath: string | undefined): boolean {
+  if (argvPath === undefined) return false;
+  let real = argvPath;
+  try {
+    real = realpathSync(argvPath);
+  } catch {
+    // Not on disk under that name: compare it as given.
+  }
+  return import.meta.url === pathToFileURL(real).href;
+}
+
+if (isEntryPoint(process.argv[1])) {
   main().catch((error) => {
     console.error(error);
     process.exitCode = 1;
