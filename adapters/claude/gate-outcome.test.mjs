@@ -18,7 +18,7 @@
 // matching pending") seeds one first with seedPending.
 
 import { strict as assert } from 'node:assert'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -146,4 +146,25 @@ test('an unrecognized event is not recorded, even with a matching pending record
   seedPending(home, 'tool-5')
   run(home, { hook_event_name: 'Notification', tool_use_id: 'tool-5', tool_name: 'Bash' })
   assert.deepEqual(readOutcomes(home), [])
+})
+
+// 0.6.19 M3 (JEVADV-70): whatever throws, the recorder ends silently with
+// exit 0. Under node's test runner with no override, src/core/paths.ts
+// refuses to resolve the cache directory (it throws), which is the one
+// throw this script can be made to meet from the outside.
+test('a cache directory that cannot be resolved ends silently: exit 0, no stack trace', () => {
+  const home = makeHome()
+  seedPending(home, 'tool-unresolvable')
+  const env = { ...process.env, HOME: home }
+  delete env.XDG_CACHE_HOME
+  delete env.ORCA_SUPERVISOR_CACHE_DIR
+  assert.ok(env.NODE_TEST_CONTEXT, 'runs under node --test, where the paths guard throws')
+  const result = spawnSync(process.execPath, [SCRIPT_PATH], {
+    env,
+    input: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_use_id: 'tool-unresolvable' }),
+    encoding: 'utf8'
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr, '')
+  assert.equal(result.stdout, '')
 })

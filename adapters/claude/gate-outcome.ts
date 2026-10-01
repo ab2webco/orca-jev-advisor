@@ -37,14 +37,19 @@ import { buildApprovalOutcomeRecord, parsePendingToolUseIds, serializeApprovalRe
 import type { ApprovalOutcome } from '../../src/core/approval_record.ts'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 
-const PLATFORM = normalizePlatform(process.platform)
-const CACHE_DIR = resolveCacheDir(PLATFORM, {
-  home: homedir(),
-  appDataDir: process.env.APPDATA,
-  localAppDataDir: process.env.LOCALAPPDATA,
-  xdgCacheHome: process.env.XDG_CACHE_HOME,
-})
-const OUTCOMES_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
+/**
+ * The cache directory, resolved when main() runs rather than at load: a
+ * throw here (0.6.19 M3) then lands in main()'s own last-resort catch
+ * instead of failing the hook with a stack trace.
+ */
+function cacheDir(): string {
+  return resolveCacheDir(normalizePlatform(process.platform), {
+    home: homedir(),
+    appDataDir: process.env.APPDATA,
+    localAppDataDir: process.env.LOCALAPPDATA,
+    xdgCacheHome: process.env.XDG_CACHE_HOME,
+  })
+}
 
 /** Exits silently. This hook must never be the reason a command fails or stalls. */
 function done(): never {
@@ -69,10 +74,10 @@ function done(): never {
  * Best-effort like everything else here: an unreadable log answers false
  * (nothing to join, so nothing to write), never a throw.
  */
-function hasPendingApproval(toolUseId: string): boolean {
+function hasPendingApproval(outcomesPath: string, toolUseId: string): boolean {
   let raw: string
   try {
-    raw = readFileSync(OUTCOMES_PATH, 'utf8')
+    raw = readFileSync(outcomesPath, 'utf8')
   } catch {
     return false
   }
@@ -114,13 +119,15 @@ function main(): void {
   const outcome = outcomeFor(event, parsed['tool_name'])
   if (outcome === null) done()
 
+  const dir = cacheDir()
+  const outcomesPath = join(dir, 'gate-approvals.jsonl')
   // Only a joinable outcome answers a real question -- see hasPendingApproval.
-  if (!hasPendingApproval(toolUseId)) done()
+  if (!hasPendingApproval(outcomesPath, toolUseId)) done()
 
   try {
-    mkdirSync(CACHE_DIR, { recursive: true })
+    mkdirSync(dir, { recursive: true })
     appendFileSync(
-      OUTCOMES_PATH,
+      outcomesPath,
       serializeApprovalRecord(
         buildApprovalOutcomeRecord({ toolUseId, at: new Date().toISOString(), outcome }),
       ),
@@ -132,4 +139,10 @@ function main(): void {
   done()
 }
 
-main()
+// 0.6.19 M3 (JEVADV-70): the last resort. Anything main() did not catch
+// itself ends as a silent exit 0, never a stack trace or a failed hook.
+try {
+  main()
+} catch {
+  done()
+}

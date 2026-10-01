@@ -53,8 +53,8 @@ async function readKey<T>(host: StorageHost, key: string, guard: (value: unknown
 
 // ---------------------------------------------------------------------------
 // catalog: the cross-worktree destination list (same shape as the root
-// project's catalog.json / src/catalog.ts, duplicated here as a storage
-// record because the plugin never imports the CLI's file-based loader).
+// project's catalog.json, kept here as a storage record; the CLI's
+// file-based loader, src/core/catalog.ts, was deleted in 0.6.19).
 // ---------------------------------------------------------------------------
 
 export type DestinationKind = "service" | "client-site" | "project" | "support";
@@ -76,8 +76,8 @@ function isDestinationKind(value: unknown): value is DestinationKind {
  * `AutonomyConfig` at all; its risk stage judges against the module-level
  * `REVERSIBLE_GATE`/`EXTERNAL_GATE`/`CONSEQUENCE_CEILING` constants, the
  * same for every destination. `src/core/catalog.ts`, the other module that
- * declared these three fields, is itself imported by nothing in `src/` or
- * `adapters/` -- dead code, not merely dead fields. Removed rather than
+ * declared these three fields, was imported by nothing in `src/` or
+ * `adapters/` -- dead code, not merely dead fields, deleted in 0.6.19. Removed rather than
  * defaulted, matching production-honesty-pass P2's precedent for the same
  * class of defect.
  */
@@ -167,7 +167,7 @@ export interface PolicyRow {
   readonly scope?: PolicyScope;
 }
 
-/** The runtime list of PolicyKind's members, same technique policies.ts already uses for its own isPolicyKind. */
+/** The runtime list of PolicyKind's members, so a stored row's kind is checked against the type's own members. */
 const POLICY_KINDS: readonly PolicyKind[] = ["permits", "requires_human", "prohibits"];
 
 function isPolicyKind(value: unknown): value is PolicyKind {
@@ -420,8 +420,14 @@ export interface PluginConfig {
   readonly jevBudgetMs: number;
 }
 
+/**
+ * 0.6.19 M13 (JEVADV-72): `logMaxEntries` must be a whole number of at least
+ * 1. A 0 saved from an emptied panel field used to pass as a number, and the
+ * next recorded decision trimmed the whole history; now such a config is
+ * invalid and the default stands, like any other malformed config.
+ */
 function isPluginConfig(value: unknown): value is PluginConfig {
-  return isRecord(value) && isNumber(value.logMaxEntries) && isNumber(value.jevBudgetMs);
+  return isRecord(value) && isNumber(value.logMaxEntries) && Number.isInteger(value.logMaxEntries) && value.logMaxEntries >= 1 && isNumber(value.jevBudgetMs);
 }
 
 const DEFAULT_CONFIG: PluginConfig = {

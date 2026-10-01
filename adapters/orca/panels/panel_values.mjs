@@ -106,8 +106,9 @@ export function buildPolicyRow(fields) {
 
 // ---------- board.html -------------------------------------------------------
 // odd/tasks/panel-interventions-and-mod-copy.md T11. Same hand-copy contract
-// as above, but into board.html: `grep -n defaultWindowKey` (or
-// relativeAge/liveEntryView) across both files is how to check they agree.
+// as above, but into board.html. panel_values.test.mjs runs every case
+// against these originals and against each panel's copy (0.6.19), so a copy
+// that drifts fails the tests.
 
 /**
  * Which window the board opens on. The current plugin version first, since
@@ -154,22 +155,35 @@ export function relativeAge(iso, nowMs) {
 }
 
 /**
+ * Orca's own FLOATING_TERMINAL_WORKTREE_ID (orca-oss
+ * src/shared/floating-workspace-selector.ts): a pane that belongs to no
+ * worktree at all, which Orca's own Activity page labels "Floating terminal".
+ */
+export const FLOATING_TERMINAL_WORKTREE_ID = "global-floating-terminal";
+
+/**
  * What a live-status row shows. A pane key is a pair of UUIDs
  * (`1e1fff06-...:a62d09bd-...`) that tells a person nothing, so it is never a
- * label: the project and branch are the chips, and the worktree and pane ids
- * go only into the tooltip, for whoever is debugging. `name` is null when the
- * worktree could not be resolved (main.mjs leaves project/branch null then);
- * the board prints its own "unknown worktree" text for that.
+ * label: the project name the worker resolved (main.mjs's boardProjectName)
+ * and the branch are the chips, and the project, worktree and pane ids go
+ * only into the tooltip, for whoever is debugging. A pane of no worktree is
+ * the floating terminal; a project the worker could not name reads as an
+ * unknown project, and no project at all as an unknown worktree -- each in
+ * the panel's own words, through `t`.
  *
- * @param {{ worktreeId?: string | null, project?: string | null, rama?: string | null, paneKey?: string } | null | undefined} entry
- * @returns {{ name: string | null, branch: string | null, title: string }}
+ * @param {{ worktreeId?: string | null, project?: string | null, projectName?: string | null, rama?: string | null, paneKey?: string } | null | undefined} entry
+ * @param {(key: string) => string} t
+ * @returns {{ name: string, branch: string | null, title: string }}
  */
-export function liveEntryView(entry) {
+export function liveEntryView(entry, t) {
   const e = entry || {};
   const present = (value) => (typeof value === "string" && value.length > 0 ? value : null);
+  let name = present(e.projectName);
+  if (name === null && e.worktreeId === FLOATING_TERMINAL_WORKTREE_ID) name = t("live.floatingTerminal");
+  if (name === null) name = present(e.project) !== null ? t("stats.unknownProject") : t("live.unknownWorktree");
   return {
-    name: present(e.project),
+    name,
     branch: present(e.rama),
-    title: [present(e.worktreeId), present(e.paneKey)].filter((part) => part !== null).join(" · "),
+    title: [present(e.project), present(e.worktreeId), present(e.paneKey)].filter((part) => part !== null).join(" · "),
   };
 }

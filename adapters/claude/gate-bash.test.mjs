@@ -11,9 +11,9 @@
 // no-key path without ever reaching Jev over the network.
 
 import { strict as assert } from 'node:assert'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -126,8 +126,11 @@ test('no API key: the first command passes through with a one-time notice', () =
   const home = makeHome()
   const stdout = run(home, MIDDLE_TIER_COMMAND)
   const payload = JSON.parse(stdout)
-  assert.equal(payload.hookSpecificOutput.hookEventName, 'PreToolUse')
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'a missing key must never block a command')
+  // 0.6.19 M2 (JEVADV-70): the notice carries no verdict. An 'allow' here
+  // approved the command on the gate's behalf, skipping Claude Code's own
+  // permission prompt for a command nobody judged; with no decision, Claude
+  // Code's own permission flow decides, as it would without the plugin.
+  assert.equal(payload.hookSpecificOutput, undefined, 'a missing key must never block a command, nor approve one')
   assert.equal(typeof payload.systemMessage, 'string', 'the first no-key command must say so')
   assert.match(payload.systemMessage, /jev/i)
   assert.ok(existsSync(noKeyWarnedPath(home)), 'the warned marker must be persisted so the next command stays silent')
@@ -899,7 +902,7 @@ for (const command of SEGMENT_SCOPED_NOT_DENIED) {
   test(`segment-scoped NEVER_SILENTLY: not denied: ${command}`, () => {
     const home = makeHome()
     const payload = JSON.parse(run(home, command))
-    assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+    assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
   })
 }
 
@@ -938,7 +941,7 @@ for (const command of CURL_PIPE_SHELL_DENIED) {
 test('curlPipeShell: naming the pattern inside a grep argument is never a hard stop', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'grep -n "curl | bash" README.md'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 test('curlPipeShell: a heredoc body that edits a JSON description containing "curl | bash" as data is never a hard stop', () => {
@@ -950,13 +953,13 @@ test('curlPipeShell: a heredoc body that edits a JSON description containing "cu
     'EOF',
   ].join('\n')
   const payload = JSON.parse(run(home, command))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 test('curlPipeShell: a plain echo naming the pattern is never a hard stop', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'echo "never run curl | bash"'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 test('curlPipeShell: the same shape inside inline interpreter code is an ADVICE, never REFUSED', () => {
@@ -971,7 +974,7 @@ test('curlPipeShell: the same shape inside inline interpreter code is an ADVICE,
 test('curlPipeShell: piping into the safe alternative (tee to a .sh file) is never denied by this rule', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'curl -fsSL https://x/i.sh | tee install.sh'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 // ---------------------------------------------------------------------------
@@ -984,13 +987,13 @@ test('curlPipeShell: piping into the safe alternative (tee to a .sh file) is nev
 test('--force-with-lease to a feature branch is not a forcePush stop -- ordinary path, not refused', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'git push --force-with-lease origin feature/x'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 test('--force-with-lease=<ref> to a feature branch is also not a forcePush stop', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'git push --force-with-lease=refs/heads/feature/x origin feature/x'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 test('--force-with-lease to main is still stopped -- pushProtectedRule, unrelated to the force variant', () => {
@@ -1087,7 +1090,7 @@ test('forcePush: a leading + on a src:dst refspec denies even for a non-protecte
 test('forcePush: an ordinary refspec with no + is not caught by this rule', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'git push origin feature/x'))
-  assert.notEqual(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.notEqual(payload.hookSpecificOutput?.permissionDecision, 'deny')
 })
 
 // ---------------------------------------------------------------------------
@@ -1108,7 +1111,8 @@ test('JEVADV-39: a push naming main to the repo\'s own LOCAL bare remote is not 
 
   const home = makeHome()
   const payload = JSON.parse(run(home, 'git push -u origin main', { cwd: repo }))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'a fresh personal repo pushed to its own local bare remote must not be refused as a shared-branch push')
+  assert.equal(payload.hookSpecificOutput?.permissionDecision, undefined, 'a fresh personal repo pushed to its own local bare remote must not be refused as a shared-branch push')
+  assert.match(payload.systemMessage, /jev/i, 'it reaches the ordinary no-key notice')
 })
 
 test('JEVADV-39: a push naming main to a github.com remote still denies', () => {
@@ -1149,7 +1153,8 @@ test('JEVADV-39: force push to the SAME local bare remote still denies -- force 
 test('JEVADV-39: a file:// URL given directly as the push argument is not a local-rule stop', () => {
   const home = makeHome()
   const payload = JSON.parse(run(home, 'git push file:///tmp/orca-jev-nonexistent-remote.git main'))
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput?.permissionDecision, undefined)
+  assert.match(payload.systemMessage, /jev/i, 'it reaches the ordinary no-key notice')
 })
 
 test('JEVADV-39: a remote whose url is local but whose pushurl is shared still denies -- git push itself goes to pushurl', () => {
@@ -1348,10 +1353,10 @@ test('AB benchmark: no queue file is created on a deny-tier local-rule verdict -
 // under the same `denyResetClean` switch, before the API key check.
 // ---------------------------------------------------------------------------
 
-/** The decision the hook emitted, or 'none' when it passed through silently. */
+/** The decision the hook emitted, or 'none' when it passed through with no verdict (silently, or with only a notice). */
 function decisionFor (home, command) {
   const stdout = run(home, command)
-  return stdout === '' ? 'none' : JSON.parse(stdout).hookSpecificOutput.permissionDecision
+  return stdout === '' ? 'none' : JSON.parse(stdout).hookSpecificOutput?.permissionDecision ?? 'none'
 }
 
 const DISCARDING_COMMANDS = [
@@ -1621,7 +1626,7 @@ function assertNotAllowedByOwnBranchPush (home, command, cwd) {
   const stdout = run(home, command, { cwd })
   if (stdout.length > 0) {
     const payload = JSON.parse(stdout)
-    if (payload.hookSpecificOutput.permissionDecision === 'allow') {
+    if (payload.hookSpecificOutput?.permissionDecision === 'allow') {
       assert.notEqual(payload.hookSpecificOutput.permissionDecisionReason, OWN_BRANCH_PUSH_REASON_TEXT)
     }
   }
@@ -1760,7 +1765,7 @@ test('own-branch push: a global requires_human command-scoped policy still block
   // instead -- proof the command was NOT resolved locally by this feature.
   const stdout = run(home, 'git push -u origin feature/x')
   const payload = JSON.parse(stdout)
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'fails open on no key, same as any other command')
+  assert.equal(payload.hookSpecificOutput?.permissionDecision, undefined, 'fails open on no key with no verdict, same as any other command')
   assert.match(payload.systemMessage, /jev/i, 'must be the ordinary no-key notice, not this feature\'s own silent reason')
   assert.equal(gateLogRecords(home).length, 0, 'the no-key path writes no gate-decision record at all')
 })
@@ -1908,7 +1913,7 @@ test('guarded git delete: a global requires_human command-scoped policy still bl
   writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
   const stdout = run(home, 'git branch -d feature/old')
   const payload = JSON.parse(stdout)
-  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', 'fails open on no key, same as any other command')
+  assert.equal(payload.hookSpecificOutput?.permissionDecision, undefined, 'fails open on no key with no verdict, same as any other command')
   assert.match(payload.systemMessage, /jev/i, 'must be the ordinary no-key notice, not this feature\'s own silent reason')
   assert.equal(gateLogRecords(home).length, 0, 'the no-key path writes no gate-decision record at all')
 })
@@ -3129,4 +3134,85 @@ test('T4: a decision that cannot be written bumps the append-failure counter, an
   const counter = JSON.parse(readFileSync(join(dir, 'gate-decisions-append-failures.json'), 'utf8'))
   assert.equal(counter.count, 2)
   assert.equal(typeof counter.lastAt, 'string')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.19 T1 (JEVADV-70): the hook never fails as a crash. These run the
+// script the way run() does, but through spawnSync, so a test can see the
+// exit code and stderr, hand the hook a stdout it cannot write, or put a
+// `git` first on PATH.
+// ---------------------------------------------------------------------------
+
+function spawnGate (home, command, { stdout = 'pipe', path } = {}) {
+  const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home }
+  delete env.XDG_CACHE_HOME
+  delete env.XDG_CONFIG_HOME
+  delete env.TYPESAFE_API_KEY
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  env.ORCA_SUPERVISOR_CACHE_DIR = join(home, '.cache', 'orca-supervisor')
+  env.ORCA_USER_DATA_PATH = join(home, 'orca-userdata-does-not-exist')
+  if (path !== undefined) env.PATH = path
+  const payload = { tool_input: { command }, cwd: home, tool_use_id: 'tool-robustness' }
+  return spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], {
+    env,
+    input: JSON.stringify(payload),
+    stdio: ['pipe', stdout, 'pipe'],
+    encoding: 'utf8'
+  })
+}
+
+test('0.6.19 M3: a failure inside main() ends as a silent pass-through, exit 0 and no stack trace', () => {
+  const home = makeHome()
+  // A stdout opened read-only: the hook's own write fails with EBADF, the
+  // way a pipe Claude Code already closed would make it fail.
+  const readOnly = join(home, 'read-only-stdout')
+  writeFileSync(readOnly, '')
+  const fd = openSync(readOnly, 'r')
+  try {
+    const result = spawnGate(home, MIDDLE_TIER_COMMAND, { stdout: fd })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stderr, '', 'never a stack trace')
+  } finally {
+    closeSync(fd)
+  }
+})
+
+test('0.6.19 M4: a git that hangs is cut off, and the gate still answers in time', () => {
+  const home = makeHome()
+  const bin = join(home, 'slow-bin')
+  mkdirSync(bin)
+  // `exec` so the kill reaches the sleeping process itself, not a shell
+  // that would leave it holding the pipe open.
+  writeFileSync(join(bin, 'git'), '#!/bin/sh\nexec sleep 20\n')
+  chmodSync(join(bin, 'git'), 0o755)
+  const started = Date.now()
+  const result = spawnGate(home, "echo '[]' > ~/.config/orca-supervisor/policies.json", { path: `${bin}:${process.env.PATH}` })
+  const elapsedMs = Date.now() - started
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(JSON.parse(result.stdout).hookSpecificOutput.permissionDecision, 'deny', 'the refusal does not depend on git')
+  assert.ok(elapsedMs < 10_000, `took ${elapsedMs} ms: a hung git must be cut off at its own timeout`)
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 1)
+  assert.notEqual(records[0].project, undefined)
+})
+
+test('0.6.19 M3: directories that cannot be resolved at load end silently too: exit 0, no stack trace', () => {
+  const home = makeHome()
+  const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home, ORCA_USER_DATA_PATH: join(home, 'orca-userdata-does-not-exist') }
+  delete env.XDG_CACHE_HOME
+  delete env.XDG_CONFIG_HOME
+  delete env.ORCA_SUPERVISOR_CONFIG_DIR
+  delete env.ORCA_SUPERVISOR_CACHE_DIR
+  delete env.TYPESAFE_API_KEY
+  // Under node --test with no override, src/core/paths.ts throws instead of
+  // resolving: the one load-time throw a test can reach from outside.
+  assert.ok(env.NODE_TEST_CONTEXT)
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], {
+    env,
+    input: JSON.stringify({ tool_input: { command: MIDDLE_TIER_COMMAND }, cwd: home, tool_use_id: 'tool-unresolvable' }),
+    encoding: 'utf8'
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr, '')
+  assert.equal(result.stdout, '')
 })

@@ -47,8 +47,9 @@
  *             and not a symlink. Every settings.json write is atomic (temp
  *             file + rename) and preceded, on the very first install, by a
  *             full backup.
- * uninstall   Surgical: removes only the hook entry each event's own
- *             `statusMessage` marks, from whichever matcher group (`Bash`
+ * uninstall   Surgical: removes only the hook entry that is ours (the
+ *             script it runs, or the `statusMessage` an older version
+ *             marked it with; see isOwnHook), from whichever matcher group (`Bash`
  *             or `Agent`) it lives in (dropping that group entirely if that
  *             was its only entry, and the event's own array if that was its
  *             only group -- across both matchers independently), restores
@@ -122,6 +123,7 @@ import {
   ORCA_USER_DATA_ENV,
   accountConfigTarget,
   claudeAccountsDir,
+  holdsClaudeConfig,
   homeConfigTarget,
   resolveOrcaUserDataDir,
   settingsPathFor,
@@ -230,7 +232,13 @@ async function discoverTargets () {
   }
   for (const entry of entries) {
     if (!entry.isDirectory()) continue
-    targets.push(accountConfigTarget(PLATFORM, accountsDir, entry.name))
+    // 0.6.19 (JEVADV-74): only a directory that holds a Claude config is an
+    // account. Every other folder here -- a stray one, an account Orca has
+    // not logged in yet -- used to become a target, and install conjured an
+    // auth/settings.json into it.
+    const target = accountConfigTarget(PLATFORM, accountsDir, entry.name)
+    const names = await readdir(target.configDir).catch(() => [])
+    if (holdsClaudeConfig(names)) targets.push(target)
   }
   return { targets, userData, accountsDir, accountsFound: true, reason: null }
 }
@@ -326,12 +334,11 @@ function localizedMarker (family, locale) {
 
 /** Every hook entry this installer manages, across BOTH matcher groups
  *  (`Bash` for the command gate, `Agent` for the model-reclassification
- *  hooks). `markers` is every locale variant of this spec's own
- *  `statusMessage` that `findOwnHookIndex`/`findMarkedHook` treat as ours --
- *  for the two "asking Jev" hooks, both `en` and `es` text (see
- *  localizedMarkers); for every other hook, its own single, unlocalized
- *  marker. Distinct per hook (never two of ours, or one of ours and a third
- *  party's, sharing a marker). `matcher` says which matcher GROUP an
+ *  hooks). `owner` is what makes an entry ours (see hookOwner): the script
+ *  it runs, and, for an entry an older version wrote, every locale variant
+ *  of this spec's own `statusMessage` -- for the two "asking Jev" hooks,
+ *  both `en` and `es` text (see localizedMarkers); for every other hook, its
+ *  own single, unlocalized marker. `matcher` says which matcher GROUP an
  *  entry's own `Bash`/`Agent` hooks live inside; installHookEntry/
  *  uninstallHookEntry are generalized over it (see their own doc comments)
  *  so a third party's own group under either matcher is never mistaken for
@@ -348,23 +355,23 @@ function hookSpecs (pluginRoot, locale = DEFAULT_LOCALE, node = resolveNodeComma
   return {
     node,
     specs: [
-      { event: 'PreToolUse', matcher: 'Bash', markers: localizedMarkers('gate'), path: gatePath, entry: gateHookEntry(node.command, gatePath, gateMarker) },
-      { event: 'PostToolUse', matcher: 'Bash', markers: [OUTCOME_HOOK_STATUS_MESSAGE], path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
-      { event: 'PermissionDenied', matcher: 'Bash', markers: [OUTCOME_HOOK_STATUS_MESSAGE], path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      { event: 'PreToolUse', matcher: 'Bash', owner: hookOwner('gate-bash.ts', localizedMarkers('gate')), path: gatePath, entry: gateHookEntry(node.command, gatePath, gateMarker) },
+      { event: 'PostToolUse', matcher: 'Bash', owner: hookOwner('gate-outcome.ts', [OUTCOME_HOOK_STATUS_MESSAGE]), path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      { event: 'PermissionDenied', matcher: 'Bash', owner: hookOwner('gate-outcome.ts', [OUTCOME_HOOK_STATUS_MESSAGE]), path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
       // Appended, never inserted before PermissionDenied: every other spot in
       // this file addresses specs[0..2] by their original positional index,
       // and a new entry at the end keeps every one of those indices meaning
       // exactly what it always meant.
-      { event: 'PostToolUseFailure', matcher: 'Bash', markers: [OUTCOME_HOOK_STATUS_MESSAGE], path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
+      { event: 'PostToolUseFailure', matcher: 'Bash', owner: hookOwner('gate-outcome.ts', [OUTCOME_HOOK_STATUS_MESSAGE]), path: outcomePath, entry: outcomeHookEntry(node.command, outcomePath) },
       // Agent-matcher hooks, appended after the four Bash ones for the same
       // reason: install()/uninstall()/status() below address specs[0..3] by
       // their original positional index, and these three land at [4..6]
       // without disturbing any of that.
-      { event: 'PreToolUse', matcher: 'Agent', markers: localizedMarkers('agentModel'), path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, HOOK_TIMEOUT_SECONDS, agentModelMarker) },
-      { event: 'PostToolUse', matcher: 'Agent', markers: [AGENT_OUTCOME_STATUS_MESSAGE], path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
-      { event: 'PostToolUseFailure', matcher: 'Agent', markers: [AGENT_OUTCOME_STATUS_MESSAGE], path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
+      { event: 'PreToolUse', matcher: 'Agent', owner: hookOwner('agent-model.ts', localizedMarkers('agentModel')), path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, HOOK_TIMEOUT_SECONDS, agentModelMarker) },
+      { event: 'PostToolUse', matcher: 'Agent', owner: hookOwner('agent-model.ts', [AGENT_OUTCOME_STATUS_MESSAGE]), path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
+      { event: 'PostToolUseFailure', matcher: 'Agent', owner: hookOwner('agent-model.ts', [AGENT_OUTCOME_STATUS_MESSAGE]), path: agentModelPath, entry: agentModelHookEntry(node.command, agentModelPath, OUTCOME_HOOK_TIMEOUT_SECONDS, AGENT_OUTCOME_STATUS_MESSAGE) },
       // 0.6.17 T2: appended at [7] for the same positional reason.
-      { event: 'PreToolUse', matcher: FILE_TOOLS_MATCHER, markers: localizedMarkers('fileGuard'), path: fileGuardPath, entry: agentModelHookEntry(node.command, fileGuardPath, FILE_GUARD_TIMEOUT_SECONDS, localizedMarker('fileGuard', locale)) }
+      { event: 'PreToolUse', matcher: FILE_TOOLS_MATCHER, owner: hookOwner('gate-files.mjs', localizedMarkers('fileGuard')), path: fileGuardPath, entry: agentModelHookEntry(node.command, fileGuardPath, FILE_GUARD_TIMEOUT_SECONDS, localizedMarker('fileGuard', locale)) }
     ]
   }
 }
@@ -639,12 +646,33 @@ async function writeInstallState (state) {
 // must never be mistaken for another one having pre-existed too.
 // ---------------------------------------------------------------------------
 
-/** `markers` is every locale variant of this hook's own statusMessage (see
- *  hookSpecs' own doc) -- an entry written under ANY of them is ours, so a
- *  locale change never orphans an entry install/status/uninstall already
- *  know about, and never causes install to push a duplicate alongside it. */
-function findOwnHookIndex (hooks, markers) {
-  return hooks.findIndex((h) => isRecord(h) && markers.includes(h.statusMessage))
+/**
+ * 0.6.19 (JEVADV-74): what makes a hook entry ours. It used to be the
+ * `statusMessage` alone, which a person may edit and which says nothing
+ * about what the entry runs. Claude Code's settings schema leaves no room
+ * for a field of our own on an entry (`hookCommand` is
+ * `additionalProperties: false`, json.schemastore.org/claude-code-settings,
+ * checked 2026-10-01), so the explicit identity is the script the entry
+ * runs: its `args[0]` ends in `adapters/claude/<script>`, whichever plugin
+ * root wrote it. The markers still identify an entry an older version wrote
+ * (a shell-pipeline command with no `args`, or any entry before 0.6.19), so
+ * an upgrade recognises every one of them; `markers` is every locale variant
+ * of this hook's own statusMessage, so a locale change never orphans an
+ * entry and never makes install push a duplicate beside it.
+ */
+function hookOwner (script, markers) {
+  return { script, markers }
+}
+
+function isOwnHook (hook, owner) {
+  if (!isRecord(hook)) return false
+  const first = Array.isArray(hook.args) ? hook.args[0] : undefined
+  if (typeof first === 'string' && first.replace(/\\/g, '/').endsWith(`/adapters/claude/${owner.script}`)) return true
+  return owner.markers.includes(hook.statusMessage)
+}
+
+function findOwnHookIndex (hooks, owner) {
+  return hooks.findIndex((h) => isOwnHook(h, owner))
 }
 
 /** A pre-change install-state record kept its PreToolUse bookkeeping as two
@@ -704,7 +732,7 @@ function setGroupExistedBefore (es, matcher, value) {
   es.groupExistedBefore[matcher] = value
 }
 
-function installHookEntry (settings, event, matcher, markers, entry, state) {
+function installHookEntry (settings, event, matcher, owner, entry, state) {
   if (state.hooksObjectExistedBefore === undefined) state.hooksObjectExistedBefore = isRecord(settings.hooks)
   if (!isRecord(settings.hooks)) settings.hooks = {}
 
@@ -720,11 +748,10 @@ function installHookEntry (settings, event, matcher, markers, entry, state) {
   }
   if (!Array.isArray(group.hooks)) group.hooks = []
 
-  // A hook written under a DIFFERENT locale's marker is still found here
-  // (findOwnHookIndex checks every marker in `markers`) and REPLACED in
-  // place with `entry` (which carries the CURRENT locale's own marker) --
-  // the locale-change update-in-place this release adds, never a duplicate.
-  const existingIndex = findOwnHookIndex(group.hooks, markers)
+  // An entry of ours -- by its script, or written under any locale's marker
+  // (see isOwnHook) -- is found here and REPLACED in place with `entry`,
+  // never joined by a duplicate.
+  const existingIndex = findOwnHookIndex(group.hooks, owner)
   const changed = existingIndex === -1 || JSON.stringify(group.hooks[existingIndex]) !== JSON.stringify(entry)
   if (existingIndex === -1) group.hooks.push(entry)
   else group.hooks[existingIndex] = entry
@@ -734,14 +761,14 @@ function installHookEntry (settings, event, matcher, markers, entry, state) {
 /** Removes only our own entry for `event`'s `matcher` group, then unwinds
  *  exactly the containers install created for that event/matcher (never one
  *  that pre-existed, however empty it now is) -- see the note above. */
-function uninstallHookEntry (settings, event, matcher, markers, state) {
+function uninstallHookEntry (settings, event, matcher, owner, state) {
   if (!isRecord(settings.hooks) || !Array.isArray(settings.hooks[event])) return false
   const eventHooks = settings.hooks[event]
   const groupIndex = eventHooks.findIndex((g) => isRecord(g) && g.matcher === matcher)
   if (groupIndex === -1) return false
   const group = eventHooks[groupIndex]
   if (!Array.isArray(group.hooks)) return false
-  const hookIndex = findOwnHookIndex(group.hooks, markers)
+  const hookIndex = findOwnHookIndex(group.hooks, owner)
   if (hookIndex === -1) return false
 
   const es = eventState(state, event)
@@ -1060,6 +1087,7 @@ async function install (pluginRoot) {
   const discovery = await discoverTargets()
   const stored = (await readInstallState()) ?? {}
   const states = targetStates(stored)
+  const installedAt = stored.installedAt ?? new Date().toISOString()
 
   const perTarget = []
   let nodeVerified = node.verified
@@ -1075,17 +1103,22 @@ async function install (pluginRoot) {
       await backupSettingsOnce(backupPathFor(target), rawBefore)
 
       const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, fileGuardChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
-        hookChanged: installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, specs[0].entry, state),
-        postChanged: installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, specs[1].entry, state),
-        deniedChanged: installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, specs[2].entry, state),
-        postFailureChanged: installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, specs[3].entry, state),
-        agentPreChanged: installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, specs[4].entry, state),
-        agentPostChanged: installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, specs[5].entry, state),
-        agentPostFailureChanged: installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, specs[6].entry, state),
-        fileGuardChanged: installHookEntry(settings, specs[7].event, specs[7].matcher, specs[7].markers, specs[7].entry, state),
+        hookChanged: installHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].owner, specs[0].entry, state),
+        postChanged: installHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].owner, specs[1].entry, state),
+        deniedChanged: installHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].owner, specs[2].entry, state),
+        postFailureChanged: installHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].owner, specs[3].entry, state),
+        agentPreChanged: installHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].owner, specs[4].entry, state),
+        agentPostChanged: installHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].owner, specs[5].entry, state),
+        agentPostFailureChanged: installHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].owner, specs[6].entry, state),
+        fileGuardChanged: installHookEntry(settings, specs[7].event, specs[7].matcher, specs[7].owner, specs[7].entry, state),
         envChanged: installEnvVar(settings, state)
       }))
       states[target.id] = state
+      // 0.6.19 (JEVADV-74): this target's "how it was before" facts are on
+      // disk before the next target is touched or the slow mod copy runs, so
+      // a run killed at main.mjs's timeout still leaves uninstall something
+      // to restore this settings.json from.
+      await writeInstallState({ version: 3, targets: states, installedAt })
 
       const modCopyPath = modCopyPathFor(target)
       const modResult = await installModCopy(pluginRoot, modCopyPath, modCopyMarkerPathFor(modCopyPath))
@@ -1117,7 +1150,7 @@ async function install (pluginRoot) {
       perTarget.push({ id: target.id, label: target.label, orcaManaged: target.orcaManaged, ok: false, detail: String(error?.message ?? error).slice(0, 300) })
     }
   }
-  await writeInstallState({ version: 3, targets: states, installedAt: stored.installedAt ?? new Date().toISOString() })
+  await writeInstallState({ version: 3, targets: states, installedAt })
 
   const failed = perTarget.filter((t) => !t.ok)
   const orcaTargets = perTarget.filter((t) => t.orcaManaged && t.ok).length
@@ -1165,7 +1198,7 @@ function defaultEventState () {
 }
 
 async function uninstall (pluginRoot) {
-  // The current locale is irrelevant to removal: `specs[*].markers` already
+  // The current locale is irrelevant to removal: `specs[*].owner` already
   // carries every locale's own text, so an entry written under either one is
   // found and removed regardless of which locale is active NOW.
   const { specs } = hookSpecs(pluginRoot)
@@ -1196,14 +1229,14 @@ async function uninstall (pluginRoot) {
     migrateLegacyPreToolUseFlags(state)
     try {
       const { hookChanged, postChanged, deniedChanged, postFailureChanged, agentPreChanged, agentPostChanged, agentPostFailureChanged, fileGuardChanged, envChanged } = await mutateSettingsGuarded(settingsPath, (settings) => ({
-        hookChanged: uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].markers, state),
-        postChanged: uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].markers, state),
-        deniedChanged: uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].markers, state),
-        postFailureChanged: uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].markers, state),
-        agentPreChanged: uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].markers, state),
-        agentPostChanged: uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].markers, state),
-        agentPostFailureChanged: uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].markers, state),
-        fileGuardChanged: uninstallHookEntry(settings, specs[7].event, specs[7].matcher, specs[7].markers, state),
+        hookChanged: uninstallHookEntry(settings, specs[0].event, specs[0].matcher, specs[0].owner, state),
+        postChanged: uninstallHookEntry(settings, specs[1].event, specs[1].matcher, specs[1].owner, state),
+        deniedChanged: uninstallHookEntry(settings, specs[2].event, specs[2].matcher, specs[2].owner, state),
+        postFailureChanged: uninstallHookEntry(settings, specs[3].event, specs[3].matcher, specs[3].owner, state),
+        agentPreChanged: uninstallHookEntry(settings, specs[4].event, specs[4].matcher, specs[4].owner, state),
+        agentPostChanged: uninstallHookEntry(settings, specs[5].event, specs[5].matcher, specs[5].owner, state),
+        agentPostFailureChanged: uninstallHookEntry(settings, specs[6].event, specs[6].matcher, specs[6].owner, state),
+        fileGuardChanged: uninstallHookEntry(settings, specs[7].event, specs[7].matcher, specs[7].owner, state),
         envChanged: uninstallEnvVar(settings, state)
       }))
       const modCopyPath = modCopyPathFor(target)
@@ -1251,14 +1284,13 @@ function findGroup (settings, event, matcher) {
     : undefined
 }
 
-/** `markers` is every locale variant this spec's own statusMessage can carry
- *  -- see hookSpecs' own doc and findOwnHookIndex above. */
-function findMarkedHook (group, markers) {
-  return group && Array.isArray(group.hooks) ? group.hooks.find((h) => isRecord(h) && markers.includes(h.statusMessage)) : undefined
+/** Our own entry in `group`, by the same rule as findOwnHookIndex above. */
+function findMarkedHook (group, owner) {
+  return group && Array.isArray(group.hooks) ? group.hooks.find((h) => isOwnHook(h, owner)) : undefined
 }
 
 async function status (pluginRoot) {
-  // Same reasoning as uninstall() above: `specs[*].markers` already covers
+  // Same reasoning as uninstall() above: `specs[*].owner` already covers
   // every locale, so "installed" is answered correctly whether or not the
   // entry on disk carries the CURRENTLY active locale's own text.
   await tightenSettingsBackups()
@@ -1284,15 +1316,15 @@ async function status (pluginRoot) {
     } catch (error) {
       readError = String(error?.message ?? error).slice(0, 200)
     }
-    const ownGateHook = findMarkedHook(findGroup(settings, gateSpec.event, gateSpec.matcher), gateSpec.markers)
+    const ownGateHook = findMarkedHook(findGroup(settings, gateSpec.event, gateSpec.matcher), gateSpec.owner)
     discoveredGateCommands.push(ownGateHook?.command)
-    const ownPostHook = findMarkedHook(findGroup(settings, postSpec.event, postSpec.matcher), postSpec.markers)
-    const ownDeniedHook = findMarkedHook(findGroup(settings, deniedSpec.event, deniedSpec.matcher), deniedSpec.markers)
-    const ownPostFailureHook = findMarkedHook(findGroup(settings, postFailureSpec.event, postFailureSpec.matcher), postFailureSpec.markers)
-    const ownAgentPreHook = findMarkedHook(findGroup(settings, agentPreSpec.event, agentPreSpec.matcher), agentPreSpec.markers)
-    const ownAgentPostHook = findMarkedHook(findGroup(settings, agentPostSpec.event, agentPostSpec.matcher), agentPostSpec.markers)
-    const ownAgentPostFailureHook = findMarkedHook(findGroup(settings, agentPostFailureSpec.event, agentPostFailureSpec.matcher), agentPostFailureSpec.markers)
-    const ownFileGuardHook = findMarkedHook(findGroup(settings, fileGuardSpec.event, fileGuardSpec.matcher), fileGuardSpec.markers)
+    const ownPostHook = findMarkedHook(findGroup(settings, postSpec.event, postSpec.matcher), postSpec.owner)
+    const ownDeniedHook = findMarkedHook(findGroup(settings, deniedSpec.event, deniedSpec.matcher), deniedSpec.owner)
+    const ownPostFailureHook = findMarkedHook(findGroup(settings, postFailureSpec.event, postFailureSpec.matcher), postFailureSpec.owner)
+    const ownAgentPreHook = findMarkedHook(findGroup(settings, agentPreSpec.event, agentPreSpec.matcher), agentPreSpec.owner)
+    const ownAgentPostHook = findMarkedHook(findGroup(settings, agentPostSpec.event, agentPostSpec.matcher), agentPostSpec.owner)
+    const ownAgentPostFailureHook = findMarkedHook(findGroup(settings, agentPostFailureSpec.event, agentPostFailureSpec.matcher), agentPostFailureSpec.owner)
+    const ownFileGuardHook = findMarkedHook(findGroup(settings, fileGuardSpec.event, fileGuardSpec.matcher), fileGuardSpec.owner)
     const modCopyPath = modCopyPathFor(target)
     const modCopy = await modCopyState(modCopyPath, modCopyMarkerPathFor(modCopyPath), modSource, modPlan?.digest ?? null).catch(() => ({ exists: false, ours: false, current: false, hasManifest: false }))
     perTarget.push({
@@ -1452,7 +1484,7 @@ async function hooksCheck (pluginRoot) {
       continue
     }
     for (const [hook, spec] of families) {
-      const own = findMarkedHook(findGroup(settings, spec.event, spec.matcher), spec.markers)
+      const own = findMarkedHook(findGroup(settings, spec.event, spec.matcher), spec.owner)
       if (own === undefined || typeof own.command !== 'string') continue
       const args = Array.isArray(own.args) ? own.args.filter((a) => typeof a === 'string') : []
       const key = JSON.stringify([hook, own.command, args])

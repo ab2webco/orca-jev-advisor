@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -335,7 +335,7 @@
           <div><label for="consequenceCeiling" data-i18n="thresholds.ceilingLabel"></label>
             <output id="consequenceCeiling"></output></div>
           <div><label for="logMaxEntries" data-i18n="thresholds.logMaxEntries"></label>
-            <input id="logMaxEntries" type="number" step="1" min="1" /></div>
+            <input id="logMaxEntries" type="number" step="1" min="1" required /></div>
         </div>
       </section>
       </div>
@@ -446,7 +446,7 @@
       <section id="models-section">
         <h2 data-i18n="models.heading"></h2>
         <p class="hint" data-i18n="models.hint"></p>
-        <p class="hint" id="models-source-line"><a href="https://platform.claude.com/docs/en/about-claude/models/overview" target="_blank" rel="noopener" data-i18n="models.sourceLine"></a></p>
+        <p class="hint" id="models-source-line"><a id="models-source-link" href="https://platform.claude.com/docs/en/about-claude/models/overview" target="_blank" rel="noopener" data-i18n="models.sourceLine"></a></p>
         <p class="hint" id="models-empty-catalog-hint" style="display:none"></p>
         <!--
           0.6.14 T4 (JEVADV-85): the models seed/models.json ships, named on a
@@ -506,6 +506,13 @@
           <div class="checkbox-text">
             <span class="checkbox-label" data-i18n="models.activeLabel"></span>
             <span class="hint" id="models-active-hint"></span>
+          </div>
+        </div>
+        <div class="checkbox-row">
+          <input id="models-ready-override" type="checkbox" />
+          <div class="checkbox-text">
+            <label class="checkbox-label" for="models-ready-override" data-i18n="models.readyOverrideLabel"></label>
+            <span class="hint" id="models-ready-override-hint"></span>
           </div>
         </div>
         <div class="actions">
@@ -872,6 +879,9 @@
           'models.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} decisiones comparables con {{matchRate}}% de acierto. Ya hay con qué calibrar.',
           'models.readiness.unknown': 'Medición: sin lectura todavía.',
           'models.saveConfig': 'Guardar modo activo',
+          'models.readyOverrideLabel': 'Darla por lista (decisión del dueño)',
+          'models.readyOverrideHint': 'Encendido: el gancho clásico puede reescribir el modelo aunque la medición no haya alcanzado su umbral. Ningún arranque lo apaga; solo tú, aquí.',
+          'models.readyOverrideOn': 'Decisión del dueño activa: se permite reescribir aunque la medición dice: {{line}}',
           'models.savingConfig': 'Guardando…',
           'models.savedConfig': 'Guardado.',
           'models.seedNoticeText': 'La base de modelos que trae el plugin cambió a la versión {{version}}: {{added}} nuevo(s), {{differing}} distinto(s) de los tuyos.',
@@ -1190,6 +1200,9 @@
           'models.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable decisions at {{matchRate}}% match. There is now something to calibrate from.',
           'models.readiness.unknown': 'Measurement: nothing read yet.',
           'models.saveConfig': 'Save active mode',
+          'models.readyOverrideLabel': "Treat measurement as ready (owner's decision)",
+          'models.readyOverrideHint': 'On: the classic hook may rewrite the model even before measurement reaches its threshold. No restart turns it off; only you, here.',
+          'models.readyOverrideOn': 'Owner override on: rewrites are allowed although measurement says: {{line}}',
           'models.savingConfig': 'Saving…',
           'models.savedConfig': 'Saved.',
           'models.seedNoticeText': 'The shipped model baseline changed to version {{version}}: {{added}} new, {{differing}} different from yours.',
@@ -1951,6 +1964,8 @@
       // ---------- applying the catalog to the DOM ----------------------------
 
       function applyStaticI18n () {
+        // 0.6.19: <html lang> is the language this panel paints in.
+        document.documentElement.lang = currentLocale
         document.querySelectorAll('[data-i18n]').forEach(function (node) {
           node.textContent = t(node.getAttribute('data-i18n'))
         })
@@ -2102,11 +2117,23 @@
         return e
       }
 
+      // 0.6.19 (JEVADV-72): a label built here names its control through
+      // `for`, so a click focuses it and a screen reader reads the two
+      // together. The rows are rebuilt on every render, so the ids come from
+      // a counter, never from row data.
+      var nextControlId = 0
+      function labelControl (label, control) {
+        nextControlId += 1
+        control.id = 'field-' + nextControlId
+        label.htmlFor = control.id
+      }
+
       function fieldInput (labelText, value, placeholder, type) {
         var wrap = elMake('div')
         var label = elMake('label')
         label.textContent = labelText
         var input = elMake('input')
+        labelControl(label, input)
         input.type = type || 'text'
         input.value = value || ''
         if (placeholder) input.placeholder = placeholder
@@ -2212,6 +2239,7 @@
         var kindLabel = elMake('label')
         kindLabel.textContent = t('catalog.fieldKind')
         var kindSelect = elMake('select')
+        labelControl(kindLabel, kindSelect)
         DESTINATION_KINDS.forEach(function (k) {
           var opt = elMake('option')
           opt.value = k
@@ -2450,6 +2478,7 @@
         var kindLabel = elMake('label')
         kindLabel.textContent = t('policies.fieldKind')
         var kindSelect = elMake('select')
+        labelControl(kindLabel, kindSelect)
         // A row loaded from storage without a valid kind (written before
         // `kind` existed, or with a typo'd value) never gets guessed into one
         // of the three real options -- it lands on the '' sentinel instead,
@@ -3241,9 +3270,22 @@
         el('logMaxEntries').value = config.logMaxEntries != null ? config.logMaxEntries : 500
       }
 
+      /** 0.6.19 M13 (JEVADV-72): the cap handed to storage is a whole number
+       *  of at least 1, else the one already stored, else 500 -- an emptied
+       *  or zeroed field never reaches storage as 0, which trimmed the whole
+       *  decision history on the next record. The input is `required` and
+       *  `min="1"` too, so save-all stops on it first; this is the backstop. */
+      function logMaxEntriesFrom (raw, previous) {
+        var text = String(raw).trim()
+        var n = Number(text)
+        if (text !== '' && isFinite(n) && Math.floor(n) === n && n >= 1) return n
+        var stored = previous && previous.logMaxEntries
+        return typeof stored === 'number' && Math.floor(stored) === stored && stored >= 1 ? stored : 500
+      }
+
       function readConfig (previous) {
         return {
-          logMaxEntries: Number(el('logMaxEntries').value),
+          logMaxEntries: logMaxEntriesFrom(el('logMaxEntries').value, previous),
           jevBudgetMs: (previous && previous.jevBudgetMs) || 4000
         }
       }
@@ -3901,7 +3943,7 @@
 
           // 0.6.2: the Anthropic docs are named once, above the ladder; a
           // card links only a source of its own (a model added by hand).
-          if (row.source && /^https?:\/\//i.test(row.source) && row.source !== el('models-source-line').querySelector('a').href) {
+          if (row.source && /^https?:\/\//i.test(row.source) && row.source !== el('models-source-link').href) {
             var link = elMake('a')
             link.href = row.source
             link.target = '_blank'
@@ -4048,7 +4090,7 @@
         var summary = measurements && measurements.ok ? measurements.summary : null
         var readiness = summary ? summary.readiness : null
         var base = t('models.activeHint')
-        if (!readiness) { hintEl.textContent = base + ' ' + t('models.readiness.unknown'); return }
+        if (!readiness) { hintEl.textContent = base + ' ' + t('models.readiness.unknown'); modelsReadinessLine = t('models.readiness.unknown'); return }
         var comparable = summary.comparable || 0
         var params = {
           minComparable: String(MODELS_READINESS_FALLBACK.minComparable),
@@ -4062,12 +4104,26 @@
         else if (readiness.reason === 'match-rate-too-low') line = t('models.readiness.rateLow', params)
         else line = t('models.readiness.shortfall', params)
         hintEl.textContent = base + ' ' + line
+        modelsReadinessLine = readiness.reason === 'ready' ? null : line
       }
+
+      // 0.6.19 M16 (JEVADV-73): the owner's explicit "treat as ready",
+      // stored in modelsConfig.readyOverride beside the legacy switch. The
+      // worker never lowers it (models-worker.mjs's mirrorModels); a
+      // measurement that is not ready stays named here while it is on.
+      var modelsReadinessLine = t('models.readiness.unknown')
+      function modelsRenderReadyOverrideHint () {
+        var on = el('models-ready-override').checked
+        el('models-ready-override-hint').textContent = on && modelsReadinessLine !== null
+          ? t('models.readyOverrideOn', { line: modelsReadinessLine })
+          : t('models.readyOverrideHint')
+      }
+      el('models-ready-override').addEventListener('change', modelsRenderReadyOverrideHint)
 
       el('models-save-config').addEventListener('click', function () {
         var saidEl = el('models-config-said')
         said(saidEl, t('models.savingConfig'))
-        write(MODELS_CONFIG_KEY, { active: el('models-active').checked }).then(function (result) {
+        write(MODELS_CONFIG_KEY, { active: el('models-active').checked, readyOverride: el('models-ready-override').checked }).then(function (result) {
           if (!result || !result.ok) throw shownError(t('common.hostRejectedWrite'))
           writeBackground(MODELS_MIRROR_REQUEST_KEY, new Date().toISOString())
           said(saidEl, t('models.savedConfig'))
@@ -4274,9 +4330,11 @@
           modelsDirty = false
           modelsRenderLadder()
           el('models-active').checked = !!(results[1] && results[1].active === true)
+          el('models-ready-override').checked = !!(results[1] && results[1].readyOverride === true)
           modelsRenderSeedNotice(results[2])
           modelsRenderMeasurements(results[3])
           modelsRenderActiveHint(results[3])
+          modelsRenderReadyOverrideHint()
         }).catch(function (error) {
           said(el('models-ladder-said'), errorText(error), true)
         })

@@ -126,3 +126,44 @@ test("config.html: consequenceCeiling's displayed value never hardcodes a number
     'the display must still read from the gateDefaults mirror, not a local guess',
   )
 })
+
+// ---------- 0.6.19 M13 (JEVADV-72) -------------------------------------------
+// An emptied or zeroed "Maximum log size" used to be saved as 0, and the
+// next decision trimmed the whole history. The field is required, and what
+// readConfig hands to storage is a whole number of at least 1 or the value
+// already stored.
+
+function extractFunction (source, name) {
+  const startMatch = source.match(new RegExp(`function ${name} *\\([^)]*\\) *\\{`))
+  assert.ok(startMatch, `function ${name} not found`)
+  let depth = 0
+  let i = startMatch.index + startMatch[0].length - 1
+  do {
+    if (source[i] === '{') depth += 1
+    else if (source[i] === '}') depth -= 1
+    i += 1
+  } while (depth > 0 && i < source.length)
+  return source.slice(startMatch.index, i)
+}
+
+test('config.html: the logMaxEntries input is required, with a minimum of 1', () => {
+  const input = configHtml.match(/<input\b[^>]*\bid="logMaxEntries"[^>]*>/)
+  assert.ok(input)
+  assert.match(input[0], /\brequired\b/)
+  assert.match(input[0], /\bmin="1"/)
+})
+
+test('logMaxEntriesFrom: only a whole number of at least 1 is kept; anything else keeps the stored value, or 500', () => {
+  const logMaxEntriesFrom = new Function(`${extractFunction(configHtml, 'logMaxEntriesFrom')}; return logMaxEntriesFrom`)()
+  assert.equal(logMaxEntriesFrom('250', { logMaxEntries: 500 }), 250)
+  assert.equal(logMaxEntriesFrom('1', null), 1)
+  for (const raw of ['', '   ', '0', '-3', '2.5', 'abc']) {
+    assert.equal(logMaxEntriesFrom(raw, { logMaxEntries: 300 }), 300, JSON.stringify(raw))
+    assert.equal(logMaxEntriesFrom(raw, null), 500, JSON.stringify(raw))
+  }
+  assert.equal(logMaxEntriesFrom('', { logMaxEntries: 0 }), 500, 'a stored 0 is not a value to keep either')
+})
+
+test('config.html: readConfig reads logMaxEntries through logMaxEntriesFrom', () => {
+  assert.match(extractFunction(configHtml, 'readConfig'), /logMaxEntries: logMaxEntriesFrom\(el\('logMaxEntries'\)\.value, previous\)/)
+})

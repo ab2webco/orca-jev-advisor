@@ -137,8 +137,20 @@ const HOME_PATHS = {
   xdgConfigHome: process.env.XDG_CONFIG_HOME,
   xdgCacheHome: process.env.XDG_CACHE_HOME,
 }
-const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
-const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
+/**
+ * 0.6.19 M3 (JEVADV-70): a directory that cannot be resolved at load ends the
+ * hook as a silent pass-through, like any other failure here -- this runs
+ * before main() and so before its last-resort catch.
+ */
+function resolvedOrPass(resolve: () => string): string {
+  try {
+    return resolve()
+  } catch {
+    process.exit(0)
+  }
+}
+const CACHE_DIR = resolvedOrPass(() => resolveCacheDir(PLATFORM, HOME_PATHS))
+const CONFIG_DIR = resolvedOrPass(() => resolveConfigDir(PLATFORM, HOME_PATHS))
 
 const CACHE_PATH = join(CACHE_DIR, 'gate-bash.json')
 const AUTH_WARNED_PATH = join(CACHE_DIR, 'gate-bash.auth-warned.json')
@@ -691,7 +703,7 @@ function emit(decision: Decision, reason: string, systemMessage?: string): void 
 }
 
 /** No verdict: the permission follows its normal course. This is the default exit. */
-function passThrough(): void {
+function passThrough(): never {
   process.exit(0)
 }
 
@@ -699,16 +711,19 @@ function passThrough(): void {
  * No verdict, but with a notice: the permission follows its course (failing
  * open is still correct), but the user learns that Jev couldn't weigh in --
  * failing open in silence is worse than failing open with one line. Used
- * only for the authentication rejection (401/403), and only once per mark
- * (see readAuthWarned/writeAuthWarned): every command repeating the same
- * notice would be as noisy as never warning at all.
+ * for the missing key, an unreachable Jev and the authentication rejection
+ * (401/403), each only once per mark (see readAuthWarned/writeAuthWarned and
+ * their siblings): every command repeating the same notice would be as noisy
+ * as never warning at all.
+ *
+ * 0.6.19 M2 (JEVADV-70): the payload carries the notice only, no
+ * `permissionDecision`. It used to say 'allow', which approved the command
+ * on the gate's behalf and skipped Claude Code's own permission prompt for a
+ * command nobody judged; with no decision, Claude Code's own permission
+ * flow decides, exactly as it would without the plugin.
  */
-function passThroughWithNotice(message: string): void {
-  const payload = {
-    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' },
-    systemMessage: t('notice', { message }),
-  }
-  writeSync(1, JSON.stringify(payload))
+function passThroughWithNotice(message: string): never {
+  writeSync(1, JSON.stringify({ systemMessage: t('notice', { message }) }))
   process.exit(0)
 }
 
@@ -834,13 +849,31 @@ function recordAdviceIssued(sessionId: string | null, command: string): void {
   writeAdviceRetryState({ ...state, [adviceRetryKey(sessionId, command)]: Date.now() })
 }
 
-/** The repository root for recoverability resolution, or null when `cwd` is not inside a git repository at all (no recoverability naming, the advice still says what it can). */
-function getRepoRootForAdvice(cwd: string): string | null {
+/**
+ * 0.6.19 M4 (JEVADV-70): how long one git call may take before it is killed.
+ * Every call below reads something the gate can do without (a project name,
+ * a branch, recoverability for the advice text); a git that hangs -- a lock,
+ * a network filesystem, a credential prompt -- would otherwise hold the hook
+ * until Claude Code's own timeout. Ordinary calls take milliseconds.
+ */
+const GIT_TIMEOUT_MS = 1500
+
+/**
+ * Runs git and returns its stdout, or null when it fails, exits non-zero or
+ * runs past GIT_TIMEOUT_MS (killed with SIGKILL). Null means "unknown": every
+ * caller already reads a failed call that way, never as a reason to stop.
+ */
+function gitOutput(args: readonly string[], cwd: string): string | null {
   try {
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: GIT_TIMEOUT_MS, killSignal: 'SIGKILL' })
   } catch {
     return null
   }
+}
+
+/** The repository root for recoverability resolution, or null when `cwd` is not inside a git repository at all (no recoverability naming, the advice still says what it can). */
+function getRepoRootForAdvice(cwd: string): string | null {
+  return gitOutput(['rev-parse', '--show-toplevel'], cwd)?.trim() ?? null
 }
 
 /** Already-fetched git status, read exactly once per advice -- `git status --porcelain --ignored -uall` plus `git ls-files`, the same two calls the validated advice-experiment prototype used (jobs/74914c09/tmp/advice-exp/proto-hook.mjs). Best-effort: any failure yields empty sets, which git_recoverability.ts reads as "nothing to protect" -- never a throw, never a block. */
@@ -848,29 +881,17 @@ function getGitStatusSetsForAdvice(repoRoot: string): GitStatusSets {
   const modified = new Set<string>()
   const untracked = new Set<string>()
   const ignored = new Set<string>()
-  try {
-    const out = execFileSync('git', ['status', '--porcelain', '--ignored', '-uall'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-    for (const line of out.split('\n')) {
-      if (line.length === 0) continue
-      const code = line.slice(0, 2)
-      const path = line.slice(3).trim().replace(/^"|"$/g, '')
-      if (code === '??') untracked.add(path)
-      else if (code === '!!') ignored.add(path)
-      else modified.add(path)
-    }
-  } catch {
-    // Leave sets empty; the caller reads that as "nothing resolved".
+  // A failed call leaves its sets empty; the caller reads that as "nothing resolved".
+  const out = gitOutput(['status', '--porcelain', '--ignored', '-uall'], repoRoot) ?? ''
+  for (const line of out.split('\n')) {
+    if (line.length === 0) continue
+    const code = line.slice(0, 2)
+    const path = line.slice(3).trim().replace(/^"|"$/g, '')
+    if (code === '??') untracked.add(path)
+    else if (code === '!!') ignored.add(path)
+    else modified.add(path)
   }
-  let tracked = new Set<string>()
-  try {
-    tracked = new Set(
-      execFileSync('git', ['ls-files'], { cwd: repoRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-        .split('\n')
-        .filter((line) => line.length > 0),
-    )
-  } catch {
-    // Same as above.
-  }
+  const tracked = new Set((gitOutput(['ls-files'], repoRoot) ?? '').split('\n').filter((line) => line.length > 0))
   return { modified, untracked, ignored, tracked }
 }
 
@@ -1263,15 +1284,10 @@ function readDenyTierConfig(): DenyTierSwitches {
  * name in a way the remote's short form does not.
  */
 function projectName(cwd: string): string | null {
-  let remote = ''
-  try {
-    remote = execFileSync('git', ['remote', 'get-url', 'origin'], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
-      .trim()
-      .replace(/^.*[:/]/, '')
-      .replace(/\.git$/, '')
-  } catch {
-    remote = ''
-  }
+  const remote = (gitOutput(['remote', 'get-url', 'origin'], cwd) ?? '')
+    .trim()
+    .replace(/^.*[:/]/, '')
+    .replace(/\.git$/, '')
   if (remote.length > 0) return remote
   try {
     return basename(cwd) || null
@@ -1497,13 +1513,7 @@ function appendAbBenchmarkSample(
  * cache key stays byte-for-byte what it always was.
  */
 function readRepoFacts(cwd: string): RepoFacts {
-  const run = (args: string[]): string => {
-    try {
-      return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim()
-    } catch {
-      return ''
-    }
-  }
+  const run = (args: string[]): string => gitOutput(args, cwd)?.trim() ?? ''
   const branch = run(['rev-parse', '--abbrev-ref', 'HEAD'])
   const remote = run(['remote', 'get-url', 'origin']).replace(/^.*[:/]/, '').replace(/\.git$/, '')
   const dirty = run(['status', '--porcelain']).length > 0
@@ -1723,7 +1733,7 @@ function gateOwnFileWritten(command: string, cwd: string): string | null {
 async function main(): Promise<void> {
   const input = readHookInput()
   if (input === null) passThrough()
-  const { command, cwd, toolUseId, sessionId } = input as HookInput
+  const { command, cwd, toolUseId, sessionId } = input
 
   // Before anything else, and before any work: if Orca has the plugin
   // switched off, this hook has no business judging anything.
@@ -2076,7 +2086,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies)
+  const outcome = await askJev(apiKey, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
@@ -2235,5 +2245,8 @@ async function main(): Promise<void> {
 // above is synchronous (writeSync, appendFileSync), so nothing is lost; what
 // this cuts is whatever timer is still pending -- before 0.6.13 the losing
 // Jev budget timer kept the process alive a median 1.4 s past its verdict.
-await main()
+// 0.6.19 M3 (JEVADV-70): anything main() did not catch itself (a stdout that
+// cannot be written, an unexpected throw) ends as a silent pass-through,
+// exit 0, as agent-model.ts does -- never a stack trace, never a failed hook.
+await main().catch(() => process.exit(0))
 process.exit(0)

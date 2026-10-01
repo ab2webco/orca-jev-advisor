@@ -72,7 +72,11 @@ export async function recordDecision(host: StorageHost, input: RecordDecisionInp
   };
 
   const updated = [...existing, toRaw(entry)];
-  const trimmed = updated.length > config.logMaxEntries ? updated.slice(updated.length - config.logMaxEntries) : updated;
+  // 0.6.19 M13: never fewer than one entry, whatever the cap says. getConfig
+  // already refuses a cap below 1; this keeps a future caller from trimming
+  // the history to nothing all the same.
+  const cap = Math.max(1, Math.floor(config.logMaxEntries));
+  const trimmed = updated.length > cap ? updated.slice(updated.length - cap) : updated;
   await setLog(host, trimmed);
   return entry;
 }

@@ -35,6 +35,20 @@ test("a redirection to a file names the file that follows it", () => {
 
 test("a file-descriptor redirection (2>&1, &>) never names a path", () => {
   assert.deepEqual(resolveCommandTargetDirs("some-tool 2>&1", CWD), []);
+  assert.deepEqual(resolveCommandTargetDirs("some-tool >&2", CWD), []);
+});
+
+test("0.6.19 M12: a redirection written without a space names its file, as the spaced form does", () => {
+  const other = join(CWD, "..", "other-repo", "x");
+  assert.deepEqual(resolveCommandTargetDirs("echo hi >../other-repo/x", CWD), [other]);
+  assert.deepEqual(resolveCommandTargetDirs("echo hi >>../other-repo/x", CWD), [other]);
+  assert.deepEqual(resolveCommandTargetDirs("echo hi 1>../other-repo/x", CWD), [other]);
+  assert.deepEqual(resolveCommandTargetDirs("some-tool 2>>err.log", CWD), [join(CWD, "err.log")]);
+});
+
+test("0.6.19 M12: a numbered redirection followed by a space names the next token", () => {
+  assert.deepEqual(resolveCommandTargetDirs("echo hi 1> /tmp/out.log", CWD), ["/tmp/out.log"]);
+  assert.deepEqual(resolveCommandTargetDirs("some-tool 2>> /tmp/err.log", CWD), ["/tmp/err.log"]);
 });
 
 test("git -C <dir>: the named directory is THIS segment's own target, never persisted to a later segment", () => {

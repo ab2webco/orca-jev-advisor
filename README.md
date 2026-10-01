@@ -16,16 +16,15 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
-## What changed in 0.6.18
+## What changed in 0.6.19
 
-Types are now checked, not only written: `npm run typecheck` (TypeScript
-strict) runs in `npm run check` and in CI. Bringing the code to zero errors
-found three real bugs, now fixed with tests: a destination row without a
-label made the gate judge that destination as if Jev were down, a push to an
-unknowable directory was read as a push from the session's own checkout, and
-the measure-only hold rule never saw a failing test. The gate also refuses an
-agent's edits to the plugin's own Orca storage, the source its mirrors are
-rewritten from.
+The rest of the independent QA of 0.6.5, closed. With no key, or with Jev
+unreachable or rejecting the key, the gate no longer approves the command
+itself: Claude Code's own permission rules decide. An empty log size can no
+longer wipe the decision history, a router readiness you set by hand survives
+a restart (a new owner override on the Models tab), the gate's git calls time
+out instead of hanging, redirections without a space are read, and the
+panels are tested against hostile names.
 
 Every release is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -51,6 +50,12 @@ gh pr merge 812 --squash          jev · client_always_asks asks you to
                                    (only because YOUR OWN team policy names
                                    this — never the risk judgement alone)
 ```
+
+An advice is not a refusal: the model may run the command anyway, and the
+gate lets it through without asking Jev again only when it is the same
+session, the same exact command, within 10 minutes of the advice; when that
+happens you see one line, `jev · the model confirmed it and it ran:` and the
+command.
 
 How often it stops a person depends entirely on what your agents do and
 what your own team policies say, so this README does not promise a ratio.

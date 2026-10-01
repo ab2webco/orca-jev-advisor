@@ -36,13 +36,19 @@ const ENV_VAR_NAME = "TYPESAFE_API_KEY";
  * set up had their key in `~/.config/orca-supervisor/env`. Reading both means
  * that key keeps working instead of the gate behaving as though none was ever
  * entered -- a failure that would have looked like the plugin doing nothing.
+ *
+ * Resolved on each read, not at import (0.6.19, JEVADV-74): a module that
+ * only imports this one never resolves a path it does not use, and a
+ * resolution that throws does so inside the caller's own error handling.
  */
-const FALLBACK_PATHS = resolveConfigDirCandidates(normalizePlatform(process.platform), {
-  home: homedir(),
-  appDataDir: process.env.APPDATA,
-  localAppDataDir: process.env.LOCALAPPDATA,
-  xdgConfigHome: process.env.XDG_CONFIG_HOME,
-}).map((dir) => join(dir, "env"));
+function fallbackPaths(): string[] {
+  return resolveConfigDirCandidates(normalizePlatform(process.platform), {
+    home: homedir(),
+    appDataDir: process.env.APPDATA,
+    localAppDataDir: process.env.LOCALAPPDATA,
+    xdgConfigHome: process.env.XDG_CONFIG_HOME,
+  }).map((dir) => join(dir, "env"));
+}
 
 /** The key name this plugin uses inside Orca's `secrets` store. */
 export const SECRET_KEY_NAME = "typesafeApiKey";
@@ -79,7 +85,7 @@ function parseEnvFile(content: string): string | null {
 async function fromFallbackFile(): Promise<string | null> {
   // First candidate that both exists and holds a key wins. A file that is
   // there but empty does not shadow a legacy one that still has the key.
-  for (const path of FALLBACK_PATHS) {
+  for (const path of fallbackPaths()) {
     let fileContent: string;
     try {
       fileContent = await readFile(path, "utf8");

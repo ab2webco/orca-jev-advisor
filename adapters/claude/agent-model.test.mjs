@@ -9,8 +9,8 @@
 // reach the real network.
 
 import { strict as assert } from 'node:assert'
-import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -58,17 +58,22 @@ function run (home, payload, extraEnv = {}) {
   })
 }
 
-function logPath (home) {
-  return join(home, '.cache', 'orca-supervisor', 'model-reclassifications.jsonl')
+function cacheDir (home) {
+  return join(home, '.cache', 'orca-supervisor')
+}
+
+/** Every file of the model-reclassification log, in reading order (0.6.19 M15: one per UTC hour, plus the legacy single file). */
+function logFiles (home) {
+  if (!existsSync(cacheDir(home))) return []
+  const names = readdirSync(cacheDir(home)).filter((name) => /^model-reclassifications(-\d{4}-\d{2}-\d{2}T\d{2})?\.jsonl$/.test(name)).sort()
+  return names.map((name) => join(cacheDir(home), name))
 }
 
 function readLogRecords (home) {
-  const path = logPath(home)
-  if (!existsSync(path)) return []
-  return readFileSync(path, 'utf8')
+  return logFiles(home).flatMap((path) => readFileSync(path, 'utf8')
     .split('\n')
     .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line))
+    .map((line) => JSON.parse(line)))
 }
 
 const PRE_TOOL_USE_AGENT_PAYLOAD = {
@@ -96,7 +101,7 @@ test('a non-Agent payload appends nothing to the log', () => {
   const home = makeHome()
   const stdout = run(home, { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_use_id: 'bash-1', tool_input: { command: 'ls' } })
   assert.equal(stdout, '')
-  assert.equal(existsSync(logPath(home)), false, 'a non-Agent hook must never create the model-reclassifications log')
+  assert.deepEqual(logFiles(home), [], 'a non-Agent hook must never create the model-reclassifications log')
 })
 
 test('an Agent PostToolUse appends one model-outcome row', () => {
@@ -120,7 +125,7 @@ test('malformed stdin exits 0 with no output and nothing appended', () => {
   const home = makeHome()
   const stdout = run(home, '{not valid json')
   assert.equal(stdout, '')
-  assert.equal(existsSync(logPath(home)), false)
+  assert.deepEqual(logFiles(home), [])
 })
 
 // Review round 2, finding 5: the hook reads `$CLAUDE_CONFIG_DIR/settings.json`
@@ -164,4 +169,43 @@ test('finding 5: the hook reads routerMode from $CLAUDE_CONFIG_DIR/settings.json
   writeMirror(home)
   run(home, PRE_TOOL_USE_AGENT_PAYLOAD, { CLAUDE_CONFIG_DIR: makeVault('active') })
   assert.equal(readLogRecords(home)[0].mode, 'measurement', 'router active -> the classic hook only measures')
+})
+
+// 0.6.19 M3 (JEVADV-70): a throw at load, before main() and its catch,
+// still ends silently. Under node --test with no override, src/core/paths.ts
+// throws instead of resolving: the one load-time throw a test can reach.
+test('directories that cannot be resolved at load end silently: exit 0, no stack trace', () => {
+  const home = makeHome()
+  const env = { ...process.env, HOME: home }
+  delete env.XDG_CACHE_HOME
+  delete env.XDG_CONFIG_HOME
+  delete env.ORCA_SUPERVISOR_CONFIG_DIR
+  delete env.ORCA_SUPERVISOR_CACHE_DIR
+  delete env.TYPESAFE_API_KEY
+  assert.ok(env.NODE_TEST_CONTEXT)
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], {
+    env,
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x', subagent_type: 'general-purpose' } }),
+    encoding: 'utf8'
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr, '')
+  assert.equal(result.stdout, '')
+})
+
+// 0.6.19 M15 (JEVADV-73): a record lands in the file of the UTC hour it was
+// written in, never in the single file written before 0.6.19.
+test('a record lands in its own hour\'s file, not in the legacy single file', () => {
+  const home = makeHome()
+  const before = new Date().toISOString().slice(0, 13)
+  run(home, {
+    hook_event_name: 'PostToolUse',
+    tool_name: 'Agent',
+    tool_use_id: 'agent-tool-use-hour',
+    tool_response: { resolvedModel: 'claude-sonnet-5', status: 'ok' }
+  })
+  const after = new Date().toISOString().slice(0, 13)
+  const names = logFiles(home).map((path) => path.slice(cacheDir(home).length + 1))
+  assert.equal(names.length, 1, JSON.stringify(names))
+  assert.ok([`model-reclassifications-${before}.jsonl`, `model-reclassifications-${after}.jsonl`].includes(names[0]), names[0])
 })

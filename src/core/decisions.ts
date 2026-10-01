@@ -444,12 +444,12 @@ export function filterPoliciesForDestination(policies: readonly Policy[], destin
  *  through untouched -- resolves exactly like an absent field, never like a
  *  real, if unfamiliar, scope.
  *
- *  This is the ONE runtime list of PolicyScope's members: policies.ts,
- *  store.ts and gate_catalog_mirror.ts each used to carry their own copy of
+ *  This is the ONE runtime list of PolicyScope's members: policies.ts (deleted
+ *  in 0.6.19), store.ts and gate_catalog_mirror.ts each used to carry their own copy of
  *  it (four in total, odd/tasks/release-0.5.1.md JEVADV-36) -- every one of
  *  them now imports {@link isPolicyScope} from here instead. Exported
  *  (JEVADV-37, R2-002) so a reader that needs to NAME the members -- e.g.
- *  policies.ts's own "must be one of: ..." error message -- derives that
+ *  a "must be one of: ..." error message -- derives that
  *  list from here too, instead of a fifth hardcoded copy drifting out of
  *  sync with this one. */
 export const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule"]);
@@ -871,7 +871,7 @@ export interface RiskGateDecision extends GateDecision {
 export interface DecideActionOptions {
   /**
    * Per-destination override of GATE_CONSEQUENCE_CEILING (e.g. from
-   * AutonomyConfig.consequenceCeiling in store.ts/catalog.ts). Omit to use
+   * AutonomyConfig.consequenceCeiling in store.ts). Omit to use
    * the module's global default, exactly as before this option existed.
    */
   readonly consequenceCeiling?: number;
@@ -883,7 +883,9 @@ export interface DecideActionOptions {
  * a single flag already asks (the original's extra `consequence > 2.3`
  * branch is unreachable beyond `flags.length >= 2` -- any consequence above
  * 2.3 is already above 1.5, so it always already contributed a flag).
- * Incomplete answers fail closed to 'ask', never to a silent 'allow'.
+ * Incomplete answers fail OPEN to 'allow' (see the comment in the body):
+ * a missing or malformed axis is our own problem, never evidence of danger,
+ * and the local rules catch real danger without Jev.
  *
  * `options.consequenceCeiling` lets a caller (decideGateAction below)
  * substitute a per-destination ceiling for the module's global

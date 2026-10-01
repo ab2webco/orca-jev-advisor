@@ -2,8 +2,10 @@
 // The model reclassification measurement log.
 //
 // Same discipline as skill_measurement.ts and gate_measurement.ts: an
-// append-only JSONL file (`<cacheDir>/model-reclassifications.jsonl`,
-// MODEL_MEASUREMENT_FILE), one line per event, correlated by `id` (the
+// append-only JSONL log (one file per UTC hour since 0.6.19,
+// `<cacheDir>/model-reclassifications-<hour>.jsonl`, after the single
+// MODEL_MEASUREMENT_FILE written before it; src/core/measurement_files.ts
+// names both), one line per event, correlated by `id` (the
 // Agent tool_use_id) rather than written as a single joined row, because
 // the two halves of a decision arrive from different hooks at different
 // times -- PreToolUse knows what Jev recommended the instant it answers;
@@ -31,6 +33,7 @@ import {
   type ModSkillsReadinessThresholds,
 } from "./mod_skills_readiness.ts";
 
+/** The single file the log was before 0.6.19: still read, never written. */
 export const MODEL_MEASUREMENT_FILE = "model-reclassifications.jsonl";
 
 // ---------------------------------------------------------------------------

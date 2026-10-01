@@ -19,9 +19,11 @@
 //   - `rm <targets...>`: every non-flag argument.
 //   - `mv <src...> <dest>` / `cp <src...> <dest>`: the LAST non-flag
 //     argument only (the destination) -- a source is read, never written.
-//   - a redirection to a file, `>`/`>>` (spaced from the filename that
-//     follows it): the token right after it. A file-descriptor form
-//     (`2>&1`, `&>`) never names a path at all and is never matched.
+//   - a redirection to a file, `>`/`>>`, with or without a descriptor
+//     number (`1>`, `2>>`): the token right after it, or the rest of the
+//     same token when written without a space (`>../x`, `2>>err.log`).
+//     A descriptor duplication (`2>&1`, `>&2`) never names a path at all
+//     and is never matched; nor is `&>`, which is not read here.
 //
 // A shell variable or a glob (the same check git_recoverability.ts's own
 // isResolvableTarget uses) is never guessed at -- it changes nothing, same
@@ -58,6 +60,27 @@ function pushResolvable(raw: string, dir: string, out: string[]): void {
   if (isResolvableTarget(raw)) out.push(resolveAgainst(dir, raw));
 }
 
+// An output redirection at the start of a token: an optional file
+// descriptor number, then `>` or `>>`, then the file when it is written
+// without a space (`>../x`, `2>>err.log`).
+const OUTPUT_REDIRECTION = /^\d*>>?/;
+
+/**
+ * The file the redirection at `tokens[index]` writes, or null when that
+ * token is not an output redirection or names no file. Spaced (`> x`,
+ * `1> x`) and unspaced (`>x`, `1>x`, `2>>x`) forms read alike; a
+ * descriptor duplication (`2>&1`, `>&2`) names none.
+ */
+function redirectionTarget(tokens: readonly string[], index: number): string | null {
+  const token = tokens[index] ?? "";
+  const operator = OUTPUT_REDIRECTION.exec(token);
+  if (operator === null) return null;
+  const rest = token.slice(operator[0].length);
+  if (rest.startsWith("&")) return null;
+  if (rest.length > 0) return rest;
+  return tokens[index + 1] ?? null;
+}
+
 export function resolveCommandTargetDirs(command: string, cwd: string): readonly string[] {
   const targets: string[] = [];
   let resolveDir = cwd;
@@ -84,8 +107,9 @@ export function resolveCommandTargetDirs(command: string, cwd: string): readonly
       if (dest !== undefined && plain.length >= 3) pushResolvable(dest, segmentDir, targets);
     }
 
-    for (let index = 0; index < tokens.length - 1; index += 1) {
-      if (tokens[index] === ">" || tokens[index] === ">>") pushResolvable(tokens[index + 1] as string, segmentDir, targets);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const target = redirectionTarget(tokens, index);
+      if (target !== null) pushResolvable(target, segmentDir, targets);
     }
   }
 

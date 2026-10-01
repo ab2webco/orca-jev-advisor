@@ -2238,8 +2238,14 @@ export function register(on: On, options: PluginOptions): void {
     if (pendingMeasurementId !== null) {
       const id = pendingMeasurementId
       pendingMeasurementId = null
-      const at = new Date(await $.clock.now()).toISOString()
-      await appendMeasurement($, at, serializeRecord(buildObservationRecord(id, e.skill, at)))
+      // 0.6.19 M8 (JEVADV-73): observing is best-effort. A clock read that
+      // fails costs this one observation, never the skill's own load.
+      try {
+        const at = new Date(await $.clock.now()).toISOString()
+        await appendMeasurement($, at, serializeRecord(buildObservationRecord(id, e.skill, at)))
+      } catch {
+        // Nothing recorded; the event still goes on below.
+      }
     }
     return next(e)
   })

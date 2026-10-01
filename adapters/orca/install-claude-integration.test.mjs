@@ -16,6 +16,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawn } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { setTimeout as delay } from 'node:timers/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -896,7 +897,10 @@ function runRouter (args, home, userDataDir) {
  *  account Orca has never written a hook into yet). */
 function makeUserDataWithAccount (home, accountId) {
   const userDataDir = join(home, 'orca-userdata')
-  mkdirSync(join(userDataDir, 'claude-accounts', accountId), { recursive: true })
+  // 0.6.19 (JEVADV-74): an account is a directory whose `auth/` holds a
+  // Claude config; Orca writes `.claude.json` there on the account's login.
+  mkdirSync(join(userDataDir, 'claude-accounts', accountId, 'auth'), { recursive: true })
+  writeFileSync(join(userDataDir, 'claude-accounts', accountId, 'auth', '.claude.json'), '{}\n', 'utf8')
   return userDataDir
 }
 
@@ -1536,4 +1540,138 @@ test('T4 0.6.17: doctor is status plus hooks-check, and changes nothing', () => 
   assert.deepEqual(installed.hooksCheck.results.map((r) => r.hook).sort(), ['agent-model', 'gate-bash', 'gate-files', 'gate-outcome'])
   for (const r of installed.hooksCheck.results) assert.equal(r.ok, true, `${r.hook}: ${r.reason} ${r.detail}`)
   assert.equal(readFileSync(settingsPathFor(home), 'utf8'), before)
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.19 T4 (JEVADV-74): the installer's ownership, targets and state.
+// ---------------------------------------------------------------------------
+
+/** The settings.json a 0.6.18 install left, from a plugin root that has since moved: each hook marked by its statusMessage, run through `args`. */
+function settingsWrittenBy0618 (oldRoot) {
+  const entry = (script, timeout, statusMessage) => ({ type: 'command', command: '/usr/local/bin/node', args: [join(oldRoot, 'adapters', 'claude', script)], timeout, statusMessage })
+  return {
+    env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1' },
+    hooks: {
+      PreToolUse: [
+        { matcher: 'Bash', hooks: [entry('gate-bash.ts', 6, GATE_MARKER)] },
+        { matcher: 'Agent', hooks: [entry('agent-model.ts', 6, AGENT_MODEL_MARKER)] },
+        { matcher: FILE_TOOLS_MATCHER, hooks: [entry('gate-files.mjs', 2, FILE_GUARD_MARKER)] }
+      ],
+      PostToolUse: [
+        { matcher: 'Bash', hooks: [entry('gate-outcome.ts', 2, OUTCOME_MARKER)] },
+        { matcher: 'Agent', hooks: [entry('agent-model.ts', 2, AGENT_OUTCOME_MARKER)] }
+      ],
+      PermissionDenied: [{ matcher: 'Bash', hooks: [entry('gate-outcome.ts', 2, OUTCOME_MARKER)] }],
+      PostToolUseFailure: [
+        { matcher: 'Bash', hooks: [entry('gate-outcome.ts', 2, OUTCOME_MARKER)] },
+        { matcher: 'Agent', hooks: [entry('agent-model.ts', 2, AGENT_OUTCOME_MARKER)] }
+      ]
+    }
+  }
+}
+
+const EVERY_HOOK = [['PreToolUse', 'Bash', 'gate-bash.ts'], ['PostToolUse', 'Bash', 'gate-outcome.ts'], ['PermissionDenied', 'Bash', 'gate-outcome.ts'], ['PostToolUseFailure', 'Bash', 'gate-outcome.ts'], ['PreToolUse', 'Agent', 'agent-model.ts'], ['PostToolUse', 'Agent', 'agent-model.ts'], ['PostToolUseFailure', 'Agent', 'agent-model.ts'], ['PreToolUse', FILE_TOOLS_MATCHER, 'gate-files.mjs']]
+
+test('0.6.19: an upgrade from a 0.6.18 settings file replaces every entry in place, and status, uninstall and doctor read it right', () => {
+  const home = makeHome()
+  writeSettings(home, settingsWrittenBy0618(join(home, 'old-plugin-root')))
+  const install = run('install', home)
+  assert.equal(install.ok, true)
+  const settings = readSettings(home)
+  for (const [event, matcher, script] of EVERY_HOOK) {
+    const hooks = group(settings, event, matcher).hooks
+    assert.equal(hooks.length, 1, `${event}/${matcher}: one entry, never a second beside the old one`)
+    assert.deepEqual(hooks[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', script)], `${event}/${matcher}`)
+  }
+  const status = run('status', home)
+  for (const family of ['hook', 'outcomeHook', 'agentModelHook', 'fileGuardHook']) assert.equal(status[family].installed, true, family)
+  const doctor = run('doctor', home)
+  assert.equal(doctor.ok, true)
+  assert.equal(doctor.status.hook.installed, true)
+  run('uninstall', home)
+  const after = readSettings(home)
+  for (const [event, matcher] of EVERY_HOOK) {
+    assert.equal((group(after, event, matcher)?.hooks ?? []).length, 0, `${event}/${matcher}: removed`)
+  }
+})
+
+test('0.6.19: an entry of ours is known by the script it runs, so an edited statusMessage neither orphans it nor duplicates it', () => {
+  const home = makeHome()
+  run('install', home)
+  const settings = readSettings(home)
+  for (const [event, matcher] of EVERY_HOOK) group(settings, event, matcher).hooks[0].statusMessage = 'renamed by hand'
+  writeSettings(home, settings)
+
+  const status = run('status', home)
+  for (const family of ['hook', 'outcomeHook', 'agentModelHook', 'fileGuardHook']) assert.equal(status[family].installed, true, `${family}: still ours`)
+
+  run('install', home)
+  const reinstalled = readSettings(home)
+  for (const [event, matcher, script] of EVERY_HOOK) {
+    const hooks = group(reinstalled, event, matcher).hooks
+    assert.equal(hooks.length, 1, `${event}/${matcher}: replaced in place`)
+    assert.deepEqual(hooks[0].args, [join(PLUGIN_ROOT, 'adapters', 'claude', script)])
+    assert.notEqual(hooks[0].statusMessage, 'renamed by hand')
+  }
+
+  run('uninstall', home)
+  const after = readSettings(home)
+  for (const [event, matcher] of EVERY_HOOK) assert.equal((group(after, event, matcher)?.hooks ?? []).length, 0, `${event}/${matcher}`)
+})
+
+test('0.6.19: a third party\'s hook that runs another script is never taken for ours, whatever its statusMessage says', () => {
+  const home = makeHome()
+  const theirs = { type: 'command', command: 'node', args: [join(home, 'their-tool', 'adapters', 'claude', 'their-gate.mjs')], statusMessage: 'their own gate' }
+  writeSettings(home, { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [theirs] }] } })
+  run('install', home)
+  assert.equal(bashGroup(readSettings(home), 'PreToolUse').hooks.length, 2)
+  run('uninstall', home)
+  assert.deepEqual(bashGroup(readSettings(home), 'PreToolUse').hooks, [theirs])
+})
+
+test('0.6.19: a directory under claude-accounts with no Claude config is not a target, and nothing is written into it', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const userDataDir = makeUserDataWithAccount(home, accountId)
+  const stray = join(userDataDir, 'claude-accounts', 'stray-folder')
+  mkdirSync(stray, { recursive: true })
+  const emptyAuth = join(userDataDir, 'claude-accounts', 'no-config-yet', 'auth')
+  mkdirSync(emptyAuth, { recursive: true })
+
+  // run() drops ORCA_USER_DATA_PATH; runRouter passes it through.
+  const install = runRouter(['install', PLUGIN_ROOT], home, userDataDir)
+  assert.deepEqual(install.targets.map((t) => t.id).sort(), [`account:${accountId}`, 'home'].sort())
+  assert.equal(existsSync(join(stray, 'auth')), false, 'no settings.json conjured into a folder that is not an account')
+  assert.equal(existsSync(join(emptyAuth, 'settings.json')), false)
+  const status = runRouter(['router-mode-status'], home, userDataDir)
+  assert.deepEqual(status.targets.map((t) => t.target).sort(), [accountId, 'home'].sort())
+})
+
+test('0.6.19: the install state is written as each target is written, so a kill mid-install leaves something to restore from', { skip: process.platform === 'win32' ? 'needs a FIFO' : false }, async () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const userDataDir = makeUserDataWithAccount(home, accountId)
+  // The account's settings.json is a FIFO: reading it blocks until a writer
+  // opens it, which never happens -- the installer hangs on the second
+  // target, after the home target is written, as it would when Orca kills it
+  // at its timeout.
+  execFileSync('mkfifo', [join(userDataDir, 'claude-accounts', accountId, 'auth', 'settings.json')])
+  const env = { ...process.env, HOME: home, ORCA_USER_DATA_PATH: userDataDir }
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  const child = spawn(process.execPath, [SCRIPT_PATH, 'install', PLUGIN_ROOT], { env, stdio: 'ignore' })
+  const statePath = join(home, '.config', 'orca-supervisor', 'claude-settings-install-state.json')
+  try {
+    const deadline = Date.now() + 15000
+    while (Date.now() < deadline && !existsSync(settingsPathFor(home))) await delay(50)
+    assert.ok(existsSync(settingsPathFor(home)), 'the home target was never written')
+    await delay(1500)
+  } finally {
+    child.kill('SIGKILL')
+  }
+  assert.ok(existsSync(statePath), 'killed after writing a settings file, with no state to undo it from')
+  const state = JSON.parse(readFileSync(statePath, 'utf8'))
+  assert.equal(state.targets.home.hooksObjectExistedBefore, false)
+  assert.equal(state.targets.home.events.PreToolUse.arrayExistedBefore, false)
 })
