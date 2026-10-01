@@ -1483,3 +1483,37 @@ test('T2 0.6.17: the guard\'s status line follows the locale, and either spellin
   assert.equal(group(settings, 'PreToolUse', FILE_TOOLS_MATCHER).hooks.length, 1, 'switching locale replaces, never duplicates')
   assert.equal(run('status', home).fileGuardHook.installed, true)
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.17 T3 (JEVADV-91): a settings backup can hold a token (an `env` block
+// with a key), so it is owner-only. The once-only rule freezes an old backup
+// written 0644, so install and status tighten every one they find.
+// ---------------------------------------------------------------------------
+
+function backupPathFor (home) {
+  return join(home, '.config', 'orca-supervisor', 'claude-settings-backup.home.json')
+}
+
+test('T3 0.6.17: a new settings backup is written owner-only (0600)', { skip: process.platform === 'win32' ? 'POSIX modes only' : false }, () => {
+  const home = makeHome()
+  writeSettings(home, { env: { SOME_TOKEN: 'x' } })
+  run('install', home)
+  assert.equal(statSync(backupPathFor(home)).mode & 0o777, 0o600)
+})
+
+test('T3 0.6.17: an existing 0644 backup is tightened to 0600 by install and by status, and its bytes are kept', { skip: process.platform === 'win32' ? 'POSIX modes only' : false }, () => {
+  for (const mode of ['install', 'status']) {
+    const home = makeHome()
+    const path = backupPathFor(home)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, '{"env":{"SOME_TOKEN":"x"}}\n', { mode: 0o644 })
+    chmodSync(path, 0o644)
+    const legacy = join(home, '.config', 'orca-supervisor', 'claude-settings-backup.account-legacy.json')
+    writeFileSync(legacy, '{}\n', { mode: 0o644 })
+    chmodSync(legacy, 0o644)
+    run(mode, home)
+    assert.equal(statSync(path).mode & 0o777, 0o600, mode)
+    assert.equal(statSync(legacy).mode & 0o777, 0o600, `${mode}: every claude-settings-backup* file`)
+    assert.equal(readFileSync(path, 'utf8'), '{"env":{"SOME_TOKEN":"x"}}\n', `${mode}: the once-only capture is untouched`)
+  }
+})

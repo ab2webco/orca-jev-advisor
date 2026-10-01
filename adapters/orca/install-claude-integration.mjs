@@ -239,8 +239,12 @@ function stateKey (target) {
   return target.id.replace(/[^a-zA-Z0-9_.-]/g, '_')
 }
 
+// 0.6.17 T3 (JEVADV-91): a settings backup can hold a token, so it is owner-only.
+const BACKUP_FILE_MODE = 0o600
+const BACKUP_FILE_PREFIX = 'claude-settings-backup'
+
 function backupPathFor (target) {
-  return join(STATE_DIR, `claude-settings-backup.${stateKey(target)}.json`)
+  return join(STATE_DIR, `${BACKUP_FILE_PREFIX}.${stateKey(target)}.json`)
 }
 
 const ENV_VAR_NAME = 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS'
@@ -548,10 +552,41 @@ async function backupSettingsOnce (backupPath, currentRawText) {
     if (error?.code !== 'ENOENT') throw error
   }
   const tempPath = `${backupPath}.${randomUUID()}.tmp`
-  await writeFile(tempPath, currentRawText, 'utf8')
+  // 0.6.17 T3 (JEVADV-91): owner-only, since settings.json can hold a token.
+  await writeFile(tempPath, currentRawText, { encoding: 'utf8', mode: BACKUP_FILE_MODE })
+  await chmod(tempPath, BACKUP_FILE_MODE)
   await rename(tempPath, backupPath)
 }
 
+/**
+ * 0.6.17 T3 (JEVADV-91): every settings backup already on disk, in every
+ * state directory, made owner-only. Backups before 0.6.17 were written with
+ * the process umask (0644 on a default macOS), and the once-only rule above
+ * never rewrites them, so install and status tighten them instead. Only the
+ * mode changes, never the bytes. POSIX only (Windows has no such mode).
+ * Best-effort: a file that cannot be changed is left as it is.
+ */
+async function tightenSettingsBackups () {
+  if (PLATFORM === 'win32') return
+  for (const dir of STATE_DIRS) {
+    let names = []
+    try {
+      names = await readdir(dir)
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      if (!name.startsWith(BACKUP_FILE_PREFIX)) continue
+      const path = join(dir, name)
+      try {
+        const info = await lstat(path)
+        if (info.isFile() && (info.mode & 0o777) !== BACKUP_FILE_MODE) await chmod(path, BACKUP_FILE_MODE)
+      } catch {
+        // Left as it is; the next install or status tries again.
+      }
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Install-state bookkeeping -- what the env var held before we ever touched
@@ -1017,6 +1052,7 @@ function modCopyPathFor (target) {
 }
 
 async function install (pluginRoot) {
+  await tightenSettingsBackups()
   const locale = await resolveLocale()
   const node = await resolveNode()
   const { specs } = hookSpecs(pluginRoot, locale, node)
@@ -1224,6 +1260,7 @@ async function status (pluginRoot) {
   // Same reasoning as uninstall() above: `specs[*].markers` already covers
   // every locale, so "installed" is answered correctly whether or not the
   // entry on disk carries the CURRENTLY active locale's own text.
+  await tightenSettingsBackups()
   const { specs } = hookSpecs(pluginRoot)
   const [gateSpec, postSpec, deniedSpec, postFailureSpec, agentPreSpec, agentPostSpec, agentPostFailureSpec, fileGuardSpec] = specs
   const modSource = join(pluginRoot, 'adapters', 'claude', 'mod-skills')
