@@ -9,7 +9,7 @@
 // reach the real network.
 
 import { strict as assert } from 'node:assert'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -164,4 +164,26 @@ test('finding 5: the hook reads routerMode from $CLAUDE_CONFIG_DIR/settings.json
   writeMirror(home)
   run(home, PRE_TOOL_USE_AGENT_PAYLOAD, { CLAUDE_CONFIG_DIR: makeVault('active') })
   assert.equal(readLogRecords(home)[0].mode, 'measurement', 'router active -> the classic hook only measures')
+})
+
+// 0.6.19 M3 (JEVADV-70): a throw at load, before main() and its catch,
+// still ends silently. Under node --test with no override, src/core/paths.ts
+// throws instead of resolving: the one load-time throw a test can reach.
+test('directories that cannot be resolved at load end silently: exit 0, no stack trace', () => {
+  const home = makeHome()
+  const env = { ...process.env, HOME: home }
+  delete env.XDG_CACHE_HOME
+  delete env.XDG_CONFIG_HOME
+  delete env.ORCA_SUPERVISOR_CONFIG_DIR
+  delete env.ORCA_SUPERVISOR_CACHE_DIR
+  delete env.TYPESAFE_API_KEY
+  assert.ok(env.NODE_TEST_CONTEXT)
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], {
+    env,
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_input: { prompt: 'x', subagent_type: 'general-purpose' } }),
+    encoding: 'utf8'
+  })
+  assert.equal(result.status, 0, result.stderr)
+  assert.equal(result.stderr, '')
+  assert.equal(result.stdout, '')
 })

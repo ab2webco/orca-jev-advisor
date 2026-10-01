@@ -54,8 +54,20 @@ const HOME_PATHS = {
   xdgConfigHome: process.env.XDG_CONFIG_HOME,
   xdgCacheHome: process.env.XDG_CACHE_HOME,
 }
-const CACHE_DIR = resolveCacheDir(PLATFORM, HOME_PATHS)
-const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS)
+/**
+ * 0.6.19 M3 (JEVADV-70): a directory that cannot be resolved at load ends the
+ * hook as a silent pass-through, like any other failure here -- this runs
+ * before main() and so before its last-resort catch.
+ */
+function resolvedOrPass(resolve: () => string): string {
+  try {
+    return resolve()
+  } catch {
+    process.exit(0)
+  }
+}
+const CACHE_DIR = resolvedOrPass(() => resolveCacheDir(PLATFORM, HOME_PATHS))
+const CONFIG_DIR = resolvedOrPass(() => resolveConfigDir(PLATFORM, HOME_PATHS))
 const MIRROR_PATH = join(CONFIG_DIR, MODELS_MIRROR_FILE)
 const LOG_PATH = join(CACHE_DIR, MODEL_MEASUREMENT_FILE)
 // A cache file of this hook's own, distinct from gate-bash.ts's

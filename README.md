@@ -52,6 +52,12 @@ gh pr merge 812 --squash          jev · client_always_asks asks you to
                                    this — never the risk judgement alone)
 ```
 
+An advice is not a refusal: the model may run the command anyway, and the
+gate lets it through without asking Jev again only when it is the same
+session, the same exact command, within 10 minutes of the advice; when that
+happens you see one line, `jev · the model confirmed it and it ran:` and the
+command.
+
 How often it stops a person depends entirely on what your agents do and
 what your own team policies say, so this README does not promise a ratio.
 What one developer's own replay of 151 real commands from this machine's

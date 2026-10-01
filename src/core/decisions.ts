@@ -883,7 +883,9 @@ export interface DecideActionOptions {
  * a single flag already asks (the original's extra `consequence > 2.3`
  * branch is unreachable beyond `flags.length >= 2` -- any consequence above
  * 2.3 is already above 1.5, so it always already contributed a flag).
- * Incomplete answers fail closed to 'ask', never to a silent 'allow'.
+ * Incomplete answers fail OPEN to 'allow' (see the comment in the body):
+ * a missing or malformed axis is our own problem, never evidence of danger,
+ * and the local rules catch real danger without Jev.
  *
  * `options.consequenceCeiling` lets a caller (decideGateAction below)
  * substitute a per-destination ceiling for the module's global
