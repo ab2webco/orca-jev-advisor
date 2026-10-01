@@ -633,3 +633,38 @@ test("never redacts the whole command -- only the value half of a match", () => 
   assert.match(result, /^export TOKEN=/);
   assert.notEqual(result, MARKER);
 });
+
+// 0.6.22 T4 (JEVADV-97): forms the redaction-impact probe found reaching Jev
+// unmasked. The password is built at runtime so no literal lands in the repo.
+const LOW_ENTROPY_PASSWORD = ["Fake", "Passw0rd!"].join("");
+
+test("names: a glued *PASSWORD / *PASSWD name (PGPASSWORD) is a secret name", () => {
+  const result = redactSecretsForJev(`PGPASSWORD=${LOW_ENTROPY_PASSWORD} psql -h db.example.com -c "SELECT 1"`);
+  assert.equal(result.text, `PGPASSWORD=[REDACTED] psql -h db.example.com -c "SELECT 1"`);
+  assert.equal(redactSecretsForJev("PGPASSFILE=/etc/pgpass psql").redactedCount, 0);
+});
+
+test("flags: --password and --passwd followed by a spaced value", () => {
+  assert.equal(redactSecretsForJev(`helm repo add acme https://charts.example.com --username ci --password ${LOW_ENTROPY_PASSWORD}`).text, "helm repo add acme https://charts.example.com --username ci --password [REDACTED]");
+  assert.equal(redactSecretsForJev(`tool login --passwd "${LOW_ENTROPY_PASSWORD}"`).text, `tool login --passwd "[REDACTED]"`);
+  assert.equal(redactSecretsForJev("vault login --password-stdin").redactedCount, 0);
+});
+
+test("flags: a registry login's -p value, only for the login commands that take one", () => {
+  assert.equal(redactSecretsForJev(`docker login -u ci -p ${LOW_ENTROPY_PASSWORD} registry.example.com && docker push registry.example.com/web:latest`).text, "docker login -u ci -p [REDACTED] registry.example.com && docker push registry.example.com/web:latest");
+  assert.equal(redactSecretsForJev(`podman login -p ${LOW_ENTROPY_PASSWORD} quay.io`).text, "podman login -p [REDACTED] quay.io");
+  assert.equal(redactSecretsForJev("ssh -p 2222 deploy@example.com").redactedCount, 0);
+  assert.equal(redactSecretsForJev("docker run -p 8080:80 nginx").redactedCount, 0);
+});
+
+test("flags: gh secret set --body / -b is the secret itself", () => {
+  assert.equal(redactSecretsForJev(`gh secret set PROD_DB_PASSWORD --body ${LOW_ENTROPY_PASSWORD} --repo acme/web`).text, "gh secret set PROD_DB_PASSWORD --body [REDACTED] --repo acme/web");
+  assert.equal(redactSecretsForJev(`gh secret set TOKEN -b "${LOW_ENTROPY_PASSWORD}"`).text, `gh secret set TOKEN -b "[REDACTED]"`);
+  assert.equal(redactSecretsForJev(`gh pr create --body "Fixes the login page"`).redactedCount, 0);
+});
+
+test("flags: openssl -k and -pass pass: values", () => {
+  assert.equal(redactSecretsForJev(`openssl enc -aes-256-cbc -k ${LOW_ENTROPY_PASSWORD} -in backup.tar -out backup.tar.enc`).text, "openssl enc -aes-256-cbc -k [REDACTED] -in backup.tar -out backup.tar.enc");
+  assert.equal(redactSecretsForJev(`openssl pkcs12 -export -passout pass:${LOW_ENTROPY_PASSWORD} -out cert.p12`).text, "openssl pkcs12 -export -passout pass:[REDACTED] -out cert.p12");
+  assert.equal(redactSecretsForJev("curl -k https://localhost:8443/health").redactedCount, 0);
+});
