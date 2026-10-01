@@ -79,6 +79,12 @@ function mean(values: readonly number[]): number | null {
   return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+/**
+ * Below this many answers, an option nobody picked says nothing: one used a
+ * tenth of the time still goes unpicked in 30 answers only 4% of the time.
+ */
+const MIN_ANSWERS_FOR_FINDING = 30;
+
 function summarizeQuestion(title: string, options: readonly string[], answers: readonly Answered[]): UsageQuestion {
   const known = answers.filter((answer) => options.includes(answer.option));
   const rows: UsageOption[] = options.map((option) => {
@@ -91,7 +97,13 @@ function summarizeQuestion(title: string, options: readonly string[], answers: r
       meanMargin: mean(mine.flatMap((answer) => (answer.margin === null ? [] : [answer.margin]))),
     };
   });
-  const findings = known.length === 0 ? [] : rows.filter((row) => row.count === 0).map((row) => `FINDING: ${title} option ${row.option} chosen 0 of ${known.length}`);
+  const unused = rows.filter((row) => row.count === 0);
+  const findings =
+    known.length === 0 || unused.length === 0
+      ? []
+      : known.length < MIN_ANSWERS_FOR_FINDING
+        ? [`NOTE: ${title} has ${known.length} answers, too few (under ${MIN_ANSWERS_FOR_FINDING}) to call an unused option a finding`]
+        : unused.map((row) => `FINDING: ${title} option ${row.option} chosen 0 of ${known.length}`);
   return { title, answered: known.length, marginRows: known.filter((answer) => answer.margin !== null).length, options: rows, findings };
 }
 

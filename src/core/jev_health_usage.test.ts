@@ -43,9 +43,15 @@ test("every option of the full set is listed, in the set's own order", () => {
 });
 
 test("an option chosen 0 times is a FINDING with the number of answers", () => {
+  const rows = Array.from({ length: 30 }, (_, i) => routerRow({ tier: i % 2 === 0 ? "simple" : "standard" }));
+  const q = question(summarizeUsage(rows, [], NOW, 7), "router tier (start)");
+  assert.deepEqual(q.findings, ["FINDING: router tier (start) option complex chosen 0 of 30", "FINDING: router tier (start) option frontier chosen 0 of 30"]);
+});
+
+test("under 30 answers an unused option is a note, not a finding: too few to tell", () => {
   const rows = [routerRow({ tier: "simple" }), routerRow({ tier: "standard" })];
   const q = question(summarizeUsage(rows, [], NOW, 7), "router tier (start)");
-  assert.deepEqual(q.findings, ["FINDING: router tier (start) option complex chosen 0 of 2", "FINDING: router tier (start) option frontier chosen 0 of 2"]);
+  assert.deepEqual(q.findings, ["NOTE: router tier (start) has 2 answers, too few (under 30) to call an unused option a finding"]);
 });
 
 test("a question with no answers has no findings and says so", () => {
