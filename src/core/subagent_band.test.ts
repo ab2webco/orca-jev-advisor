@@ -244,18 +244,22 @@ test("0.6.23 T2 subagentBand: a leading word/ every shown branch shares is dropp
   assert.ok(share(["feature/login", null]).slice(1).join("\n").includes("feature/login"), "one shown branch alone is not a shared prefix");
 });
 
-test("0.6.23 T2 subagentBand: the place gives way after the effort and the reason's long wording, before the description", () => {
+test("0.6.23 T2 subagentBand: the place gives way after the effort and the reason's long wording; the description is cut before the place goes", () => {
   const w120 = lines(120, "en", PLACED).slice(1);
   assert.match(w120[0] ?? "", /Adding the login form +app-feature · feature\/login +Opus 5\.5 +extra high/, "120 keeps place and effort");
   const w100 = lines(100, "en", PLACED).slice(1);
   assert.ok(w100.every((row) => !/ (extra high|high|medium) /.test(row)), `100 drops the effort: ${w100.join("\n")}`);
   assert.ok(w100[0]?.includes("app-feature · feature/login"), `100 keeps the place: ${w100.join("\n")}`);
+  // 80 columns is a common terminal: the place stays, as the branch alone when the worktree does not fit too.
   const w80 = lines(80, "en", PLACED).slice(1);
-  assert.ok(!w80.join("\n").includes("feature/login"), "80 gives the place up before it cuts the description");
-  assert.ok(w80.every((row) => /Adding the login form|Watching CI checks|Preparing a clean checkout/.test(row)), `80 keeps every description whole: ${w80.join("\n")}`);
+  assert.ok(w80[0]?.includes("feature/login"), `80 keeps the branch: ${w80.join("\n")}`);
+  assert.ok(w80[1]?.includes(" main "), `80 keeps the lead's branch: ${w80.join("\n")}`);
+  assert.ok(w80[2]?.includes("new worktree"), `80 keeps a pending worktree: ${w80.join("\n")}`);
+  assert.ok(w80.every((row) => /Adding the lo|Watching CI c|Preparing a c/.test(row)), `80 still shows each description: ${w80.join("\n")}`);
+  // 40 columns: two lines per agent, the branch on the second, before the description.
   const w40 = lines(40, "en", PLACED).slice(1);
-  assert.ok(w40.some((row) => /Adding the login/.test(row)), `40 keeps the description: ${w40.join("\n")}`);
-  assert.ok(!w40.join("\n").includes("feature/login"), "40 has no room for the place");
+  assert.ok(w40.some((row) => /^ +Opus 5\.5 +feature\/login +Add/.test(row)), `40 keeps the branch: ${w40.join("\n")}`);
+  assert.ok(w40.some((row) => /^ +Sonnet 5\.5 +main +Watch/.test(row)), `40 keeps the lead's branch: ${w40.join("\n")}`);
 });
 
 test("0.6.23 T2 subagentBand: a long branch is cut from the left, so its end stays visible", () => {
@@ -276,4 +280,11 @@ test("0.6.23 T2 subagentBand: every line with places fits at 200, 120, 80 and 40
 
 test("0.6.23 T2 subagentBand: no glyph of ambiguous width in a place", () => {
   for (const line of lines(200, "es", PLACED)) assert.ok(!/[⎇\u{1F300}-\u{1FAFF}]/u.test(line), line);
+});
+
+test("0.6.23 subagentBand: a row with no place gives its place cells to its description, and the model column stays aligned", () => {
+  const mixed: readonly RunningSubagent[] = [PLACED[0] as RunningSubagent, { ...(PLACED[1] as RunningSubagent), id: "n-1", description: "Reading playwright.config.ts", place: undefined }];
+  const [, placed, bare] = lines(80, "en", mixed);
+  assert.ok(bare?.includes("Reading playwright.config.ts"), `the bare row keeps its description whole: ${bare}`);
+  assert.equal(bare?.indexOf("Sonnet 5.5"), placed?.indexOf("Opus 5.5"), "the model starts at one column");
 });
