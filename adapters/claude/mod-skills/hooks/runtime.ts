@@ -40,14 +40,11 @@ export interface ModPathEnv {
   readonly appData?: string;
   readonly localAppData?: string;
   /**
-   * `$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME`, when set. This environment has
-   * no direct platform noun (see the `isWindows` heuristic below), so
-   * unlike src/core/paths.ts -- which honors these only on `linux`, never
-   * `darwin` -- this honors them on every non-Windows environment reaching
-   * this branch. The alternative was silently ignoring them everywhere
-   * this sandbox runs, which is the exact Linux gap this project is
-   * closing; a macOS developer who has not set XDG_CONFIG_HOME (the common
-   * case) sees no change at all.
+   * `$XDG_CONFIG_HOME` / `$XDG_CACHE_HOME`, when set. Honoured only for a
+   * Linux home (`/home/...` or `/root`), matching src/core/paths.ts, which
+   * honours them only on `linux`: this environment has no platform noun, so
+   * the home directory's shape stands in for one (see computeHomePaths). A
+   * macOS home ignores them, even when set.
    */
   readonly xdgConfigHome?: string;
   readonly xdgCacheHome?: string;

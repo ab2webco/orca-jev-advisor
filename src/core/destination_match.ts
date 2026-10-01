@@ -12,7 +12,7 @@
 // `/Projects/orca-oss` (it does not start with `/Projects/orca-oss/`).
 //
 // Pure and dependency-free by design: no filesystem, no node builtins, so it
-// can be unit-tested without touching the real catalog loader in catalog.ts.
+// can be unit-tested without touching any catalog storage.
 
 export interface MatchableDestination {
   readonly id: string;

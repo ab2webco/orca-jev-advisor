@@ -951,10 +951,9 @@ async function claudeIntegrationStatus () {
 // readers of the one shipped file would drift, and parseSeedPolicies's
 // "malformed rows cost only themselves" behaviour is exactly what a manual
 // import should do with a seed file, not throw the whole import away over
-// one bad row (loadPolicies in src/core/policies.ts is a different, stricter
-// contract for tools/decide.ts and tools/policy-gate.ts's own
-// developer-authored policy files, where a malformed row IS a
-// misconfiguration to surface loudly; it is not reused here).
+// one bad row (the stricter file loader src/core/policies.ts once held, for
+// developer-authored policy files where a malformed row IS a
+// misconfiguration, was never reused here and was deleted in 0.6.19).
 //
 // Resolved relative to PLUGIN_ROOT (this worker's own installed tree), never
 // an absolute path -- the seed ships inside the plugin, wherever it happens

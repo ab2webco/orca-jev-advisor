@@ -2,7 +2,7 @@
 // filesystem, no clock. Run with: node --test src/core/gate_stats.test.ts
 // (this project has no test runner configured yet; node:test is the
 // built-in one, and Node 24's native TypeScript support runs this file
-// directly, same as `node src/supervisor.ts --self-check` already does).
+// directly).
 
 import assert from "node:assert/strict";
 import test from "node:test";

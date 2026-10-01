@@ -146,6 +146,20 @@ export function accountConfigTarget(platform: SupportedPlatform, accountsDir: st
   };
 }
 
+/**
+ * The files any one of which says a directory is a Claude config directory:
+ * Claude Code's own `.claude.json` and `settings.json`, and the marker Orca
+ * writes into every account's `auth/` (`.orca-managed-claude-auth`). 0.6.19
+ * (JEVADV-74): a folder under claude-accounts with none of them is not an
+ * account, and the installer leaves it alone.
+ */
+export const CLAUDE_CONFIG_MARKER_FILES: readonly string[] = [".claude.json", "settings.json", ".orca-managed-claude-auth"];
+
+/** Whether a directory listing (`names`) holds a Claude config. */
+export function holdsClaudeConfig(names: readonly string[]): boolean {
+  return names.some((name) => CLAUDE_CONFIG_MARKER_FILES.includes(name));
+}
+
 export function settingsPathFor(platform: SupportedPlatform, target: ClaudeConfigTarget): string {
   return joinerFor(platform)(target.configDir, "settings.json");
 }

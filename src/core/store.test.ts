@@ -262,7 +262,7 @@ test("getCatalog: a destination with a malformed (non-numeric) consequenceCeilin
 // named it live. The coordinator verified independently: getConfig() has
 // exactly two callers, log.ts (logMaxEntries) and main.mjs's cmdDecide
 // (jevBudgetMs). Nothing reads thresholds.consequenceCeiling back out --
-// gate-bash.ts's decideGateAction takes its ceiling from catalog.ts's
+// gate-bash.ts's decideGateAction takes its ceiling from the catalog row's
 // per-destination override (matched?.autonomy?.consequenceCeiling, a
 // different object with the same field name) or straight from decisions.ts's
 // GATE_CONSEQUENCE_CEILING constant. So it was five dead fields, not four,

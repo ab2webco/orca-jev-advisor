@@ -295,3 +295,29 @@ test("persistCompareOutput: results are appended, and only the newest ones up to
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// 0.6.19 (JEVADV-74): results are written before the queue is rewritten. In
+// the other order, a run that died between the two writes had drained the
+// queue of entries whose results were never recorded.
+test("persistCompareOutput: the results are on disk before the queue is rewritten", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orca-jev-ab-order-"));
+  try {
+    const resultsPath = join(dir, "ab-benchmark-results.jsonl");
+    // A directory where the queue file should be: rewriting the queue fails.
+    const queuePath = join(dir, "queue-is-a-directory");
+    mkdirSync(queuePath);
+    const output = await runCompare({
+      queueRaw: serializeSampleEntry(queuedEntry({ id: "a" })),
+      commandLines: [],
+      config: DEFAULT_AB_BENCHMARK_CONFIG,
+      cap: 1,
+      bigModelRunner: okBigModel,
+      jevCaller: null,
+      totalJevDecisions: null,
+    });
+    assert.throws(() => persistCompareOutput(output, { queuePath, resultsPath }));
+    assert.equal(readFileSync(resultsPath, "utf8").trim().split("\n").length, 1, "the measured result was kept");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

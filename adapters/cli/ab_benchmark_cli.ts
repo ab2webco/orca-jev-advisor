@@ -305,19 +305,22 @@ export interface ComparePaths {
 }
 
 /**
- * Writes a compare run's output: the queue entries it did not reach back to
- * the queue, and its results after the ones already recorded, keeping the
- * newest `maxResults`. The results file is rewritten through a temporary
+ * Writes a compare run's output: its results after the ones already
+ * recorded, keeping the newest `maxResults`, and then the queue entries it
+ * did not reach back to the queue. The results file is rewritten through a temporary
  * file and a rename, so a run killed mid-write leaves the previous file.
  */
 export function persistCompareOutput(output: RunCompareOutput, paths: ComparePaths, maxResults: number = AB_RESULTS_MAX_LINES): void {
-  writeFileSync(paths.queuePath, output.remainingQueueEntries.map(serializeSampleEntry).join(""));
   mkdirSync(dirname(paths.resultsPath), { recursive: true });
   const lines = [...readTextOrEmpty(paths.resultsPath).split("\n").filter((line) => line.length > 0), ...output.results.map((result) => JSON.stringify(result))];
   const kept = lines.slice(Math.max(0, lines.length - maxResults));
   const temporary = `${paths.resultsPath}.tmp`;
   writeFileSync(temporary, kept.map((line) => `${line}\n`).join(""));
   renameSync(temporary, paths.resultsPath);
+  // 0.6.19 (JEVADV-74): the queue is rewritten only once the results are on
+  // disk. The other way round, a run that died in between had removed
+  // entries from the queue whose results were never recorded.
+  writeFileSync(paths.queuePath, output.remainingQueueEntries.map(serializeSampleEntry).join(""));
 }
 
 function formatLatency(stats: AbBenchmarkReport["jevLatency"]): string {

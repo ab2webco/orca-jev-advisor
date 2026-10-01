@@ -2,8 +2,9 @@
 // developer's already-stored policy list, without ever overwriting an id
 // they already have.
 //
-// Why this exists: `loadPolicies` (src/core/policies.ts) already knows how
-// to read and validate the seed file, but nothing could bring it IN --
+// Why this exists: `loadPolicies` (the file-based loader src/core/policies.ts
+// held until 0.6.19 deleted it as dead code) could read and validate the
+// seed file, but nothing could bring it IN --
 // main.mjs's mirrorCatalogAndPolicies only ever mirrors the developer's own
 // policies OUT to gate-bash.ts's JSON file, so every fresh install starts
 // with an empty policy list and no way to adopt the shared baseline this

@@ -703,7 +703,7 @@ function emit(decision: Decision, reason: string, systemMessage?: string): void 
 }
 
 /** No verdict: the permission follows its normal course. This is the default exit. */
-function passThrough(): void {
+function passThrough(): never {
   process.exit(0)
 }
 
@@ -722,7 +722,7 @@ function passThrough(): void {
  * command nobody judged; with no decision, Claude Code's own permission
  * flow decides, exactly as it would without the plugin.
  */
-function passThroughWithNotice(message: string): void {
+function passThroughWithNotice(message: string): never {
   writeSync(1, JSON.stringify({ systemMessage: t('notice', { message }) }))
   process.exit(0)
 }
@@ -1733,7 +1733,7 @@ function gateOwnFileWritten(command: string, cwd: string): string | null {
 async function main(): Promise<void> {
   const input = readHookInput()
   if (input === null) passThrough()
-  const { command, cwd, toolUseId, sessionId } = input as HookInput
+  const { command, cwd, toolUseId, sessionId } = input
 
   // Before anything else, and before any work: if Orca has the plugin
   // switched off, this hook has no business judging anything.
@@ -2086,7 +2086,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey as string, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies)
+  const outcome = await askJev(apiKey, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
