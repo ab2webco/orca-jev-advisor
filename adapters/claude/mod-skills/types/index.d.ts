@@ -92,8 +92,8 @@ export type RunningSubagentsState = {
     /** The model as a person reads it (`Opus 5.5`). */
     label: string | null
     effort: RouterStickyEffort | null
-    /** 0.6.15 T4b: a `SubagentEffortSource` (src/core/subagent_status.ts), null before its first step; absent on an older row. */
-    effortSource?: 'inherited' | 'jev' | 'not-sent' | null
+    /** 0.6.15 T4b: a `SubagentEffortSource` (src/core/subagent_status.ts), null before its first step; absent on an older row. `frontmatter` since 0.6.16 T3. */
+    effortSource?: 'inherited' | 'jev' | 'frontmatter' | 'not-sent' | null
     /** A `SubagentWhy` (src/core/subagent_status.ts). */
     why: string
     wouldUse: string | null

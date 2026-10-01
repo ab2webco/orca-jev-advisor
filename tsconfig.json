@@ -1,0 +1,27 @@
+// Node runs this code by stripping its types, which never checks them, so a
+// type error passed every test until this file existed. `npm run typecheck`
+// holds the code to these options, matched to how Node runs it: ES modules
+// resolved the Node way, `.ts` extensions in imports, and only syntax that
+// type stripping can erase.
+//
+// The mod-skills hooks module is left to its own two configs. Claude Code runs
+// it in an environment with no Node and its own web globals (its URL is not
+// Node's), so it is checked there by adapters/claude/mod-skills/tsconfig.json,
+// and its Node-run tests by tsconfig.test.json beside it.
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "lib": ["es2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "adapters/**/*.ts"],
+  "exclude": ["adapters/claude/mod-skills/**"]
+}

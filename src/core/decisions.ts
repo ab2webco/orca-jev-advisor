@@ -23,7 +23,7 @@
 //     description to a capability tier, for routing work to an agent/
 //     worktree of adequate capability. New in this plugin.
 
-import type { Answer, ChoiceQuestion, NoulQuestion, Question, ScoreAnswer, ScoreQuestion } from "./jev.ts";
+import type { Answer, ChoiceQuestion, JsonValue, NoulQuestion, Question, ScoreAnswer, ScoreQuestion } from "./jev.ts";
 import { getChoiceAnswer, getNoulAnswer, getScoreAnswer } from "./jev.ts";
 import type { LocalizedReason } from "./i18n.ts";
 import type { DestinationKey } from "./i18n_destination.ts";
@@ -848,8 +848,8 @@ export interface GateDestinationContext {
  * or body flag of a known CLI, a heredoc written to a file) becomes a
  * placeholder (0.6.13 T1, command_text.ts withDataTextAsPlaceholders).
  */
-export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext, deployPublishSignal?: string, names: JevNames = createJevPseudonyms()): Record<string, unknown> {
-  const state: Record<string, unknown> = {
+export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext, deployPublishSignal?: string, names: JevNames = createJevPseudonyms()): { [key: string]: JsonValue } {
+  const state: { [key: string]: JsonValue } = {
     proposed_command: names.redactText(redactSecretsForJev(withDataTextAsPlaceholders(command)).text),
     context: redactSecretsForJev(names.redactText(context)).text,
     note: NOTE,
@@ -861,6 +861,11 @@ export function buildActionGateState(command: string, context: string, destinati
     state["deployPublishSignal"] = deployPublishSignal;
   }
   return state;
+}
+
+/** decideAction's verdict: the risk axes alone ask or allow; only a `prohibits` policy denies (decideGateAction). */
+export interface RiskGateDecision extends GateDecision {
+  readonly verdict: "allow" | "ask";
 }
 
 export interface DecideActionOptions {
@@ -886,7 +891,7 @@ export interface DecideActionOptions {
  * existing single-argument call site (adapters/claude/gate-bash.ts)
  * working identically.
  */
-export function decideAction(answers: Record<string, Answer>, options?: DecideActionOptions): GateDecision {
+export function decideAction(answers: Record<string, Answer>, options?: DecideActionOptions): RiskGateDecision {
   const consequenceCeiling = options?.consequenceCeiling ?? GATE_CONSEQUENCE_CEILING;
   const reversible = getNoulAnswer(answers, "reversible");
   const external = getNoulAnswer(answers, "external");

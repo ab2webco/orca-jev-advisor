@@ -6,8 +6,10 @@
 # never declared, and a panel default that had drifted from the constant it
 # mirrors -- and both had tests written for them only afterwards.
 #
-# `npm run check` is the same command a person runs locally: the unit tests,
-# then the panel assertions, then the screenshots. The screenshots are kept as
+# `npm run check` is the same command a person runs locally: the typecheck,
+# the unit tests, then the panel assertions, then the screenshots. Node runs
+# the code by stripping its types without checking them, so without the
+# typecheck a type error would pass every other step here. The screenshots are kept as
 # an artifact rather than left in a runner's scrollback, because a panel that
 # renders the wrong words passes every other check in this file.
 
@@ -30,7 +32,8 @@ jobs:
 
       # The plugin itself has zero runtime dependencies -- Orca clones this
       # tree and runs it without installing anything, so a runtime dependency
-      # would break every install. This only brings in the dev-only harness.
+      # would break every install. This only brings in the dev-only harness
+      # and the typechecker (typescript, @types/node).
       - run: npm install --no-audit --no-fund
 
       - run: npx playwright install --with-deps chromium

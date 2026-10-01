@@ -112,3 +112,47 @@ test("commandWritesGateOwnFile: a symlink to one is the file it points at", () =
   assert.equal(commandWritesGateOwnFile("echo '[]' > /tmp/link.json", PROJECT, HOME, own, canonical), `${CONFIG}/policies.json`);
   assert.equal(gateOwnFileAt("/tmp/link.json", own, canonical), `${CONFIG}/policies.json`);
 });
+
+// 0.6.18 T3 (JEVADV-94): the plugin's Orca storage. The gate never reads it,
+// but the panel and the worker rewrite every mirror above from it (and the
+// key mirror from its secrets file), so a write there reaches the gate at the
+// next refresh. Orca keeps it under `<user data>/plugins-data/<plugin id>/`.
+const STORE = `${ORCA}/plugins-data/ab2web.orca-jev-advisor`;
+
+test("gateOwnFiles: the plugin's Orca storage and secrets, and nothing else of Orca's plugin data", () => {
+  assert.equal(gateOwnFileAt(`${STORE}/storage.json`, OWN), `${STORE}/storage.json`);
+  assert.equal(gateOwnFileAt(`${STORE}/secrets.json.enc`, OWN), `${STORE}/secrets.json.enc`);
+  assert.equal(gateOwnFileAt(`${STORE}/storage.json.antes-seed`, OWN), null);
+  assert.equal(gateOwnFileAt(`${ORCA}/plugins-data/ab2web.wa-inbox/storage.json`, OWN), null);
+  assert.equal(gateOwnFileAt("/tmp/orca-test-profile/plugins-data/ab2web.orca-jev-advisor/storage.json", OWN), null);
+});
+
+test("commandWritesGateOwnFile: a write to the plugin's Orca storage, or removing its directory", () => {
+  const storage = `${STORE}/storage.json`;
+  for (const command of [
+    "echo '{}' > ~/.config/orca/plugins-data/ab2web.orca-jev-advisor/storage.json",
+    "cp /tmp/s.json $HOME/.config/orca/plugins-data/ab2web.orca-jev-advisor/storage.json",
+    "jq '.policies = []' /tmp/s.json | tee ~/.config/orca/plugins-data/ab2web.orca-jev-advisor/storage.json",
+    "cd ~/.config/orca/plugins-data/ab2web.orca-jev-advisor && sed -i 's/never/always/' storage.json",
+    "python3 - <<'EOF'\nimport os, json\np = os.path.expanduser('~/.config/orca/plugins-data/ab2web.orca-jev-advisor/storage.json')\nopen(p, 'w').write('{}')\nEOF",
+  ]) {
+    assert.equal(writes(command), storage, command);
+  }
+  assert.equal(writes("rm -f ~/.config/orca/plugins-data/ab2web.orca-jev-advisor/secrets.json.enc"), `${STORE}/secrets.json.enc`);
+  assert.equal(writes("rm -rf ~/.config/orca/plugins-data/ab2web.orca-jev-advisor"), STORE);
+  for (const command of [
+    "jq .policies ~/.config/orca/plugins-data/ab2web.orca-jev-advisor/storage.json",
+    "cp ~/.config/orca/plugins-data/ab2web.orca-jev-advisor/storage.json /tmp/storage-backup.json",
+    "echo '{}' > /tmp/orca-test-profile/plugins-data/ab2web.orca-jev-advisor/storage.json",
+  ]) {
+    assert.equal(writes(command), null, command);
+  }
+});
+
+test("commandWritesGateOwnFile: the macOS storage path, with its space, quoted or escaped", () => {
+  const orca = `${HOME}/Library/Application Support/orca`;
+  const own = gateOwnFiles({ configDir: CONFIG, cacheDir: CACHE, orcaUserDataDir: orca });
+  const storage = `${orca}/plugins-data/ab2web.orca-jev-advisor/storage.json`;
+  assert.equal(commandWritesGateOwnFile('cp /tmp/s.json "$HOME/Library/Application Support/orca/plugins-data/ab2web.orca-jev-advisor/storage.json"', PROJECT, HOME, own), storage);
+  assert.equal(commandWritesGateOwnFile("echo '{}' > ~/Library/Application\\ Support/orca/plugins-data/ab2web.orca-jev-advisor/storage.json", PROJECT, HOME, own), storage);
+});

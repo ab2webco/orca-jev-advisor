@@ -77,7 +77,7 @@ test("pruneAdviceRetryState on an empty object returns an empty, unchanged state
 });
 
 test("pruneAdviceRetryState never throws on a non-object payload -- returns empty, changed", () => {
-  // @ts-expect-error -- exercising the fail-open guard against malformed input
+  // The input is `unknown` on purpose: this is the fail-open guard against malformed input.
   const result = pruneAdviceRetryState(null, Date.now());
   assert.deepEqual(result.fresh, {});
 });

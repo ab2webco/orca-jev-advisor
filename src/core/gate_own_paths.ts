@@ -4,6 +4,7 @@
 // guard, run on every edit, loads nothing but this. Pure: no I/O;
 // `canonical` is how the caller resolves a symlink.
 import { basename, dirname, join, normalize } from "node:path";
+import { PLUGIN_ID } from "./orca_enablement.ts";
 
 export const identity = (path: string): string => path;
 
@@ -25,6 +26,15 @@ export const GATE_OWN_CONFIG_FILES: readonly string[] = [
 
 /** The cache directory's files the gate reads back as a verdict or a pass. */
 export const GATE_OWN_CACHE_FILES: readonly string[] = ["gate-bash.json", "gate-advice-retry.json", "gate-enablement.json", "agent-model-enablement.json", "human-queue.jsonl"];
+
+/**
+ * The plugin's own Orca storage, `<Orca user data>/plugins-data/<plugin id>/`
+ * (0.6.18 T3, JEVADV-94). The gate never reads it, but the panel and the
+ * worker rewrite every config mirror above from `storage.json`, and the key
+ * mirror (`env`) from `secrets.json.enc`, so a write there reaches the gate at
+ * the next refresh.
+ */
+export const GATE_OWN_ORCA_STORAGE_FILES: readonly string[] = ["storage.json", "secrets.json.enc"];
 
 export interface GateOwnFiles {
   readonly files: ReadonlySet<string>;
@@ -48,8 +58,10 @@ export function gateOwnFiles(input: { readonly configDir: string; readonly cache
     ...cacheDirs.flatMap((dir) => GATE_OWN_CACHE_FILES.map((name) => join(dir, name))),
   ]);
   const orcaDirs = input.orcaUserDataDir === null ? [] : spellings(input.orcaUserDataDir);
+  const storageDirs = orcaDirs.map((dir) => join(dir, "plugins-data", PLUGIN_ID));
   for (const dir of orcaDirs) files.add(join(dir, "orca-profile-index.json"));
-  return { files, roots: [...configDirs, ...cacheDirs], orcaUserDataDirs: orcaDirs };
+  for (const dir of storageDirs) for (const name of GATE_OWN_ORCA_STORAGE_FILES) files.add(join(dir, name));
+  return { files, roots: [...configDirs, ...cacheDirs, ...storageDirs], orcaUserDataDirs: orcaDirs };
 }
 
 function ownFile(path: string, own: GateOwnFiles): string | null {

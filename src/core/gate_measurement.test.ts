@@ -89,6 +89,8 @@ test("a record serializes as one JSON line and carries no command text", () => {
     source: "jev",
     verdict: "ask",
     latencyMs: 380,
+    pluginVersion: undefined,
+    stopReason: "risk",
   });
   const line = serializeGateRecord(record);
   assert.equal(line.endsWith("\n"), true);
@@ -106,14 +108,14 @@ test("a record serializes as one JSON line and carries no command text", () => {
 // ---------------------------------------------------------------------------
 
 test("parseGateDecisionRecords: reads every well-formed line back", () => {
-  const a = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
-  const b = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "rm -rf dist", source: "cache", verdict: "allow", latencyMs: null });
+  const a = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400, pluginVersion: undefined, stopReason: "risk" });
+  const b = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "rm -rf dist", source: "cache", verdict: "allow", latencyMs: null, pluginVersion: undefined, stopReason: "cache" });
   const raw = serializeGateRecord(a) + serializeGateRecord(b);
   assert.deepEqual(parseGateDecisionRecords(raw), [a, b]);
 });
 
 test("parseGateDecisionRecords: a malformed or incomplete line is skipped, siblings survive, never throws", () => {
-  const a = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
+  const a = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400, pluginVersion: undefined, stopReason: "risk" });
   const raw = `${serializeGateRecord(a)}not json\n${JSON.stringify({ type: "gate-decision", id: "incomplete" })}\n`;
   assert.deepEqual(parseGateDecisionRecords(raw), [a]);
 });
@@ -131,6 +133,8 @@ test("a 'none' source round-trips through build/serialize/parse -- Jev was asked
     source: "none",
     verdict: "allow",
     latencyMs: null,
+    pluginVersion: undefined,
+    stopReason: "unreachable",
   });
   assert.equal(record.source, "none");
   const raw = serializeGateRecord(record);
@@ -138,9 +142,9 @@ test("a 'none' source round-trips through build/serialize/parse -- Jev was asked
 });
 
 test("parseGateDecisionRecords: counting source:'jev' entries gives the real-decision total the AB benchmark reports against", () => {
-  const jev1 = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400 });
-  const jev2 = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "git push", source: "jev", verdict: "ask", latencyMs: 410 });
-  const cached = buildGateDecisionRecord({ id: "c", at: "2026-01-01T00:00:02.000Z", project: null, command: "npm test", source: "cache", verdict: "allow", latencyMs: null });
+  const jev1 = buildGateDecisionRecord({ id: "a", at: "2026-01-01T00:00:00.000Z", project: null, command: "npm test", source: "jev", verdict: "allow", latencyMs: 400, pluginVersion: undefined, stopReason: "risk" });
+  const jev2 = buildGateDecisionRecord({ id: "b", at: "2026-01-01T00:00:01.000Z", project: null, command: "git push", source: "jev", verdict: "ask", latencyMs: 410, pluginVersion: undefined, stopReason: "risk" });
+  const cached = buildGateDecisionRecord({ id: "c", at: "2026-01-01T00:00:02.000Z", project: null, command: "npm test", source: "cache", verdict: "allow", latencyMs: null, pluginVersion: undefined, stopReason: "cache" });
   const raw = serializeGateRecord(jev1) + serializeGateRecord(jev2) + serializeGateRecord(cached);
   const records = parseGateDecisionRecords(raw);
   assert.equal(records.filter((r) => r.source === "jev").length, 2);
@@ -164,6 +168,7 @@ test("a record carries the plugin version it was produced by", () => {
     verdict: "allow",
     latencyMs: null,
     pluginVersion: "0.4.0",
+    stopReason: "cache",
   });
   assert.equal(record.pluginVersion, "0.4.0");
 });
@@ -178,6 +183,7 @@ test("pluginVersion round-trips through serialize/parse", () => {
     verdict: "ask",
     latencyMs: null,
     pluginVersion: "0.4.0",
+    stopReason: "local-rule",
   });
   const raw = serializeGateRecord(record);
   assert.deepEqual(parseGateDecisionRecords(raw), [record]);

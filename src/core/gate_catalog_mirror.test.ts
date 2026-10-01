@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseMirroredCatalog, parseMirroredPolicies } from "./gate_catalog_mirror.ts";
+import { mirroredDestinationContext, parseMirroredCatalog, parseMirroredPolicies } from "./gate_catalog_mirror.ts";
 
 test("a well-formed catalog mirror parses through", () => {
   const raw = {
@@ -58,6 +58,41 @@ test("a well-formed, empty catalog (destinations: []) is valid, not null", () =>
   const parsed = parseMirroredCatalog({ destinations: [] });
   assert.notEqual(parsed, null);
   assert.equal(parsed?.destinations.length, 0);
+});
+
+// 0.6.18 T2: the mirror is the panel's whole catalog, so a row also carries
+// the destination's `label` and `kind`, which the gate hands Jev. They were
+// read without being declared or checked: a row with no label reached
+// jev_pseudonyms' destinationDescription as undefined and threw inside
+// askJev's try, so every command in that destination was judged as if Jev
+// were unreachable.
+test("a destination's label and kind parse through when present, and are optional", () => {
+  const raw = {
+    destinations: [
+      { id: "a", worktreePath: "/home/x/a", label: "Site A", kind: "client-site" },
+      { id: "b", worktreePath: "/home/x/b" },
+    ],
+  };
+  const parsed = parseMirroredCatalog(raw);
+  assert.equal(parsed?.destinations[0]?.label, "Site A");
+  assert.equal(parsed?.destinations[0]?.kind, "client-site");
+  assert.equal(parsed?.destinations[1]?.label, undefined);
+});
+
+test("a malformed label or kind does not invalidate the catalog: the row's policies and ceiling still apply", () => {
+  assert.notEqual(parseMirroredCatalog({ destinations: [{ id: "a", worktreePath: "/home/x/a", label: 42, kind: "project" }] }), null);
+  assert.notEqual(parseMirroredCatalog({ destinations: [{ id: "a", worktreePath: "/home/x/a", label: "A", kind: null }] }), null);
+});
+
+test("the destination context sent to Jev needs both a label and a kind, or there is none", () => {
+  assert.deepEqual(
+    mirroredDestinationContext({ id: "a", worktreePath: "/home/x/a", label: "Site A", kind: "client-site" }),
+    { label: "Site A", kind: "client-site" },
+  );
+  assert.equal(mirroredDestinationContext({ id: "a", worktreePath: "/home/x/a" }), undefined);
+  assert.equal(mirroredDestinationContext({ id: "a", worktreePath: "/home/x/a", kind: "project" }), undefined);
+  assert.equal(mirroredDestinationContext({ id: "a", worktreePath: "/home/x/a", label: "Site A" }), undefined);
+  assert.equal(mirroredDestinationContext({ id: "a", worktreePath: "/home/x/a", label: 42, kind: "project" }), undefined);
 });
 
 test("a well-formed policies mirror parses through, including the optional destinations scope", () => {

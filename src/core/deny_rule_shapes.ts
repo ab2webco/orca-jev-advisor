@@ -328,10 +328,13 @@ export function pushTargets(
   const out: PushTarget[] = [];
   for (const { segment, dir } of locateCommandSegments(command, cwd, home)) {
     if (someSegmentMatches(segment, RUNS_A_PUSH) !== "deny") continue;
-    const pushDir = gitInvocation(segment, dir, resolve(home))?.dir ?? dir;
-    const local = remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir);
+    // Null when the directory cannot be known (`git -C "$X"`, `cd "$X"`): never
+    // the session's own checkout, as protectedPushOutcome reads it.
+    const pushDir = gitInvocation(segment, dir, resolve(home))?.dir ?? null;
+    const local = pushDir !== null && remoteIsLocal(withoutGitGlobalOptionsBeforePush(segment), pushDir);
     for (const push of pushInvocations(segment)) {
       if (implicitPush(push)) {
+        if (pushDir === null) continue;
         const destination = implicitDestination(pushDir, push.refspecs.length > 0);
         if (destination.kind === "branch") out.push({ remote: push.remote, branch: destination.name, remoteIsLocal: local });
         continue;

@@ -105,8 +105,9 @@ test("planRouterModeWrite: refuses a file that is not a JSON object, never overw
 // ---------------------------------------------------------------------------
 
 import { parseTierEffort, planRouterEffortWrite, routerEffortFromSettings } from "./model_router_mode.ts";
+import type { TierEffortMap } from "./model_router_decide.ts";
 
-const DEFAULTS = { simple: "medium", standard: "medium", complex: "high", frontier: "xhigh" };
+const DEFAULTS: TierEffortMap = { simple: "medium", standard: "medium", complex: "high", frontier: "xhigh" };
 
 test("parseTierEffort: valid per-tier values override the defaults; anything else is ignored", () => {
   assert.deepEqual(parseTierEffort(undefined), DEFAULTS);

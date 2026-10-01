@@ -10,8 +10,9 @@
  * that cannot be one of those files is passed before any is loaded. Every
  * protected file sits in a directory named `orca-supervisor`
  * (src/core/paths.ts, on every platform), in a directory an override
- * variable names, or is one of Orca's two profile files; anything else is
- * not one of them. It fails open like the gate: an unreadable payload or any
+ * variable names, is one of Orca's two profile files, or sits in the
+ * plugin's Orca storage directory, named by the plugin's id; anything else
+ * is not one of them. It fails open like the gate: an unreadable payload or any
  * error is a silent pass.
  */
 import { readFileSync, realpathSync, writeSync } from 'node:fs'
@@ -20,7 +21,8 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 // The tools that write a file; the settings.json matcher names the same four.
 const FILE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const OVERRIDES = ['ORCA_SUPERVISOR_CONFIG_DIR', 'ORCA_SUPERVISOR_CACHE_DIR', 'ORCA_USER_DATA_PATH']
-const NEEDLES = ['orca-supervisor', 'orca-data.json', 'orca-profile-index.json']
+// The plugin's Orca storage directory is named by its id (src/core/orca_enablement.ts PLUGIN_ID).
+const NEEDLES = ['orca-supervisor', 'orca-data.json', 'orca-profile-index.json', 'ab2web.orca-jev-advisor']
 
 /** The path a file tool is about to write, absolute; null for any other tool or a payload that names none. */
 function targetPath (raw) {

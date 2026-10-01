@@ -116,7 +116,7 @@ import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
 import { commandWritesGateOwnFile, gateOwnFiles } from '../../src/core/gate_own_files.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
-import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
+import { mirroredDestinationContext, parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
 import { DEFAULT_DENY_TIER_SWITCHES, parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
 import type { DenyTierSwitches, DenyToggleKey } from '../../src/core/deny_tier_config.ts'
@@ -1613,7 +1613,7 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
       ...buildActionGateQuestions(),
       ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies, jevNames) : {}),
     }
-    const destination = matched !== null ? { label: matched.label, kind: matched.kind } : undefined
+    const destination = matched !== null ? mirroredDestinationContext(matched) : undefined
     // The advise-model release, Part 3(a): a local, no-network fact ("this
     // triggers a deployment workflow", "this publishes a package") is fed
     // into the SAME state both the policy and risk questions read from, so
@@ -1662,7 +1662,7 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
       reason,
       axes: gate.axes,
       destinationId: matched?.id ?? null,
-      destinationKind: matched?.kind ?? null,
+      destinationKind: typeof matched?.kind === 'string' ? matched.kind : null,
       usage: { inputTokens: response.usage.input_tokens, outputTokens: response.usage.output_tokens },
       policyId: gate.policyId,
       policyRule,

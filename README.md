@@ -16,15 +16,16 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
-## What changed in 0.6.17
+## What changed in 0.6.18
 
-The gate guards itself: an agent's write to the files the gate and router
-decide from (team policies, owners, deny switches, the model catalog, the
-gate's own state) is refused, through Bash and through Claude Code's Edit
-and Write tools, which now pass a fast local check. A `gh pr merge` is no
-longer refused as a direct write to main, while a merge through `gh api`
-into main now is. Settings backups are owner-only, the gate's decision log
-rotates by the hour, and the A/B benchmark runs from a path with a space.
+Types are now checked, not only written: `npm run typecheck` (TypeScript
+strict) runs in `npm run check` and in CI. Bringing the code to zero errors
+found three real bugs, now fixed with tests: a destination row without a
+label made the gate judge that destination as if Jev were down, a push to an
+unknowable directory was read as a push from the session's own checkout, and
+the measure-only hold rule never saw a failing test. The gate also refuses an
+agent's edits to the plugin's own Orca storage, the source its mirrors are
+rewritten from.
 
 Every release is in [CHANGELOG.md](CHANGELOG.md).
 

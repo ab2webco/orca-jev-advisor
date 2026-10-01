@@ -119,7 +119,10 @@ export function mergeWide(results: readonly (WideResult | null)[]): WideResult |
   const depth = Math.max(...answered.map((result) => result.ranked.length));
   const ranked: WideResult["ranked"][number][] = [];
   for (let level = 0; level < depth; level++) {
-    const row = answered.flatMap((result) => (result.ranked[level] === undefined ? [] : [result.ranked[level]]));
+    const row = answered.flatMap((result) => {
+      const entry = result.ranked[level];
+      return entry === undefined ? [] : [entry];
+    });
     ranked.push(...row.sort((a, b) => b.probability - a.probability));
   }
   const first = results[0] ?? null;

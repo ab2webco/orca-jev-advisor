@@ -196,7 +196,9 @@ test("tierOfModel / modelRank: a session's model maps back to its tier, ignoring
   assert.equal(tierOfModel(tiers, "claude-sonnet-5-5"), "standard");
   assert.equal(tierOfModel(tiers, "claude-opus-5-5[1m]"), "complex");
   assert.equal(tierOfModel(tiers, "some-other-model"), null);
-  assert.ok(modelRank(tiers, "claude-opus-5-5") > modelRank(tiers, "claude-haiku-4-5-20251001"));
+  const opus = modelRank(tiers, "claude-opus-5-5");
+  const haiku = modelRank(tiers, "claude-haiku-4-5-20251001");
+  assert.ok(opus !== null && haiku !== null && opus > haiku);
   assert.equal(modelRank(tiers, "some-other-model"), null);
 });
 

@@ -1,0 +1,8 @@
+// The mod-skills tests run under Node (`node --test`), not in the hooks
+// environment, so they take the root config's Node options plus the
+// 'claude-code' module the hooks module imports its types from.
+{
+  "extends": "../../../tsconfig.json",
+  "include": ["claude-code.d.ts", "*.test.ts"],
+  "exclude": []
+}

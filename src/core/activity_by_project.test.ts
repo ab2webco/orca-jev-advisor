@@ -72,9 +72,14 @@ function routerRow(overrides: Partial<RouterDecisionRecord> = {}): RouterDecisio
     stepSaving: null,
     expectedSteps: null,
     quotaBand: "normal",
+    quotaSource: null,
     origin: null,
     effort: null,
     project: "orca",
+    sessionId: null,
+    turnId: null,
+    agentId: null,
+    workKind: null,
     ...overrides,
   };
 }
