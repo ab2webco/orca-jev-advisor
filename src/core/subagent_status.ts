@@ -84,6 +84,25 @@ export interface RunningSubagent {
   readonly why: SubagentWhy;
   /** Measure mode: the model the router would have given it, when that is another one. */
   readonly wouldUse: string | null;
+  /** 0.6.23 (JEVADV-102): where the agent works; absent until known. */
+  readonly place?: AgentPlace;
+}
+
+/**
+ * 0.6.23 (JEVADV-102): where an agent works, as the band shows it. The
+ * engine never reports a subagent's shell directory (a shell `cd` does not
+ * move the session's), so this is the spawn's `cwd`, or what the agent's own
+ * writes and `cd`s show.
+ */
+export interface AgentPlace {
+  /** The git worktree's top-level directory name (basename only); null when unknown. */
+  readonly worktree: string | null;
+  /** The checked-out branch; null for a detached HEAD or when unknown. */
+  readonly branch: string | null;
+  /** True when the worktree is not the lead's (`$.session.root()`'s top level). */
+  readonly apart: boolean;
+  /** `isolation: 'worktree'` was asked for and no path is known yet. */
+  readonly pendingIsolation?: true;
 }
 
 /** An agent as `$.agent.list()` returns it, the fields read here. */
