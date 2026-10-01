@@ -95,7 +95,7 @@ import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
-import { jevStateExceedsCap } from '../../src/core/jev_state_cap.ts'
+import { fitJevState } from '../../src/core/jev_state_cap.ts'
 import { callJev, jevFailureOf, JevRequestError, type JevFailure } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -1416,6 +1416,7 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       stopReason,
       ...(policyId !== null ? { policyId } : {}),
       ...(failure !== null ? { failure } : {}),
+      ...(source === 'jev' && stateCondensed ? { stateCondensed: true } : {}),
       // 0.6.8 T3: the requires_human policies were set aside for this
       // command -- see main()'s own note where that is decided.
       teamInternal,
@@ -1578,6 +1579,9 @@ type JevOutcome =
   | { readonly kind: 'none'; readonly failure: JevFailure | null }
   | { readonly kind: 'oversized' }
 
+/** Whether the state Jev judged was the condensed one -- stamped on every `jev` row this process writes. One hook process judges one command. */
+let stateCondensed = false
+
 /**
  * Calls Jev (src/core) and translates the verdict into the hook's decision.
  * Never throws.
@@ -1633,11 +1637,13 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // a destination policy (client_always_asks, ...) can recognise it too --
     // see decisions.ts's own doc on buildActionGateState's deployPublishSignal.
     const deployPublish = detectDeployPublish(command)
-    const state = buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames)
-    // JEVADV-96 T5: a state over the cap would only be refused (HTTP 400) after
-    // spending the time budget, so Jev is not asked at all.
-    if (jevStateExceedsCap(state)) return { kind: 'oversized' }
-    const response = await callJev(apiKey, state, questions, { budgetMs: BUDGET_MS })
+    // JEVADV-96 T5: a state over the cap is condensed (blob words replaced by a
+    // marker) and that is judged; only one still over the cap is not sent, since
+    // it would be refused (HTTP 400) after spending the time budget.
+    const fit = fitJevState((condense) => buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames, { condense }))
+    if (fit === null) return { kind: 'oversized' }
+    stateCondensed = fit.condensed
+    const response = await callJev(apiKey, fit.state, questions, { budgetMs: BUDGET_MS })
     const gate = decideGateAction({
       action: command,
       policies: commandScopedPolicies,

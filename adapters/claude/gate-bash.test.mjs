@@ -3223,7 +3223,8 @@ test('0.6.19 M3: directories that cannot be resolved at load end silently too: e
 // notice is shown, the row says oversized, and no unreachable row exists.
 test('JEVADV-96: an oversized command is not put to Jev, says so, and records the class', () => {
   const home = makeHome()
-  const huge = `${MIDDLE_TIER_COMMAND} ${'a'.repeat(20000)}`
+  // Many short words: nothing in it can be condensed, so it stays over the cap.
+  const huge = `${MIDDLE_TIER_COMMAND} ${Array.from({ length: 4000 }, (_, i) => `word${i}`).join(' ')}`
   const payload = JSON.parse(run(home, huge, { apiKey: 'not-a-real-key' }))
   assert.equal(payload.hookSpecificOutput, undefined, 'no verdict: the permission follows its normal course')
   assert.match(payload.systemMessage, /too large/i, 'the note says the command was too large to judge')
@@ -3233,5 +3234,5 @@ test('JEVADV-96: an oversized command is not put to Jev, says so, and records th
   assert.equal(records[0].source, 'local-rule')
   assert.equal(records[0].verdict, 'allow')
   assert.equal(records[0].commandFamily, 'some-unmeasured-tool')
-  assert.equal(JSON.stringify(records[0]).includes('aaaa'), false, 'the row never carries the command')
+  assert.equal(JSON.stringify(records[0]).includes('word123'), false, 'the row never carries the command')
 })

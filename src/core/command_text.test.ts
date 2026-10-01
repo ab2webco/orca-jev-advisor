@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { withDataTextAsPlaceholders, withoutHeredocBodies, withoutLineContinuations } from "./command_text.ts";
+import { withDataTextAsPlaceholders, withLongWordsElided, withoutHeredocBodies, withoutLineContinuations } from "./command_text.ts";
 
 // The phrases are assembled at run time rather than written out, so this file
 // can be read, edited and searched without the live gate stopping the person
@@ -432,4 +432,24 @@ test("a command substitution is read again as a command line, its own text a pla
   const force = phrase("git", "push", "--force", "origin", "main");
   assert.equal(withDataTextAsPlaceholders(`node probe.mjs "$(printf '%s' '${force} is refused')"`), `node probe.mjs "$(printf '%s' ${PLACEHOLDER})"`);
   assert.equal(withDataTextAsPlaceholders(`echo "$(${force})"`), `echo "$(${force})"`);
+});
+
+test("withLongWordsElided: a long blob becomes a marker with its length and the action beside it survives", () => {
+  const blob = "QUJD".repeat(100);
+  assert.equal(withLongWordsElided(`printf ${blob} | base64 -d > f && git push origin main`, 200), "printf ‹400 chars› | base64 -d > f && git push origin main");
+  assert.equal(withLongWordsElided(`echo "${blob}" && git push origin main`, 200), "echo ‹402 chars› && git push origin main");
+});
+
+test("withLongWordsElided: short words, long paths and anything that runs are left as written", () => {
+  const path = `/srv/${"deep/".repeat(60)}file`;
+  assert.equal(withLongWordsElided(`rm -rf ${path}`, 200), `rm -rf ${path}`);
+  const runs = `echo "$(${"x".repeat(300)})"`;
+  assert.equal(withLongWordsElided(runs, 200), runs);
+  assert.equal(withLongWordsElided("git status", 200), "git status");
+});
+
+test("withLongWordsElided: a shell heredoc body is code and keeps its text", () => {
+  const body = "y".repeat(300);
+  const command = `bash <<'EOF'\n${body}\nEOF\ngit push origin main`;
+  assert.equal(withLongWordsElided(command, 200), command);
 });

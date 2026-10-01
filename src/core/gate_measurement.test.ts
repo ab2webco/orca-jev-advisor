@@ -509,3 +509,11 @@ test("a command too large to judge records the class oversized", () => {
   assert.equal(record.failureClass, "oversized");
   assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
 });
+
+test("a decision judged on a condensed state says so, and one that was not carries no key", () => {
+  const base = { id: "c", at: "2026-09-24T00:00:00.000Z", project: null, command: "printf x", source: "jev", verdict: "allow", latencyMs: 400, pluginVersion: undefined, stopReason: "risk" } as const;
+  const condensed = buildGateDecisionRecord({ ...base, stateCondensed: true });
+  assert.equal(condensed.stateCondensed, true);
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(condensed)), [condensed]);
+  assert.equal("stateCondensed" in buildGateDecisionRecord({ ...base, id: "d", stateCondensed: false }), false);
+});

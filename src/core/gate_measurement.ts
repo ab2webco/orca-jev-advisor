@@ -133,6 +133,8 @@ export interface GateDecisionRecord {
   readonly stopReason?: GateStopReason;
   /** JEVADV-96: why nobody judged this command, when Jev failed or the state was too large. Absent on every judged decision and on every record written before this field existed. */
   readonly failureClass?: GateFailureClass;
+  /** JEVADV-96: present (always `true`) only when the command's state was over the size cap and Jev judged its condensed form (blob words replaced by a marker). */
+  readonly stateCondensed?: true;
   /** The HTTP status behind `failureClass`, only for http4xx, http5xx and overload. */
   readonly failureStatus?: number;
   /**
@@ -334,6 +336,8 @@ export interface BuildGateDecisionRecordInput {
   readonly stopReason: GateStopReason;
   /** JEVADV-96: why the decision went unjudged -- see GateDecisionRecord.failureClass. */
   readonly failure?: GateFailure;
+  /** JEVADV-96 -- see GateDecisionRecord.stateCondensed. `false` and absent both write no key. */
+  readonly stateCondensed?: boolean;
   /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */
   readonly policyId?: string;
   /** 0.6.8 T3 -- see GateDecisionRecord.teamInternal. `false` and absent both write no key. */
@@ -371,6 +375,7 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     ...(input.policyId !== undefined ? { policyId: input.policyId } : {}),
     ...(input.failure !== undefined ? { failureClass: input.failure.kind } : {}),
     ...(input.failure !== undefined && "status" in input.failure ? { failureStatus: input.failure.status } : {}),
+    ...(input.stateCondensed === true ? { stateCondensed: true as const } : {}),
     ...(input.teamInternal === true ? { teamInternal: true as const } : {}),
   };
 }
@@ -423,6 +428,7 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     (record.policyId === undefined || typeof record.policyId === "string") &&
     (record.failureClass === undefined || isGateFailureClass(record.failureClass)) &&
     (record.failureStatus === undefined || typeof record.failureStatus === "number") &&
+    (record.stateCondensed === undefined || record.stateCondensed === true) &&
     (record.teamInternal === undefined || record.teamInternal === true)
   );
 }

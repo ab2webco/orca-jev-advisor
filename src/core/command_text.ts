@@ -537,6 +537,42 @@ export function withDataTextAsPlaceholders(command: string): string {
   return commandLineForJev(command, 0);
 }
 
+/** A word longer than this (JEVADV-96) is a blob, not an action: it is replaced when the state is too large. */
+export const LONG_WORD_CHARS = 200;
+
+/**
+ * The command with every word longer than `limit` characters replaced by a
+ * marker carrying its length (`‹400 chars›`), for a state that is over the
+ * size cap (src/core/jev_state_cap.ts). Run it on withDataTextAsPlaceholders'
+ * output: that already sets aside the text of a message, a heredoc fed to a
+ * non-shell program and every quoted text with spaces in it; what is left
+ * that is long is a blob (base64, hex, minified code) glued to the words that
+ * are the action, and those words stay. Left as written: a word that runs
+ * something (`$( )`, a backtick, `<( )`), a path, and a heredoc body read by a
+ * shell, which is code.
+ */
+export function withLongWordsElided(command: string, limit: number = LONG_WORD_CHARS): string {
+  const bodies: string[] = [];
+  const masked = mapHeredocBodies(command, (heredoc) => {
+    if (heredoc.body.length === 0) return heredoc.terminator;
+    bodies.push(heredoc.body.join("\n"));
+    return [`\u0000${bodies.length - 1}\u0000`, ...heredoc.terminator];
+  });
+  const replacements: { readonly start: number; readonly end: number; readonly text: string }[] = [];
+  for (const segment of spanSegments(masked)) {
+    for (const word of segment) {
+      if (word.end - word.start <= limit || mayRun(word.raw) || word.raw.includes("\u0000")) continue;
+      if (looksLikeOnePath(tokenize(word.raw)[0] ?? word.raw)) continue;
+      replacements.push({ start: word.start, end: word.end, text: `‹${word.end - word.start} chars›` });
+    }
+  }
+  let result = masked;
+  for (const { start, end, text } of [...replacements].sort((a, b) => b.start - a.start)) {
+    result = result.slice(0, start) + text + result.slice(end);
+  }
+  return result.replace(/\u0000(\d+)\u0000/g, (_match, at: string) => bodies[Number(at)] ?? "");
+}
+
 /**
  * What is open at a point in the text: a quote (`$'` is ANSI-C quoting, where
  * `\'` does not close it), or a command substitution / parenthesis inside
