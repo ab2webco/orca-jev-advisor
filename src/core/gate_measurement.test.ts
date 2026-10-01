@@ -485,3 +485,27 @@ test("time, nice, nohup, env (with its options and assignments) and command are 
   assert.equal(commandFamily("time"), "time");
   assert.equal(commandFamily("env"), "env");
 });
+
+test("an unjudged decision records why Jev failed, with the status when there is one, and round-trips", () => {
+  const base = { id: "f-1", at: "2026-09-24T00:00:00.000Z", project: null, command: "npm test", source: "none", verdict: "allow", latencyMs: null, pluginVersion: undefined, stopReason: "unreachable" } as const;
+  const withStatus = buildGateDecisionRecord({ ...base, failure: { kind: "http5xx", status: 503 } });
+  assert.equal(withStatus.failureClass, "http5xx");
+  assert.equal(withStatus.failureStatus, 503);
+  const without = buildGateDecisionRecord({ ...base, id: "f-2", failure: { kind: "timeout" } });
+  assert.equal(without.failureClass, "timeout");
+  assert.equal("failureStatus" in without, false);
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(withStatus) + serializeGateRecord(without)), [withStatus, without]);
+});
+
+test("a record with no failure carries neither key, and one with an unknown class is skipped", () => {
+  const plain = buildGateDecisionRecord({ id: "p", at: "2026-09-24T00:00:00.000Z", project: null, command: "ls", source: "jev", verdict: "allow", latencyMs: 400, pluginVersion: undefined, stopReason: "risk" });
+  assert.equal("failureClass" in plain, false);
+  const bad = JSON.stringify({ ...plain, id: "b", failureClass: "gremlins" }) + "\n";
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(plain) + bad), [plain]);
+});
+
+test("a command too large to judge records the class oversized", () => {
+  const record = buildGateDecisionRecord({ id: "o", at: "2026-09-24T00:00:00.000Z", project: null, command: "printf x", source: "local-rule", verdict: "allow", latencyMs: null, pluginVersion: undefined, stopReason: "local-allow", failure: { kind: "oversized" } });
+  assert.equal(record.failureClass, "oversized");
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});

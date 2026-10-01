@@ -10,6 +10,7 @@
 
 import { locateCommandSegments } from "./command_locations.ts";
 import { splitOnCommandSeparators, startsWithGitDiscard } from "./git_discard.ts";
+import type { JevFailure } from "./jev.ts";
 
 /**
  * `"none"` means the gate reached the point of asking Jev and got no answer
@@ -86,6 +87,14 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  * no cache and no network) but gets its own, more specific stopReason so an
  * "allow" it produces is never confused with a NEVER_SILENTLY deny/ask.
  */
+/**
+ * JEVADV-96: why a decision went unjudged, when it did. The six classes of a
+ * failed Jev call (src/core/jev.ts) plus `oversized`: the command's state was
+ * over the cap, so Jev was never asked (src/core/jev_state_cap.ts).
+ */
+export type GateFailure = JevFailure | { readonly kind: "oversized" };
+export type GateFailureClass = GateFailure["kind"];
+
 export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue";
 
 export interface GateDecisionRecord {
@@ -122,6 +131,10 @@ export interface GateDecisionRecord {
    * dropped and never treated as corrupt.
    */
   readonly stopReason?: GateStopReason;
+  /** JEVADV-96: why nobody judged this command, when Jev failed or the state was too large. Absent on every judged decision and on every record written before this field existed. */
+  readonly failureClass?: GateFailureClass;
+  /** The HTTP status behind `failureClass`, only for http4xx, http5xx and overload. */
+  readonly failureStatus?: number;
   /**
    * The policy that resolved this decision -- present only when
    * `stopReason` is `"policy"` or `"queue"`. The id only, never the command or the
@@ -319,6 +332,8 @@ export interface BuildGateDecisionRecordInput {
   readonly pluginVersion: string | undefined;
   /** Required at construction time: whoever builds a record today always knows why (see GateStopReason above). */
   readonly stopReason: GateStopReason;
+  /** JEVADV-96: why the decision went unjudged -- see GateDecisionRecord.failureClass. */
+  readonly failure?: GateFailure;
   /** Only meaningful (and only ever passed) when `stopReason` is `"policy"`. */
   readonly policyId?: string;
   /** 0.6.8 T3 -- see GateDecisionRecord.teamInternal. `false` and absent both write no key. */
@@ -354,6 +369,8 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     // absent one, and every non-"policy" stop must produce a record
     // byte-for-byte indistinguishable from one that never had this field.
     ...(input.policyId !== undefined ? { policyId: input.policyId } : {}),
+    ...(input.failure !== undefined ? { failureClass: input.failure.kind } : {}),
+    ...(input.failure !== undefined && "status" in input.failure ? { failureStatus: input.failure.status } : {}),
     ...(input.teamInternal === true ? { teamInternal: true as const } : {}),
   };
 }
@@ -383,6 +400,10 @@ function isGateStopReason(value: unknown): value is GateStopReason {
   );
 }
 
+function isGateFailureClass(value: unknown): value is GateFailureClass {
+  return value === "timeout" || value === "network" || value === "http4xx" || value === "http5xx" || value === "overload" || value === "malformed" || value === "oversized";
+}
+
 function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
@@ -400,6 +421,8 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     (record.pluginVersion === undefined || typeof record.pluginVersion === "string") &&
     (record.stopReason === undefined || isGateStopReason(record.stopReason)) &&
     (record.policyId === undefined || typeof record.policyId === "string") &&
+    (record.failureClass === undefined || isGateFailureClass(record.failureClass)) &&
+    (record.failureStatus === undefined || typeof record.failureStatus === "number") &&
     (record.teamInternal === undefined || record.teamInternal === true)
   );
 }

@@ -244,7 +244,34 @@ const RETRYABLE_STATUS = new Set([429, 529]);
 const MAX_RETRIES = 1;
 const DEFAULT_BUDGET_MS = 4_000;
 
+/**
+ * Why a Jev call failed (JEVADV-96). Every failure `callJev` throws carries
+ * one, so the gate's measurement rows can say why a command went unjudged.
+ *   timeout  -- the latency budget ran out.
+ *   network  -- the request never got an answer (connection refused, reset, DNS).
+ *   http4xx  -- Jev refused the request (400-499 except 429); `status` says which.
+ *   http5xx  -- Jev failed on its side (500-599 except 529).
+ *   overload -- 429 or 529: Jev asked callers to slow down.
+ *   malformed -- a 200 whose body is not the expected answer.
+ */
+export type JevFailure =
+  | { readonly kind: "timeout" }
+  | { readonly kind: "network" }
+  | { readonly kind: "http4xx"; readonly status: number }
+  | { readonly kind: "http5xx"; readonly status: number }
+  | { readonly kind: "overload"; readonly status: number }
+  | { readonly kind: "malformed" };
+
+export type JevFailureClass = JevFailure["kind"];
+
+function failureFromStatus(status: number | null): JevFailure {
+  if (status === null) return { kind: "network" };
+  if (RETRYABLE_STATUS.has(status)) return { kind: "overload", status };
+  return status >= 500 ? { kind: "http5xx", status } : { kind: "http4xx", status };
+}
+
 export class JevTimeoutError extends Error {
+  readonly failure: JevFailure = { kind: "timeout" };
   constructor(budgetMs: number) {
     super(`Jev didn't respond within the ${budgetMs}ms budget`);
     this.name = "JevTimeoutError";
@@ -253,11 +280,19 @@ export class JevTimeoutError extends Error {
 
 export class JevRequestError extends Error {
   readonly status: number | null;
-  constructor(message: string, status: number | null) {
+  readonly failure: JevFailure;
+  /** `malformed` marks a 200 whose body is not a Jev answer; otherwise the class follows from `status` (null: the request never got an answer). */
+  constructor(message: string, status: number | null, malformed = false) {
     super(message);
     this.name = "JevRequestError";
     this.status = status;
+    this.failure = malformed ? { kind: "malformed" } : failureFromStatus(status);
   }
+}
+
+/** The class of a failure thrown by `callJev`, or null for any other error. */
+export function jevFailureOf(error: unknown): JevFailure | null {
+  return error instanceof JevTimeoutError || error instanceof JevRequestError ? error.failure : null;
 }
 
 export interface CallJevOptions {
@@ -284,9 +319,9 @@ export interface CallJevOptions {
  * - `apiKey` is always supplied by the caller; this function never reads
  *   the environment or the filesystem, and never logs the key or includes
  *   it in a thrown error.
- * - Retries exactly once, with a 500ms/1000ms backoff, and only when the
- *   response status is 429 (rate limited) or 529 (overloaded). Any other
- *   non-ok status throws immediately.
+ * - Retries at most once per call: a 429 (rate limited) or 529 (overloaded)
+ *   is retried after a 500ms backoff. Any other failure throws at once.
+ * - Every thrown failure carries its class (`jevFailureOf`).
  * - Enforces a hard latency budget (default 4000ms): an AbortController is
  *   always created and its `signal` always sent, so a `fetchImpl` that
  *   honours it (the global `fetch`) cancels the underlying request; the
@@ -308,8 +343,9 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
 
   const request: JevRequest = { state, model: "jev-latest", questions };
 
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  let retriesUsed = 0;
+  let attemptBudgetMs = budgetMs;
+  for (;;) {
     const controller = new AbortController();
     let timedOut = false;
     // The loser of the race is never awaited again, but `Promise.race`
@@ -320,14 +356,16 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
     // short-lived caller (the gate hook) exits right after its verdict; a
     // sleep that ignores the signal just runs out as before.
     const budgetSettled = new AbortController();
-    const budget = doSleep(budgetMs, budgetSettled.signal).then((): Promise<never> => {
+    const thisBudgetMs = attemptBudgetMs;
+    const budget = doSleep(thisBudgetMs, budgetSettled.signal).then((): Promise<never> => {
       if (budgetSettled.signal.aborted) return new Promise<never>(() => undefined);
       timedOut = true;
       controller.abort();
-      throw new JevTimeoutError(budgetMs);
+      throw new JevTimeoutError(thisBudgetMs);
     });
 
-    let response: JevFetchResponse;
+    let response: JevFetchResponse | null = null;
+    let networkError: JevRequestError | null = null;
     try {
       response = await Promise.race([
         doFetch(JEV_ENDPOINT, {
@@ -339,35 +377,48 @@ export async function callJev(apiKey: string, state: JsonValue, questions: Recor
         budget,
       ]);
     } catch (error) {
-      if (timedOut || error instanceof JevTimeoutError) throw new JevTimeoutError(budgetMs);
-      if (error instanceof Error && error.name === "AbortError") throw new JevTimeoutError(budgetMs);
-      throw new JevRequestError(`Couldn't reach Jev: ${error instanceof Error ? error.message : String(error)}`, null);
+      if (timedOut || error instanceof JevTimeoutError) throw new JevTimeoutError(thisBudgetMs);
+      if (error instanceof Error && error.name === "AbortError") throw new JevTimeoutError(thisBudgetMs);
+      networkError = new JevRequestError(`Couldn't reach Jev: ${error instanceof Error ? error.message : String(error)}`, null);
     } finally {
       budgetSettled.abort();
     }
 
-    if (response.ok) {
+    let failure: JevRequestError;
+    let waitMs: number;
+    let transient: boolean;
+    if (response === null) {
+      failure = networkError ?? new JevRequestError("Jev: unknown failure", null);
+      transient = true;
+      waitMs = 0;
+    } else if (response.ok) {
       const bodyText = await response.text();
       let parsed: unknown;
       try {
         parsed = JSON.parse(bodyText);
       } catch {
-        throw new JevRequestError("Jev responded 200 but the body isn't valid JSON", response.status);
+        throw new JevRequestError("Jev responded 200 but the body isn't valid JSON", response.status, true);
       }
       if (!isJevResponse(parsed)) {
-        throw new JevRequestError("Jev responded 200 but the body doesn't have the expected shape {model, answers, usage}", response.status);
+        throw new JevRequestError("Jev responded 200 but the body doesn't have the expected shape {model, answers, usage}", response.status, true);
       }
       return parsed;
+    } else {
+      const bodyText = await response.text().catch(() => "");
+      failure = new JevRequestError(`Jev responded ${response.status}: ${bodyText || `HTTP ${response.status}`}`, response.status);
+      transient = failure.failure.kind === "http5xx";
+      waitMs = 500;
     }
 
-    const bodyText = await response.text().catch(() => "");
-    lastError = new JevRequestError(`Jev responded ${response.status}: ${bodyText || `HTTP ${response.status}`}`, response.status);
-
-    if (!RETRYABLE_STATUS.has(response.status) || attempt === MAX_RETRIES) {
-      throw lastError;
+    if (retriesUsed >= MAX_RETRIES) throw failure;
+    if (transient) {
+      throw failure;
+    } else if (failure.failure.kind === "overload") {
+      attemptBudgetMs = budgetMs;
+    } else {
+      throw failure;
     }
-    await doSleep(500 * 2 ** attempt);
+    retriesUsed += 1;
+    await doSleep(waitMs);
   }
-
-  throw lastError ?? new JevRequestError("Jev: unknown failure after retries", null);
 }

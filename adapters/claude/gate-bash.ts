@@ -95,7 +95,7 @@ import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
-import { callJev, JevRequestError } from '../../src/core/jev.ts'
+import { callJev, jevFailureOf, JevRequestError, type JevFailure } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
 import type { Locale } from '../../src/core/i18n.ts'
@@ -105,7 +105,7 @@ import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import { GATE_DECISIONS_APPEND_FAILURES_FILE, gateDecisionFileName, nextAppendFailures, parseAppendFailures } from '../../src/core/measurement_files.ts'
-import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
+import type { GateFailure, GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
 import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, ghMerges, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
@@ -1400,7 +1400,7 @@ const SEED_SCOPE_BY_ID = readSeedScopeById()
  * failure is counted in GATE_APPEND_FAILURES_PATH, which the board's "is the
  * gate working?" card shows.
  */
-function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false): void {
+function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false, failure: GateFailure | null = null): void {
   const at = new Date().toISOString()
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
@@ -1414,6 +1414,7 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       latencyMs,
       stopReason,
       ...(policyId !== null ? { policyId } : {}),
+      ...(failure !== null ? { failure } : {}),
       // 0.6.8 T3: the requires_human policies were set aside for this
       // command -- see main()'s own note where that is decided.
       teamInternal,
@@ -1573,7 +1574,7 @@ type JevOutcome =
       readonly deployPublishKind: 'deploy' | 'publish' | null
     }
   | { readonly kind: 'auth-rejected'; readonly status: number }
-  | { readonly kind: 'none' }
+  | { readonly kind: 'none'; readonly failure: JevFailure | null }
 
 /**
  * Calls Jev (src/core) and translates the verdict into the hook's decision.
@@ -1693,7 +1694,7 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     if (error instanceof JevRequestError && (error.status === 401 || error.status === 403)) {
       return { kind: 'auth-rejected', status: error.status }
     }
-    return { kind: 'none' }
+    return { kind: 'none', failure: jevFailureOf(error) }
   }
 }
 
@@ -2095,7 +2096,7 @@ async function main(): Promise<void> {
     // nobody did. Without this, the log kept filling with 'cache' and
     // 'local-rule' rows and looked healthy while this half of the gate was
     // silently judging nothing. Best-effort, same as every other record.
-    appendGateRecord(actingCwd, command, 'none', 'allow', null, 'unreachable', null, teamInternal)
+    appendGateRecord(actingCwd, command, 'none', 'allow', null, 'unreachable', null, teamInternal, outcome.failure)
     const previousUnreachableFailures = readUnreachableFailures()
     const unreachableNotice = decideUnreachableNotice(false, previousUnreachableFailures, UNREACHABLE_WARN_THRESHOLD)
     if (unreachableNotice.nextConsecutiveFailures !== previousUnreachableFailures) writeUnreachableFailures(unreachableNotice.nextConsecutiveFailures)
