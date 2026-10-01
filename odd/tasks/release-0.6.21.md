@@ -31,7 +31,7 @@ Authorized by the owner 2026-10-01 ("sigue con la 98 y si puedes las demas en pa
 - [x] T3 Jev failure class recorded
 - [x] T4 transient retry within budget
 - [x] T5 oversized-state cap
-- [ ] T6 README, CHANGELOG, QA, release, live check
+- [x] T6 README, CHANGELOG, QA, release, live check
 
 ## Acceptance criteria
 - Strict TDD for each behaviour change (RED observed, then GREEN).
@@ -44,3 +44,4 @@ Authorized by the owner 2026-10-01 ("sigue con la 98 y si puedes las demas en pa
 - T1 036a1df, T2 8b7394d (writer A): gate_stats 23/23, gate_decision_totals 10/10, gate-log-fold 11/11 (RED 5/9 then 9/11), read-consumption 18/18, redirections 6/6, command_targets 16/16, gate_own_files 11/11; test:panels 190/190.
 - T3 c4a1048, T4 aa22156, T5 de55120 and 080f0a1 (writer B): gate_measurement 39 (RED 3 failing), jev_call 7 then 14 (RED 7 of 14), cap and condensing tests (RED at import).
 - Merged on the release branch: typecheck 0, npm test 3093/3093, privacy 0, all six replay sets unchanged (lead).
+- T6: released as v0.6.21 at 22130ca (#32); live check L1-L5 in `odd/qa/qa-0.6.21.md`.
