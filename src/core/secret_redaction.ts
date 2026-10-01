@@ -143,7 +143,9 @@ function nameSegments(name: string): string[] {
 function looksLikeSecretName(name: string): boolean {
   const segments = nameSegments(name);
   if (segments.some((segment) => PATH_REFERENCE_SEGMENTS.has(segment))) return false;
-  return segments.some((segment) => SECRET_NAME_SEGMENTS.has(segment));
+  // 0.6.22 T4 (JEVADV-97): a glued `PGPASSWORD`/`DBPASSWD` is a password too;
+  // nothing ordinary ends in PASSWORD, unlike KEY (MONKEY) or AUTH (OAUTH).
+  return segments.some((segment) => SECRET_NAME_SEGMENTS.has(segment) || /(?:PASSWORD|PASSWD)$/.test(segment));
 }
 
 /**
@@ -256,6 +258,71 @@ function redactMysqlInlinePassword(text: string): RedactSecretsResult {
     redactedCount += 1;
     return `${lead}${flag}${MARKER}`;
   });
+  return { text: result, redactedCount };
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.22 T4 (JEVADV-97): password flags whose value follows a space, found
+// reaching Jev unmasked by the redaction-impact probe. `--password <v>` is a
+// password anywhere (`--password=<v>` is already an assignment above). The
+// short or ambiguous flags are read only inside the one command that gives
+// them that meaning, so `ssh -p 2222`, `docker run -p 8080:80`, `curl -k`
+// and `gh pr create --body` keep their values.
+// ---------------------------------------------------------------------------
+
+/** A flag's spaced value: double-quoted, single-quoted, or one bare word not starting another flag. */
+const SPACED_VALUE = String.raw`(\s+)(?:"([^"]*)"|'([^']*)'|([^\s"'-][^\s"']*))`;
+
+/** Masks the spaced value of any flag in `flags` inside `text`. */
+function redactSpacedFlagValues(text: string, flags: string): RedactSecretsResult {
+  let redactedCount = 0;
+  const pattern = new RegExp(String.raw`(^|\s)(${flags})${SPACED_VALUE}`, "g");
+  const result = text.replace(pattern, (match, lead: string, flag: string, space: string, double?: string, single?: string, bare?: string) => {
+    const value = double ?? single ?? bare ?? "";
+    if (value.length === 0 || isAlreadyRedacted(value)) return match;
+    redactedCount += 1;
+    const quote = double !== undefined ? '"' : single !== undefined ? "'" : "";
+    return `${lead}${flag}${space}${quote}${MARKER}${quote}`;
+  });
+  return { text: result, redactedCount };
+}
+
+/** Each command segment (up to `;`, `&` or `|`) that `command` starts, with `flags` masked inside it only. */
+function redactFlagsWithin(text: string, command: RegExp, flags: string): RedactSecretsResult {
+  let redactedCount = 0;
+  const result = text.replace(command, (segment) => {
+    const masked = redactSpacedFlagValues(segment, flags);
+    redactedCount += masked.redactedCount;
+    return masked.text;
+  });
+  return { text: result, redactedCount };
+}
+
+const REGISTRY_LOGIN_SEGMENT = /\b(?:docker|podman|buildah|skopeo|nerdctl)\s+login\b[^;&|]*/g;
+const GH_SECRET_SET_SEGMENT = /\bgh\s+secret\s+set\b[^;&|]*/g;
+const OPENSSL_SEGMENT = /\bopenssl\b[^;&|]*/g;
+const OPENSSL_PASS_ARGUMENT = /(\bpass:)([^\s"']+)/g;
+
+function redactPasswordFlags(text: string): RedactSecretsResult {
+  let redactedCount = 0;
+  let result = text;
+  for (const step of [
+    (t: string) => redactSpacedFlagValues(t, "--password|--passwd"),
+    (t: string) => redactFlagsWithin(t, REGISTRY_LOGIN_SEGMENT, "-p"),
+    (t: string) => redactFlagsWithin(t, GH_SECRET_SET_SEGMENT, "--body|-b"),
+    (t: string) => redactFlagsWithin(t, OPENSSL_SEGMENT, "-k"),
+  ]) {
+    const masked = step(result);
+    result = masked.text;
+    redactedCount += masked.redactedCount;
+  }
+  result = result.replace(OPENSSL_SEGMENT, (segment) =>
+    segment.replace(OPENSSL_PASS_ARGUMENT, (match, prefix: string, value: string) => {
+      if (isAlreadyRedacted(value)) return match;
+      redactedCount += 1;
+      return `${prefix}${MARKER}`;
+    }),
+  );
   return { text: result, redactedCount };
 }
 
@@ -607,6 +674,7 @@ const RULES: readonly ((text: string) => RedactSecretsResult)[] = [
   redactUrlUserinfo,
   redactBasicAuthFlag,
   redactMysqlInlinePassword,
+  redactPasswordFlags,
   redactKnownPrefixTokens,
   redactJwtShapedStrings,
   redactWebhookTokens,

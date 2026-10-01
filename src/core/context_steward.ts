@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { isRecord } from "../guards.ts";
-import { getChoiceAnswer } from "./jev.ts";
+import { answerMargin, getChoiceAnswer } from "./jev.ts";
 import type { Answer, JsonValue, Question } from "./jev.ts";
 import { translate } from "./i18n.ts";
 import type { Locale } from "./i18n.ts";
@@ -115,6 +115,8 @@ const VERDICTS: readonly StewardVerdict[] = ["boundary", "mid-task", "new-topic"
 export interface StewardJudgment {
   readonly verdict: StewardVerdict;
   readonly confidence: number;
+  /** 0.6.22 T1 (JEVADV-97): top probability minus runner-up; absent when Jev's probabilities give none. Log only. */
+  readonly margin?: number;
 }
 
 /** What the turn that just ended did: counts and yes/no facts only, never text. */
@@ -207,7 +209,8 @@ export function buildStewardQuestions(): Record<string, Question> {
 export function interpretSteward(answers: Record<string, Answer>): StewardJudgment | null {
   const answer = getChoiceAnswer(answers, "verdict");
   if (answer === null || !(VERDICTS as readonly string[]).includes(answer.choice)) return null;
-  return { verdict: answer.choice as StewardVerdict, confidence: answer.confidence };
+  const margin = answerMargin(answer.probabilities);
+  return { verdict: answer.choice as StewardVerdict, confidence: answer.confidence, ...(margin === undefined ? {} : { margin }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +383,8 @@ export interface StewardRecord {
   readonly tier: StewardTier | null;
   /** A tier that would have fired but is only measured: the soft tier while its switch is on measure. */
   readonly wouldFire: StewardTier | null;
+  /** 0.6.22 T1 (JEVADV-97): the verdict's top-two probability gap; absent when there is none. */
+  readonly margin?: number;
 }
 
 export interface StewardRecordInput {
@@ -398,6 +403,7 @@ export interface StewardRecordInput {
   readonly mainWindow: number | null;
   readonly currentModel: string | null;
   readonly wouldFire: StewardTier | null;
+  readonly margin?: number;
 }
 
 /** One log line: numbers and names only, never prompt text. */
@@ -421,6 +427,7 @@ export function stewardDecisionRecord(input: StewardRecordInput): StewardRecord 
     currentModel: input.currentModel,
     tier: stewardTier(input.decision.decision),
     wouldFire: input.wouldFire,
+    ...(input.margin === undefined ? {} : { margin: input.margin }),
   };
 }
 

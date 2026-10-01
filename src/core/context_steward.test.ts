@@ -330,3 +330,13 @@ test("status: the soft tier reads as such, both locales", () => {
   assert.equal(stewardStatusPart("es", { mode: "active", decision: "soft-limit", applied: true, before: 420_000, after: 70_000 }), "contexto 420k → 70k (límite suave de 400k)");
   assert.equal(stewardStatusPart("en", { mode: "active", decision: "soft-limit", applied: true, before: 420_000, after: 70_000 }), "context 420k → 70k (400k soft limit)");
 });
+
+test("0.6.22 T1 steward answer and record: the margin is written when Jev gave one, and the key is absent otherwise", () => {
+  const answered = interpretSteward({ verdict: { type: "choice", choice: "boundary", probabilities: { boundary: 0.7, "mid-task": 0.3 }, confidence: 0.7 } });
+  assert.deepEqual(answered, { verdict: "boundary", confidence: 0.7, margin: 0.7 - 0.3 });
+  const bare = interpretSteward({ verdict: { type: "choice", choice: "boundary", probabilities: { boundary: 1 }, confidence: 0.9 } });
+  assert.ok(bare !== null && !("margin" in bare));
+  const input = { at: "2026-09-28T14:05:00.000Z", account: "acct-a", project: "project-c", mode: "active", contextBefore: 150_000, decision: { decision: "boundary", compact: true, suggestClear: false, confidence: 0.7 }, applied: true, contextAfter: 30_000, notApplied: null, verdict: "boundary", sessionId: "s-1", turnIndex: 7, mainWindow: 1_000_000, currentModel: "m", wouldFire: null } as const;
+  assert.equal(stewardDecisionRecord({ ...input, margin: 0.4 }).margin, 0.4);
+  assert.ok(!JSON.stringify(stewardDecisionRecord(input)).includes("margin"));
+});

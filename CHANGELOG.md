@@ -2,6 +2,36 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.22
+
+- **Jev health probes.** `npm run jev-health -- <usage|flips|redaction>` calls
+  Jev only, never the `claude` CLI.
+  - `usage [--days N]` reads the router and steward logs. For each option it
+    prints the count, share, mean confidence and mean margin. An option
+    nobody picked becomes a finding once its question has 30 answers.
+  - `flips [--commands-file F] [--runs N]` puts the gate questions about a
+    committed 42-command corpus to Jev N times (5 by default). It reports
+    the answers that changed, the threshold crossings and the gate verdicts
+    that flipped. Failed calls are counted apart.
+  - `redaction --commands-file F` asks about each command twice, redacted and
+    raw, and lists the verdicts and thresholds that differ. The raw state
+    comes from an injected redactor that no hook passes; a test reads the
+    hooks' source to keep it that way.
+- **Distribution margin.** Router rows log `margin` (top probability minus
+  runner-up) for the tier and `workKindMargin` for the work kind. Steward
+  rows log `margin` for the verdict. The field is absent, never 0 or NaN,
+  when Jev gives no usable probabilities. No floor changed.
+- **Redaction.** These now reach Jev masked:
+  - a glued `*PASSWORD` or `*PASSWD` name (`PGPASSWORD=`);
+  - `--password <value>` and `--passwd <value>`;
+  - `-p <value>` inside a registry login (docker, podman, buildah, skopeo,
+    nerdctl);
+  - `--body` or `-b` inside `gh secret set`;
+  - openssl's `-k <value>` and `pass:<value>`.
+
+  `ssh -p`, `docker run -p`, `curl -k` and `gh pr create --body` keep their
+  values.
+
 ## 0.6.21
 
 - **Gate logs stop growing forever.** Gate decision files older than 8 days

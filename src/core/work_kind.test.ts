@@ -113,3 +113,8 @@ test("T1/T2 readWorkTierEffort: the router's own low stays only on read or execu
   assert.equal(readWorkTierEffort("simple", "high", true, acting), "high", "the person's own setting for simple wins");
   assert.equal(readWorkTierEffort("standard", "medium", false, acting), "medium");
 });
+
+test("0.6.22 T1 interpretWorkKind: the margin rides along only when the probabilities give one", () => {
+  assert.deepEqual(interpretWorkKind({ kind: { type: "choice", choice: "read", probabilities: { read: 0.6, review: 0.3, execute: 0.1 }, confidence: 0.6 } }), { kind: "read", confidence: 0.6, source: "jev", margin: 0.6 - 0.3 });
+  assert.ok(!("margin" in (interpretWorkKind({ kind: { type: "choice", choice: "read", probabilities: {}, confidence: 0.6 } }) ?? {})));
+});

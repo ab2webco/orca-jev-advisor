@@ -29,6 +29,7 @@ import type { LocalizedReason } from "./i18n.ts";
 import type { DestinationKey } from "./i18n_destination.ts";
 import type { GateKey } from "./i18n_gate.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
+import type { RedactSecretsResult } from "./secret_redaction.ts";
 import { createJevPseudonyms } from "./jev_pseudonyms.ts";
 import { withDataTextAsPlaceholders, withLongWordsElided } from "./command_text.ts";
 import type { JevNames } from "./jev_pseudonyms.ts";
@@ -625,8 +626,8 @@ export interface GateDecision {
   readonly consequence: number | null;
 }
 
-const GATE_REVERSIBLE_GATE = 0.7;
-const GATE_EXTERNAL_GATE = 0.5;
+export const GATE_REVERSIBLE_GATE = 0.7;
+export const GATE_EXTERNAL_GATE = 0.5;
 /**
  * Measured across BOTH populations the gate actually sees, not one.
  *
@@ -787,6 +788,21 @@ export interface GateDestinationContext {
   readonly kind: string;
 }
 
+/** Takes secrets out of text on its way to Jev; redactSecretsForJev is the gate's. */
+export type GateStateRedactor = (text: string) => RedactSecretsResult;
+
+export interface BuildGateStateOptions {
+  readonly condense?: boolean;
+  /**
+   * 0.6.22 T4 (JEVADV-97): an injected redactor, default redactSecretsForJev.
+   * Only the redaction-impact probe (src/core/jev_health_redaction.ts) passes
+   * one, an identity function, to see what Jev says about the raw text. A
+   * function and not a flag on purpose, and no hook entry point passes it:
+   * src/core/gate_raw_state_guard.test.ts reads their source and fails if one does.
+   */
+  readonly redact?: GateStateRedactor;
+}
+
 /**
  * The state the command gate sends to Jev.
  *
@@ -848,16 +864,17 @@ export interface GateDestinationContext {
  * or body flag of a known CLI, a heredoc written to a file) becomes a
  * placeholder (0.6.13 T1, command_text.ts withDataTextAsPlaceholders).
  */
-export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext, deployPublishSignal?: string, names: JevNames = createJevPseudonyms(), options: { readonly condense?: boolean } = {}): { [key: string]: JsonValue } {
+export function buildActionGateState(command: string, context: string, destination?: GateDestinationContext, deployPublishSignal?: string, names: JevNames = createJevPseudonyms(), options: BuildGateStateOptions = {}): { [key: string]: JsonValue } {
+  const redact = options.redact ?? redactSecretsForJev;
   const viewed = withDataTextAsPlaceholders(command);
   const state: { [key: string]: JsonValue } = {
     // JEVADV-96: `condense` also replaces every blob word (src/core/command_text.ts withLongWordsElided), for a state over the size cap.
-    proposed_command: names.redactText(redactSecretsForJev(options.condense === true ? withLongWordsElided(viewed) : viewed).text),
-    context: redactSecretsForJev(names.redactText(context)).text,
+    proposed_command: names.redactText(redact(options.condense === true ? withLongWordsElided(viewed) : viewed).text),
+    context: redact(names.redactText(context)).text,
     note: NOTE,
   };
   if (destination !== undefined) {
-    state["destination"] = { kind: destination.kind, description: redactSecretsForJev(names.destinationDescription(destination.label)).text };
+    state["destination"] = { kind: destination.kind, description: redact(names.destinationDescription(destination.label)).text };
   }
   if (deployPublishSignal !== undefined) {
     state["deployPublishSignal"] = deployPublishSignal;

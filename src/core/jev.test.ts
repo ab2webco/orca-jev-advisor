@@ -8,7 +8,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { defaultSleep } from "./jev.ts";
+import { answerMargin, defaultSleep } from "./jev.ts";
 
 function activeTimers(): number {
   return process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
@@ -35,4 +35,18 @@ test("the default sleep still waits its time when nothing aborts it", async () =
   const started = Date.now();
   await sleep(30);
   assert.ok(Date.now() - started >= 25);
+});
+
+// 0.6.22 T1 (JEVADV-97): the margin between the top two options, absent when it cannot be read.
+test("answerMargin: top minus runner-up; a tie is 0; fewer than two or a non-number is undefined", () => {
+  assert.equal(answerMargin({ a: 0.7, b: 0.2, c: 0.1 }), 0.7 - 0.2);
+  assert.equal(answerMargin({ a: 0.5, b: 0.5 }), 0);
+  assert.equal(answerMargin({ a: 0.4, b: 0.4, c: 0.2 }), 0);
+  assert.equal(answerMargin({ a: 1 }), undefined);
+  assert.equal(answerMargin({}), undefined);
+  assert.equal(answerMargin({ a: 0.6, b: "0.4" }), undefined);
+  assert.equal(answerMargin({ a: 0.6, b: Number.NaN }), undefined);
+  assert.equal(answerMargin({ a: 0.6, b: Number.POSITIVE_INFINITY }), undefined);
+  assert.equal(answerMargin(null), undefined);
+  assert.equal(answerMargin([0.6, 0.4]), undefined);
 });
