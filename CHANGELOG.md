@@ -2,6 +2,36 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.17
+
+- **The gate guards its own rules.** A command that writes, moves, truncates,
+  removes or edits a file the gate or the router reads to decide is refused
+  with the reason ("edits the gate's own rules; change them in the Advisor
+  panel"): the config mirrors (policies, team owners, deny-tier switches,
+  catalogs, queue mode, quotas, explicit models, mod-skills settings, the
+  key file), the gate's cache state and the Orca profile index. That holds
+  for redirects, `tee`, `sed -i`, `cp`/`mv`, `rm`, `truncate` and
+  interpreter code, in `~`, `$HOME`, absolute and relative spellings;
+  reading them stays allowed. Claude Code's Edit, Write, MultiEdit and
+  NotebookEdit tools get a new hook entry that refuses only those paths,
+  with no network call (about 1 ms on other files). Install, uninstall,
+  status and the hooks check know the new entry ("Edit guard").
+- **A PR merge is the reviewed path.** Jev is told that `gh pr merge` merges a
+  pull request through its review on the server, whatever the local branch,
+  so it is no longer refused under `never_write_to_main` from a checkout on
+  main; `gh pr merge --admin` from main still is. A merge through
+  `gh api …/merges` into main, which skips review and used to pass, is now
+  refused.
+- **Settings backups are owner-only.** New backups are written 0600 and
+  install and status tighten existing ones.
+- **The gate's decision log rotates by the hour**, and every reader (the
+  Activity tab, the gate status, calibration, the A/B counter) reads the
+  hourly files and the old single file, so no history is lost. A failed
+  append is counted and shown on the board.
+- Command families skip `time`, `nice`, `nohup`, `env` and `command`; the
+  privacy test skips outside a git checkout; the installer accepts
+  `doctor`; the A/B benchmark CLI runs from a path with a space.
+
 ## 0.6.16
 
 - **Effort by work kind at subagent spawn.** The Jev call that picks a
