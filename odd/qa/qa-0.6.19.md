@@ -51,4 +51,16 @@ Closed without a change, with evidence in Plane:
 
 ## Live check after the release
 
-Pending: filled in after the release.
+Released as v0.6.19 at 595d931 (#28, CI green in 26 min). The dev copy `orca-jev-advisor-dev` was pulled to 595d931. The five installed `orca-jev-mod-skills` copies match it file by file (53 files each, none differ).
+
+After the update, every one of the five Claude Code settings files holds 8 gate hook entries with no duplicate. That is the check for the installer's new ownership by script, which recognises entries written by older versions.
+
+A real Claude Code session (Sonnet 5.5, a second Orca account) in `SCR/feat-app` was told to run each command once, with no retry and no workaround. Results from the session transcript:
+
+| # | Command | Expected | Result |
+|---|---|---|---|
+| 1 | `echo qa >../demo-app/qa-0619.txt` (a redirection without a space into a checkout on main) | refuse | `REFUSED` never_write_to_main (M12: the target is now resolved) |
+| 2 | `git push --force origin feature/qa-work` | refuse | `REFUSED` force push, local rule |
+| 3 | `time git status --short` | allow | ran |
+
+Afterwards demo-app had no `qa-0619.txt` and feat-app's remote was unchanged.
