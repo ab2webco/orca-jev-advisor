@@ -23,13 +23,15 @@ after(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true })
 })
 
-function run (home, payload, { locale } = {}) {
+/** `orcaUserData: null` leaves Orca's user data where Orca puts it for this HOME. */
+function run (home, payload, { locale, orcaUserData = join(home, 'orca-userdata') } = {}) {
   const env = { ...process.env, HOME: home }
   delete env.XDG_CACHE_HOME
   delete env.XDG_CONFIG_HOME
+  delete env.ORCA_USER_DATA_PATH
   env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
   env.ORCA_SUPERVISOR_CACHE_DIR = join(home, '.cache', 'orca-supervisor')
-  env.ORCA_USER_DATA_PATH = join(home, 'orca-userdata')
+  if (orcaUserData !== null) env.ORCA_USER_DATA_PATH = orcaUserData
   if (locale !== undefined) {
     mkdirSync(env.ORCA_SUPERVISOR_CONFIG_DIR, { recursive: true })
     writeFileSync(join(env.ORCA_SUPERVISOR_CONFIG_DIR, 'locale'), locale)
@@ -97,4 +99,24 @@ test('with the plugin switched off in Orca, nothing is refused', () => {
   writeFileSync(join(userData, 'orca-profile-index.json'), JSON.stringify({ activeProfileId: 'p1' }))
   writeFileSync(join(userData, 'profiles', 'p1', 'orca-data.json'), JSON.stringify({ settings: { disabledPlugins: ['ab2web.orca-jev-advisor'] } }))
   assert.equal(run(home, { tool_name: 'Write', tool_input: { file_path: join(home, '.config', 'orca-supervisor', 'policies.json'), content: '[]' } }), '')
+})
+
+// 0.6.18 T3 (JEVADV-94): the plugin's Orca storage, at Orca's own location for
+// this HOME (no override variable names it, as on a real machine), so the
+// plain-JavaScript pass in gate-files.mjs must not let it through unread.
+test('an Edit or Write of the plugin\'s Orca storage is refused; another plugin\'s is not', { skip: process.platform === 'win32' }, () => {
+  const home = makeHome()
+  const userData = process.platform === 'darwin' ? join(home, 'Library', 'Application Support', 'orca') : join(home, '.config', 'orca-ide')
+  const store = join(userData, 'plugins-data', 'ab2web.orca-jev-advisor')
+  const conventional = (payload) => run(home, payload, { orcaUserData: null })
+  for (const [tool_name, tool_input] of [
+    ['Write', { file_path: join(store, 'storage.json'), content: '{}' }],
+    ['Edit', { file_path: join(store, 'storage.json'), old_string: 'never', new_string: 'always' }],
+    ['Write', { file_path: join(store, 'secrets.json.enc'), content: '' }]
+  ]) {
+    const payload = denied(conventional({ tool_name, tool_input }))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', tool_name)
+    assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^REFUSED: edits the gate's own rules \(~\/.*plugins-data\/ab2web\.orca-jev-advisor\/(storage\.json|secrets\.json\.enc)\)/, tool_name)
+  }
+  assert.equal(conventional({ tool_name: 'Write', tool_input: { file_path: join(userData, 'plugins-data', 'ab2web.wa-inbox', 'storage.json'), content: '{}' } }), '')
 })

@@ -22,7 +22,7 @@ import { tokenize } from "./git_discard.ts";
 import { gateOwnFileAt, identity } from "./gate_own_paths.ts";
 import type { GateOwnFiles } from "./gate_own_paths.ts";
 
-export { GATE_OWN_CACHE_FILES, GATE_OWN_CONFIG_FILES, gateOwnFileAt, gateOwnFiles } from "./gate_own_paths.ts";
+export { GATE_OWN_CACHE_FILES, GATE_OWN_CONFIG_FILES, GATE_OWN_ORCA_STORAGE_FILES, gateOwnFileAt, gateOwnFiles } from "./gate_own_paths.ts";
 export type { GateOwnFiles } from "./gate_own_paths.ts";
 
 /** A protected file at `path`, or the directory holding them, for a removal or a move of a whole directory. */

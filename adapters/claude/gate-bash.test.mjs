@@ -3077,6 +3077,26 @@ test("T2: reading the gate's own files, or writing another HOME's, is not refuse
   }
 })
 
+// 0.6.18 T3 (JEVADV-94): the plugin's Orca storage, which the panel and the
+// worker rewrite the mirrors from. run() puts Orca's user data at
+// ~/orca-userdata-does-not-exist; the gate resolves it the same way.
+test("T3: writing the plugin's Orca storage or secrets is refused locally; reading it is not", () => {
+  const home = makeHome()
+  const store = '~/orca-userdata-does-not-exist/plugins-data/ab2web.orca-jev-advisor'
+  for (const command of [
+    `echo '{}' > ${store}/storage.json`,
+    `jq '.policies = []' /tmp/s.json > ${store}/storage.json`,
+    `rm -f ${store}/secrets.json.enc`
+  ]) {
+    const payload = JSON.parse(run(home, command))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', command)
+    assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^REFUSED: edits the gate's own rules \(~\/orca-userdata-does-not-exist\/plugins-data\/ab2web\.orca-jev-advisor\/(storage\.json|secrets\.json\.enc)\)/, command)
+  }
+  const stdout = run(home, `jq .policies ${store}/storage.json`)
+  const decision = stdout.trim().length === 0 ? null : JSON.parse(stdout).hookSpecificOutput?.permissionDecision
+  assert.notEqual(decision, 'deny')
+})
+
 // ---------------------------------------------------------------------------
 // 0.6.17 T4 (JEVADV-92): the decision log rotates by the hour, and a record
 // that cannot be written is counted where the board reads it.
