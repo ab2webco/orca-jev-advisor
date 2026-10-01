@@ -1301,7 +1301,8 @@ const MODELS_WORKER_OPTIONS = { mirror: runSecretMirrorScript, readSummary: runR
 // card renders. Unlike read-measurements.mjs/read-model-measurements.mjs,
 // this sidecar also WRITES (it prunes turn-usage-*.jsonl files older than
 // 8 days -- see read-consumption.mjs's own header for why pruning lives
-// there instead of in the hook or a separate sidecar), so it needs
+// there instead of in the hook or a separate sidecar -- and folds gate
+// decision files older than 8 days into their totals, gate-log-fold.mjs), so it needs
 // `--allow-fs-write` on CACHE_DIR in addition to the read-only grants every
 // other measurements-style sidecar gets. It also needs read access to
 // CONFIG_DIR (quota.json), CLAUDE_HOME_DIR (the global CLAUDE.md), and

@@ -13,7 +13,7 @@
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -330,4 +330,45 @@ test('a steward log more than 8 days old is pruned, same retention as the others
   const oldPath = join(cacheDirFor(home), stewardFileName(oldMs))
   assert.equal(run(home).ok, true)
   assert.equal(existsSync(oldPath), false)
+})
+
+// 0.6.21 T1 (JEVADV-98): this sidecar, the one with write access to the cache
+// dir, also folds gate decision files older than 8 days into the running
+// totals and deletes them -- after its own summary, and never at its cost.
+function gateFileName (ms) {
+  return `gate-decisions-${new Date(ms).toISOString().slice(0, 13)}.jsonl`
+}
+
+function gateRow (atMs, source) {
+  return `${JSON.stringify({ type: 'gate-decision', id: `g-${atMs}-${source}`, at: new Date(atMs).toISOString(), project: 'alpha', commandFamily: 'grep', source, verdict: 'allow', latencyMs: source === 'jev' ? 100 : null })}\n`
+}
+
+test('T1: a gate decision file more than 8 days old is folded into the totals and deleted; a newer one is kept', () => {
+  const home = makeHome()
+  const now = Date.now()
+  const day = 24 * 60 * 60 * 1000
+  mkdirSync(cacheDirFor(home), { recursive: true })
+  const oldPath = join(cacheDirFor(home), gateFileName(now - 9 * day))
+  const recentPath = join(cacheDirFor(home), gateFileName(now - day))
+  writeFileSync(oldPath, gateRow(now - 9 * day, 'jev') + gateRow(now - 9 * day, 'cache'))
+  writeFileSync(recentPath, gateRow(now - day, 'jev'))
+  const result = run(home)
+  assert.equal(result.ok, true)
+  assert.equal(existsSync(oldPath), false, 'the 9-day-old gate file is folded and deleted')
+  assert.equal(existsSync(recentPath), true)
+  const totals = JSON.parse(readFileSync(join(cacheDirFor(home), 'gate-decisions-totals.json'), 'utf8'))
+  assert.equal(totals.all.totalDecisions, 2)
+  assert.equal(totals.jevRecordsForAb, 1)
+})
+
+test('T1: a fold that fails leaves the consumption summary and every gate file as they were', () => {
+  const home = makeHome()
+  const now = Date.now()
+  mkdirSync(cacheDirFor(home), { recursive: true })
+  const oldPath = join(cacheDirFor(home), gateFileName(now - 9 * 24 * 60 * 60 * 1000))
+  writeFileSync(oldPath, gateRow(now - 9 * 24 * 60 * 60 * 1000, 'jev'))
+  mkdirSync(join(cacheDirFor(home), 'gate-decisions-totals.json.tmp'))
+  const result = run(home)
+  assert.equal(result.ok, true)
+  assert.equal(existsSync(oldPath), true)
 })

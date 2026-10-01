@@ -12,12 +12,14 @@
  * directly would run them; this module has no side effects on import.
  *
  * Only reading lives here. Pruning (`rm`) stays in read-consumption.mjs,
- * the one sidecar granted `--allow-fs-write` on the cache dir.
+ * the one sidecar granted `--allow-fs-write` on the cache dir, and so does
+ * folding old gate decision files (./gate-log-fold.mjs, which it runs).
  */
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { GATE_DECISIONS_APPEND_FAILURES_FILE, gateDecisionFilesToRead, parseAppendFailures } from '../../src/core/measurement_files.ts'
+import { emptyGateDecisionTotals, GATE_DECISION_TOTALS_FILE, isFoldedFile, parseGateDecisionTotals } from '../../src/core/gate_decision_totals.ts'
 
 export const TURN_USAGE_FILE_PATTERN = /^turn-usage-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/
 // JEV-060 slice 2 (§8, T9): the router's own decision log, same hourly
@@ -40,6 +42,11 @@ export async function readJsonl (path) {
     if (error?.code === 'ENOENT') return { rows: [], corrupt: 0 }
     throw error
   }
+  return parseJsonlText(text)
+}
+
+/** {@link readJsonl} on text already read: every line that is a JSON object, and how many were not. */
+export function parseJsonlText (text) {
   const rows = []
   let corrupt = 0
   for (const line of text.split('\n')) {
@@ -87,18 +94,89 @@ export async function listHourlyFiles (cacheDir, pattern) {
  * 0.6.17 T4 (JEVADV-92): every gate decision row, from the single file
  * written before 0.6.17 and every hourly file since (gateDecisionFilesToRead:
  * legacy first, then the hours in order), so the readers keep the whole
- * history across the upgrade. Not pruned: the board's windows reach back
- * to the first decision. A missing cache dir reads as no rows.
+ * history across the upgrade. A missing cache dir reads as no rows.
+ *
+ * 0.6.21 T1 (JEVADV-98): files older than 8 days are folded into running
+ * totals and deleted (./gate-log-fold.mjs), so this also returns `totals`,
+ * which every row read here comes after; a reader continues them with these
+ * rows (src/core/gate_decision_totals.ts addGateDecisions). A file the
+ * totals already hold (same name, size and modification time) is skipped: a
+ * fold that stopped between writing them and deleting it never counts it
+ * twice. The files are read before the
+ * totals, so a fold running meanwhile never hides a file either: a file
+ * deleted after this read is named by the totals read after it.
  */
 export async function readGateDecisionLog (cacheDir) {
   let names
   try {
     names = await readdir(cacheDir)
   } catch (error) {
-    if (error?.code === 'ENOENT') return { rows: [], corrupt: 0 }
+    if (error?.code === 'ENOENT') return { rows: [], corrupt: 0, totals: emptyGateDecisionTotals() }
     throw error
   }
-  return readJsonlRows(gateDecisionFilesToRead(names).map((name) => ({ path: join(cacheDir, name) })))
+  const files = gateDecisionFilesToRead(names)
+  const read = await Promise.all(files.map((name) => readJsonl(join(cacheDir, name))))
+  const { totals } = await readGateDecisionTotalsFile(cacheDir)
+  const rows = []
+  let corrupt = 0
+  for (const [index, name] of files.entries()) {
+    if (totals.files.some((file) => file.name === name) && isFoldedFile(totals, name, await seenAs(join(cacheDir, name)))) continue
+    const file = read[index] ?? { rows: [], corrupt: 0 }
+    rows.push(...file.rows)
+    corrupt += file.corrupt
+  }
+  return { rows, corrupt, totals }
+}
+
+/** A file's size and modification time, or null when it is gone or cannot be looked at (the totals then hold it). */
+async function seenAs (path) {
+  try {
+    const info = await stat(path)
+    return { size: info.size, mtimeMs: info.mtimeMs }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 0.6.21 T1 (JEVADV-98): the running totals old decision files were folded
+ * into (src/core/gate_decision_totals.ts). `state` is 'missing' (nothing
+ * folded yet), 'ok', or 'unreadable' (a file of another shape, or one that
+ * cannot be read); `totals` is the empty totals unless 'ok', so a reader
+ * that cannot read them still reads every file still on disk.
+ */
+export async function readGateDecisionTotalsFile (cacheDir) {
+  let text
+  try {
+    text = await readFile(join(cacheDir, GATE_DECISION_TOTALS_FILE), 'utf8')
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { state: 'missing', totals: emptyGateDecisionTotals() }
+    return { state: 'unreadable', totals: emptyGateDecisionTotals() }
+  }
+  let parsed = null
+  try {
+    parsed = parseGateDecisionTotals(JSON.parse(text))
+  } catch {
+    parsed = null
+  }
+  return parsed === null ? { state: 'unreadable', totals: emptyGateDecisionTotals() } : { state: 'ok', totals: parsed }
+}
+
+/**
+ * The gate decisions among `rows`, through toGateDecisionRecord: a row of
+ * another type is neither a decision nor malformed; a decision row the guard
+ * refuses is counted as malformed. Every reader and the fold go through this.
+ */
+export function guardGateDecisionRows (rows) {
+  const records = []
+  let malformed = 0
+  for (const row of rows) {
+    if (row.type !== 'gate-decision') continue
+    const record = toGateDecisionRecord(row)
+    if (record === null) malformed += 1
+    else records.push(record)
+  }
+  return { records, malformed }
 }
 
 /** How many gate decisions the gate could not write (0.6.17 T4); `{count: 0, lastAt: null}` when none, or when the counter cannot be read. */

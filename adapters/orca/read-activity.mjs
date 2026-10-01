@@ -34,9 +34,9 @@ import { aggregateActivityByProject } from '../../src/core/activity_by_project.t
 import {
   listHourlyFiles,
   MODEL_ROUTER_DECISIONS_FILE_PATTERN,
+  guardGateDecisionRows,
   readGateDecisionLog,
   readJsonlRows,
-  toGateDecisionRecord,
   toTurnUsageRecord,
   TURN_USAGE_FILE_PATTERN,
 } from './log-files.mjs'
@@ -95,14 +95,18 @@ async function main () {
       readJsonlRows(withinReadWindow(decisionFiles, now)),
     ])
 
-    // Same filter as read-measurements.mjs's aggregateGate: a row of some
+    // Same guard as read-measurements.mjs's aggregateGate: a row of some
     // other type in this file is not a gate decision, and not corrupt either.
-    const gate = guardRows(gateLog.rows.filter((row) => row.type === 'gate-decision'), toGateDecisionRecord)
+    const gate = guardGateDecisionRows(gateLog.rows)
     const turnUsage = guardRows(usage.rows, toTurnUsageRecord)
     const routerDecisions = guardRows(decisions.rows, toRouterDecisionRow)
 
     const summary = aggregateActivityByProject(gate.records, turnUsage.records, routerDecisions.records, now)
+    // 0.6.21 T1: the unreadable lines of gate files already folded still
+    // count, as they did while those files were read. Folded decisions are
+    // all older than this fold's seven days, so only the files are folded.
     const corruptLines =
+      gateLog.totals.corruptLines + gateLog.totals.malformedRows +
       gateLog.corrupt + gate.malformed +
       usage.corrupt + turnUsage.malformed +
       decisions.corrupt + routerDecisions.malformed

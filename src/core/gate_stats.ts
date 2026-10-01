@@ -114,14 +114,29 @@ function incrementVerdict(counts: GateVerdictCounts, verdict: GateVerdict): Gate
   return { ...counts, [verdict]: counts[verdict] + 1 };
 }
 
-/** Sorted-ascending input required -- callers here always pass the array they just sorted themselves. */
-function median(sortedAscending: readonly number[]): number | null {
-  const n = sortedAscending.length;
+/** How many latency samples a counted list holds. */
+function sampleCount(latencies: readonly (readonly [number, number])[]): number {
+  return latencies.reduce((sum, [, count]) => sum + count, 0);
+}
+
+/** The sample at 0-based `index` of the ascending list `latencies` stands for, counting each value as many times as it was seen. */
+function sampleAt(latencies: readonly (readonly [number, number])[], index: number): number | undefined {
+  let seen = 0;
+  for (const [value, count] of latencies) {
+    seen += count;
+    if (index < seen) return value;
+  }
+  return undefined;
+}
+
+/** The middle sample, or the mean of the two middle ones; null when there is none. Ascending input. */
+function median(latencies: readonly (readonly [number, number])[]): number | null {
+  const n = sampleCount(latencies);
   if (n === 0) return null;
   const mid = Math.floor(n / 2);
-  const lower = sortedAscending[mid - 1];
-  const upper = sortedAscending[mid];
+  const upper = sampleAt(latencies, mid);
   if (n % 2 === 1) return upper ?? null;
+  const lower = sampleAt(latencies, mid - 1);
   if (lower === undefined || upper === undefined) return null;
   return (lower + upper) / 2;
 }
@@ -130,58 +145,98 @@ function median(sortedAscending: readonly number[]): number | null {
  * Nearest-rank percentile: for n sorted-ascending samples, the p-th
  * percentile is the value at 0-based index `ceil(p/100 * n) - 1`. Chosen
  * over interpolation so a percentile always names an actual recorded
- * latency, never a value nobody measured. Sorted-ascending input required,
- * same as {@link median}. Null, never 0, when there is no sample.
+ * latency, never a value nobody measured. Ascending input, same as
+ * {@link median}. Null, never 0, when there is no sample.
  */
-function percentile(sortedAscending: readonly number[], p: number): number | null {
-  const n = sortedAscending.length;
+function percentile(latencies: readonly (readonly [number, number])[], p: number): number | null {
+  const n = sampleCount(latencies);
   if (n === 0) return null;
   const rank = Math.ceil((p / 100) * n);
   const index = Math.min(Math.max(rank - 1, 0), n - 1);
-  return sortedAscending[index] ?? null;
+  return sampleAt(latencies, index) ?? null;
 }
 
-interface MutableFamilyStat {
-  total: number;
-  byVerdict: GateVerdictCounts;
+export interface GateFamilyTally {
+  readonly total: number;
+  readonly byVerdict: GateVerdictCounts;
 }
 
 /**
- * Folds the gate's own decision log into a summary. Pure: same input
- * always yields the same output, no clock, no filesystem, no randomness.
+ * 0.6.21 T1 (JEVADV-98): the fold as a running tally, so the decisions of a
+ * log file that has been deleted still count. Everything a summary needs and
+ * nothing else; continuing a tally with later records gives exactly the
+ * tally of all of them. Lists, not objects, keep the order in which each
+ * family, project and build was first seen: a summary sorts by total, and
+ * ties keep that order, as a fold of the records themselves does. A JSON
+ * round trip leaves it unchanged.
  */
-export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateStatsSummary {
-  let byVerdict = emptyVerdictCounts();
-  const bySource: { "local-rule": number; cache: number; jev: number; none: number } = { "local-rule": 0, cache: 0, jev: 0, none: 0 };
-  const familyStats = new Map<string, MutableFamilyStat>();
-  const projectCounts = new Map<string | null, number>();
-  const pluginVersionCounts = new Map<string, number>();
-  let noPluginVersionCount = 0;
-  const jevLatencies: number[] = [];
+export interface GateTally {
+  readonly totalDecisions: number;
+  readonly byVerdict: GateVerdictCounts;
+  readonly bySource: GateSourceCounts;
+  readonly families: readonly (readonly [string, GateFamilyTally])[];
+  readonly projects: readonly (readonly [string | null, number])[];
+  readonly pluginVersions: readonly (readonly [string, number])[];
+  readonly noPluginVersionCount: number;
+  /** `[latencyMs, how many jev records had it]`, ascending by latency. */
+  readonly jevLatencies: readonly (readonly [number, number])[];
+}
+
+export function emptyGateTally(): GateTally {
+  return {
+    totalDecisions: 0,
+    byVerdict: emptyVerdictCounts(),
+    bySource: { "local-rule": 0, cache: 0, jev: 0, none: 0 },
+    families: [],
+    projects: [],
+    pluginVersions: [],
+    noPluginVersionCount: 0,
+    jevLatencies: [],
+  };
+}
+
+/** `tally` continued with `records`, which come after everything it already holds. Pure. */
+export function tallyGateDecisions(tally: GateTally, records: readonly GateDecisionRecord[]): GateTally {
+  let byVerdict = tally.byVerdict;
+  const bySource: { "local-rule": number; cache: number; jev: number; none: number } = { ...tally.bySource };
+  const families = new Map<string, GateFamilyTally>(tally.families);
+  const projects = new Map<string | null, number>(tally.projects);
+  const pluginVersions = new Map<string, number>(tally.pluginVersions);
+  let noPluginVersionCount = tally.noPluginVersionCount;
+  const latencies = new Map<number, number>(tally.jevLatencies);
 
   for (const record of records) {
     byVerdict = incrementVerdict(byVerdict, record.verdict);
     bySource[record.source] += 1;
 
-    const family: MutableFamilyStat = familyStats.get(record.commandFamily) ?? { total: 0, byVerdict: emptyVerdictCounts() };
-    family.total += 1;
-    family.byVerdict = incrementVerdict(family.byVerdict, record.verdict);
-    familyStats.set(record.commandFamily, family);
+    const family = families.get(record.commandFamily) ?? { total: 0, byVerdict: emptyVerdictCounts() };
+    families.set(record.commandFamily, { total: family.total + 1, byVerdict: incrementVerdict(family.byVerdict, record.verdict) });
 
-    projectCounts.set(record.project, (projectCounts.get(record.project) ?? 0) + 1);
+    projects.set(record.project, (projects.get(record.project) ?? 0) + 1);
 
     if (record.pluginVersion === undefined) noPluginVersionCount += 1;
-    else pluginVersionCounts.set(record.pluginVersion, (pluginVersionCounts.get(record.pluginVersion) ?? 0) + 1);
+    else pluginVersions.set(record.pluginVersion, (pluginVersions.get(record.pluginVersion) ?? 0) + 1);
 
     if (record.source === "jev" && record.latencyMs !== null && Number.isFinite(record.latencyMs)) {
-      jevLatencies.push(record.latencyMs);
+      latencies.set(record.latencyMs, (latencies.get(record.latencyMs) ?? 0) + 1);
     }
   }
 
-  const sortedLatencies = [...jevLatencies].sort((a, b) => a - b);
-  const lastLatency = sortedLatencies[sortedLatencies.length - 1];
+  return {
+    totalDecisions: tally.totalDecisions + records.length,
+    byVerdict,
+    bySource,
+    families: [...families.entries()],
+    projects: [...projects.entries()],
+    pluginVersions: [...pluginVersions.entries()],
+    noPluginVersionCount,
+    jevLatencies: [...latencies.entries()].sort((a, b) => a[0] - b[0]),
+  };
+}
 
-  const byCommandFamily: GateCommandFamilyStat[] = [...familyStats.entries()]
+/** The summary the board renders, from a tally. Pure. */
+export function summarizeGateTally(tally: GateTally): GateStatsSummary {
+  const byCommandFamily: GateCommandFamilyStat[] = tally.families
     .map(([commandFamily, stat]) => ({
       commandFamily,
       total: stat.total,
@@ -192,30 +247,40 @@ export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateS
 
   const familiesWithNoInterventions = byCommandFamily.filter((f) => f.interventions === 0).length;
 
-  const byProject: GateProjectStat[] = [...projectCounts.entries()]
+  const byProject: GateProjectStat[] = tally.projects
     .map(([project, total]) => ({ project, total }))
     .sort((a, b) => b.total - a.total);
 
-  const byPluginVersion: GatePluginVersionStat[] = [...pluginVersionCounts.entries()]
+  const byPluginVersion: GatePluginVersionStat[] = tally.pluginVersions
     .map(([pluginVersion, total]) => ({ pluginVersion, total }))
     .sort((a, b) => b.total - a.total);
 
+  const last = tally.jevLatencies[tally.jevLatencies.length - 1];
+
   return {
-    totalDecisions: records.length,
-    byVerdict,
-    bySource,
+    totalDecisions: tally.totalDecisions,
+    byVerdict: tally.byVerdict,
+    bySource: tally.bySource,
     jevLatency: {
-      sampleCount: sortedLatencies.length,
-      medianMs: median(sortedLatencies),
-      p95Ms: percentile(sortedLatencies, 95),
-      maxMs: sortedLatencies.length > 0 && lastLatency !== undefined ? lastLatency : null,
+      sampleCount: sampleCount(tally.jevLatencies),
+      medianMs: median(tally.jevLatencies),
+      p95Ms: percentile(tally.jevLatencies, 95),
+      maxMs: last !== undefined ? last[0] : null,
     },
     byCommandFamily,
     familiesWithNoInterventions,
     byProject,
     byPluginVersion,
-    noPluginVersionCount,
+    noPluginVersionCount: tally.noPluginVersionCount,
   };
+}
+
+/**
+ * Folds the gate's own decision log into a summary. Pure: same input
+ * always yields the same output, no clock, no filesystem, no randomness.
+ */
+export function foldGateDecisions(records: readonly GateDecisionRecord[]): GateStatsSummary {
+  return summarizeGateTally(tallyGateDecisions(emptyGateTally(), records));
 }
 
 // Re-exported only so read-measurements.mjs and tests can name the source/

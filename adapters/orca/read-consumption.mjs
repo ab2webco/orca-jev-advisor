@@ -13,7 +13,9 @@
  * UNLIKE read-measurements.mjs/read-model-measurements.mjs, this script
  * also WRITES: after reading every `turn-usage-*.jsonl` file, it deletes
  * any whose hour bucket is more than 8 days old (JEV-060 slice 1's own
- * decision gap — see odd/tasks/jev-060-consumption.md). Pruning lives
+ * decision gap — see odd/tasks/jev-060-consumption.md), and, after printing
+ * its summary, folds the gate's decision files older than 8 days into their
+ * running totals and deletes them (./gate-log-fold.mjs, 0.6.21 T1). Pruning lives
  * here, not in the hook (hooks/index.ts's own header explains why: the
  * hook only ever appends to its OWN hour's file and does no rotation of
  * its own) and not as a separate sidecar, because the prune needs the
@@ -56,6 +58,7 @@ import {
   TURN_USAGE_FILE_PATTERN,
 } from './log-files.mjs'
 import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions } from '../../src/core/context_steward.ts'
+import { foldGateDecisionLog } from './gate-log-fold.mjs'
 
 const PLATFORM = normalizePlatform(process.platform)
 const HOME = homedir()
@@ -202,6 +205,11 @@ async function main () {
     result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
   process.stdout.write(JSON.stringify(result))
+  // 0.6.21 T1 (JEVADV-98): fold gate decision files older than 8 days into
+  // the running totals and delete them (./gate-log-fold.mjs: at most once a
+  // day, crash-safe). After the summary is out, so it never delays or fails
+  // it; an error leaves every file where it was, for the next run.
+  await foldGateDecisionLog(CACHE_DIR, Date.now()).catch(() => {})
 }
 
 await main()
