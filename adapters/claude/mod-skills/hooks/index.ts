@@ -149,7 +149,7 @@ import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '..
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
 import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
-import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
+import { TEAMMATE_TYPE, isUnseenWhy, observedSubagent, parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
 import { agentDefinitionEffort, agentDefinitionModel, declaredEffort } from '../../../../src/core/agent_definition.ts'
 import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedShare } from '../../../../src/core/effort_source.ts'
@@ -705,7 +705,7 @@ async function effortLogFields($: EngineInterface, e: Frozen<TurnStepInput>, inp
   const share = changed ? uncachedShare({ input: r.usage?.input_tokens ?? null, cacheRead: r.usage?.cache_read_input_tokens ?? null, cacheWrite: r.usage?.cache_creation_input_tokens ?? null }) : undefined
   // 0.6.16 T4: with the effort before the change and the prompt's size, so a miss can be weighed.
   const change = !changed ? {} : { prevEffort: loop?.lastSent ?? null, promptTokens: (r.usage?.input_tokens ?? 0) + (r.usage?.cache_read_input_tokens ?? 0) + (r.usage?.cache_creation_input_tokens ?? 0) }
-  return { effortSource: source, routerEffort, modelFixed: agent === undefined ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }), ...change }
+  return { effortSource: source, routerEffort, modelFixed: agent === undefined || isUnseenWhy(agent.why) ? null : agent.why === 'explicit', effortChanged: changed, ...(share === undefined ? {} : { uncachedShare: share }), ...change }
 }
 
 /** The main loop's turn so far, for the measure-only phase log (0.6.16 T4); a subagent's steps are not held. */
@@ -737,11 +737,24 @@ function phaseLogFields(e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<
  * copy back once per load, before anything is written over it; `writes`
  * chains the writes, each one the whole set as it is when it runs, so an
  * older snapshot never lands after a newer one.
+ *
+ * 0.6.20 T2: `beforeLoad` holds the ids the host already ran at this load's
+ * first session.start, so an agent no spawn recorded is said to have
+ * started before the plugin loaded only when that was seen; null until then.
  */
 interface RunningSet {
   readonly agents: Map<string, RunningSubagent>
   hydrated: Promise<void> | null
   writes: Promise<void>
+  beforeLoad: Set<string> | null
+}
+
+/** 0.6.20 T2: once per load, at its first session.start: the agents the host runs already started before this load. Fails open: no list, no snapshot. */
+async function snapshotBeforeLoad($: EngineInterface, set: RunningSet): Promise<void> {
+  if (set.beforeLoad !== null) return
+  const listed = await listAgents($)
+  if (listed === null) return
+  set.beforeLoad = new Set(listed.filter((agent) => agent.status === 'running').map((agent) => agent.id))
 }
 
 /** Reads the kept copy back into this load's set, once. What this load already recorded wins, after the kept ones (they started earlier). Fails open: nothing kept, nothing added. */
@@ -791,7 +804,7 @@ async function listAgents($: EngineInterface): Promise<ListedAgent[] | null> {
  */
 async function runningSubagentsStatus($: EngineInterface, running: RunningSet, keep: string | null): Promise<string | null> {
   await hydrateRunning($, running)
-  const { kept, shown } = reconcileRunning([...running.agents.values()], await listAgents($), keep)
+  const { kept, shown } = reconcileRunning([...running.agents.values()], await listAgents($), keep, running.beforeLoad ?? undefined)
   if (kept.length !== running.agents.size) for (const id of [...running.agents.keys()]) if (!kept.some((agent) => agent.id === id)) running.agents.delete(id)
   await persistRunning($, running)
   return subagentsStatusPart(await resolveLocale($), shown)
@@ -803,6 +816,32 @@ async function noteSubagentEffort($: EngineInterface, running: RunningSet, agent
   const agent = running.agents.get(agentId)
   if (agent === undefined || (agent.effort === effort && agent.effortSource === effortSource)) return
   running.agents.set(agentId, { ...agent, effort, effortSource })
+  await persistRunning($, running)
+}
+
+/**
+ * 0.6.20 T2: an agent no spawn recorded (an agent-team teammate: agent.spawn
+ * never fires for one) is recorded once one of its steps has answered, if
+ * the host lists it as running; a loop the host does not list (an engine
+ * fork) is not. Its model is the one the answer reports (`r.usage.model`):
+ * the T1 probe found a teammate's step event names the lead's model, not its
+ * own. Its effort is the one its step was sent with. Best-effort.
+ */
+async function observeUnseenAgent($: EngineInterface, running: RunningSet, agentId: string, answeredBy: string | null, effort: SessionEffort | null, effortSource: SubagentEffortSource): Promise<void> {
+  await hydrateRunning($, running)
+  if (running.agents.has(agentId)) return
+  const listed = (await listAgents($))?.find((row) => row.id === agentId && row.status === 'running')
+  if (listed === undefined) return
+  let tiers: ResolvedTiers | null = null
+  if (answeredBy !== null) {
+    try {
+      tiers = (await resolveRouterAccount($, await resolveAccountId($))).tiers
+    } catch {
+      // No account at hand: the model reads as its family or its id.
+    }
+  }
+  const label = answeredBy === null ? null : subagentModelLabel(answeredBy, tiers)
+  running.agents.set(agentId, observedSubagent(listed, { label, effort, effortSource }, running.beforeLoad?.has(agentId) ?? false))
   await persistRunning($, running)
 }
 
@@ -1378,7 +1417,7 @@ async function routeSubagent($: EngineInterface, e: Frozen<AgentSpawnInput>, nex
  * pre-computed target (a guard can hold a higher inherited value than the
  * tier's own target, which spawn time never sees).
  */
-async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource) => Promise<void>, effortLog: (e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult) => Promise<Record<string, unknown>>): StreamHookBody<TurnStepChunk, TurnStepResult> {
+async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, next: StreamNext<'turn.step'>, mode: RouterMode, options: PluginOptions, showRouterStatus: (text: string) => void, subagentEffortTarget: Map<string, SubagentEffortTarget>, project: string | null, noteEffort: (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource, answeredBy?: string | null) => Promise<void>, effortLog: (e: Frozen<TurnStepInput>, input: TurnStepInput | Frozen<TurnStepInput>, r: TurnStepResult) => Promise<Record<string, unknown>>): StreamHookBody<TurnStepChunk, TurnStepResult> {
   let input: TurnStepInput | Frozen<TurnStepInput> = e
   if (mode !== 'off' && e.agentId === undefined) {
     let held: RouterSticky | undefined
@@ -1454,6 +1493,14 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
     }
   }
   const r = yield* next(input)
+  if (e.agentId !== undefined) {
+    // 0.6.20 T2: an agent no spawn recorded takes the model its answer reports.
+    try {
+      await noteEffort(e.agentId, input.effort ?? null, subagentEffortSource(e.effort ?? null, input.effort ?? null, subagentEffortTarget.get(e.agentId)?.declared ?? null), r.usage?.model ?? null)
+    } catch {
+      // Visibility only: never a reason to fail the step.
+    }
+  }
   let effortFields: Record<string, unknown> = {}
   try {
     effortFields = await effortLog(e, input, r)
@@ -1833,7 +1880,7 @@ export function register(on: On, options: PluginOptions): void {
   // 0.6.8 T6: the subagents running now (agent.spawn adds one, its own
   // turn.complete removes it) and their status-line part. 0.6.14 T1: kept
   // in `$.state` too, so a reload does not forget them (RunningSet).
-  const runningSubagents: RunningSet = { agents: new Map<string, RunningSubagent>(), hydrated: null, writes: Promise.resolve() }
+  const runningSubagents: RunningSet = { agents: new Map<string, RunningSubagent>(), hydrated: null, writes: Promise.resolve(), beforeLoad: null }
   let agentsStatusText: string | null = null
   const statusLine = (): string | null => composeStatusLine([promptStatusText, routerStatusText, agentsStatusText, stewardStatusText])
   // The main turn running now (turn.start → turn.complete), so the steward
@@ -2260,7 +2307,9 @@ export function register(on: On, options: PluginOptions): void {
     // no prompt has resolved it yet this session (an honest "not yet
     // known", not a bug).
     const project = modSkillsProjectName(orcaContextCache)
-    const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource): Promise<void> => noteSubagentEffort($, runningSubagents, agentId, effort, source)
+    // Before the step (answeredBy undefined): a recorded agent's effort. After it: an agent no spawn recorded (0.6.20 T2).
+    const noteEffort = (agentId: string, effort: SessionEffort | null, source: SubagentEffortSource, answeredBy?: string | null): Promise<void> =>
+      answeredBy === undefined ? noteSubagentEffort($, runningSubagents, agentId, effort, source) : observeUnseenAgent($, runningSubagents, agentId, answeredBy, effort, source)
     return yield* handleTurnStep($, e, next, routerMode, options, showRouterStatus, subagentEffortTarget, project, noteEffort, async (step, input, r) => ({ ...(await effortLogFields($, step, input, r, effortLoops, runningSubagents.agents, subagentEffortTarget)), ...phaseLogFields(step, input, r, phaseHolder) }))
   })
 
@@ -2289,7 +2338,7 @@ export function register(on: On, options: PluginOptions): void {
     if (beneath.type !== 'engine') return beneath
     try {
       const stored = parseRunningSubagents((await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'runningSubagents' })).value)
-      const { shown } = reconcileRunning(stored, await listAgents($), null)
+      const { shown } = reconcileRunning(stored, await listAgents($), null, runningSubagents.beforeLoad ?? undefined)
       const band = subagentBand(await resolveLocale($), shown, e.props.bodyColumns)
       if (band === null) return beneath
       const { Box, Text } = $.ui.resolve(e)
@@ -2314,6 +2363,7 @@ export function register(on: On, options: PluginOptions): void {
   // nothing recorded) is shown at once, not at the next spawn.
   on('session.start', async ($, e, next) => {
     try {
+      await snapshotBeforeLoad($, runningSubagents)
       agentsStatusText = await runningSubagentsStatus($, runningSubagents, null)
       const line = statusLine()
       if (line !== null) $.ui.status(line)
@@ -2325,7 +2375,9 @@ export function register(on: On, options: PluginOptions): void {
 
   on('turn.complete', async ($, e, next) => {
     // 0.6.8 T6: a subagent's own answer ends it; the status line drops it.
-    if (e.agentId !== undefined && runningSubagents.agents.delete(e.agentId)) {
+    // 0.6.20 T2: a teammate's turn does not end the teammate; its row goes
+    // when the host stops running it (runningSubagentsStatus, the band).
+    if (e.agentId !== undefined && runningSubagents.agents.get(e.agentId)?.type !== TEAMMATE_TYPE && runningSubagents.agents.delete(e.agentId)) {
       try {
         agentsStatusText = await runningSubagentsStatus($, runningSubagents, null)
         $.ui.status(statusLine() ?? undefined)

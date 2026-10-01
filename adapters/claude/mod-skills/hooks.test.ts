@@ -2350,6 +2350,13 @@ interface StoredSubagent {
   wouldUse: string | null;
 }
 
+/** Raises session.start, as a load (or a reload) does. */
+async function startSession(handlers: Map<string, Hook>, engine: unknown): Promise<void> {
+  const start = handlers.get("session.start");
+  assert.ok(start, "session.start was never registered");
+  await start(engine, { source: "startup" }, async (e: unknown) => e);
+}
+
 function storedSubagents(host: FakeHost): StoredSubagent[] {
   const value = host.state.get("runningSubagents") as { agents: StoredSubagent[] } | undefined;
   return value?.agents ?? [];
@@ -2417,13 +2424,15 @@ test("0.6.14 T1: after a plugin reload the running set is still there, and an ag
   host.agents = [
     { id: "agent-0", status: "running", type: "acme-frontend-developer", description: "Reading playwright.config.ts" },
     { id: "agent-1", status: "running", type: "acme-frontend-developer", description: "Adding Definition of Done to spec.md" },
-    { id: "agent-2", status: "running", type: "acme-backend-developer", description: "Watching CI checks on PR 867" },
   ];
+  // 0.6.20 T2: the reload's session.start sees agent-0 already running.
+  await startSession(second.handlers, second.engine);
+  host.agents = [...host.agents, { id: "agent-2", status: "running", type: "acme-backend-developer", description: "Watching CI checks on PR 867" }];
   await spawnAs(second.handlers, second.engine, spawnEvent({ model: "sonnet", subagentType: "acme-backend-developer", description: "Watching CI checks on PR 867" }), "agent-2", "claude-sonnet-5-5");
   assert.deepEqual(storedSubagents(host).map((a) => a.id), ["agent-1", "agent-2"], "the record made before the reload is kept");
   assert.match(lastStatus(host), /(^|· )agents: 3$/);
   const rows = (await bandText(second.handlers, second.engine)).split("\n");
-  assert.match(rows[1] ?? "", /Reading playwright\.config\.ts +\? +\? +no data: started before the plugin reloaded$/);
+  assert.match(rows[1] ?? "", /Reading playwright\.config\.ts +\? +\? +started before the plugin loaded$/);
   assert.match(rows[2] ?? "", /Adding Definition of Done to spec\.md +Opus 5\.5 .*explicit request$/);
   assert.match(rows[3] ?? "", /Watching CI checks on PR 867 +Sonnet 5\.5 .*explicit request$/);
 });
@@ -2494,8 +2503,12 @@ test("0.6.14 T2: the owner's four agents, each on its own row with its own model
   seedRouterAccount(host);
   host.fetchQueue.push(tierAnswer("simple"), tierAnswer("standard"), tierAnswer("simple"));
   const first = loadHooksWith(host, { routerMode: "active" });
-  // One agent started before the reload, when nothing recorded it.
+  // One agent started before the reload, when nothing recorded it; the reload's session.start sees it running (0.6.20 T2).
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [{ id: "agent-0", status: "running", type: "acme-frontend-developer", description: "Reading playwright.config.ts" }];
+  await startSession(handlers, engine);
+  // As before 0.6.20: the spawns below run with no host list, so none prunes another.
+  host.agents = null;
   const keep = (): void => {
     host.files.set(`${CONFIG_DIR}/explicit-models.json`, JSON.stringify({ mode: "keep" }));
   };
@@ -2518,7 +2531,7 @@ test("0.6.14 T2: the owner's four agents, each on its own row with its own model
   const lines = bandLines(await renderBand(handlers, engine, 200));
   assert.equal(lines[0], "Running agents: 4");
   assert.equal(lines.length, 5);
-  assert.match(lines[1] ?? "", /^frontend-developer +Reading playwright\.config\.ts +\? +\? +no data: started before the plugin reloaded$/);
+  assert.match(lines[1] ?? "", /^frontend-developer +Reading playwright\.config\.ts +\? +\? +started before the plugin loaded$/);
   // 0.6.15 T4b: each effort names its source, read off the agent's step (all three kept the level the engine put on it).
   assert.match(lines[2] ?? "", /^frontend-developer +Adding Definition of Done to spec\.md +Opus 5\.5 +extra high \(inherited\) +explicit request$/);
   assert.match(lines[3] ?? "", /^general-purpose +Creating a worktree for verify-report generation +Sonnet 5\.5 +medium \(inherited\) +lowered by Jev$/);
@@ -2572,6 +2585,63 @@ test("0.6.14 T2: the band is sized to the band's own width", async () => {
   for (const columns of [200, 120, 80, 40]) {
     for (const line of bandLines(await renderBand(handlers, engine, columns))) assert.ok(line.length <= columns, `${columns}: ${line}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.20 T2: an agent the plugin did not see at `agent.spawn` (an agent-team
+// teammate, which Claude Code creates outside it) shows the model and effort
+// its own steps report, and the true reason -- never a reload it cannot show.
+// ---------------------------------------------------------------------------
+
+test("0.6.20 T2: a teammate no spawn recorded says so, and shows the model and effort of its first step", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await startSession(handlers, engine);
+  host.agents = [{ id: "tm-1", status: "running", type: "teammate", description: "researcher" }];
+  assert.match(await bandText(handlers, engine), /^teammate +researcher +\? +\? +teammate: created outside the router$/m, "before its first step: no model or effort, and no reload guessed");
+  // The T1 probe: a teammate's step event names the lead's model; the model it ran on is the step result's.
+  const event = turnStepEvent({ agentId: "tm-1", turnId: "tm-turn-1", index: 0, model: "claude-sonnet-5-5", effort: "high" });
+  const sent = await stepThrough(handlers, engine, event, turnStepResult({ turnId: "tm-turn-1", usage: { ...(turnStepResult().usage as Record<string, unknown>), model: "claude-opus-5-5" } }));
+  assert.deepEqual([sent.model, sent.effort], ["claude-sonnet-5-5", "high"], "visibility only: the step is sent as it came");
+  assert.match(await bandText(handlers, engine), /^teammate +researcher +Opus 5\.5 +high \(inherited\) +teammate: created outside the router$/m);
+  assert.deepEqual(storedSubagents(host).map((a) => [a.id, a.why, a.label, a.effort, a.effortSource]), [["tm-1", "teammate", "Opus 5.5", "high", "inherited"]]);
+});
+
+test("0.6.20 T2: a teammate's turn ending does not end its row while the host still runs it", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [{ id: "tm-1", status: "running", type: "teammate", description: "researcher" }];
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "tm-1", turnId: "tm-turn-1", index: 0, model: "claude-sonnet-5-5", effort: "high" }), turnStepResult({ turnId: "tm-turn-1", usage: { ...(turnStepResult().usage as Record<string, unknown>), model: "claude-opus-5-5" } }));
+  await completeSubagent(handlers, engine, "tm-1");
+  assert.match(await bandText(handlers, engine), /^teammate +researcher +Opus 5\.5 +high \(inherited\) /m);
+  host.agents = [{ id: "tm-1", status: "completed", type: "teammate", description: "researcher" }];
+  assert.deepEqual(await renderBand(handlers, engine), ENGINE_DRAWING, "gone once the host no longer runs it");
+});
+
+test("0.6.20 T2: an agent running when this load started reads as started before the plugin loaded; one that came after, as not seen at launch", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [{ id: "agent-0", status: "running", type: "general-purpose", description: "Started earlier" }];
+  await startSession(handlers, engine);
+  host.agents = [...host.agents, { id: "agent-9", status: "running", type: "Explore", description: "Started later" }];
+  const text = await bandText(handlers, engine);
+  assert.match(text, /Started earlier +\? +\? +started before the plugin loaded$/m);
+  assert.match(text, /Started later +\? +\? +not seen at launch$/m);
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-9", turnId: "sub-9", index: 0, model: "claude-sonnet-5-5", effort: undefined }), turnStepResult({ turnId: "sub-9", usage: { ...(turnStepResult().usage as Record<string, unknown>), model: "claude-haiku-4-5-20251001" } }));
+  assert.match(await bandText(handlers, engine), /Started later +Haiku 4\.5 +— +not seen at launch$/m, "its model from its step; no effort sent reads as a dash");
+});
+
+test("0.6.20 T2: a step from a loop the host does not list (an engine fork) adds no row", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  host.agents = [];
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "fork-1", turnId: "fork-turn", index: 0, model: "claude-haiku-4-5-20251001", effort: "low" }));
+  assert.deepEqual(storedSubagents(host), []);
+  assert.deepEqual(await renderBand(handlers, engine), ENGINE_DRAWING);
 });
 
 // ---------------------------------------------------------------------------

@@ -25,7 +25,13 @@ Plane: JEVADV-99.
 
 ## Checklist
 - [ ] T1 probe facts recorded
-- [ ] T2 band shows the real model, effort and reason for agents not seen at spawn
+- [x] T2 band shows the real model, effort and reason for agents not seen at spawn
+  - Engine fields used. Model: the step result's `usage.model` (`TurnStepResult.usage.model`, the model that answered). `AgentInfo` has no model field, `SessionMessage` carries none, and the T1 probe found that a teammate's `turn.step` event names the lead's model. Effort: the `effort` its step is sent with (`turn.step` input), with the 0.6.15 T4b source; a teammate's effort follows the lead's. Type, description and status: `$.agent.list()`.
+  - The row is recorded once a step has answered, and only if `$.agent.list()` lists the agent as running, so an engine fork the list does not name adds no row. A teammate's own `turn.complete` does not drop its row. The row goes when the host stops listing it as running.
+  - Reasons: `teammate` ("teammate: created outside the router"), `before-load` (listed as running at this load's first `session.start`, the only point where it can be shown), otherwise `unseen` ("not seen at launch"). The old `unknown` reason and its reload wording are gone.
+  - The 0.6.14 fixtures that asserted the reload wording now fire the new load's `session.start` while the earlier agent runs, and assert "started before the plugin loaded". With the new short wording the 80-column row fits, so the "one long reason is cut at the edge" case moved to its own band test.
+  - RED: 2999 tests, 6 failing (5 band and hook tests; the status test file failed at import). Before the probe fact on `e.model`: hooks.test.ts had 3 RED out of 131. GREEN: `npm test` 3017/3017 (main had 3008). `npm run typecheck` exits 0.
+  - Shots: `npm run shots:band` gives 16 images under `odd/qa/shots-0.6.20/` (200/120/80/40 columns, es and en, dark and light). The fixture has a teammate before its first step, one after it, an agent running at load and an unseen one. All 16 were opened.
 - [ ] T3 teammates routed as far as the engine allows
 - [ ] T4 README, CHANGELOG, QA, release, live check
 
