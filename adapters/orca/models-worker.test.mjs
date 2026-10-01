@@ -157,6 +157,40 @@ test('mirrorModels: a failed sidecar call is logged, never thrown', async () => 
   assert.ok(orca._logs.some((line) => line.includes('launch-failed')))
 })
 
+// 0.6.19 M16 (JEVADV-73): the owner's explicit "treat as ready" survives every
+// mirror, the boot one included; the measured readiness is never what lowers it.
+test('mirrorModels: an owner override keeps ready on when the readout says not ready', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    [MODELS_CONFIG_KEY]: { active: true, readyOverride: true },
+    [MODEL_MEASUREMENTS_KEY]: { ok: true, summary: { readiness: { ready: false } } },
+  })
+  const mirror = recordingMirror()
+  await mirrorModels(orca, storageHost, { mirror })
+  assert.equal(JSON.parse(mirror.calls[0].stdin).ready, true)
+})
+
+test('mirrorModels: an owner override keeps ready on when a fresh readout is passed in as not ready', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [MODELS_CONFIG_KEY]: { active: true, readyOverride: true } })
+  const mirror = recordingMirror()
+  await mirrorModels(orca, storageHost, { mirror, ready: false })
+  assert.equal(JSON.parse(mirror.calls[0].stdin).ready, true)
+})
+
+test('mirrorModels: without the override, a lost readiness lowers ready as before', async () => {
+  const orca = fakeOrca()
+  for (const config of [{ active: true }, { active: true, readyOverride: false }, { active: true, readyOverride: 'yes' }]) {
+    const storageHost = fakeStorageHost({
+      [MODELS_CONFIG_KEY]: config,
+      [MODEL_MEASUREMENTS_KEY]: { ok: true, summary: { readiness: { ready: false } } },
+    })
+    const mirror = recordingMirror()
+    await mirrorModels(orca, storageHost, { mirror })
+    assert.equal(JSON.parse(mirror.calls[0].stdin).ready, false, JSON.stringify(config))
+  }
+})
+
 // ---------------------------------------------------------------------------
 // attendModelsMirrorRequest
 // ---------------------------------------------------------------------------

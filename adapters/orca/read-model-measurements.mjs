@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * read-model-measurements.mjs — sidecar that reads and summarizes
- * model-reclassifications.jsonl (adapters/claude/agent-model.ts's own
- * append log, src/core/model_measurement.ts's MODEL_MEASUREMENT_FILE),
+ * read-model-measurements.mjs — sidecar that reads and summarizes the
+ * model-reclassification log (adapters/claude/agent-model.ts's own append
+ * log: one file per UTC hour since 0.6.19, after the single
+ * model-reclassifications.jsonl written before it),
  * which lives under ~/.cache/orca-supervisor/, outside this worker's own
  * permission sandbox -- same reason read-measurements.mjs's own two logs go
  * through a clean child instead of a direct read from main.mjs (see that
@@ -24,12 +25,13 @@
  * `{ok: false, reason, detail}`. Never console.log/console.error -- any
  * stray output on stdout would corrupt the parent's JSON.parse of it.
  */
-import { readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { parseModelCatalog } from '../../src/core/model_catalog.ts'
-import { MODEL_MEASUREMENT_FILE, parseModelRecord, summarizeModelMeasurements } from '../../src/core/model_measurement.ts'
+import { parseModelRecord, summarizeModelMeasurements } from '../../src/core/model_measurement.ts'
+import { modelMeasurementFilesToRead } from '../../src/core/measurement_files.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), {
   home: homedir(),
@@ -37,7 +39,6 @@ const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), {
   localAppDataDir: process.env.LOCALAPPDATA,
   xdgCacheHome: process.env.XDG_CACHE_HOME,
 })
-const LOG_PATH = join(CACHE_DIR, MODEL_MEASUREMENT_FILE)
 
 async function readStdin () {
   const chunks = []
@@ -49,21 +50,32 @@ async function readStdin () {
  * Reads the log a line at a time, tolerantly: a blank line or one that
  * fails parseModelRecord's own shape checks (src/core/model_measurement.ts)
  * is skipped, never thrown on -- same discipline as read-measurements.mjs's
- * own readJsonl. A missing file (nothing has ever been recorded) reads as
- * no records at all, not an error.
+ * own readJsonl. 0.6.19 M15: the log is the single file written before
+ * 0.6.19 plus one file per UTC hour, read in that order so a decision comes
+ * before the outcome that follows it. A missing cache directory or file
+ * (nothing has ever been recorded) reads as no records at all, not an error.
  */
 async function readRecords () {
-  let text
+  let names
   try {
-    text = await readFile(LOG_PATH, 'utf8')
+    names = await readdir(CACHE_DIR)
   } catch (error) {
     if (error?.code === 'ENOENT') return []
     throw error
   }
   const records = []
-  for (const line of text.split('\n')) {
-    const record = parseModelRecord(line)
-    if (record !== null) records.push(record)
+  for (const name of modelMeasurementFilesToRead(names)) {
+    let text
+    try {
+      text = await readFile(join(CACHE_DIR, name), 'utf8')
+    } catch (error) {
+      if (error?.code === 'ENOENT') continue
+      throw error
+    }
+    for (const line of text.split('\n')) {
+      const record = parseModelRecord(line)
+      if (record !== null) records.push(record)
+    }
   }
   return records
 }

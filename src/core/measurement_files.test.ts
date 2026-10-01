@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GATE_DECISIONS_APPEND_FAILURES_FILE, GATE_DECISIONS_LEGACY_FILE, gateDecisionFileName, gateDecisionFilesToRead, measurementFileName, measurementFilesToRead, measurementLegacyFileName, nextAppendFailures, parseAppendFailures } from "./measurement_files.ts";
+import { GATE_DECISIONS_APPEND_FAILURES_FILE, GATE_DECISIONS_LEGACY_FILE, MODEL_MEASUREMENT_LEGACY_FILE, gateDecisionFileName, gateDecisionFilesToRead, measurementFileName, measurementFilesToRead, measurementLegacyFileName, modelMeasurementFileName, modelMeasurementFilesToRead, nextAppendFailures, parseAppendFailures } from "./measurement_files.ts";
 
 test("each hour of each log gets its own file", () => {
   assert.equal(measurementFileName("mod-skills", "2026-09-29T17:28:25.611Z"), "mod-skills-measurements-2026-09-29T17.jsonl");
@@ -63,4 +63,24 @@ test("gate decisions: a failed append is counted, with the time of the last one"
   assert.deepEqual(parseAppendFailures({ count: "x" }), { count: 0, lastAt: null });
   assert.deepEqual(parseAppendFailures({ count: 3, lastAt: "2026-09-30T10:00:00.000Z" }), { count: 3, lastAt: "2026-09-30T10:00:00.000Z" });
   assert.deepEqual(nextAppendFailures({ count: 3, lastAt: "2026-09-30T10:00:00.000Z" }, "2026-09-30T11:00:00.000Z"), { count: 4, lastAt: "2026-09-30T11:00:00.000Z" });
+});
+
+// 0.6.19 M15 (JEVADV-73): the model-reclassification log rotates hourly like
+// the others; the single file written before 0.6.19 is still read first.
+test("model reclassifications: one file per UTC hour, the single legacy file read first", () => {
+  assert.equal(MODEL_MEASUREMENT_LEGACY_FILE, "model-reclassifications.jsonl");
+  assert.equal(modelMeasurementFileName("2026-09-30T17:28:25.611Z"), "model-reclassifications-2026-09-30T17.jsonl");
+  const names = [
+    "model-reclassifications-2026-09-30T18.jsonl",
+    "gate-decisions-2026-09-30T17.jsonl",
+    "model-reclassifications.jsonl",
+    "model-reclassifications-2026-09-30T17.jsonl",
+    "model-reclassifications-notes.txt",
+  ];
+  assert.deepEqual(modelMeasurementFilesToRead(names), [
+    "model-reclassifications.jsonl",
+    "model-reclassifications-2026-09-30T17.jsonl",
+    "model-reclassifications-2026-09-30T18.jsonl",
+  ]);
+  assert.deepEqual(modelMeasurementFilesToRead(["model-reclassifications-2026-09-30T17.jsonl"]), ["model-reclassifications-2026-09-30T17.jsonl"]);
 });

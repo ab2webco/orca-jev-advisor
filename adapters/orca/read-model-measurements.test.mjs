@@ -110,3 +110,15 @@ test('an unparseable stdin catalog reports ok:false with a reason, never a stack
   assert.equal(result.ok, false)
   assert.equal(typeof result.reason, 'string')
 })
+
+// 0.6.19 M15 (JEVADV-73): the log is the legacy single file plus one file per
+// UTC hour; a decision in one and its outcome in another still pair up.
+test('the legacy file and the hourly files are read together, in order', () => {
+  const home = makeHome()
+  writeLog(home, [decisionRow('a')])
+  const hourly = join(home, '.cache', 'orca-supervisor', 'model-reclassifications-2026-01-01T01.jsonl')
+  writeFileSync(hourly, `${JSON.stringify(decisionRow('b', { at: '2026-01-01T01:00:00.000Z' }))}\n`, 'utf8')
+  const result = run(home, [SONNET, HAIKU])
+  assert.equal(result.ok, true)
+  assert.equal(result.summary.decisions, 2)
+})

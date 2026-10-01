@@ -4022,3 +4022,39 @@ for (const locale of ['en', 'es']) {
     }
   })
 }
+
+// 0.6.19 M16 (JEVADV-73): the owner's "treat as ready" is a switch of its own,
+// stored with the legacy switch; the measured readiness stays on screen.
+for (const [locale, onText, measured] of [['en', /Owner override on: rewrites are allowed although measurement says:/, /comparable decisions/], ['es', /Decisión del dueño activa: se permite reescribir aunque la medición dice:/, /decisiones comparables/]]) {
+  test(`models: the owner's ready override shows beside the measured readiness, and survives a reload (${locale})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const storage = { ...SCENARIOS.ready, modelsConfig: { active: true, readyOverride: true } }
+    const { browser, page, errors } = await openPanel(storage, locale)
+    try {
+      assert.equal(await page.isChecked('#models-ready-override'), true, 'the stored override is shown on')
+      const hint = await page.textContent('#models-ready-override-hint')
+      assert.match(hint, onText)
+      assert.match(hint, measured, 'the measured readiness line is still there')
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('models: saving the legacy switch writes the ready override with it, and an untouched override stays off', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ ...SCENARIOS.ready, modelsConfig: { active: false } })
+  try {
+    await page.click('#tab-models')
+    assert.equal(await page.isChecked('#models-ready-override'), false)
+    await page.click('#models-save-config')
+    await page.waitForTimeout(800)
+    assert.deepEqual(await page.evaluate(() => window.__written.modelsConfig), { active: false, readyOverride: false })
+    await page.check('#models-ready-override')
+    await page.click('#models-save-config')
+    await page.waitForTimeout(800)
+    assert.deepEqual(await page.evaluate(() => window.__written.modelsConfig), { active: false, readyOverride: true })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

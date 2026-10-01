@@ -58,6 +58,27 @@ export function gateDecisionFilesToRead(names: readonly string[]): string[] {
   return names.includes(GATE_DECISIONS_LEGACY_FILE) ? [GATE_DECISIONS_LEGACY_FILE, ...hours] : hours;
 }
 
+// 0.6.19 M15 (JEVADV-73): the model-reclassification log (agent-model.ts),
+// one file per UTC hour like the logs above, so no single file grows without
+// end. Not pruned: its readiness readout counts every comparable decision
+// ever made. The single file written before 0.6.19 is still read first,
+// never written.
+
+export const MODEL_MEASUREMENT_LEGACY_FILE = "model-reclassifications.jsonl";
+
+const MODEL_HOUR_FILE = /^model-reclassifications-\d{4}-\d{2}-\d{2}T\d{2}\.jsonl$/;
+
+/** The model-reclassification file for the UTC hour `atIso` (an ISO instant) falls in. */
+export function modelMeasurementFileName(atIso: string): string {
+  return `model-reclassifications-${atIso.slice(0, 13)}.jsonl`;
+}
+
+/** The names out of `names` (a cache directory listing) that hold model-reclassification records: the legacy file first, then the hours in order. */
+export function modelMeasurementFilesToRead(names: readonly string[]): string[] {
+  const hours = names.filter((name) => MODEL_HOUR_FILE.test(name)).sort();
+  return names.includes(MODEL_MEASUREMENT_LEGACY_FILE) ? [MODEL_MEASUREMENT_LEGACY_FILE, ...hours] : hours;
+}
+
 /** How many gate decisions could not be written, and when the last one was: the board shows it. */
 export const GATE_DECISIONS_APPEND_FAILURES_FILE = "gate-decisions-append-failures.json";
 

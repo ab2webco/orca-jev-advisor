@@ -33,7 +33,7 @@
 // spawn, the real Jev network call, argv and console.log.
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -290,6 +290,36 @@ export function countRealJevDecisions(cacheDir: string = CACHE_DIR): number | nu
   return parseGateDecisionRecords(raw).filter((r) => r.source === "jev").length;
 }
 
+/**
+ * 0.6.19 M15 (JEVADV-73): how many comparison results the results file keeps.
+ * It only grew before; each run now keeps the newest ones up to this many
+ * (a result is about 400 bytes, so about 2 MB) and drops the oldest. The
+ * board's A/B summary folds whatever is there.
+ */
+export const AB_RESULTS_MAX_LINES = 5000;
+
+/** Where a compare run leaves what it did not reach and what it measured. */
+export interface ComparePaths {
+  readonly queuePath: string;
+  readonly resultsPath: string;
+}
+
+/**
+ * Writes a compare run's output: the queue entries it did not reach back to
+ * the queue, and its results after the ones already recorded, keeping the
+ * newest `maxResults`. The results file is rewritten through a temporary
+ * file and a rename, so a run killed mid-write leaves the previous file.
+ */
+export function persistCompareOutput(output: RunCompareOutput, paths: ComparePaths, maxResults: number = AB_RESULTS_MAX_LINES): void {
+  writeFileSync(paths.queuePath, output.remainingQueueEntries.map(serializeSampleEntry).join(""));
+  mkdirSync(dirname(paths.resultsPath), { recursive: true });
+  const lines = [...readTextOrEmpty(paths.resultsPath).split("\n").filter((line) => line.length > 0), ...output.results.map((result) => JSON.stringify(result))];
+  const kept = lines.slice(Math.max(0, lines.length - maxResults));
+  const temporary = `${paths.resultsPath}.tmp`;
+  writeFileSync(temporary, kept.map((line) => `${line}\n`).join(""));
+  renameSync(temporary, paths.resultsPath);
+}
+
 function formatLatency(stats: AbBenchmarkReport["jevLatency"]): string {
   return stats === null ? "no data" : `median ${stats.medianMs}ms, range ${stats.minMs}-${stats.maxMs}ms (n=${stats.count})`;
 }
@@ -364,9 +394,7 @@ async function runCompareCommand(args: Extract<CliArgs, { command: "compare" }>)
     },
   });
 
-  writeFileSync(QUEUE_PATH, output.remainingQueueEntries.map(serializeSampleEntry).join(""));
-  mkdirSync(dirname(RESULTS_PATH), { recursive: true });
-  for (const result of output.results) appendFileSync(RESULTS_PATH, `${JSON.stringify(result)}\n`);
+  persistCompareOutput(output, { queuePath: QUEUE_PATH, resultsPath: RESULTS_PATH });
 
   if (output.directBatchSkipped > 0) {
     console.log(`${output.directBatchSkipped} commands-file line(s) skipped (no API key, or the Jev call failed) -- not measured, not counted as a verdict`);

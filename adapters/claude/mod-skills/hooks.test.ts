@@ -2888,3 +2888,42 @@ test("0.6.16 T4: the first step after an effort change also logs the effort befo
   assert.equal(one?.prevEffort, undefined);
   assert.deepEqual([two?.effortChanged, two?.prevEffort, two?.promptTokens, two?.uncachedShare], [true, "high", 40_110, 0.003]);
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.19 M8 (JEVADV-73): skill.prompt observes, and observing must never cost
+// the skill its load. A rejected $.clock.now() used to escape the handler
+// before next(e), so the engine never got the event back.
+// ---------------------------------------------------------------------------
+
+test("skill.prompt: a rejected clock read still hands the event to next, and records nothing", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const { handlers, engine } = loadHooks(host);
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.05 },
+    }),
+  );
+  await submitPrompt(handlers, engine, "first prompt");
+  const before = host.files.get(SKILL_MEASUREMENTS_PATH);
+
+  const baseEngine = engine as { clock: { now: () => Promise<number> } };
+  baseEngine.clock.now = async () => {
+    throw new Error("clock unavailable");
+  };
+  const skillPrompt = handlers.get("skill.prompt");
+  assert.ok(skillPrompt);
+  const event = { skill: "graft-helper", origin: { kind: "user" } };
+  let handed: unknown = null;
+  await assert.doesNotReject(async () => {
+    await skillPrompt(engine, event, async (e: unknown) => {
+      handed = e;
+      return e;
+    });
+  });
+  assert.equal(handed, event, "next(e) must always be reached");
+  assert.equal(host.files.get(SKILL_MEASUREMENTS_PATH), before, "no observation is written without a time");
+});

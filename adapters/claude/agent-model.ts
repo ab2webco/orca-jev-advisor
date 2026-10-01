@@ -20,7 +20,8 @@
  *   - reads the worker's catalog mirror (src/core/model_mirror.ts) and the
  *     TypeSafe API key (src/core/secrets.ts),
  *   - calls handleAgentModelHook and appends its record, best-effort, to
- *     `<cacheDir>/model-reclassifications.jsonl`,
+ *     `<cacheDir>/model-reclassifications-<UTC hour>.jsonl` (0.6.19 M15;
+ *     src/core/measurement_files.ts),
  *   - writes stdout when there is one.
  *
  * ALWAYS exits 0 -- same fail-open discipline as gate-bash.ts: a bug in
@@ -34,7 +35,8 @@ import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_
 import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
 import { callJev } from '../../src/core/jev.ts'
 import { resolveApiKey } from '../../src/core/secrets.ts'
-import { MODEL_MEASUREMENT_FILE, serializeModelRecord } from '../../src/core/model_measurement.ts'
+import { serializeModelRecord } from '../../src/core/model_measurement.ts'
+import { modelMeasurementFileName } from '../../src/core/measurement_files.ts'
 import type { ModelMeasurementRecord } from '../../src/core/model_measurement.ts'
 import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
 import { routerModeFromSettings } from '../../src/core/model_router_mode.ts'
@@ -69,7 +71,6 @@ function resolvedOrPass(resolve: () => string): string {
 const CACHE_DIR = resolvedOrPass(() => resolveCacheDir(PLATFORM, HOME_PATHS))
 const CONFIG_DIR = resolvedOrPass(() => resolveConfigDir(PLATFORM, HOME_PATHS))
 const MIRROR_PATH = join(CONFIG_DIR, MODELS_MIRROR_FILE)
-const LOG_PATH = join(CACHE_DIR, MODEL_MEASUREMENT_FILE)
 // A cache file of this hook's own, distinct from gate-bash.ts's
 // `gate-enablement.json` -- the same fact (is the plugin disabled in
 // Orca?), read by two independent processes, so each keeps its own small
@@ -166,13 +167,14 @@ function pluginDisabledInOrca(): boolean {
   }
 }
 
-/** Appends one measurement record. Best-effort, same as gate-bash.ts's own
- *  appendGateRecord: a log that cannot be written is never a reason to
- *  block or delay an Agent call. */
+/** Appends one measurement record to the file of the UTC hour it is written
+ *  in (0.6.19 M15, src/core/measurement_files.ts). Best-effort, same as
+ *  gate-bash.ts's own appendGateRecord: a log that cannot be written is
+ *  never a reason to block or delay an Agent call. */
 function appendRecord(record: ModelMeasurementRecord): void {
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
-    appendFileSync(LOG_PATH, serializeModelRecord(record), 'utf8')
+    appendFileSync(join(CACHE_DIR, modelMeasurementFileName(new Date().toISOString())), serializeModelRecord(record), 'utf8')
   } catch {
     // Best-effort measurement; never blocks or delays anything.
   }

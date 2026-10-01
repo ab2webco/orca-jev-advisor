@@ -13,7 +13,7 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -38,7 +38,7 @@ process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(PATHS_OVERRIDE_DIR, "config");
 process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, "cache");
 after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }));
 
-const { countRealJevDecisions, parseCliArgs, runCompare } = await import("./ab_benchmark_cli.ts");
+const { countRealJevDecisions, parseCliArgs, persistCompareOutput, runCompare } = await import("./ab_benchmark_cli.ts");
 
 function queuedEntry(overrides: Partial<AbSampleEntry> = {}): AbSampleEntry {
   return {
@@ -266,5 +266,32 @@ test("the CLI runs from a path with a space in it", () => {
     assert.match(result.stdout, /ab-benchmark compare/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 0.6.19 M15 (JEVADV-73): the results file only grew. It keeps the newest
+// AB_RESULTS_MAX_LINES results; older ones are dropped when a run appends.
+test("persistCompareOutput: results are appended, and only the newest ones up to the cap are kept", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "orca-jev-ab-persist-"));
+  try {
+    const resultsPath = join(dir, "ab-benchmark-results.jsonl");
+    const queuePath = join(dir, "ab-benchmark-queue.jsonl");
+    writeFileSync(resultsPath, ["r1", "r2", "r3"].map((id) => `${JSON.stringify({ id })}\n`).join(""));
+    const output = await runCompare({
+      queueRaw: [queuedEntry({ id: "a" }), queuedEntry({ id: "b" })].map(serializeSampleEntry).join(""),
+      commandLines: [],
+      config: DEFAULT_AB_BENCHMARK_CONFIG,
+      cap: 2,
+      bigModelRunner: okBigModel,
+      jevCaller: null,
+      totalJevDecisions: null,
+    });
+    persistCompareOutput(output, { queuePath, resultsPath }, 4);
+    const ids = readFileSync(resultsPath, "utf8").trim().split("\n").map((line) => (JSON.parse(line) as { id: string }).id);
+    assert.equal(ids.length, 4);
+    assert.deepEqual(ids.slice(0, 2), ["r2", "r3"], "the oldest result is the one dropped");
+    assert.equal(readFileSync(queuePath, "utf8"), "", "both queued entries were compared");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

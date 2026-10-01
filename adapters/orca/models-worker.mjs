@@ -168,7 +168,8 @@ async function lastPublishedReady (storageHost) {
  * comes from `options.ready` when a caller already knows it (e.g.
  * publishModelMeasurements, which just computed a fresh readout and would
  * otherwise have to read its own just-published value straight back), or
- * from the last published readout otherwise. Never throws: a failed mirror
+ * from the last published readout otherwise, and is true regardless while
+ * the owner's override (`modelsConfig.readyOverride`) is on. Never throws: a failed mirror
  * write is logged and returned, exactly like main.mjs's own
  * mirrorCatalogAndPolicies treats a failed catalog-save/policies-save.
  */
@@ -179,7 +180,15 @@ export async function mirrorModels (orca, storageHost, options = {}) {
   ])
   const models = parseModelCatalog(storedModels)
   const active = isRecord(storedConfig) && storedConfig.active === true
-  const ready = typeof options.ready === 'boolean' ? options.ready : await lastPublishedReady(storageHost)
+  const measuredReady = typeof options.ready === 'boolean' ? options.ready : await lastPublishedReady(storageHost)
+  // 0.6.19 M16 (JEVADV-73): the owner's explicit "treat as ready"
+  // (`modelsConfig.readyOverride`, set from the panel and only there) is
+  // never lowered by a mirror. Raising `ready` by hand in the mirror file
+  // used to last until the next boot, which rewrote it from the readout;
+  // the override lives in storage instead, and the panel shows it beside
+  // the measured readiness, so a real loss of readiness stays visible.
+  const ownerReady = isRecord(storedConfig) && storedConfig.readyOverride === true
+  const ready = measuredReady || ownerReady
 
   const result = await options.mirror('models-save', JSON.stringify({ active, ready, models }))
   if (!result.ok) {
