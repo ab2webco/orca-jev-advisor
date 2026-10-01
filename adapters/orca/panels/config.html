@@ -901,6 +901,8 @@
           'models.measurementsApplied': 'Reescrituras aplicadas: {{applied}}',
           'integration.agentModelHookInstalled': 'Hooks de modelo del Agent: puestos en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
           'integration.agentModelHookNotInstalled': 'Hooks de modelo del Agent: no puestos.',
+          'integration.fileGuardInstalled': 'Guarda de ediciones (reglas del propio gate): puesta en {{installed}} de {{total}} sitios donde Claude Code lee su configuración.',
+          'integration.fileGuardNotInstalled': 'Guarda de ediciones (reglas del propio gate): no puesta.',
         },
         en: {
           'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
@@ -1217,6 +1219,8 @@
           'models.measurementsApplied': 'Rewrites applied: {{applied}}',
           'integration.agentModelHookInstalled': 'Agent model hooks: installed in {{installed}} of {{total}} places Claude Code reads its configuration.',
           'integration.agentModelHookNotInstalled': 'Agent model hooks: not installed.',
+          'integration.fileGuardInstalled': "Edit guard (the gate's own rules): installed in {{installed}} of {{total}} places Claude Code reads its configuration.",
+          'integration.fileGuardNotInstalled': "Edit guard (the gate's own rules): not installed.",
         }
       }
 
@@ -3488,6 +3492,14 @@
             ? t('integration.agentModelHookInstalled', { installed: String(status.agentModelHook.installedCount), total: String(status.agentModelHook.totalCount) })
             : t('integration.agentModelHookNotInstalled')
           claudeIntegrationStatusEl.appendChild(li(agentModelHookLine))
+        }
+
+        // 0.6.17 T2: the file tools' guard, the same way -- guarded on the
+        // field, which a worker older than this panel never reports.
+        if (status.fileGuardHook && typeof status.fileGuardHook.installed === 'boolean') {
+          claudeIntegrationStatusEl.appendChild(li(status.fileGuardHook.installed
+            ? t('integration.fileGuardInstalled', { installed: String(status.fileGuardHook.installedCount), total: String(status.fileGuardHook.totalCount) })
+            : t('integration.fileGuardNotInstalled')))
         }
       }
 

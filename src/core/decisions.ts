@@ -741,8 +741,13 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  *
  * Bumped to 6 for 0.6.15 T2: a requires_human rule is judged on effect, so
  * an 'ask' cached for `terraform plan` (topic) is judged again.
+ *
+ * Bumped to 7 for 0.6.17 T1: a `gh` merge is judged with what it goes
+ * through, so a 'deny' cached for `gh pr merge` from a checkout on main (the
+ * refusal this fixes) and an 'allow' cached for an API branch merge into
+ * main are judged again.
  */
-export const GATE_DECISION_RULES_VERSION = 6;
+export const GATE_DECISION_RULES_VERSION = 7;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {

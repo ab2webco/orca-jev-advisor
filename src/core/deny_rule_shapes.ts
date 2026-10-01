@@ -7,7 +7,7 @@
 // an echo or a heredoc body is data. Each predicate here runs on the text
 // that scan lets it read, so it inherits that design unchanged.
 import { resolve } from "node:path";
-import { afterHome, gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
+import { afterHome, commandWords, gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
 import { someSegmentMatches, splitOnCommandSeparatorsDetailed, tokenize } from "./git_discard.ts";
 import { PROTECTED_BRANCH_NAMES } from "./push_remote.ts";
 import type { ImplicitPushDestination } from "./push_remote.ts";
@@ -338,6 +338,61 @@ export function pushTargets(
       }
       for (const refspec of push.refspecs) out.push({ remote: push.remote, branch: refspecDestination(refspec, push.deletes), remoteIsLocal: local });
     }
+  }
+  return out;
+}
+
+/** A merge `gh` asks the hosting service for: a pull request's, or one branch straight into another through the API. */
+export type GhMerge =
+  | { readonly kind: "pull-request"; readonly admin: boolean; readonly auto: boolean }
+  | { readonly kind: "branch"; readonly base: string | null; readonly head: string | null };
+
+// `gh api` options that take the next word as their value.
+const GH_API_OPTIONS_WITH_VALUE: ReadonlySet<string> = new Set(["-X", "--method", "-f", "--raw-field", "-F", "--field", "-H", "--header", "--input", "-q", "--jq", "-t", "--template", "--hostname", "--cache", "-p", "--preview"]);
+const GH_API_FIELDS: ReadonlySet<string> = new Set(["-f", "--raw-field", "-F", "--field"]);
+const BRANCH_MERGE_ENDPOINT = /^\/?repos\/[^/]+\/[^/]+\/merges$/;
+const PULL_MERGE_ENDPOINT = /^\/?repos\/[^/]+\/[^/]+\/pulls\/[^/]+\/merge$/;
+
+/** What one `gh api` invocation merges, read from its endpoint and its `base=`/`head=` fields; null when it merges nothing. */
+function ghApiMerge(args: readonly string[]): GhMerge | null {
+  let endpoint: string | null = null;
+  const fields = new Map<string, string>();
+  for (let at = 0; at < args.length; at += 1) {
+    const word = args[at] ?? "";
+    if (word.startsWith("-")) {
+      const name = word.startsWith("--") && word.includes("=") ? word.slice(0, word.indexOf("=")) : word;
+      const value = name !== word ? word.slice(name.length + 1) : GH_API_OPTIONS_WITH_VALUE.has(name) ? (args[(at += 1)] ?? "") : null;
+      if (GH_API_FIELDS.has(name) && value !== null && value.includes("=")) fields.set(value.slice(0, value.indexOf("=")), value.slice(value.indexOf("=") + 1));
+      continue;
+    }
+    endpoint ??= word;
+  }
+  if (endpoint === null) return null;
+  if (PULL_MERGE_ENDPOINT.test(endpoint)) return { kind: "pull-request", admin: false, auto: false };
+  if (BRANCH_MERGE_ENDPOINT.test(endpoint)) return { kind: "branch", base: fields.get("base") ?? null, head: fields.get("head") ?? null };
+  return null;
+}
+
+/**
+ * 0.6.17 T1 (JEVADV-93): every merge a `gh` command in command position asks
+ * the hosting service for. Jev refused `gh pr merge` from a checkout on main
+ * under never_write_to_main, reading "on main" and "merge" as a write on it,
+ * while the same command from a feature checkout got only advice: the code
+ * knows what the merge goes through, so the context says it.
+ */
+export function ghMerges(command: string, cwd: string, home: string): readonly GhMerge[] {
+  const out: GhMerge[] = [];
+  for (const { segment } of locateCommandSegments(command, cwd, home)) {
+    const run = commandWords(tokenize(segment));
+    if ((run[0] ?? "").replace(/^.*\//, "") !== "gh") continue;
+    if (run[1] === "pr" && run[2] === "merge") {
+      const args = run.slice(3);
+      out.push({ kind: "pull-request", admin: args.includes("--admin"), auto: args.includes("--auto") });
+      continue;
+    }
+    if (run[1] !== "api") continue;
+    const merge = ghApiMerge(run.slice(2));
+    if (merge !== null) out.push(merge);
   }
   return out;
 }

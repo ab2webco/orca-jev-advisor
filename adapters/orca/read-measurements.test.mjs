@@ -617,6 +617,7 @@ test('gate.health: the last successful Jev call and the unanswered calls since i
     lastJevAt: '2026-09-24T11:00:00.000Z',
     consecutiveFailures: 2,
     lastFailureAt: '2026-09-24T11:07:00.000Z',
+    appendFailures: { count: 0, lastAt: null },
   })
 })
 
@@ -643,7 +644,7 @@ test('gate.windows and gate.health on an empty log: every window present and zer
     assert.equal(w.approvals.asked, 0, key)
     assert.equal(w.jevLatency.medianMs, null, key)
   }
-  assert.deepEqual(gate.health, { lastJevAt: null, consecutiveFailures: 0, lastFailureAt: null })
+  assert.deepEqual(gate.health, { lastJevAt: null, consecutiveFailures: 0, lastFailureAt: null, appendFailures: { count: 0, lastAt: null } })
 })
 
 // ---------------------------------------------------------------------------
@@ -735,4 +736,22 @@ test('modSkills reads the legacy file and every hourly file together (JEVADV-62)
   assert.equal(result.modSkills.totalDecisions, 3)
   assert.equal(result.modSkills.firstAt, '2026-09-28T10:00:00.000Z')
   assert.equal(result.modSkills.lastAt, '2026-09-30T01:00:00.000Z')
+})
+
+// 0.6.17 T4 (JEVADV-92): the hourly gate files and the legacy one are read
+// together, and the append-failure counter reaches the gate's health.
+test('T4: the gate aggregate reads the legacy file and every hourly file, and reports failed appends', () => {
+  const home = makeHome()
+  const dir = join(home, '.cache', 'orca-supervisor')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'gate-decisions.jsonl'), `${JSON.stringify(gateDecisionRow('a', { at: '2026-09-24T00:00:00.000Z' }))}\n`)
+  writeFileSync(join(dir, 'gate-decisions-2026-09-30T10.jsonl'), `${JSON.stringify(gateDecisionRow('b', { at: '2026-09-30T10:05:00.000Z', source: 'jev', verdict: 'allow', latencyMs: 200 }))}\n`)
+  writeFileSync(join(dir, 'gate-decisions-2026-09-30T11.jsonl'), `${JSON.stringify(gateDecisionRow('c', { at: '2026-09-30T11:05:00.000Z' }))}\n`)
+  let result = run(home)
+  assert.equal(result.gate.totalDecisions, 3)
+  assert.deepEqual(result.gate.recent.map((r) => r.at), ['2026-09-30T11:05:00.000Z', '2026-09-30T10:05:00.000Z', '2026-09-24T00:00:00.000Z'])
+  assert.deepEqual(result.gate.health.appendFailures, { count: 0, lastAt: null })
+  writeFileSync(join(dir, 'gate-decisions-append-failures.json'), JSON.stringify({ count: 4, lastAt: '2026-09-30T11:06:00.000Z' }))
+  result = run(home)
+  assert.deepEqual(result.gate.health.appendFailures, { count: 4, lastAt: '2026-09-30T11:06:00.000Z' })
 })

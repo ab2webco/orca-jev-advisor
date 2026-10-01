@@ -16,6 +16,8 @@ export type RescanTarget = {
   readonly hook: RescanFamily;
   readonly outcomeHook: RescanFamily;
   readonly agentModelHook: RescanFamily;
+  /** 0.6.17 T2: the file tools' guard. */
+  readonly fileGuardHook: RescanFamily;
 };
 
 export type RescanStatus = {
@@ -34,7 +36,7 @@ export function isRescanDue(now: number, lastCheckedAt: number | null): boolean 
 }
 
 function families(target: RescanTarget): readonly RescanFamily[] {
-  return [target.hook, target.outcomeHook, target.agentModelHook];
+  return [target.hook, target.outcomeHook, target.agentModelHook, target.fileGuardHook];
 }
 
 /**

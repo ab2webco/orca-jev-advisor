@@ -254,6 +254,8 @@ const READY = {
     // PreToolUse/PostToolUse/PostToolUseFailure hooks -- same fields as
     // `hook` above.
     agentModelHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+    // 0.6.17 T2: the file tools' guard, same aggregate shape.
+    fileGuardHook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
     // install-claude-integration.mjs's status().node: the Node the hooks run on.
     node: { state: 'ok', path: '/opt/homebrew/bin/node', version: 'v26.9.0' },
     // statMirror()'s real shape. `{ ok: true }` alone left `exists` and
@@ -343,7 +345,7 @@ const READY = {
       bySource: {'local-rule': 126, cache: 278, jev: 3262, none: 45},
       jevLatency: {sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809},
       windows: READY_WINDOWS,
-      health: { lastJevAt: '2026-09-25T00:28:45.360Z', consecutiveFailures: 0, lastFailureAt: '2026-09-24T20:25:32.366Z' },
+      health: { lastJevAt: '2026-09-25T00:28:45.360Z', consecutiveFailures: 0, lastFailureAt: '2026-09-24T20:25:32.366Z', appendFailures: { count: 0, lastAt: null } },
       byCommandFamily: [
         { commandFamily: 'cd', total: 511, byVerdict: { allow: 498, ask: 13, deny: 0 } },
         { commandFamily: 'git', total: 402, byVerdict: { allow: 371, ask: 30, deny: 1 } },
@@ -472,7 +474,7 @@ const DEGRADED = {
         version: { ...DEGRADED_DAY, key: 'version', pluginVersion: '0.4.0', since: '2026-09-24T12:21:00.000Z' },
         day: DEGRADED_DAY,
       },
-      health: { lastJevAt: '2026-09-24T17:20:41.118Z', consecutiveFailures: 12, lastFailureAt: '2026-09-24T17:33:10.004Z' },
+      health: { lastJevAt: '2026-09-24T17:20:41.118Z', consecutiveFailures: 12, lastFailureAt: '2026-09-24T17:33:10.004Z', appendFailures: { count: 3, lastAt: '2026-09-24T17:30:02.511Z' } },
       recent: [
         { at: '2026-09-24T17:33:10.004Z', project: 'orca-supervisor', commandFamily: 'other', source: 'none', verdict: 'allow', latencyMs: null },
         ...READY.measurementsSummary.gate.recent,
@@ -498,7 +500,7 @@ const EMPTY = {
     gate: {
       ...EMPTY_GATE_SUMMARY,
       windows: { version: emptyWindow('version'), day: emptyWindow('day'), week: emptyWindow('week'), all: emptyWindow('all') },
-      health: { lastJevAt: null, consecutiveFailures: 0, lastFailureAt: null },
+      health: { lastJevAt: null, consecutiveFailures: 0, lastFailureAt: null, appendFailures: { count: 0, lastAt: null } },
       corruptLines: 0,
       cacheHitRate: null,
       recent: [],

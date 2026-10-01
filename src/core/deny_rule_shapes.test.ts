@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { FORCE_PUSH_SHAPE, curlToShellOutcome, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome, withDownloadsMarked, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
+import { FORCE_PUSH_SHAPE, curlToShellOutcome, ghMerges, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome, withDownloadsMarked, withoutGitGlobalOptionsBeforePush } from "./deny_rule_shapes.ts";
 import { someSegmentMatches } from "./git_discard.ts";
 import type { ImplicitPushDestination } from "./push_remote.ts";
 
@@ -199,4 +199,25 @@ test("pushTargets: each push's remote, destination branch and whether the remote
   assert.deepEqual(targets("git push"), [{ remote: null, branch: "feature/x", remoteIsLocal: true }]);
   assert.deepEqual(targets("git push origin --delete main"), [{ remote: "origin", branch: "main", remoteIsLocal: true }]);
   assert.deepEqual(targets("git status && echo 'git push origin main'"), []);
+});
+
+// 0.6.17 T1 (JEVADV-93): what a `gh` merge does, read from the command, so
+// Jev is told a pull request merge is the reviewed path and an API branch
+// merge is not, whatever branch the checkout is on.
+test("ghMerges: a pull request merge, with its --admin and --auto, in command position only", () => {
+  const merges = (command: string) => ghMerges(command, PROJECT, HOME);
+  assert.deepEqual(merges("gh pr merge 430 -R acme/widget --squash --delete-branch"), [{ kind: "pull-request", admin: false, auto: false }]);
+  assert.deepEqual(merges("gh pr merge --auto --squash 12"), [{ kind: "pull-request", admin: false, auto: true }]);
+  assert.deepEqual(merges("GH_TOKEN=x gh pr merge 12 --admin --merge && git pull"), [{ kind: "pull-request", admin: true, auto: false }]);
+  assert.deepEqual(merges("bash -c 'gh pr merge 12 --rebase'"), [{ kind: "pull-request", admin: false, auto: false }]);
+  assert.deepEqual(merges("gh api -X PUT repos/acme/widget/pulls/12/merge -f merge_method=squash"), [{ kind: "pull-request", admin: false, auto: false }]);
+  assert.deepEqual(merges("echo 'gh pr merge 12' && gh pr view 12 && git merge main"), []);
+});
+
+test("ghMerges: an API merge of one branch into another names its base and head", () => {
+  const merges = (command: string) => ghMerges(command, PROJECT, HOME);
+  assert.deepEqual(merges("gh api -X POST repos/acme/widget/merges -f base=main -f head=feature/x"), [{ kind: "branch", base: "main", head: "feature/x" }]);
+  assert.deepEqual(merges("gh api --method=POST /repos/acme/widget/merges --field head=feature/x -F base=develop"), [{ kind: "branch", base: "develop", head: "feature/x" }]);
+  assert.deepEqual(merges("gh api repos/acme/widget/merges --input body.json"), [{ kind: "branch", base: null, head: null }]);
+  assert.deepEqual(merges("gh api repos/acme/widget/pulls/12"), []);
 });

@@ -24,7 +24,7 @@
 // Pure: no I/O, no locale -- both stay English/generic like repoContext().
 import type { MatchableDestination } from "./destination_match.ts";
 import type { MatchedDestinationForCwd } from "./linked_worktree.ts";
-import type { PushTarget } from "./deny_rule_shapes.ts";
+import type { GhMerge, PushTarget } from "./deny_rule_shapes.ts";
 import { CLEAR_BRANCH_NAMES, IDENTITY_NAMES } from "./jev_pseudonyms.ts";
 import type { JevNames } from "./jev_pseudonyms.ts";
 
@@ -157,6 +157,32 @@ export function buildPushDestinationSentence(targets: readonly PushTarget[], nam
     const where = target.remoteIsLocal ? "a repository on this machine" : "a repository on another machine";
     const shared = CLEAR_BRANCH_NAMES.includes(target.branch) ? `; ${target.branch} is a shared branch there, whatever branch the checkout is on` : "";
     return `The command pushes commits to branch ${names.name("branch", target.branch)} of ${remote}, ${where}${shared}.`;
+  });
+  return sentences.length === 0 ? null : [...new Set(sentences)].join(" ");
+}
+
+/**
+ * 0.6.17 T1 (JEVADV-93): what each `gh` merge goes through, as
+ * deny_rule_shapes.ts ghMerges read it, in the context both questions read.
+ * A pull request merge from a checkout on main was refused under
+ * never_write_to_main as if it wrote on the checkout's branch; the same
+ * merge from a feature checkout was not. An API branch merge and an
+ * `--admin` merge skip the review, so they say so instead. Null when the
+ * command merges nothing on the server.
+ */
+export function buildGhMergeSentence(merges: readonly GhMerge[], names: JevNames = IDENTITY_NAMES): string | null {
+  const local = "It changes nothing in the local checkout, so the branch the checkout is on plays no part.";
+  const sentences = merges.map((merge) => {
+    if (merge.kind === "pull-request") {
+      return merge.admin
+        ? `The command asks the hosting service to merge a pull request with --admin, which merges it even when the base branch's required reviews or checks have not passed: it bypasses the review that makes a pull request merge the reviewed path, so it writes the pull request's commits on its base branch as directly as a push to it would. ${local}`
+        : "The command asks the hosting service to merge a pull request: the service lands the pull request's commits on its base branch only through that branch's own protection (its required reviews and checks). " +
+            `That is the reviewed path into a shared branch, not a direct write on it, and it changes nothing in the local checkout, so the branch the checkout is on plays no part.`;
+    }
+    if (merge.base === null) return "The command asks the hosting service's API to merge one branch directly into another on the remote, with no pull request and no review.";
+    const head = merge.head === null ? "a branch" : `branch ${names.name("branch", merge.head)}`;
+    const base = names.name("branch", merge.base);
+    return `The command asks the hosting service's API to merge ${head} directly into branch ${base} on the remote, with no pull request and no review; that writes commits on ${base}, whatever branch the checkout is on.`;
   });
   return sentences.length === 0 ? null : [...new Set(sentences)].join(" ");
 }

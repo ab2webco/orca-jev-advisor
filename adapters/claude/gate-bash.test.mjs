@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,6 +23,7 @@ import { commandShape } from '../../src/core/command_shape.ts'
 import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey } from '../../src/core/gate_advice_retry.ts'
+import { gateDecisionFileName, gateDecisionFilesToRead } from '../../src/core/measurement_files.ts'
 import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
 import { translate } from '../../src/core/i18n.ts'
 
@@ -557,8 +558,19 @@ test('JEVADV-29: a command with a secret-shaped env assignment is still refused 
 // TYPESAFE_API_KEY and never reaches Jev.
 // ---------------------------------------------------------------------------
 
-function gateLogPath (home) {
-  return join(home, '.cache', 'orca-supervisor', 'gate-decisions.jsonl')
+// 0.6.17 T4: the log is one file per UTC hour (src/core/measurement_files.ts);
+// these read every one of them, in order, the way the readers do.
+function gateLogFiles (home) {
+  const dir = join(home, '.cache', 'orca-supervisor')
+  return existsSync(dir) ? gateDecisionFilesToRead(readdirSync(dir)).map((name) => join(dir, name)) : []
+}
+
+function gateLogExists (home) {
+  return gateLogFiles(home).length > 0
+}
+
+function gateLogText (home) {
+  return gateLogFiles(home).map((path) => readFileSync(path, 'utf8')).join('')
 }
 
 /** The real orca-plugin.json's own `version`, read the same way a developer
@@ -574,7 +586,7 @@ test('a written gate-decision record carries the real plugin version', () => {
   const home = makeHome()
   run(home, 'rm -rf /')
 
-  const lines = readFileSync(gateLogPath(home), 'utf8').trim().split('\n')
+  const lines = gateLogText(home).trim().split('\n')
   assert.equal(lines.length, 1, 'the local-rule deny must write exactly one decision row')
   const record = JSON.parse(lines[0])
   assert.equal(record.pluginVersion, expectedPluginVersion(), 'the row must carry the shipped plugin version, not be missing the field')
@@ -588,7 +600,7 @@ test('a local-rule stop is recorded with stopReason "local-rule"', () => {
   const home = makeHome()
   run(home, 'rm -rf /')
 
-  const lines = readFileSync(gateLogPath(home), 'utf8').trim().split('\n')
+  const lines = gateLogText(home).trim().split('\n')
   const record = JSON.parse(lines[0])
   assert.equal(record.stopReason, 'local-rule')
   assert.equal(record.policyId, undefined, 'a local-rule stop never carries a policyId')
@@ -1220,14 +1232,14 @@ test('real subprocess, not a local-rule stop: sed\'s own script argument merely 
   const home = makeHome()
   const decision = decisionFor(home, "sed -i 's/git reset --hard//' f")
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
-  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
+  assert.equal(gateLogExists(home), false, 'a mention must never reach the local-rule record path')
 })
 
 test('real subprocess, not a local-rule stop: an unrecognised program\'s quoted argument merely mentions a force push', () => {
   const home = makeHome()
   const decision = decisionFor(home, 'some-unknown-tool "please never git push --force"')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
-  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
+  assert.equal(gateLogExists(home), false, 'a mention must never reach the local-rule record path')
 })
 
 test('real subprocess, still DENIES: a wrapper (su -c) really running a hard reset stays command position', () => {
@@ -1257,7 +1269,7 @@ test('a mention is no longer a local-rule stop, so it writes no local-rule gate 
   run(home, "sed -i 's/git reset --hard//' f")
   // No API key and no local-rule match at all: main() returns from the
   // no-key branch before ever calling appendGateRecord.
-  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
+  assert.equal(gateLogExists(home), false, 'a mention must never reach the local-rule record path')
 })
 
 // ---------------------------------------------------------------------------
@@ -1271,14 +1283,14 @@ test('real subprocess, not stopped by a local rule at all: git grep\'s pattern i
   const home = makeHome()
   const decision = decisionFor(home, 'git grep "git reset --hard"')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
-  assert.equal(existsSync(gateLogPath(home)), false, 'a known data position must never reach the local-rule record path')
+  assert.equal(gateLogExists(home), false, 'a known data position must never reach the local-rule record path')
 })
 
 test('real subprocess, not stopped by a local rule at all: a generic --body flag on an unrecognised program is a known data position', () => {
   const home = makeHome()
   const decision = decisionFor(home, 'orca plane create --body "plan: run git reset --hard origin/main next"')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
-  assert.equal(existsSync(gateLogPath(home)), false, 'a known data position must never reach the local-rule record path')
+  assert.equal(gateLogExists(home), false, 'a known data position must never reach the local-rule record path')
 })
 
 // ---------------------------------------------------------------------------
@@ -1296,7 +1308,7 @@ test('real subprocess, not a local-rule stop: a wrapper NAME sitting inside anot
   // same case for that one instead.
   const decision = decisionFor(home, 'some-tool -n watch "…git reset --hard…" f')
   assert.ok(decision === 'allow' || decision === 'none', `expected the ordinary path, got ${decision}`)
-  assert.equal(existsSync(gateLogPath(home)), false, 'a mention must never reach the local-rule record path')
+  assert.equal(gateLogExists(home), false, 'a mention must never reach the local-rule record path')
 })
 
 // ---------------------------------------------------------------------------
@@ -1576,8 +1588,8 @@ for (const command of ALREADY_NOT_DENIED_BEFORE_T8) {
 // ---------------------------------------------------------------------------
 
 function gateLogRecords (home) {
-  if (!existsSync(gateLogPath(home))) return []
-  return readFileSync(gateLogPath(home), 'utf8').trim().split('\n').filter((l) => l.length > 0).map((l) => JSON.parse(l))
+  if (!gateLogExists(home)) return []
+  return gateLogText(home).trim().split('\n').filter((l) => l.length > 0).map((l) => JSON.parse(l))
 }
 
 const OWN_BRANCH_PUSH_REASON_TEXT = 'pushes your own branch, with no force and no shared branch'
@@ -2048,7 +2060,7 @@ test('a risk-stage advice: permissionDecision is deny, the reason is never REFUS
   assert.match(reason, /run the same command again unchanged and it will go through/, 'the retry clause must be present')
   assert.match(payload.systemMessage, /advis/i, 'the person sees a short, non-blocking advice line')
 
-  const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
+  const record = JSON.parse(gateLogText(home).trim())
   assert.equal(record.verdict, 'advise')
   assert.equal(record.stopReason, 'risk')
 })
@@ -2069,7 +2081,7 @@ test('an identical retry in the SAME session passes as allow, and is never writt
   const cacheAfter = JSON.parse(readFileSync(verdictCachePath(home), 'utf8'))
   assert.equal(cacheAfter[key].decision, 'advise', 'the retry-pass allow must never overwrite the shape cache entry')
 
-  const records = readFileSync(gateLogPath(home), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+  const records = gateLogText(home).trim().split('\n').map((l) => JSON.parse(l))
   const last = records[records.length - 1]
   assert.equal(last.verdict, 'allow')
   assert.equal(last.stopReason, 'advice-retry')
@@ -2205,7 +2217,7 @@ test('a deploy command that Jev would silently allow is floored into an advice n
   assert.match(reason, /triggers a deployment workflow on GitHub Actions/)
   assert.match(reason, /run the same command again unchanged and it will go through/)
 
-  const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
+  const record = JSON.parse(gateLogText(home).trim())
   assert.equal(record.verdict, 'advise')
 })
 
@@ -2679,7 +2691,7 @@ test('an identical retry for an UNCACHEABLE command makes no Jev call at all -- 
   assert.equal(existsSync(noKeyWarnedPath(home)), false, 'the retry pass must fire before the no-key path is ever reached -- proof no Jev call was attempted')
   assert.equal(existsSync(verdictCachePath(home)), false, 'an uncacheable command must never touch the shape cache either')
 
-  const record = JSON.parse(readFileSync(gateLogPath(home), 'utf8').trim())
+  const record = JSON.parse(gateLogText(home).trim())
   assert.equal(record.verdict, 'allow')
   assert.equal(record.stopReason, 'advice-retry')
 })
@@ -3030,3 +3042,71 @@ function writeQueueModeMirror (home, enabled) {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, JSON.stringify({ enabled }))
 }
+
+// ---------------------------------------------------------------------------
+// 0.6.17 T2 (JEVADV-90): a write to one of the gate's own decision inputs is
+// a local refusal, before any key, cache or Jev call; reading them is not.
+// The throwaway HOME's own config directory is the real one for this run
+// (ORCA_SUPERVISOR_CONFIG_DIR, see run() above).
+// ---------------------------------------------------------------------------
+
+test("T2: writing the gate's own policies mirror is refused locally, and recorded", () => {
+  const home = makeHome()
+  for (const command of [
+    "echo '[]' > ~/.config/orca-supervisor/policies.json",
+    'sed -i "" "s/never/always/" "$HOME/.config/orca-supervisor/deny-tier-config.json"',
+    `cp /tmp/x.json ${join(home, '.config', 'orca-supervisor', 'team-owners.json')}`,
+    "python3 - <<'EOF'\nimport os\nopen(os.path.expanduser('~/.config/orca-supervisor/policies.json'), 'w').write('[]')\nEOF"
+  ]) {
+    const payload = JSON.parse(run(home, command))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', command)
+    assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^REFUSED: edits the gate's own rules \(~\/\.config\/orca-supervisor\/[\w.-]+\); change them in the Advisor panel\./, command)
+    assert.match(payload.systemMessage, /^jev · blocked `.+`: edits the gate's own rules/, command)
+  }
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 4)
+  assert.ok(records.every((r) => r.source === 'local-rule' && r.verdict === 'deny'))
+})
+
+test("T2: reading the gate's own files, or writing another HOME's, is not refused", () => {
+  const home = makeHome()
+  for (const command of ['cat ~/.config/orca-supervisor/policies.json', "echo '[]' > /tmp/orca-jev-test-home/.config/orca-supervisor/policies.json"]) {
+    const stdout = run(home, command)
+    const decision = stdout.trim().length === 0 ? null : JSON.parse(stdout).hookSpecificOutput?.permissionDecision
+    assert.notEqual(decision, 'deny', command)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.17 T4 (JEVADV-92): the decision log rotates by the hour, and a record
+// that cannot be written is counted where the board reads it.
+// ---------------------------------------------------------------------------
+
+test('T4: a decision lands in the current hour\'s file, never in the single legacy file', () => {
+  const home = makeHome()
+  const before = new Date().toISOString()
+  run(home, 'rm -rf /')
+  const after = new Date().toISOString()
+  const dir = join(home, '.cache', 'orca-supervisor')
+  assert.equal(existsSync(join(dir, 'gate-decisions.jsonl')), false)
+  const names = readdirSync(dir).filter((name) => name.startsWith('gate-decisions-') && name.endsWith('.jsonl'))
+  assert.equal(names.length, 1)
+  assert.ok([gateDecisionFileName(before), gateDecisionFileName(after)].includes(names[0]), names[0])
+  assert.equal(gateLogRecords(home).length, 1)
+})
+
+test('T4: a decision that cannot be written bumps the append-failure counter, and the verdict still goes out', () => {
+  const home = makeHome()
+  const dir = join(home, '.cache', 'orca-supervisor')
+  const now = Date.now()
+  // A directory where this hour's (and the next hour's) file would go makes
+  // the append fail the way a full or read-only disk would.
+  for (const at of [now, now + 60 * 60 * 1000]) mkdirSync(join(dir, gateDecisionFileName(new Date(at).toISOString())), { recursive: true })
+  for (let i = 0; i < 2; i += 1) {
+    const payload = JSON.parse(run(home, 'rm -rf /'))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  }
+  const counter = JSON.parse(readFileSync(join(dir, 'gate-decisions-append-failures.json'), 'utf8'))
+  assert.equal(counter.count, 2)
+  assert.equal(typeof counter.lastAt, 'string')
+})

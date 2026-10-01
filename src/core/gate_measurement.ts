@@ -186,7 +186,7 @@ const FAMILY_PATTERNS: readonly { readonly pattern: { test(segment: string): boo
 export function commandFamily(command: string): string {
   // Whole command first: some shapes ARE the pipe -- `curl ... | bash` is only
   // dangerous because of what it pipes into, and splitting on `|` destroys it.
-  const whole = stripAssignments(command.trim());
+  const whole = stripRunners(command.trim());
   for (const { pattern, family, spansPipe } of FAMILY_PATTERNS) {
     if (spansPipe === true && pattern.test(whole)) return family;
   }
@@ -214,7 +214,7 @@ const GIT_GLOBAL_OPTIONS = /^git(?:\s+(?:(?:-C|-c|--git-dir|--work-tree|--namesp
 function familySegments(command: string): string[] {
   const located = locateCommandSegments(command, "/", "/")
     .filter(({ substituted }) => !substituted)
-    .map(({ outer }) => stripAssignments(outer.trim()).replace(GIT_GLOBAL_OPTIONS, "git"))
+    .map(({ outer }) => stripRunners(outer.trim()).replace(GIT_GLOBAL_OPTIONS, "git"))
     .filter((segment) => segment.length > 0);
   return located.length > 0 ? located : splitSegments(command);
 }
@@ -274,6 +274,19 @@ export function splitSegments(command: string): string[] {
  */
 export function stripAssignments(segment: string): string {
   return segment.replace(/^(?:(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/, "");
+}
+
+// 0.6.17 T4 (JEVADV-92): words that only run the command after them, each
+// with the options it takes: `time -p`, `nice -n 10`, `env -i -u NAME`
+// (its NAME=value assignments are stripped like any other), `nohup`,
+// `command -p`.
+const RUNNER_WORD = /^(?:time(?:\s+-p)?|nice(?:\s+(?:-n\s*\S+|--adjustment=\S+|-\d+))?|nohup|env(?:\s+(?:-u\s*\S+|--unset=\S+|-[i0v]+|--ignore-environment|--null))*|command(?:\s+-p)?)\s+(?=\S)/;
+
+/** `segment` without the runner words (and their assignments) in front of the program it runs; one alone is kept, it is the command. */
+export function stripRunners(segment: string): string {
+  let out = stripAssignments(segment);
+  for (let next = out.replace(RUNNER_WORD, ""); next !== out; next = out.replace(RUNNER_WORD, "")) out = stripAssignments(next);
+  return out;
 }
 
 /**

@@ -517,6 +517,8 @@
           'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'sin latencia de Jev medida en esta ventana',
           'status.policiesWithoutKind': '{{n}} políticas del equipo no tienen tipo y no se aplican: {{ids}}. Abre Configuración → Políticas del equipo y elige un tipo.',
+          'status.appendFailures': '{{n}} decisiones sin registrar, la última {{age}}',
+          'status.appendFailuresTitle': 'El gate no pudo escribir estas decisiones en su registro; las cifras de este tablero no las cuentan.',
           'toll.heading': '¿Qué me cuesta?',
           'toll.unit': 'decisiones en esta ventana',
           'toll.avoided': 'Las reglas locales y la caché resolvieron {{n}} sin llamar a la red.',
@@ -718,6 +720,8 @@
           'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'no Jev latency measured in this window',
           'status.policiesWithoutKind': '{{n}} team policies have no kind and are not applied: {{ids}}. Open Settings → Team policies and pick a kind.',
+          'status.appendFailures': '{{n}} decisions not logged, the last {{age}}',
+          'status.appendFailuresTitle': 'The gate could not write these decisions to its log; the figures on this board do not count them.',
           'toll.heading': 'What does it cost?',
           'toll.unit': 'decisions in this window',
           'toll.avoided': 'Local rules and the cache settled {{n}} of them without a network call.',
@@ -1420,6 +1424,12 @@
         // to the owner too -- see main.mjs's publishPoliciesWithoutKindStatus.
         if (policiesWithoutKind && policiesWithoutKind.count > 0) {
           chips.push(chip(t('status.policiesWithoutKind', { n: num(policiesWithoutKind.count), ids: policiesWithoutKind.ids.join(', ') }), 'alarm'))
+        }
+        // 0.6.17 T4: decisions the gate could not write (read-measurements.mjs
+        // reads the gate's own counter), never left to look like a quiet gate.
+        var appendFailures = health.appendFailures || {}
+        if (appendFailures.count > 0) {
+          chips.push(chip(t('status.appendFailures', { n: num(appendFailures.count), age: appendFailures.lastAt ? ago(appendFailures.lastAt) : '' }), 'alarm', t('status.appendFailuresTitle')))
         }
         el('status-body').innerHTML = chips.join('')
       }
@@ -2202,6 +2212,9 @@
         // machine with no gate decisions measured yet, so it gets its own
         // reason to show the status card, independent of hasGate.
         var kindIssue = !!(lastPoliciesWithoutKind && lastPoliciesWithoutKind.count > 0)
+        // 0.6.17 T4: decisions that could not be written show the card too --
+        // with every append failing there is no decision to show it for.
+        var appendIssue = !!(gate.health && gate.health.appendFailures && gate.health.appendFailures.count > 0)
 
         // An empty log gets one card that says why, never a column of empty
         // sections and never a zero standing in for "nothing yet". With tabs
@@ -2216,7 +2229,7 @@
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
         show('windows', hasGate)
-        show('card-status', hasGate || kindIssue)
+        show('card-status', hasGate || kindIssue || appendIssue)
         show('card-recent', hasGate)
         show('card-speed', hasMeasurements)
         show('card-unmeasured', hasMeasurements)
@@ -2233,13 +2246,13 @@
             renderApprovals(w.approvals || {})
           }
           renderRecent(gate)
-        } else if (kindIssue) {
+        } else if (kindIssue || appendIssue) {
           // No gate decisions measured at all, but the kind-less-policy
           // warning still has to render somewhere -- the same chips
           // function, with no gate health to report (its own no-data chips
           // are truthful either way: "Jev has not answered a call yet" is
           // exactly what "no gate data" means here).
-          renderStatus({}, {}, lastPoliciesWithoutKind)
+          renderStatus(gate.health || {}, {}, lastPoliciesWithoutKind)
         }
         if (hasMeasurements) {
           renderUnmeasured()

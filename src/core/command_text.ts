@@ -55,6 +55,20 @@ export function withoutHeredocBodies(command: string): string {
   });
 }
 
+/**
+ * The body of every heredoc fed to an interpreter (python, node, perl,
+ * ruby) as its program, not one opened inside a quoted substitution -- the
+ * same heredocs withoutHeredocBodies reads as programs (0.6.17 T2).
+ */
+export function interpreterHeredocBodies(command: string): readonly string[] {
+  const bodies: string[] = [];
+  mapHeredocBodies(command, (heredoc) => {
+    if (!heredoc.nested && !bodyStaysVisible(heredoc) && INTERPRETER_READERS.test(heredoc.openerLine)) bodies.push(heredoc.body.join("\n"));
+    return [];
+  });
+  return bodies;
+}
+
 // 0.6.13 T5 (JEVADV-63) and 0.6.14 T3 (N-09): a heredoc body fed to python,
 // node, perl or ruby is a program, replaced by the command lines it runs,
 // read the way its own language reads it -- see program_text.ts.

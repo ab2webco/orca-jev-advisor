@@ -61,7 +61,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -78,12 +78,11 @@ import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
-import { ORCA_USER_DATA_ENV, resolveOrcaUserDataDir } from '../../src/core/orca_accounts.ts'
-import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/core/orca_enablement.ts'
+import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
-import { buildCrossRepoSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
+import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
 import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
@@ -105,15 +104,17 @@ import type { GateKey } from '../../src/core/i18n_gate.ts'
 import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
+import { GATE_DECISIONS_APPEND_FAILURES_FILE, gateDecisionFileName, nextAppendFailures, parseAppendFailures } from '../../src/core/measurement_files.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
-import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
+import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, ghMerges, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolveImplicitPushDestination, resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
 import { decideNoKeyNotice } from '../../src/core/gate_key_notice.ts'
 import { decideUnreachableNotice } from '../../src/core/gate_unreachable_notice.ts'
 import { pruneGateCache } from '../../src/core/gate_cache.ts'
+import { commandWritesGateOwnFile, gateOwnFiles } from '../../src/core/gate_own_files.ts'
 import type { GateCacheEntry } from '../../src/core/gate_cache.ts'
 import { parseMirroredCatalog, parseMirroredPolicies } from '../../src/core/gate_catalog_mirror.ts'
 import type { MirroredDestination } from '../../src/core/gate_catalog_mirror.ts'
@@ -149,7 +150,9 @@ const UNREACHABLE_WARNED_PATH = join(CACHE_DIR, 'gate-bash.unreachable-warned.js
 // ordinary network noise, not a signal the gate is disarmed.
 const UNREACHABLE_WARN_THRESHOLD = 3
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
-const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
+// 0.6.17 T4 (JEVADV-92): one decision file per UTC hour (gateDecisionFileName);
+// a record that cannot be written is counted in GATE_APPEND_FAILURES_PATH.
+const GATE_APPEND_FAILURES_PATH = join(CACHE_DIR, GATE_DECISIONS_APPEND_FAILURES_FILE)
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // The advise-model release's own small state file: one entry per
 // sha256(session_id + NUL + command), so an identical retry within the
@@ -1374,13 +1377,20 @@ function readSeedScopeById(): ReadonlyMap<string, PolicyScope> {
 }
 const SEED_SCOPE_BY_ID = readSeedScopeById()
 
-/** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
+/**
+ * Appends one measurement record to the current hour's file. Best-effort, same
+ * as the auth-warned marker: a log that cannot be written is never a reason
+ * to block or delay a verdict. It is never silent either (0.6.17 T4): the
+ * failure is counted in GATE_APPEND_FAILURES_PATH, which the board's "is the
+ * gate working?" card shows.
+ */
 function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false): void {
+  const at = new Date().toISOString()
   try {
-    mkdirSync(dirname(GATE_LOG_PATH), { recursive: true })
+    mkdirSync(CACHE_DIR, { recursive: true })
     const record = buildGateDecisionRecord({
       id: randomUUID(),
-      at: new Date().toISOString(),
+      at,
       project: projectName(cwd),
       command,
       source,
@@ -1397,13 +1407,27 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       // the read possibly failing rather than forcing a fake version string.
       pluginVersion: PLUGIN_VERSION,
     })
-    appendFileSync(GATE_LOG_PATH, serializeGateRecord(record), 'utf8')
+    appendFileSync(join(CACHE_DIR, gateDecisionFileName(at)), serializeGateRecord(record), 'utf8')
   } catch {
-    // Best-effort measurement; never blocks or delays a verdict.
+    countGateAppendFailure(at)
   }
 }
 
-/** Best-effort read; a missing, unreadable or malformed config is read as "off" -- see src/core/ab_benchmark_config.ts's own fail-open contract. */
+/** One more record that could not be written. If even this cannot be written, there is nowhere left to say so; the verdict still goes out. */
+function countGateAppendFailure(at: string): void {
+  try {
+    let previous: unknown = null
+    try {
+      previous = JSON.parse(readFileSync(GATE_APPEND_FAILURES_PATH, 'utf8'))
+    } catch {
+      // No counter yet, or an unreadable one: start from zero.
+    }
+    writeFileSync(GATE_APPEND_FAILURES_PATH, JSON.stringify(nextAppendFailures(parseAppendFailures(previous), at)))
+  } catch {
+    // Nothing more to do: a verdict is never held for a log line.
+  }
+}
+
 function readAbBenchmarkConfig() {
   try {
     return parseAbBenchmarkConfig(readFileSync(AB_BENCHMARK_CONFIG_PATH, 'utf8'))
@@ -1663,57 +1687,36 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
   }
 }
 
-/**
- * True when Orca has this plugin switched off.
- *
- * The gate is a Claude Code hook, so nothing about it stopped when the plugin
- * was disabled in Orca: it kept judging every command, and kept interrupting,
- * with the plugin visibly off. It consults Orca's own `disabledPlugins` now.
- *
- * That file holds the whole profile and runs to megabytes, so parsing it on
- * every command would cost more than the judgement does. The answer is cached
- * against the file's size and mtime -- a stat, measured at a fifth of a
- * millisecond -- and only re-read when Orca has actually written to it.
- *
- * Every failure answers false and leaves the gate running. A plugin that
- * silently stops protecting because a file moved is worse than one that keeps
- * asking after being switched off: the second at least announces itself to
- * the person it annoys.
- */
-function pluginDisabledInOrca(): boolean {
+/** `path` with its symlinks resolved, as far as it exists; the path as written when nothing of it does. */
+function canonicalPath(path: string): string {
   try {
-    const userData = resolveOrcaUserDataDir(PLATFORM, {
-      home: HOME_PATHS.home,
-      appDataDir: process.env.APPDATA,
-      xdgConfigHome: process.env.XDG_CONFIG_HOME,
-      orcaUserDataPath: process.env[ORCA_USER_DATA_ENV],
-    })
-    const profileId = activeProfileId(JSON.parse(readFileSync(join(userData.path, 'orca-profile-index.json'), 'utf8')))
-    if (profileId === null) return false
-    const dataPath = profileDataPath(PLATFORM, userData.path, profileId)
-    const stat = statSync(dataPath)
-    const stamp = `${stat.size}:${stat.mtimeMs}`
-
-    try {
-      const cached: unknown = JSON.parse(readFileSync(ENABLEMENT_CACHE_PATH, 'utf8'))
-      if (typeof cached === 'object' && cached !== null) {
-        const record = cached as Record<string, unknown>
-        if (record['stamp'] === stamp && typeof record['disabled'] === 'boolean') return record['disabled']
-      }
-    } catch {
-      // No usable cache yet; fall through and read the file once.
-    }
-
-    const disabled = isPluginDisabled(JSON.parse(readFileSync(dataPath, 'utf8')))
-    try {
-      mkdirSync(CACHE_DIR, { recursive: true })
-      writeFileSync(ENABLEMENT_CACHE_PATH, JSON.stringify({ stamp, disabled }))
-    } catch {
-      // A cache that cannot be written only costs the next command a re-read.
-    }
-    return disabled
+    return realpathSync(path)
   } catch {
-    return false
+    try {
+      return join(realpathSync(dirname(path)), basename(path))
+    } catch {
+      return path
+    }
+  }
+}
+
+/** A protected path as the person and the model read it: under home, spelled from `~`. */
+function displayPath(path: string): string {
+  const home = HOME_PATHS.home
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
+
+/**
+ * 0.6.17 T2 (JEVADV-90): the protected file `command` writes, or null --
+ * src/core/gate_own_files.ts reads the command; this resolves the real
+ * directories it is matched against.
+ */
+function gateOwnFileWritten(command: string, cwd: string): string | null {
+  try {
+    const own = gateOwnFiles({ configDir: CONFIG_DIR, cacheDir: CACHE_DIR, orcaUserDataDir: orcaUserDataPath(PLATFORM, HOME_PATHS.home) }, canonicalPath)
+    return commandWritesGateOwnFile(command, cwd, homedir(), own, canonicalPath)
+  } catch {
+    return null
   }
 }
 
@@ -1724,7 +1727,20 @@ async function main(): Promise<void> {
 
   // Before anything else, and before any work: if Orca has the plugin
   // switched off, this hook has no business judging anything.
-  if (pluginDisabledInOrca()) passThrough()
+  if (pluginDisabledInOrca(PLATFORM, HOME_PATHS.home, ENABLEMENT_CACHE_PATH)) passThrough()
+
+  // 0.6.17 T2 (JEVADV-90): the model cannot rewrite its own judge. A write
+  // to a file the gate or the router decides from is refused here, before
+  // the safe list (a plain `echo > file` would pass it), any key, cache or
+  // Jev call. It has no switch: the switches live in one of those files.
+  const ownFile = gateOwnFileWritten(command, cwd)
+  if (ownFile !== null) {
+    appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
+    appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
+    const file = displayPath(ownFile)
+    emit('deny', tEnglish('localRuleDeny', { why: tEnglish('rule.ownConfig', { file }) }), t('blockedLine', { segment: truncateForPersonLine(affectedSegments(command)[0] ?? command), rule: t('rule.ownConfig', { file }) }))
+    return
+  }
 
   if (isObviouslySafeCommand(command)) passThrough()
   // Naming one of these is not running it. Measured live: searching this
@@ -1963,7 +1979,11 @@ async function main(): Promise<void> {
   const jevNames = createJevPseudonyms()
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
   const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head })), jevNames)
-  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '')
+  // 0.6.17 T1 (JEVADV-93): a `gh` merge says what it goes through -- a pull
+  // request's review, or none for an API branch merge -- so a reviewed merge
+  // is not judged by the checkout's branch. Jev's copy only, like the push.
+  const mergeSentence = mentionOnly || !/\bgh\b/.test(inspected) ? null : buildGhMergeSentence(ghMerges(inspected, cwd, homedir()), jevNames)
+  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '') + (mergeSentence !== null ? ` ${mergeSentence}` : '')
   // The destination is resolved once, above (folding in every target's own
   // repository too -- see pickStricterDestination): it is part of the cache
   // key, because two repositories with different thresholds must never

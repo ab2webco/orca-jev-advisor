@@ -463,3 +463,19 @@ test("the family is named after what runs, past cd, subshells, bash -c and git g
   assert.equal(commandFamily("pushd x >/dev/null && npm run build && popd"), "package script");
   assert.equal(commandFamily("cd x"), "cd");
 });
+
+// 0.6.17 T4 (JEVADV-92): a wrapper that only runs the next command is not the
+// family -- `time sqlite3 ...` was logged as `time`.
+test("time, nice, nohup, env (with its options and assignments) and command are skipped to the program they run", () => {
+  assert.equal(commandFamily("time sqlite3 app.db 'select 1'"), "sqlite3");
+  assert.equal(commandFamily("time -p npm test"), "npm");
+  assert.equal(commandFamily("nice -n 10 npm test"), "npm");
+  assert.equal(commandFamily("nohup node server.js &"), "node");
+  assert.equal(commandFamily("env FOO=1 BAR=secret npm test"), "npm");
+  assert.equal(commandFamily("env -i -u HOME TOKEN=ghp_x gh pr merge 3"), "gh cli");
+  assert.equal(commandFamily("command git push origin feature/x"), commandFamily("git push origin feature/x"));
+  assert.equal(commandFamily("time env A=1 nice -n 5 terraform apply"), commandFamily("terraform apply"));
+  assert.equal(commandFamily("cd app && time sqlite3 app.db .tables"), "sqlite3");
+  assert.equal(commandFamily("time"), "time");
+  assert.equal(commandFamily("env"), "env");
+});

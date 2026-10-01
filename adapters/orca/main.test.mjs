@@ -265,10 +265,11 @@ const HEALTHY_STATUS = {
   hook: { installed: true, pathMatches: true },
   outcomeHook: { installed: true, pathMatches: true },
   agentModelHook: { installed: true, pathMatches: true },
+  fileGuardHook: { installed: true, pathMatches: true },
   env: { installed: true, name: 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS' },
   modCopy: { installed: true }
 }
-const HEALTHY_HOOK_RUNS = { ok: true, results: ['gate-bash', 'gate-outcome', 'agent-model'].map((hook) => ({ hook, targets: ['home'], ok: true, reason: null, detail: null })) }
+const HEALTHY_HOOK_RUNS = { ok: true, results: ['gate-bash', 'gate-outcome', 'agent-model', 'gate-files'].map((hook) => ({ hook, targets: ['home'], ok: true, reason: null, detail: null })) }
 
 test('describeClaudeIntegration: everything in place and every hook ran is ok', () => {
   const check = describeClaudeIntegration(HEALTHY_STATUS, HEALTHY_HOOK_RUNS)
@@ -285,6 +286,16 @@ test('describeClaudeIntegration: a stale path counts for the outcome and Agent h
   assert.match(agent.detail, /agent-model\.ts/)
   const gate = describeClaudeIntegration({ ...HEALTHY_STATUS, hook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
   assert.match(gate.detail, /gate-bash\.ts/)
+})
+
+// 0.6.17 T2: the file tools' guard counts like the other hooks.
+test('describeClaudeIntegration: a missing or stale file tools\' guard is not fully installed', () => {
+  const missing = describeClaudeIntegration({ ...HEALTHY_STATUS, fileGuardHook: { installed: false, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.equal(missing.ok, false)
+  assert.match(missing.detail, /missing the file tools' guard/)
+  const stale = describeClaudeIntegration({ ...HEALTHY_STATUS, fileGuardHook: { installed: true, pathMatches: false } }, HEALTHY_HOOK_RUNS)
+  assert.equal(stale.ok, false)
+  assert.match(stale.detail, /gate-files\.mjs/)
 })
 
 test('describeClaudeIntegration: names the hook that failed to run and why', () => {
@@ -329,8 +340,8 @@ test('claudeIntegrationPermissionArgs: hooks-check is read-only on disk but may 
 // 0.6.11 T2e: the poll loop looks again for Orca accounts added after
 // Configure, at most once a minute, and installs only when Configure was done.
 
-const RESCAN_OK = { hook: { installed: true, pathMatches: true }, outcomeHook: { installed: true, pathMatches: true }, agentModelHook: { installed: true, pathMatches: true } }
-const RESCAN_BARE = { hook: { installed: false, pathMatches: false }, outcomeHook: { installed: false, pathMatches: false }, agentModelHook: { installed: false, pathMatches: false } }
+const RESCAN_OK = { hook: { installed: true, pathMatches: true }, outcomeHook: { installed: true, pathMatches: true }, agentModelHook: { installed: true, pathMatches: true }, fileGuardHook: { installed: true, pathMatches: true } }
+const RESCAN_BARE = { hook: { installed: false, pathMatches: false }, outcomeHook: { installed: false, pathMatches: false }, agentModelHook: { installed: false, pathMatches: false }, fileGuardHook: { installed: false, pathMatches: false } }
 
 function rescanDeps (targets) {
   const calls = { status: 0, install: 0, publish: 0 }

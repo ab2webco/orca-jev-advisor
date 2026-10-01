@@ -12,7 +12,8 @@
 // to run it.
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -37,7 +38,7 @@ process.env.ORCA_SUPERVISOR_CONFIG_DIR = join(PATHS_OVERRIDE_DIR, "config");
 process.env.ORCA_SUPERVISOR_CACHE_DIR = join(PATHS_OVERRIDE_DIR, "cache");
 after(() => rmSync(PATHS_OVERRIDE_DIR, { recursive: true, force: true }));
 
-const { parseCliArgs, runCompare } = await import("./ab_benchmark_cli.ts");
+const { countRealJevDecisions, parseCliArgs, runCompare } = await import("./ab_benchmark_cli.ts");
 
 function queuedEntry(overrides: Partial<AbSampleEntry> = {}): AbSampleEntry {
   return {
@@ -229,4 +230,41 @@ test("parseCliArgs: 'config --disable'", () => {
 test("parseCliArgs: no arguments, or an unrecognized command, yields 'help'", () => {
   assert.deepEqual(parseCliArgs([]), { command: "help" });
   assert.deepEqual(parseCliArgs(["bogus"]), { command: "help" });
+});
+
+// 0.6.17 T4 (JEVADV-92): the gate's decisions are one file per UTC hour, and
+// the single file from before is still counted.
+test("countRealJevDecisions: counts Jev decisions across the legacy file and every hourly file", () => {
+  const dir = mkdtempSync(join(tmpdir(), "orca-jev-ab-count-"));
+  try {
+    assert.equal(countRealJevDecisions(dir), null);
+    const row = (source: string) => `${JSON.stringify({ type: "gate-decision", id: Math.random().toString(36), at: "2026-09-30T10:00:00.000Z", project: "p", commandFamily: "git", source, verdict: "allow", latencyMs: 1 })}\n`;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "gate-decisions.jsonl"), row("jev") + row("cache"));
+    writeFileSync(join(dir, "gate-decisions-2026-09-30T10.jsonl"), row("jev") + row("local-rule"));
+    writeFileSync(join(dir, "gate-decisions-2026-09-30T11.jsonl"), row("jev"));
+    assert.equal(countRealJevDecisions(dir), 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// 0.6.17 T5 (JEVADV-67, A7): the entry check compared import.meta.url with
+// `file://` + argv[1], which differ as soon as the path holds a character a
+// URL escapes (a space is %20), so the CLI printed nothing and did nothing.
+test("the CLI runs from a path with a space in it", () => {
+  const root = mkdtempSync(join(tmpdir(), "orca jev ab cli "));
+  try {
+    const repo = join(root, "plugin copy");
+    const here = join(import.meta.dirname, "..", "..");
+    for (const dir of ["src", join("adapters", "cli")]) cpSync(join(here, dir), join(repo, dir), { recursive: true });
+    cpSync(join(here, "package.json"), join(repo, "package.json"));
+    const env = { ...process.env, ORCA_SUPERVISOR_CONFIG_DIR: join(root, "config"), ORCA_SUPERVISOR_CACHE_DIR: join(root, "cache") };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", join(repo, "adapters", "cli", "ab_benchmark_cli.ts"), "help"], { env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /ab-benchmark compare/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

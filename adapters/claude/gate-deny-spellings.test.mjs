@@ -6,11 +6,12 @@
 // retry in the same session (advice lets that retry through; a rule never).
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import { gateDecisionFilesToRead } from '../../src/core/measurement_files.ts'
 
 const GATE = fileURLToPath(new URL('./gate-bash.ts', import.meta.url))
 
@@ -391,7 +392,10 @@ test('0.6.13 T1: a real push next to data text is still refused', () => {
 // F-05: the recorded project and command family follow the repository the
 // command acts on, not the session's.
 function lastRecord (home) {
-  const lines = readFileSync(join(home, '.cache', 'orca-supervisor', 'gate-decisions.jsonl'), 'utf8').trim().split('\n')
+  // 0.6.17 T4: one log file per UTC hour; the newest line of the newest file.
+  const dir = join(home, '.cache', 'orca-supervisor')
+  const files = gateDecisionFilesToRead(readdirSync(dir))
+  const lines = readFileSync(join(dir, files.at(-1)), 'utf8').trim().split('\n')
   return JSON.parse(lines.at(-1))
 }
 

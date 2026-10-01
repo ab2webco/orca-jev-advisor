@@ -11,8 +11,8 @@ function family(installed: boolean, pathMatches: boolean) {
   return { installed, pathMatches };
 }
 
-const OK = { hook: family(true, true), outcomeHook: family(true, true), agentModelHook: family(true, true) };
-const NOT_INSTALLED = { hook: family(false, false), outcomeHook: family(false, false), agentModelHook: family(false, false) };
+const OK = { hook: family(true, true), outcomeHook: family(true, true), agentModelHook: family(true, true), fileGuardHook: family(true, true) };
+const NOT_INSTALLED = { hook: family(false, false), outcomeHook: family(false, false), agentModelHook: family(false, false), fileGuardHook: family(false, false) };
 
 function status(targets: Record<string, Omit<RescanTarget, "id">>): RescanStatus {
   return { ok: true, targets: Object.entries(targets).map(([id, families]) => ({ id, ...families })) };
@@ -72,4 +72,13 @@ test("once resolved, the memory is cleared so a later change installs again", ()
 test("a status that could not be read decides nothing and keeps what was remembered", () => {
   const decision = decideRescanInstall({ ok: false, targets: [] }, "account:new:missing");
   assert.deepEqual(decision, { install: false, signature: "account:new:missing" });
+});
+
+// 0.6.17 T2: an install from before the file tools' guard existed gains it on
+// the next look, without anyone pressing Configure again.
+test("an install that predates the file tools' guard: install", () => {
+  const upgraded = { ...OK, fileGuardHook: family(false, false) };
+  const decision = decideRescanInstall(status({ home: upgraded, "account:a": upgraded }), null);
+  assert.equal(decision.install, true);
+  assert.equal(decision.signature, "account:a:missing,home:missing");
 });

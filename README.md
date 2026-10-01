@@ -16,14 +16,15 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
-## What changed in 0.6.16
+## What changed in 0.6.17
 
-Subagents get the effort their work needs: the spawn's Jev judgment also
-names the work kind, and runs that only execute or read go at high at most
-on Sonnet 5 and at medium on Opus 5.5 and Sonnet 5.5. It has its own switch
-in the Models tab and starts in measure. The router no longer sends `low` on
-its own (the simple tier defaults to medium), an agent definition's declared
-effort is a floor, and router decisions join their steps by session and turn.
+The gate guards itself: an agent's write to the files the gate and router
+decide from (team policies, owners, deny switches, the model catalog, the
+gate's own state) is refused, through Bash and through Claude Code's Edit
+and Write tools, which now pass a fast local check. A `gh pr merge` is no
+longer refused as a direct write to main, while a merge through `gh api`
+into main now is. Settings backups are owner-only, the gate's decision log
+rotates by the hour, and the A/B benchmark runs from a path with a space.
 
 Every release is in [CHANGELOG.md](CHANGELOG.md).
 

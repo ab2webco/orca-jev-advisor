@@ -1501,6 +1501,34 @@ test('the Agent model hooks line renders only when the field exists, and never a
   }
 })
 
+// 0.6.17 T2 -- the file tools' guard: its own line, in both languages, only
+// when the worker reports the field.
+for (const [locale, installedText, missingText] of [['en', /Edit guard \(the gate's own rules\): installed in 2 of 2 places/, /Edit guard \(the gate's own rules\): not installed/], ['es', /Guarda de ediciones \(reglas del propio gate\): puesta en 2 de 2 sitios/, /Guarda de ediciones \(reglas del propio gate\): no puesta/]]) {
+  test(`the file tools' guard line says where it is installed (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    for (const [fileGuardHook, expected] of [[{ installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 }, installedText], [{ installed: false, installedCount: 1, totalCount: 2, orcaPaneCount: 2 }, missingText], [undefined, null]]) {
+      const { browser, page, errors } = await openPanel({
+        claudeIntegrationStatus: {
+          ok: true,
+          hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+          ...(fileGuardHook === undefined ? {} : { fileGuardHook }),
+          env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+          secretMirror: { ok: true, exists: false },
+          checkedAt: new Date().toISOString()
+        }
+      }, locale)
+      try {
+        const lines = await page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+        if (expected === null) assert.ok(!lines.some((line) => /Edit guard|Guarda de ediciones/.test(line)), `a guard line rendered with no status field: ${JSON.stringify(lines)}`)
+        else assert.ok(lines.some((line) => expected.test(line)), `no matching guard line: ${JSON.stringify(lines)}`)
+        assert.ok(!lines.some((line) => /undefined|\{\{/.test(line)), `an integration line leaked a missing value: ${JSON.stringify(lines)}`)
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    }
+  })
+}
+
 // 0.6.11 T2a -- the Node the installed hooks run on: a clear line when it is
 // too old or missing, a plain confirmation when it is fine, nothing when an
 // older worker never reported it.
@@ -3847,6 +3875,48 @@ test('a quote in a branch or project name stays text inside its attribute and bi
     }))
     assert.equal(found.handlers, 0, 'a quote in the data closed an attribute and bound a handler')
     assert.ok(found.titles.some((title) => title.includes(hostile)), `the raw name must survive as text in the title: ${JSON.stringify(found.titles)}`)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// 0.6.17 T4 (JEVADV-92): a decision the gate could not write is counted, and
+// the "is the gate working?" card says so -- even with no decision written.
+for (const [locale, text] of [['en', /3 decisions not logged, the last/], ['es', /3 decisiones sin registrar, la última/]]) {
+  test(`the status card counts gate decisions that could not be written (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const ready = SCENARIOS.ready
+    const health = { ...ready.measurementsSummary.gate.health, appendFailures: { count: 3, lastAt: new Date().toISOString() } }
+    const withFailures = { ...ready, measurementsSummary: { ...ready.measurementsSummary, gate: { ...ready.measurementsSummary.gate, health } } }
+    const { browser, page, errors } = await openBoardPanel(withFailures, locale)
+    try {
+      const chips = await page.$$eval('#status-body .chip', (items) => items.map((chip) => ({ text: chip.textContent, alarm: chip.classList.contains('alarm'), title: chip.getAttribute('title') })))
+      const failed = chips.find((chip) => text.test(chip.text))
+      assert.ok(failed, `no append-failure chip: ${JSON.stringify(chips)}`)
+      assert.equal(failed.alarm, true)
+      assert.match(failed.title, locale === 'en' ? /could not write these decisions/ : /no pudo escribir estas decisiones/)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('no append-failure chip when every decision was written, and the card shows failures with no decision at all', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const ready = await openBoardPanel(SCENARIOS.ready)
+  try {
+    const chips = await ready.page.$$eval('#status-body .chip', (items) => items.map((chip) => chip.textContent))
+    assert.ok(!chips.some((chip) => /not logged/.test(chip)), JSON.stringify(chips))
+  } finally {
+    await ready.browser.close()
+  }
+  const empty = SCENARIOS.empty
+  const health = { ...empty.measurementsSummary.gate.health, appendFailures: { count: 2, lastAt: new Date().toISOString() } }
+  const onlyFailures = { ...empty, measurementsSummary: { ...empty.measurementsSummary, gate: { ...empty.measurementsSummary.gate, health } } }
+  const { browser, page, errors } = await openBoardPanel(onlyFailures)
+  try {
+    assert.equal(await page.isVisible('#card-status'), true)
+    assert.match(await page.textContent('#status-body'), /2 decisions not logged/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

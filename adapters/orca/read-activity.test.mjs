@@ -237,3 +237,18 @@ test('runs under the permission sandbox with read-only grants on the plugin root
   assert.equal(result.projects[0].project, 'alpha')
   assert.deepEqual(result.projects[0].gateOutcomes, { allowed: 1, advised: 0, asked: 0, blocked: 0 })
 })
+
+// 0.6.17 T4 (JEVADV-92): the gate's log is one file per UTC hour now; the
+// single file written before 0.6.17 is read next to them, so no history
+// disappears on upgrade.
+test('T4: gate decisions are read from the legacy file and from every hourly file', () => {
+  const home = makeHome()
+  const now = Date.now()
+  writeLines(home, 'gate-decisions.jsonl', [gateRow({ verdict: 'allow', at: new Date(now - 3 * 60 * 60 * 1000).toISOString() })])
+  writeLines(home, `gate-decisions-${hourKey(now - 60 * 60 * 1000)}.jsonl`, [gateRow({ verdict: 'deny', source: 'local-rule', at: new Date(now - 60 * 60 * 1000).toISOString() })])
+  writeLines(home, `gate-decisions-${hourKey(now)}.jsonl`, [gateRow({ verdict: 'allow' }), 'not json'])
+  const result = run(home)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.projects[0].gateOutcomes, { allowed: 2, advised: 0, asked: 0, blocked: 1 })
+  assert.equal(result.corruptLines, 1)
+})

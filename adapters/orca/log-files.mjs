@@ -17,6 +17,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
+import { GATE_DECISIONS_APPEND_FAILURES_FILE, gateDecisionFilesToRead, parseAppendFailures } from '../../src/core/measurement_files.ts'
 
 export const TURN_USAGE_FILE_PATTERN = /^turn-usage-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/
 // JEV-060 slice 2 (§8, T9): the router's own decision log, same hourly
@@ -80,6 +81,33 @@ export async function listHourlyFiles (cacheDir, pattern) {
     files.push({ name, path: join(cacheDir, name), hourMs: Number.isNaN(hourMs) ? null : hourMs })
   }
   return files
+}
+
+/**
+ * 0.6.17 T4 (JEVADV-92): every gate decision row, from the single file
+ * written before 0.6.17 and every hourly file since (gateDecisionFilesToRead:
+ * legacy first, then the hours in order), so the readers keep the whole
+ * history across the upgrade. Not pruned: the board's windows reach back
+ * to the first decision. A missing cache dir reads as no rows.
+ */
+export async function readGateDecisionLog (cacheDir) {
+  let names
+  try {
+    names = await readdir(cacheDir)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return { rows: [], corrupt: 0 }
+    throw error
+  }
+  return readJsonlRows(gateDecisionFilesToRead(names).map((name) => ({ path: join(cacheDir, name) })))
+}
+
+/** How many gate decisions the gate could not write (0.6.17 T4); `{count: 0, lastAt: null}` when none, or when the counter cannot be read. */
+export async function readGateAppendFailures (cacheDir) {
+  try {
+    return parseAppendFailures(JSON.parse(await readFile(join(cacheDir, GATE_DECISIONS_APPEND_FAILURES_FILE), 'utf8')))
+  } catch {
+    return parseAppendFailures(null)
+  }
 }
 
 export async function readJsonlRows (files) {
