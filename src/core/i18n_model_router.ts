@@ -50,7 +50,10 @@ export type ModelRouterKey =
   | "agents.why.measuring"
   | "agents.why.inherited"
   | "agents.why.no-jev"
-  | "agents.why.unknown"
+  | "agents.why.teammate"
+  | "agents.why.teammate-routed"
+  | "agents.why.before-load"
+  | "agents.why.unseen"
   | "agents.short.explicit"
   | "agents.short.lowered"
   | "agents.short.raised"
@@ -61,7 +64,10 @@ export type ModelRouterKey =
   | "agents.short.measuring"
   | "agents.short.inherited"
   | "agents.short.no-jev"
-  | "agents.short.unknown";
+  | "agents.short.teammate"
+  | "agents.short.teammate-routed"
+  | "agents.short.before-load"
+  | "agents.short.unseen";
 
 export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
   es: {
@@ -114,8 +120,12 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.measuring": "heredado, midiendo",
     "agents.why.inherited": "heredado",
     "agents.why.no-jev": "heredado, sin respuesta de Jev",
-    // 0.6.14 T1: an agent the host runs that no spawn recorded.
-    "agents.why.unknown": "sin datos: empezó antes de recargar el plugin",
+    // 0.6.20 T2: an agent the host runs that no spawn recorded, by what is known about it.
+    "agents.why.teammate": "teammate: lo creó Claude Code fuera del router",
+    // 0.6.20 T3: a teammate the router judged at its first step.
+    "agents.why.teammate-routed": "teammate: enrutado en su primer paso",
+    "agents.why.before-load": "empezó antes de cargar el plugin",
+    "agents.why.unseen": "no visto al lanzarse",
     // The same reasons where the band is narrow.
     "agents.short.explicit": "explícito",
     "agents.short.lowered": "Jev lo bajó",
@@ -127,7 +137,10 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.short.measuring": "midiendo",
     "agents.short.inherited": "heredado",
     "agents.short.no-jev": "sin Jev",
-    "agents.short.unknown": "sin datos: antes de recargar",
+    "agents.short.teammate": "fuera del router",
+    "agents.short.teammate-routed": "enrutado",
+    "agents.short.before-load": "antes de cargar",
+    "agents.short.unseen": "no visto",
   },
   en: {
     "status.active.effort": "model: {{model}} · {{effort}} effort",
@@ -176,7 +189,10 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.measuring": "inherited, measuring",
     "agents.why.inherited": "inherited",
     "agents.why.no-jev": "inherited, no answer from Jev",
-    "agents.why.unknown": "no data: started before the plugin reloaded",
+    "agents.why.teammate": "teammate: created outside the router",
+    "agents.why.teammate-routed": "teammate: routed at its first step",
+    "agents.why.before-load": "started before the plugin loaded",
+    "agents.why.unseen": "not seen at launch",
     "agents.short.explicit": "explicit",
     "agents.short.lowered": "lowered",
     "agents.short.raised": "raised",
@@ -187,6 +203,9 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.short.measuring": "measuring",
     "agents.short.inherited": "inherited",
     "agents.short.no-jev": "no Jev",
-    "agents.short.unknown": "no data: before a reload",
+    "agents.short.teammate": "outside router",
+    "agents.short.teammate-routed": "routed",
+    "agents.short.before-load": "before load",
+    "agents.short.unseen": "not seen",
   },
 };

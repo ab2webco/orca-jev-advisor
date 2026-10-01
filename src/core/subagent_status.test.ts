@@ -4,7 +4,7 @@ import test from "node:test";
 import type { ModelEntry } from "./model_catalog.ts";
 import { resolveAccountTiers } from "./model_router_accounts.ts";
 import type { SubagentDecision } from "./model_router_subagent.ts";
-import { parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from "./subagent_status.ts";
+import { observedSubagent, parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart, unseenWhy } from "./subagent_status.ts";
 import type { RunningSubagent } from "./subagent_status.ts";
 
 function entry(id: string, rank: number): ModelEntry {
@@ -107,7 +107,35 @@ test("reconcileRunning: an agent the host runs with no record gets a row of its 
   const { kept, shown } = reconcileRunning(recorded, listed, null);
   assert.deepEqual(kept.map((a) => a.id), ["a-2"], "an unknown agent is shown, not recorded");
   assert.equal(shown.length, 2);
-  assert.deepEqual(shown[0], { id: "a-1", type: "acme-frontend-developer", description: "Reading playwright.config.ts", label: null, effort: null, why: "unknown", wouldUse: null });
+  // 0.6.20 T2: nothing says why it was missed, so the row says only that: not seen at launch.
+  assert.deepEqual(shown[0], { id: "a-1", type: "acme-frontend-developer", description: "Reading playwright.config.ts", label: null, effort: null, effortSource: null, why: "unseen", wouldUse: null });
+});
+
+test("0.6.20 T2 reconcileRunning: an unrecorded row says what is known -- a teammate, an agent running when this load began, or neither", () => {
+  const listed = [
+    { id: "t-1", type: "teammate", description: "researcher", status: "running" },
+    { id: "a-1", type: "general-purpose", description: "List files", status: "running" },
+    { id: "a-2", type: "Explore", description: "Find the router", status: "running" },
+  ];
+  const { shown } = reconcileRunning([], listed, null, new Set(["t-1", "a-1"]));
+  assert.deepEqual(shown.map((a) => [a.id, a.why]), [["t-1", "teammate"], ["a-1", "before-load"], ["a-2", "unseen"]]);
+  assert.ok(shown.every((a) => a.label === null && a.effort === null && a.effortSource === null), "no model or effort until its first step");
+  assert.deepEqual(reconcileRunning([], listed, null).shown.map((a) => a.why), ["teammate", "unseen", "unseen"], "with no load snapshot, a reload is never guessed");
+});
+
+test("0.6.20 T2 unseenWhy: a teammate is named as one first; a reload only when shown", () => {
+  assert.equal(unseenWhy("teammate", false), "teammate");
+  assert.equal(unseenWhy("teammate", true), "teammate");
+  assert.equal(unseenWhy("general-purpose", true), "before-load");
+  assert.equal(unseenWhy("general-purpose", false), "unseen");
+});
+
+test("0.6.20 T2 observedSubagent: an agent first met at its own step takes the model and effort that step reports", () => {
+  const listed = { id: "t-1", type: "teammate", description: "researcher", status: "running" };
+  assert.deepEqual(observedSubagent(listed, { label: "Opus 5.5", effort: "high", effortSource: "inherited" }, false), {
+    id: "t-1", type: "teammate", description: "researcher", label: "Opus 5.5", effort: "high", effortSource: "inherited", why: "teammate", wouldUse: null,
+  });
+  assert.equal(observedSubagent({ ...listed, type: "Explore" }, { label: "Haiku 4.5", effort: null, effortSource: "not-sent" }, true).why, "before-load");
 });
 
 test("reconcileRunning: with no host list, what spawn recorded stands", () => {
@@ -118,14 +146,14 @@ test("reconcileRunning: with no host list, what spawn recorded stands", () => {
 });
 
 test("parseRunningSubagents: reads back what was stored, drops what is malformed", () => {
-  const stored = [agent("a-1", { effort: null, why: "lowered", wouldUse: "Haiku 4.5" }), agent("a-2", { label: null, effort: 4096 })];
+  const stored = [agent("a-1", { effort: null, why: "lowered", wouldUse: "Haiku 4.5" }), agent("a-2", { label: null, effort: 4096 }), agent("t-1", { type: "teammate", why: "teammate", effortSource: "inherited" })];
   assert.deepEqual(parseRunningSubagents({ agents: JSON.parse(JSON.stringify(stored)) }), stored);
   assert.deepEqual(parseRunningSubagents(undefined), []);
   assert.deepEqual(parseRunningSubagents({ agents: [{ id: "x" }, null, 3, { ...stored[0], why: "nonsense" }] }), []);
 });
 
 test("subagentsStatusPart: an agent with no record counts", () => {
-  const running = [agent("a-1"), agent("a-2", { label: null, effort: null, why: "unknown" })];
+  const running = [agent("a-1"), agent("a-2", { label: null, effort: null, why: "unseen" })];
   assert.equal(subagentsStatusPart("es", running), "agentes: 2");
   assert.equal(subagentsStatusPart("en", running), "agents: 2");
 });

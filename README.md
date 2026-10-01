@@ -16,6 +16,19 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.20
+
+Agent-team teammates are seen and routed. Claude Code creates a teammate
+outside the hook the router uses for subagents. Until now the agents band
+showed one as `? ?` and claimed it had started before a plugin reload. Now a
+teammate is judged at its first step, with the same Jev call and rules as a
+subagent at spawn. Its model and effort apply to every later step, and the
+band says "teammate: routed at its first step". Any agent the plugin did
+not see start shows the model and effort its own steps report. The band's
+reason says only what is known: a teammate, an agent that was already
+running when the plugin loaded, or one not seen at launch. It never guesses
+a reload.
+
 ## What changed in 0.6.19
 
 The rest of the independent QA of 0.6.5, closed. With no key, or with Jev
@@ -479,6 +492,19 @@ lets a rewrite return an "allow" decision without overriding what the
 person's own permission rules would have produced); and Jev's own
 confidence in the recommendation (at least 0.7). Any one of these failing
 means the subagent runs on whatever model was already requested.
+
+**Agent-team teammates.** A teammate (an `Agent` call with a `name`, with
+agent teams turned on) does not start through the hook a subagent starts
+through. The router keeps the task from the lead's `Agent` call and
+judges the teammate at its first step, the same way it judges a subagent
+at spawn: the same Jev call, guards, work kind and agent-definition effort
+floor. That model and effort then apply to every step of the teammate's
+life, and the decision log writes a row with `point: "teammate"`. If the
+plugin reloaded after the call, the task is gone. The teammate then keeps
+the model it started on, because its cache is already warm, and its row
+says the task was missing. A split-pane teammate runs in its own process,
+which loads the plugin there, so it is expected to be routed as a main
+session. That has not been verified.
 
 **Revert.** The same **Revert everything** action (Settings → Jev
 Advisor, or the *Advisor: Revert the Claude Code side* command) removes

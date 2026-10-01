@@ -2,6 +2,22 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.20
+
+- **Agent-team teammates are routed.** Claude Code never fires `agent.spawn`
+  for a teammate, so the router never saw one. The router now keeps the
+  task from the lead's `Agent` call and judges the teammate at its first
+  step, with the same Jev call, guards, work kind and definition effort
+  floor as a subagent at spawn. That model and effort apply to every later
+  step, and the decision log writes a row with `point: "teammate"`.
+- **The agents band tells the truth.** An agent the plugin did not see
+  start shows the model its own answers report and the effort its steps
+  are sent with, instead of `? ?`. The reason says what is known: a
+  teammate (routed at its first step, or created outside the router), an
+  agent already running when the plugin loaded, or one not seen at launch.
+  It no longer guesses a plugin reload. A teammate's row stays while the
+  host runs it, not only until its first answer.
+
 ## 0.6.19
 
 - **No key no longer means approved.** When the gate has no key, cannot reach

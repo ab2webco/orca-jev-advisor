@@ -408,7 +408,11 @@ export function routerDecisionFileName(atIso: string): string {
   return `model-router-decisions-${atIso.slice(0, 13)}.jsonl`;
 }
 
-export type RouterPoint = "start" | "stage" | "subagent";
+/** 0.6.20 T3: `teammate`, an agent-team teammate judged at its first step (agent.spawn never fires for one). */
+export type RouterPoint = "start" | "stage" | "subagent" | "teammate";
+
+/** 0.6.20 T3: whether the lead's Agent call for a teammate was kept to judge it by, or missing (a reload forgot it). */
+export type TeammateTaskSeen = "matched" | "missing";
 
 export interface RouterDecisionRecord {
   readonly at: string;
@@ -440,6 +444,8 @@ export interface RouterDecisionRecord {
   readonly agentId: string | null;
   /** 0.6.16 T2: a subagent's work kind (src/core/work_kind.ts); null on every other point and when the switch is off. */
   readonly workKind: WorkKindRecord | null;
+  /** 0.6.20 T3: on a teammate row only. */
+  readonly teammateTask?: TeammateTaskSeen;
 }
 
 export interface RouterDecisionRecordInput {
@@ -461,6 +467,7 @@ export interface RouterDecisionRecordInput {
   readonly turnId?: string | null;
   readonly agentId?: string | null;
   readonly workKind?: WorkKindRecord | null;
+  readonly teammateTask?: TeammateTaskSeen;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -489,5 +496,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     turnId: input.turnId ?? null,
     agentId: input.agentId ?? null,
     workKind: input.workKind ?? null,
+    ...(input.teammateTask === undefined ? {} : { teammateTask: input.teammateTask }),
   };
 }

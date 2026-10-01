@@ -75,7 +75,10 @@ const WHY_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
   measuring: "agents.why.measuring",
   inherited: "agents.why.inherited",
   "no-jev": "agents.why.no-jev",
-  unknown: "agents.why.unknown",
+  teammate: "agents.why.teammate",
+  "teammate-routed": "agents.why.teammate-routed",
+  "before-load": "agents.why.before-load",
+  unseen: "agents.why.unseen",
 };
 
 const WHY_SHORT_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
@@ -89,13 +92,16 @@ const WHY_SHORT_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
   measuring: "agents.short.measuring",
   inherited: "agents.short.inherited",
   "no-jev": "agents.short.no-jev",
-  unknown: "agents.short.unknown",
+  teammate: "agents.short.teammate",
+  "teammate-routed": "agents.short.teammate-routed",
+  "before-load": "agents.short.before-load",
+  unseen: "agents.short.unseen",
 };
 
 function effortText(locale: Locale, agent: RunningSubagent): string {
   const { effort, effortSource } = agent;
   // 0.6.15 T4b: unknown before its first step, whatever the reason says.
-  if (agent.why === "unknown" || effortSource === null) return "?";
+  if (effortSource === null) return "?";
   if (effort === null) return "—";
   const level = typeof effort === "number" ? String(effort) : translate(MODEL_ROUTER_CATALOG, locale, `effort.${effort}`);
   if (effortSource === undefined || effortSource === "not-sent") return level;

@@ -10,7 +10,11 @@
  *   1. It runs the REAL hook (hooks/index.ts's `register`, the same module
  *      the plugin ships) against a minimal host that holds the owner's case
  *      of 2026-09-30 in `$.state` and `$.agent.list()`: four agents running,
- *      two of the same type, one started before a plugin reload.
+ *      two of the same type, one started before the plugin loaded (the
+ *      hook's own session.start sees it running, 0.6.20 T2). 0.6.20 adds
+ *      two agent-team teammates (one before its first step, one the router
+ *      judged at its first step) and an agent nothing recorded that started
+ *      after the load.
  *   2. It paints the returned tree as a terminal would -- one cell per
  *      character, `bold` bold, `dimColor` dim -- at 200, 120, 80 and 40
  *      columns, dark and light, and photographs each with Playwright.
@@ -30,7 +34,7 @@ import { register } from '../adapters/claude/mod-skills/hooks/index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outFlag = process.argv.indexOf('--out')
-const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.15')
+const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.20')
 const COLUMNS = [200, 120, 80, 40]
 const THEMES = {
   dark: { background: '#1e1e1e', foreground: '#d4d4d4', label: '#8a8a8a' },
@@ -39,19 +43,28 @@ const THEMES = {
 const LOCALES = ['es', 'en']
 
 // The owner's four agents, with a neutral project prefix. agent-0 has no
-// record: it started before the plugin reloaded.
+// record: it started before the plugin loaded. 0.6.20: the reviewer is a
+// teammate the router judged at its first step (T3), the researcher a teammate
+// before its first step (T2), and agent-9 started after the load, unseen.
 const RECORDED = [
   { id: 'agent-1', type: 'acme-frontend-developer', description: 'Adding Definition of Done to spec.md', label: 'Opus 5.5', effort: 'xhigh', effortSource: 'inherited', why: 'explicit', wouldUse: null },
   { id: 'agent-2', type: 'general-purpose', description: 'Creating a worktree for verify-report generation', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'lowered', wouldUse: null },
   { id: 'agent-3', type: 'acme-backend-developer', description: 'Watching CI checks on PR 867', label: 'Sonnet 5.5', effort: 'high', effortSource: 'inherited', why: 'explicit', wouldUse: null },
+  { id: 'areviewer-1a2b', type: 'teammate', description: 'reviewer', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'teammate-routed', wouldUse: null },
+]
+/** What the host runs at the load's session.start: agent-0 is already there. */
+const AT_LOAD = [
+  { id: 'agent-0', type: 'acme-frontend-developer', description: 'Reading playwright.config.ts', status: 'running' },
 ]
 const LISTED = [
   ...RECORDED.map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, status: 'running' })),
-  { id: 'agent-0', type: 'acme-frontend-developer', description: 'Reading playwright.config.ts', status: 'running' },
+  ...AT_LOAD,
+  { id: 'aresearcher-3c4d', type: 'teammate', description: 'researcher', status: 'running' },
+  { id: 'agent-9', type: 'Explore', description: 'Find the band hook', status: 'running' },
 ]
 
-/** The few `$` nouns the band's hook reads, holding the case above. */
-function host (locale) {
+/** The few `$` nouns the band's hook reads, holding the case above; `listed` is what `$.agent.list()` returns. */
+function host (locale, listed = LISTED) {
   return {
     env: { get: async (name) => (name === 'HOME' ? '/home/dev' : undefined) },
     fs: {
@@ -61,9 +74,13 @@ function host (locale) {
         throw new Error(`not in this host: ${path}`)
       },
     },
-    state: { get: async (ref) => ({ value: ref.key === 'runningSubagents' ? { agents: RECORDED } : undefined, version: 1 }) },
-    agent: { list: async () => LISTED },
+    state: {
+      get: async (ref) => ({ value: ref.key === 'runningSubagents' ? { agents: RECORDED } : undefined, version: 1 }),
+      set: async () => ({ isSet: false, version: 1 }),
+    },
+    agent: { list: async () => listed },
     ui: {
+      status: () => {},
       resolve: () => ({
         Box: (props) => ({ type: 'Box', props }),
         Text: (props) => ({ type: 'Text', props }),
@@ -72,12 +89,17 @@ function host (locale) {
   }
 }
 
-function bandHook () {
+/** The band's hook, after the load's own session.start has seen what the host ran then. */
+async function bandHook () {
   let hook = null
+  let start = null
   register((event, matcher, fn) => {
     if (event === 'ui.render' && matcher?.component === 'AbovePrompt') hook = fn
+    if (event === 'session.start') start = typeof matcher === 'function' ? matcher : fn
   }, { typesafeApiKey: 'unused' })
   if (hook === null) throw new Error('hooks/index.ts registered no AbovePrompt band')
+  if (start === null) throw new Error('hooks/index.ts registered no session.start')
+  await start(host('en', AT_LOAD), { source: 'startup' }, async (e) => e)
   return hook
 }
 
@@ -100,7 +122,7 @@ function plain (node) {
   return children.map(plain).join('')
 }
 
-const hook = bandHook()
+const hook = await bandHook()
 await mkdir(OUT_DIR, { recursive: true })
 const browser = await chromium.launch()
 const overflows = []
@@ -120,7 +142,7 @@ try {
           .band{width:${columns}ch;white-space:pre;overflow:hidden;outline:1px dashed ${colors.label}}
         </style><div class="label">AbovePrompt band · ${columns} columns · ${locale} · ${theme} (the hook's own tree, painted cell by cell)</div>
         <div class="band">${lines.map((line) => paint(line)).join('\n')}</div>`
-        const page = await browser.newPage({ viewport: { width: Math.ceil(columns * 8.6) + 48, height: 200 }, deviceScaleFactor: 2 })
+        const page = await browser.newPage({ viewport: { width: Math.ceil(columns * 8.6) + 48, height: 260 }, deviceScaleFactor: 2 })
         await page.setContent(html)
         const file = join(OUT_DIR, `band-${locale}-${columns}-${theme}.png`)
         await page.screenshot({ path: file, fullPage: true })

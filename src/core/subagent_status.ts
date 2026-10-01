@@ -31,11 +31,31 @@ export function subagentEffortSource(carried: SessionEffort | null, sent: Sessio
   return carried === sent ? "inherited" : "jev";
 }
 
-/** Why a running subagent is on the model it is on. */
-/** Why a running subagent is on the model it is on; `unknown` when nothing recorded it (0.6.14 T1: it started before the plugin loaded). */
-export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "unknown";
+/**
+ * Why a running subagent is on the model it is on. 0.6.20 T2: an agent no
+ * spawn recorded says only what is known about it -- `teammate` (an
+ * agent-team teammate, which Claude Code creates outside the router),
+ * `before-load` (the host already ran it when this plugin load started), or
+ * `unseen` (neither can be shown). A reload is never guessed. 0.6.20 T3:
+ * `teammate-routed`, a teammate the router judged at its first step.
+ */
+export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "teammate" | "teammate-routed" | "before-load" | "unseen";
 
-const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "unknown"];
+const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "teammate", "teammate-routed", "before-load", "unseen"];
+
+/** The engine's type for an in-process agent-team teammate (`$.agent.list()`). */
+export const TEAMMATE_TYPE = "teammate";
+
+/** 0.6.20 T2: why an agent no spawn recorded runs as it does -- a teammate first, a start before this load only when shown. */
+export function unseenWhy(type: string, startedBeforeLoad: boolean): SubagentWhy {
+  if (type === TEAMMATE_TYPE) return "teammate";
+  return startedBeforeLoad ? "before-load" : "unseen";
+}
+
+/** Whether a row's reason says no spawn recorded it (its model and effort come from its own steps). */
+export function isUnseenWhy(why: SubagentWhy): boolean {
+  return why === "teammate" || why === "teammate-routed" || why === "before-load" || why === "unseen";
+}
 
 /**
  * One subagent running now (0.6.14 T1): what it is and what it is doing,
@@ -72,17 +92,21 @@ export interface ListedAgent {
   readonly type: string;
   readonly description: string;
   readonly status: string;
+  /** 0.6.20 T3: what SendMessage addresses it by, when it has one (a teammate's Agent `name`). */
+  readonly name?: string;
 }
 
 /**
  * The running set against what the host runs now: `kept` is what stays
  * recorded (a recorded agent the host lists as running, or `keep`, the one
  * just started), `shown` adds a row for each agent the host runs that no
- * spawn recorded (it started before this plugin loaded), first, in the
- * host's order -- so the count always matches the host's. With no list
- * (the host has none, or it failed) what spawn recorded stands.
+ * spawn recorded, first, in the host's order -- so the count always matches
+ * the host's. Such a row has no model or effort yet, and its reason is
+ * unseenWhy's: `beforeLoad` holds the ids the host already ran when this
+ * plugin load started (0.6.20 T2). With no list (the host has none, or it
+ * failed) what spawn recorded stands.
  */
-export function reconcileRunning(recorded: readonly RunningSubagent[], listed: readonly ListedAgent[] | null, keep: string | null): { kept: RunningSubagent[]; shown: RunningSubagent[] } {
+export function reconcileRunning(recorded: readonly RunningSubagent[], listed: readonly ListedAgent[] | null, keep: string | null, beforeLoad: ReadonlySet<string> = new Set()): { kept: RunningSubagent[]; shown: RunningSubagent[] } {
   if (listed === null) return { kept: [...recorded], shown: [...recorded] };
   const live = listed.filter((agent) => agent.status === "running");
   const liveIds = new Set(live.map((agent) => agent.id));
@@ -90,8 +114,24 @@ export function reconcileRunning(recorded: readonly RunningSubagent[], listed: r
   const known = new Set(kept.map((agent) => agent.id));
   const unknown: RunningSubagent[] = live
     .filter((agent) => !known.has(agent.id))
-    .map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, label: null, effort: null, why: "unknown", wouldUse: null }));
+    .map((agent) => ({ id: agent.id, type: agent.type, description: agent.description, label: null, effort: null, effortSource: null, why: unseenWhy(agent.type, beforeLoad.has(agent.id)), wouldUse: null }));
   return { kept, shown: [...unknown, ...kept] };
+}
+
+/** What an agent's own step reports: its model, as a person reads it (null when its answer named none), and the effort it is sent with and where that came from. */
+export interface ObservedStep {
+  readonly label: string | null;
+  readonly effort: SessionEffort | null;
+  readonly effortSource: SubagentEffortSource;
+}
+
+/**
+ * 0.6.20 T2: the row for an agent no spawn recorded, met first at one of its
+ * own steps: what the host lists it as, the model and effort that step
+ * reports, and unseenWhy's reason.
+ */
+export function observedSubagent(agent: ListedAgent, step: ObservedStep, startedBeforeLoad: boolean): RunningSubagent {
+  return { id: agent.id, type: agent.type, description: agent.description, label: step.label, effort: step.effort, effortSource: step.effortSource, why: unseenWhy(agent.type, startedBeforeLoad), wouldUse: null };
 }
 
 function isEffort(value: unknown): value is SessionEffort {
