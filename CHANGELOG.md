@@ -2,6 +2,36 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.19
+
+- **No key no longer means approved.** When the gate has no key, cannot reach
+  Jev or has its key rejected, it shows its notice and leaves the decision to
+  Claude Code's own permission rules, instead of returning `allow` and
+  skipping the prompt. Nothing changes in bypassPermissions.
+- **The gate hook never crashes and never hangs on git.** Every hook entry
+  point fails open on an unexpected error, and the gate's git calls go
+  through one helper with a timeout. Redirections without a space
+  (`>../x`, `>>../x`, `1>../x`, `2>>file`) are read like the spaced form.
+- **Decision history is safe from an empty field.** The log size must be a
+  whole number of at least 1 in the panel, the stored config and the log
+  writer, so an empty or zero value can no longer wipe the history.
+- **A readiness you set survives a restart.** A new owner override on the
+  Models tab ("Treat measurement as ready") is kept in Orca's storage and
+  applied by every mirror, including the one at boot; with it off, a real
+  loss of readiness still shows.
+- **Panels:** every escaped name on the board and in the config panel is
+  tested with hostile input; the hand-copied panel functions are tested
+  against their originals (one had drifted); labels are tied to their
+  controls; the panels declare their language.
+- **Data:** the model reclassification log rotates by the hour, the A/B
+  results file keeps the newest 5,000 rows, the A/B CLI records results
+  before it rewrites its queue, and the skills mod's prompt hook can no
+  longer fail on its clock.
+- **Cleanup:** two unused modules, two stale typecheck configs and the
+  broken `self-check` script are gone; the installer recognises its hook
+  entries by the script they run, and only takes account folders that hold
+  a Claude config.
+
 ## 0.6.18
 
 - **A real typecheck.** `typescript` and `@types/node` are development
