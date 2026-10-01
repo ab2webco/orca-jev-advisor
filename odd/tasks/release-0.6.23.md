@@ -65,9 +65,9 @@ export interface AgentPlace {
   - What Claude Code paints is reported as terminal text (`orca terminal read`), not as an image, unless a real screenshot is taken.
 
 ## Checklist
-- [ ] T1 agent place inference and resolution
-- [ ] T2 band column
-- [ ] T3 band screenshots, looked at
+- [x] T1 agent place inference and resolution
+- [x] T2 band column
+- [x] T3 band screenshots, looked at
 - [ ] T4 README, CHANGELOG, QA, release, live check
 
 ## Acceptance criteria
@@ -76,3 +76,10 @@ export interface AgentPlace {
 - The gate replay sets pass unchanged.
 - The privacy test exits 0. No user name, path or branch prefix is in fixtures or screenshots.
 - Every band line fits `columns` at 200, 120, 80 and 40.
+
+## Proof
+- **T1, afc7e34 (writer A):** RED was 7 failures plus a test file that could not load. GREEN added 21 tests, and npm test passed 3164 of 3164. The hooks module cannot import `command_locations.ts`, because that file uses `node:path`. It uses the splitter and tokenizer from `git_discard.ts` instead.
+- **T2, 6fbefb4 (writer B):** RED was 4 of 23 failing, GREEN 23 of 23.
+- **T2 follow-up, 446ab50 (lead):** keeps the place at 80 and 40 columns (RED 1, then GREEN). A row with no place lends its cells to its description (RED 1, then GREEN).
+- **T3:** 16 screenshots in `odd/qa/shots-0.6.23/`, all looked at.
+- **Integrated branch (lead):** typecheck 0, npm test 3172 of 3172, privacy 0. No gate file changed.
