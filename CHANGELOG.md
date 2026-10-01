@@ -2,6 +2,31 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.18
+
+- **A real typecheck.** `typescript` and `@types/node` are development
+  dependencies; `tsconfig.json` (strict, `noEmit`, `nodenext`,
+  `allowImportingTsExtensions`, `erasableSyntaxOnly`, `verbatimModuleSyntax`)
+  checks the Node code and its tests, and the skills mod is checked against
+  Claude Code's own types. `npm run typecheck` runs first in `npm run check`,
+  which CI runs, so a type error fails CI. The hand-written Node shim that
+  shadowed `@types/node` is gone.
+- **Three bugs the typecheck found**, each fixed with a failing test first:
+  - a destination mirror row without a string label made the gate's Jev call
+    throw, so every command in that destination was judged as if Jev were
+    unreachable;
+  - a push whose directory cannot be known (`git -C "$X" push`,
+    `cd "$X" && git push`) was described to Jev as a push from the session's
+    own checkout and branch; it is now unknown, as the local rules already
+    read it;
+  - the measure-only hold rule (0.6.16) read a tool's arguments from a field
+    Claude Code never sends, so it never saw a failing test run.
+- **The gate's last unguarded inputs.** The plugin's Orca storage
+  (`storage.json` and the encrypted secrets the key file is rewritten from)
+  joins the files an agent may not edit, through Bash and the Edit and Write
+  tools. Claude Code's own `settings.json` stays editable; a removed hook
+  entry is reinstalled by the worker's rescan and reported by `status`.
+
 ## 0.6.17
 
 - **The gate guards its own rules.** A command that writes, moves, truncates,
