@@ -44,6 +44,7 @@ import { commandFamily, parseGateDecisionRecords } from "../../src/core/gate_mea
 import { gateDecisionFilesToRead } from "../../src/core/measurement_files.ts";
 import { emptyGateDecisionTotals, GATE_DECISION_TOTALS_FILE, isFoldedFile, parseGateDecisionTotals } from "../../src/core/gate_decision_totals.ts";
 import type { GateDecisionTotals } from "../../src/core/gate_decision_totals.ts";
+import { isBlankOrComment } from "../../src/core/commands_file.ts";
 import { callJev } from "../../src/core/jev.ts";
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from "../../src/core/paths.ts";
 import { resolveApiKey } from "../../src/core/secrets.ts";
@@ -95,11 +96,6 @@ export interface RunCompareOutput {
   readonly remainingQueueEntries: readonly AbSampleEntry[];
   /** Commands-file lines that could not be measured (no JevCaller, or the call failed) -- reported, never silently ignored. */
   readonly directBatchSkipped: number;
-}
-
-function isBlankOrComment(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.length === 0 || trimmed.startsWith("#");
 }
 
 export async function runCompare(input: RunCompareInput): Promise<RunCompareOutput> {

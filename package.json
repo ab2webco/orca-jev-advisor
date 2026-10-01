@@ -17,7 +17,8 @@
     "preflight": "npm run typecheck && npm run test && npm run shots",
     "check": "npm run preflight && npm run test:panels",
     "test:panels": "node --test scripts/panels.spec.mjs",
-    "ab-benchmark": "node --experimental-strip-types adapters/cli/ab_benchmark_cli.ts"
+    "ab-benchmark": "node --experimental-strip-types adapters/cli/ab_benchmark_cli.ts",
+    "jev-health": "node --experimental-strip-types adapters/cli/jev_health_cli.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",
