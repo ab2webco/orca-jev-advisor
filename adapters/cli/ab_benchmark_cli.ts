@@ -33,13 +33,14 @@
 // spawn, the real Jev network call, argv and console.log.
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { buildActionGateQuestions, buildActionGateState, decideAction } from "../../src/core/decisions.ts";
 import { commandFamily, parseGateDecisionRecords } from "../../src/core/gate_measurement.ts";
+import { gateDecisionFilesToRead } from "../../src/core/measurement_files.ts";
 import { callJev } from "../../src/core/jev.ts";
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from "../../src/core/paths.ts";
 import { resolveApiKey } from "../../src/core/secrets.ts";
@@ -219,10 +220,6 @@ const CONFIG_DIR = resolveConfigDir(PLATFORM, HOME_PATHS);
 const CONFIG_PATH = join(CONFIG_DIR, "ab-benchmark-config.json");
 const QUEUE_PATH = join(CACHE_DIR, "ab-benchmark-queue.jsonl");
 const RESULTS_PATH = join(CACHE_DIR, "ab-benchmark-results.jsonl");
-// The gate's own decision log (adapters/claude/gate-bash.ts's GATE_LOG_PATH)
-// -- read-only from here, purely to count real "source":"jev" decisions for
-// AbBenchmarkReport.decisionsBigModelSkipped. Never written by this CLI.
-const GATE_LOG_PATH = join(CACHE_DIR, "gate-decisions.jsonl");
 
 const execFileAsync = promisify(execFile);
 const CLAUDE_TIMEOUT_MS = 60_000;
@@ -272,9 +269,23 @@ function readTextOrEmpty(path: string): string {
   }
 }
 
-function countRealJevDecisions(): number | null {
-  const raw = readTextOrEmpty(GATE_LOG_PATH);
-  if (raw.length === 0) return null;
+/**
+ * Real "source":"jev" decisions in the gate's own decision log, for
+ * AbBenchmarkReport.decisionsBigModelSkipped -- read-only, never written by
+ * this CLI. 0.6.17 T4: the log is one file per UTC hour plus the single file
+ * written before 0.6.17 (src/core/measurement_files.ts); null when there is
+ * none at all.
+ */
+export function countRealJevDecisions(cacheDir: string = CACHE_DIR): number | null {
+  let names: string[];
+  try {
+    names = readdirSync(cacheDir);
+  } catch {
+    return null;
+  }
+  const files = gateDecisionFilesToRead(names);
+  if (files.length === 0) return null;
+  const raw = files.map((name) => readTextOrEmpty(join(cacheDir, name))).join("\n");
   return parseGateDecisionRecords(raw).filter((r) => r.source === "jev").length;
 }
 
@@ -295,7 +306,7 @@ function printReport(report: AbBenchmarkReport): void {
   console.log(`tokens -- Jev:         input ${report.jevTokens.input}, output ${report.jevTokens.output}`);
   console.log(
     report.decisionsBigModelSkipped === null
-      ? "decisions no model had to make: n/a (no gate-decisions.jsonl to read)"
+      ? "decisions no model had to make: n/a (no gate decision log to read)"
       : `decisions no model had to make: ${report.decisionsBigModelSkipped}`,
   );
   // Grouped by model id, never averaged across models: a median over two

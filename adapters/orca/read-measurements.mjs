@@ -46,12 +46,11 @@ import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_rec
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
 import { modSkillsProjectName } from '../../src/core/project_name.ts'
-import { toGateDecisionRecord } from './log-files.mjs'
+import { readGateAppendFailures, readGateDecisionLog, toGateDecisionRecord } from './log-files.mjs'
 import { HUMAN_QUEUE_FILE, parseHumanQueue, waitingItems } from '../../src/core/human_queue.ts'
 import { measurementFilesToRead } from '../../src/core/measurement_files.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
-const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 const APPROVALS_LOG_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 const AB_BENCHMARK_LOG_PATH = join(CACHE_DIR, 'ab-benchmark-results.jsonl')
 const HUMAN_QUEUE_PATH = join(CACHE_DIR, HUMAN_QUEUE_FILE)
@@ -108,7 +107,8 @@ function topByCount (counts, limit) {
 // never drift onto two different guards.
 
 async function aggregateGate () {
-  const { rows, corrupt } = await readJsonl(GATE_LOG_PATH)
+  // 0.6.17 T4: the hourly files and the legacy single file, in order.
+  const { rows, corrupt } = await readGateDecisionLog(CACHE_DIR)
   const candidates = rows.filter((r) => r.type === 'gate-decision')
   const decisions = []
   let malformed = 0
@@ -130,7 +130,9 @@ async function aggregateGate () {
   return {
     ...summary,
     windows: buildGateWindows(decisions, pending, outcomes, now),
-    health: gateHealth(decisions),
+    // 0.6.17 T4: records the gate could not write, so a log that stopped
+    // growing is never read as a quiet gate.
+    health: { ...gateHealth(decisions), appendFailures: await readGateAppendFailures(CACHE_DIR) },
     corruptLines: corrupt + malformed,
     cacheHitRate: summary.totalDecisions > 0 ? summary.bySource.cache / summary.totalDecisions : null,
     recent: decisions

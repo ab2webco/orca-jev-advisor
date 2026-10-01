@@ -3880,3 +3880,45 @@ test('a quote in a branch or project name stays text inside its attribute and bi
     await browser.close()
   }
 })
+
+// 0.6.17 T4 (JEVADV-92): a decision the gate could not write is counted, and
+// the "is the gate working?" card says so -- even with no decision written.
+for (const [locale, text] of [['en', /3 decisions not logged, the last/], ['es', /3 decisiones sin registrar, la última/]]) {
+  test(`the status card counts gate decisions that could not be written (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const ready = SCENARIOS.ready
+    const health = { ...ready.measurementsSummary.gate.health, appendFailures: { count: 3, lastAt: new Date().toISOString() } }
+    const withFailures = { ...ready, measurementsSummary: { ...ready.measurementsSummary, gate: { ...ready.measurementsSummary.gate, health } } }
+    const { browser, page, errors } = await openBoardPanel(withFailures, locale)
+    try {
+      const chips = await page.$$eval('#status-body .chip', (items) => items.map((chip) => ({ text: chip.textContent, alarm: chip.classList.contains('alarm'), title: chip.getAttribute('title') })))
+      const failed = chips.find((chip) => text.test(chip.text))
+      assert.ok(failed, `no append-failure chip: ${JSON.stringify(chips)}`)
+      assert.equal(failed.alarm, true)
+      assert.match(failed.title, locale === 'en' ? /could not write these decisions/ : /no pudo escribir estas decisiones/)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('no append-failure chip when every decision was written, and the card shows failures with no decision at all', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const ready = await openBoardPanel(SCENARIOS.ready)
+  try {
+    const chips = await ready.page.$$eval('#status-body .chip', (items) => items.map((chip) => chip.textContent))
+    assert.ok(!chips.some((chip) => /not logged/.test(chip)), JSON.stringify(chips))
+  } finally {
+    await ready.browser.close()
+  }
+  const empty = SCENARIOS.empty
+  const health = { ...empty.measurementsSummary.gate.health, appendFailures: { count: 2, lastAt: new Date().toISOString() } }
+  const onlyFailures = { ...empty, measurementsSummary: { ...empty.measurementsSummary, gate: { ...empty.measurementsSummary.gate, health } } }
+  const { browser, page, errors } = await openBoardPanel(onlyFailures)
+  try {
+    assert.equal(await page.isVisible('#card-status'), true)
+    assert.match(await page.textContent('#status-body'), /2 decisions not logged/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

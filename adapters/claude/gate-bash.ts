@@ -104,6 +104,7 @@ import type { GateKey } from '../../src/core/i18n_gate.ts'
 import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
+import { GATE_DECISIONS_APPEND_FAILURES_FILE, gateDecisionFileName, nextAppendFailures, parseAppendFailures } from '../../src/core/measurement_files.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
 import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, ghMerges, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
@@ -149,7 +150,9 @@ const UNREACHABLE_WARNED_PATH = join(CACHE_DIR, 'gate-bash.unreachable-warned.js
 // ordinary network noise, not a signal the gate is disarmed.
 const UNREACHABLE_WARN_THRESHOLD = 3
 const LOCALE_PATH = join(CONFIG_DIR, 'locale')
-const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
+// 0.6.17 T4 (JEVADV-92): one decision file per UTC hour (gateDecisionFileName);
+// a record that cannot be written is counted in GATE_APPEND_FAILURES_PATH.
+const GATE_APPEND_FAILURES_PATH = join(CACHE_DIR, GATE_DECISIONS_APPEND_FAILURES_FILE)
 const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // The advise-model release's own small state file: one entry per
 // sha256(session_id + NUL + command), so an identical retry within the
@@ -1374,13 +1377,20 @@ function readSeedScopeById(): ReadonlyMap<string, PolicyScope> {
 }
 const SEED_SCOPE_BY_ID = readSeedScopeById()
 
-/** Appends one measurement record. Best-effort, same as the auth-warned marker: a log that cannot be written is never a reason to block or delay a verdict. */
+/**
+ * Appends one measurement record to the current hour's file. Best-effort, same
+ * as the auth-warned marker: a log that cannot be written is never a reason
+ * to block or delay a verdict. It is never silent either (0.6.17 T4): the
+ * failure is counted in GATE_APPEND_FAILURES_PATH, which the board's "is the
+ * gate working?" card shows.
+ */
 function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false): void {
+  const at = new Date().toISOString()
   try {
-    mkdirSync(dirname(GATE_LOG_PATH), { recursive: true })
+    mkdirSync(CACHE_DIR, { recursive: true })
     const record = buildGateDecisionRecord({
       id: randomUUID(),
-      at: new Date().toISOString(),
+      at,
       project: projectName(cwd),
       command,
       source,
@@ -1397,13 +1407,27 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       // the read possibly failing rather than forcing a fake version string.
       pluginVersion: PLUGIN_VERSION,
     })
-    appendFileSync(GATE_LOG_PATH, serializeGateRecord(record), 'utf8')
+    appendFileSync(join(CACHE_DIR, gateDecisionFileName(at)), serializeGateRecord(record), 'utf8')
   } catch {
-    // Best-effort measurement; never blocks or delays a verdict.
+    countGateAppendFailure(at)
   }
 }
 
-/** Best-effort read; a missing, unreadable or malformed config is read as "off" -- see src/core/ab_benchmark_config.ts's own fail-open contract. */
+/** One more record that could not be written. If even this cannot be written, there is nowhere left to say so; the verdict still goes out. */
+function countGateAppendFailure(at: string): void {
+  try {
+    let previous: unknown = null
+    try {
+      previous = JSON.parse(readFileSync(GATE_APPEND_FAILURES_PATH, 'utf8'))
+    } catch {
+      // No counter yet, or an unreadable one: start from zero.
+    }
+    writeFileSync(GATE_APPEND_FAILURES_PATH, JSON.stringify(nextAppendFailures(parseAppendFailures(previous), at)))
+  } catch {
+    // Nothing more to do: a verdict is never held for a log line.
+  }
+}
+
 function readAbBenchmarkConfig() {
   try {
     return parseAbBenchmarkConfig(readFileSync(AB_BENCHMARK_CONFIG_PATH, 'utf8'))

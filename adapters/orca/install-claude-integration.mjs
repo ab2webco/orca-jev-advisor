@@ -8,7 +8,7 @@
  * does: the worker's own permission sandbox only lets it read its plugin
  * root, and every one of these lives outside it.
  *
- * Usage: node install-claude-integration.mjs <install|uninstall|status|hooks-check> <pluginRoot>
+ * Usage: node install-claude-integration.mjs <install|uninstall|status|hooks-check|doctor> <pluginRoot>
  *        node install-claude-integration.mjs router-mode-status
  *        node install-claude-integration.mjs router-mode-set <target> <mode>
  *
@@ -63,8 +63,9 @@
  * status      Read-only: reports whether each of the seven is in place
  *             right now, for the config panel and advisor.doctor.
  * hooks-check Runs each installed hook (gate-bash, gate-outcome,
- *             agent-model) as its settings.json entry writes it, with a
- *             no-op payload, and reports which ones failed and why.
+ *             agent-model, gate-files) as its settings.json entry writes
+ *             it, with a no-op payload, and reports which ones failed and why.
+ * doctor      Read-only: `{ok, status, hooksCheck}`, the two above in one call.
  * router-mode-status  Read-only, no pluginRoot needed: `{ok, targets: [
  *             {target: "home" | "<account uuid>", mode}, ...]}`, one row
  *             per target discoverTargets() finds -- JEV-060 slice 2 §7/§9,
@@ -1702,7 +1703,7 @@ async function main () {
       // Hooks run from whatever repository Claude is in, so a relative root would only work in this one.
       const pluginRoot = typeof givenRoot === 'string' && givenRoot.length > 0 ? resolvePath(givenRoot) : givenRoot
       if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
-        result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status> <pluginRoot>' }
+        result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status|hooks-check|doctor> <pluginRoot>' }
       } else if (mode === 'install') {
         result = await install(pluginRoot)
       } else if (mode === 'uninstall') {
@@ -1711,6 +1712,9 @@ async function main () {
         result = await status(pluginRoot)
       } else if (mode === 'hooks-check') {
         result = await hooksCheck(pluginRoot)
+      } else if (mode === 'doctor') {
+        // 0.6.17 T4 (JEVADV-92): the two read-only checks in one call.
+        result = { ok: true, status: await status(pluginRoot), hooksCheck: await hooksCheck(pluginRoot) }
       } else {
         result = { ok: false, reason: 'unknown-mode', detail: `unrecognized mode: ${String(mode).slice(0, 60)}` }
       }

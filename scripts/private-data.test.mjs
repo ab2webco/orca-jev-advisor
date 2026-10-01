@@ -146,6 +146,23 @@ function pushedDocuments(tips, commits) {
 /** @type {Document[] | undefined} */
 let cachedDocuments;
 
+/**
+ * 0.6.17 T4 (JEVADV-92): whether there is a checkout to scan at all. An
+ * installed copy of the plugin has no `.git`, and `git ls-files` there used
+ * to fail the whole suite; with nothing tracked there is nothing to leak.
+ * A pre-push run always has one.
+ */
+function insideGitCheckout() {
+  if (process.env.PRIVATE_DATA_TIPS !== undefined) return true;
+  try {
+    return execFileSync("git", ["rev-parse", "--is-inside-work-tree"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() === "true";
+  } catch {
+    return false;
+  }
+}
+
+const NOT_A_CHECKOUT = "not a git checkout (an installed copy has no .git): nothing tracked to scan";
+
 /** @returns {Document[]} */
 function documents() {
   cachedDocuments ??=
@@ -163,7 +180,8 @@ function forEachLine(document, fn) {
   document.content.split("\n").forEach((line, index) => fn(line, index + 1));
 }
 
-test("no email outside example.com/example.org is tracked", () => {
+test("no email outside example.com/example.org is tracked", (t) => {
+  if (!insideGitCheckout()) return t.skip(NOT_A_CHECKOUT);
   const hits = [];
   for (const document of documents()) {
     forEachLine(document, (line, lineNumber) => {
@@ -176,7 +194,8 @@ test("no email outside example.com/example.org is tracked", () => {
   assert.deepEqual(hits, [], `private email domain found at:\n${hits.join("\n")}`);
 });
 
-test("no absolute /Users/<name>/ path is tracked", () => {
+test("no absolute /Users/<name>/ path is tracked", (t) => {
+  if (!insideGitCheckout()) return t.skip(NOT_A_CHECKOUT);
   const hits = [];
   for (const document of documents()) {
     forEachLine(document, (line, lineNumber) => {
@@ -187,6 +206,7 @@ test("no absolute /Users/<name>/ path is tracked", () => {
 });
 
 test("no term from the owner's private-terms list is tracked", (t) => {
+  if (!insideGitCheckout()) return t.skip(NOT_A_CHECKOUT);
   const termsPath = join(homedir(), ".config", "orca-supervisor", "private-terms.txt");
   if (!existsSync(termsPath)) {
     t.skip("no private-terms file; absent for other users and CI");

@@ -1517,3 +1517,23 @@ test('T3 0.6.17: an existing 0644 backup is tightened to 0600 by install and by 
     assert.equal(readFileSync(path, 'utf8'), '{"env":{"SOME_TOKEN":"x"}}\n', `${mode}: the once-only capture is untouched`)
   }
 })
+
+// 0.6.17 T4 (JEVADV-92): `doctor` was an unknown mode. It is the status plus
+// the hooks check, in one call, read-only.
+test('T4 0.6.17: doctor is status plus hooks-check, and changes nothing', () => {
+  const home = makeHome()
+  const bare = run('doctor', home)
+  assert.equal(bare.ok, true)
+  assert.equal(bare.status.hook.installed, false)
+  assert.deepEqual(bare.hooksCheck.results, [])
+  assert.equal(existsSync(settingsPathFor(home)), false, 'doctor never writes settings.json')
+  run('install', home)
+  const before = readFileSync(settingsPathFor(home), 'utf8')
+  const installed = run('doctor', home, PLUGIN_ROOT, { ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor') })
+  assert.equal(installed.ok, true)
+  assert.equal(installed.status.hook.installed, true)
+  assert.equal(installed.status.fileGuardHook.installed, true)
+  assert.deepEqual(installed.hooksCheck.results.map((r) => r.hook).sort(), ['agent-model', 'gate-bash', 'gate-files', 'gate-outcome'])
+  for (const r of installed.hooksCheck.results) assert.equal(r.ok, true, `${r.hook}: ${r.reason} ${r.detail}`)
+  assert.equal(readFileSync(settingsPathFor(home), 'utf8'), before)
+})

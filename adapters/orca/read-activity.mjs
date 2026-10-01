@@ -6,7 +6,8 @@
  * the worker's own permission sandbox -- same reason every other
  * cross-boundary read in this plugin goes through a clean child):
  *
- *   gate-decisions.jsonl                 the gate's verdicts (single file)
+ *   gate-decisions-YYYY-MM-DDTHH.jsonl   the gate's verdicts (hourly, 0.6.17;
+ *                                        plus the single gate-decisions.jsonl before it)
  *   turn-usage-YYYY-MM-DDTHH.jsonl       the hook's per-step usage (hourly)
  *   model-router-decisions-*.jsonl       the router's decisions (hourly)
  *
@@ -33,7 +34,7 @@ import { aggregateActivityByProject } from '../../src/core/activity_by_project.t
 import {
   listHourlyFiles,
   MODEL_ROUTER_DECISIONS_FILE_PATTERN,
-  readJsonl,
+  readGateDecisionLog,
   readJsonlRows,
   toGateDecisionRecord,
   toTurnUsageRecord,
@@ -41,7 +42,6 @@ import {
 } from './log-files.mjs'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
-const GATE_LOG_PATH = join(CACHE_DIR, 'gate-decisions.jsonl')
 
 // The fold's window is 7 local calendar days, whose oldest day starts less
 // than 7*24h before now; 8 days of hourly files (UTC-named) covers it with
@@ -86,7 +86,7 @@ async function main () {
   try {
     const now = Date.now()
     const [gateLog, usageFiles, decisionFiles] = await Promise.all([
-      readJsonl(GATE_LOG_PATH),
+      readGateDecisionLog(CACHE_DIR),
       listHourlyFiles(CACHE_DIR, TURN_USAGE_FILE_PATTERN),
       listHourlyFiles(CACHE_DIR, MODEL_ROUTER_DECISIONS_FILE_PATTERN),
     ])
