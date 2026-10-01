@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildCrossRepoSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from "./cross_repo_context.ts";
+import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from "./cross_repo_context.ts";
 import { createJevPseudonyms, IDENTITY_NAMES } from "./jev_pseudonyms.ts";
 
 const REPO_A = "/home/dev/Projects/orca-supervisor";
@@ -173,5 +173,28 @@ test("buildPushDestinationSentence: names the branch and remote a push updates, 
   assert.equal(
     buildPushDestinationSentence([{ remote: null, branch: "feature/acme-login", remoteIsLocal: false }], names),
     "The command pushes commits to branch <branch-1> of its default remote, a repository on another machine.",
+  );
+});
+
+// 0.6.17 T1 (JEVADV-93): a pull request merged on the server goes through
+// its review whatever the checkout is on; an API branch merge skips it.
+test("buildGhMergeSentence: a pull request merge is the reviewed path, an API branch merge is a direct write", () => {
+  const names = createJevPseudonyms();
+  assert.equal(buildGhMergeSentence([], names), null);
+  assert.equal(
+    buildGhMergeSentence([{ kind: "pull-request", admin: false, auto: false }], names),
+    "The command asks the hosting service to merge a pull request: the service lands the pull request's commits on its base branch only through that branch's own protection (its required reviews and checks). That is the reviewed path into a shared branch, not a direct write on it, and it changes nothing in the local checkout, so the branch the checkout is on plays no part.",
+  );
+  assert.equal(
+    buildGhMergeSentence([{ kind: "pull-request", admin: true, auto: false }], names),
+    "The command asks the hosting service to merge a pull request with --admin, which merges it even when the base branch's required reviews or checks have not passed: it bypasses the review that makes a pull request merge the reviewed path, so it writes the pull request's commits on its base branch as directly as a push to it would. It changes nothing in the local checkout, so the branch the checkout is on plays no part.",
+  );
+  assert.equal(
+    buildGhMergeSentence([{ kind: "branch", base: "main", head: "feature/acme-login" }], names),
+    "The command asks the hosting service's API to merge branch <branch-1> directly into branch main on the remote, with no pull request and no review; that writes commits on main, whatever branch the checkout is on.",
+  );
+  assert.equal(
+    buildGhMergeSentence([{ kind: "branch", base: null, head: null }], names),
+    "The command asks the hosting service's API to merge one branch directly into another on the remote, with no pull request and no review.",
   );
 });

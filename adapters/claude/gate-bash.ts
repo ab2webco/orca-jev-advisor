@@ -83,7 +83,7 @@ import { activeProfileId, isPluginDisabled, profileDataPath } from '../../src/co
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
-import { buildCrossRepoSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
+import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
 import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cross_repo_context.ts'
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
@@ -107,7 +107,7 @@ import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
 import type { GateSource, GateStopReason, GateVerdict } from '../../src/core/gate_measurement.ts'
 import { withoutHeredocBodies, withoutLineContinuations } from '../../src/core/command_text.ts'
-import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
+import { FORCE_PUSH_SHAPE, curlToShellOutcome, droppedTableOutcome, ghMerges, protectedPushOutcome, pushTargets, recursiveRmOfRootOrHomeOutcome } from '../../src/core/deny_rule_shapes.ts'
 import { discardsUncommittedWork, someSegmentMatches, splitOnCommandSeparators, splitOnCommandSeparatorsDetailed } from '../../src/core/git_discard.ts'
 import { resolveImplicitPushDestination, resolvePushRemoteIsLocal } from '../../src/core/push_remote.ts'
 import { isObviouslySafeCommand, mentionsRatherThanRuns } from '../../src/core/gate_safe_command.ts'
@@ -1963,7 +1963,11 @@ async function main(): Promise<void> {
   const jevNames = createJevPseudonyms()
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
   const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head })), jevNames)
-  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '')
+  // 0.6.17 T1 (JEVADV-93): a `gh` merge says what it goes through -- a pull
+  // request's review, or none for an API branch merge -- so a reviewed merge
+  // is not judged by the checkout's branch. Jev's copy only, like the push.
+  const mergeSentence = mentionOnly || !/\bgh\b/.test(inspected) ? null : buildGhMergeSentence(ghMerges(inspected, cwd, homedir()), jevNames)
+  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '') + (mergeSentence !== null ? ` ${mergeSentence}` : '')
   // The destination is resolved once, above (folding in every target's own
   // repository too -- see pickStricterDestination): it is part of the cache
   // key, because two repositories with different thresholds must never
