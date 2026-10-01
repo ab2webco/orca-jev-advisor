@@ -11,6 +11,7 @@ const OK_BODY = JSON.stringify({ model: "jev-latest", answers: {}, usage: { inpu
 interface Step {
   readonly status?: number;
   readonly body?: string;
+  readonly retryAfter?: string;
   readonly throws?: Error;
   readonly takesMs?: number;
 }
@@ -36,6 +37,7 @@ function harness(steps: readonly Step[], budgetMs = 4_000): Harness {
       ok: status >= 200 && status < 300,
       status,
       text: async () => step.body ?? (status === 200 ? OK_BODY : ""),
+      headers: { get: (name: string) => (name.toLowerCase() === "retry-after" ? (step.retryAfter ?? null) : null) },
     };
     return response;
   };
@@ -52,6 +54,7 @@ function harness(steps: readonly Step[], budgetMs = 4_000): Harness {
         }
         return new Promise<void>(() => undefined);
       },
+      nowImpl: () => clock,
     },
     fetchCalls: () => index,
     waits: () => waits,
@@ -80,8 +83,8 @@ test("each failure names its class", async () => {
   assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ status: 400 }]).options)), { kind: "http4xx", status: 400 });
   assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ status: 401 }]).options)), { kind: "http4xx", status: 401 });
   assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ status: 429 }, { status: 529 }]).options)), { kind: "overload", status: 529 });
-  assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ status: 503 }]).options)), { kind: "http5xx", status: 503 });
-  assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ throws: new Error("ECONNRESET") }]).options)), { kind: "network" });
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ status: 502 }, { status: 503 }]).options)), { kind: "http5xx", status: 503 });
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ throws: new Error("ECONNRESET") }, { throws: new Error("ECONNRESET") }]).options)), { kind: "network" });
   assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ body: "<html>" }]).options)), { kind: "malformed" });
   assert.deepEqual(await failureOf(callJev("k", {}, {}, harness([{ body: JSON.stringify({ nope: true }) }]).options)), { kind: "malformed" });
 });
@@ -97,4 +100,79 @@ test("the class survives the existing error types", () => {
   assert.deepEqual(jevFailureOf(new JevRequestError("x", null)), { kind: "network" });
   assert.deepEqual(jevFailureOf(new JevRequestError("x", 403)), { kind: "http4xx", status: 403 });
   assert.equal(jevFailureOf(new Error("other")), null);
+});
+
+test("a 5xx is retried once and the retry's answer is used", async () => {
+  const h = harness([{ status: 503 }, {}]);
+  const response = await callJev("k", {}, {}, h.options);
+  assert.equal(response.usage.output_tokens, 1);
+  assert.equal(h.fetchCalls(), 2);
+  assert.equal(h.waits().length, 1);
+});
+
+test("a network failure is retried once", async () => {
+  const h = harness([{ throws: new Error("ECONNRESET") }, {}]);
+  await callJev("k", {}, {}, h.options);
+  assert.equal(h.fetchCalls(), 2);
+});
+
+test("a second transient failure is not retried again", async () => {
+  const h = harness([{ status: 500 }, { status: 500 }, {}]);
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, h.options)), { kind: "http5xx", status: 500 });
+  assert.equal(h.fetchCalls(), 2);
+});
+
+test("a 4xx, a timeout and a malformed answer are not transient", async () => {
+  for (const step of [{ status: 404 }, { body: "nope" }] satisfies Step[]) {
+    const h = harness([step, {}]);
+    await failureOf(callJev("k", {}, {}, h.options));
+    assert.equal(h.fetchCalls(), 1);
+  }
+});
+
+test("one retry in total: a 429 retry uses it up", async () => {
+  const h = harness([{ status: 429 }, { status: 500 }, {}]);
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, h.options)), { kind: "http5xx", status: 500 });
+  assert.equal(h.fetchCalls(), 2);
+});
+
+test("one retry in total: a transient retry uses it up", async () => {
+  const h = harness([{ status: 500 }, { status: 429 }, {}]);
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, h.options)), { kind: "overload", status: 429 });
+  assert.equal(h.fetchCalls(), 2);
+});
+
+test("Retry-After is honoured when the retry still fits", async () => {
+  const h = harness([{ status: 503, retryAfter: "1" }, {}]);
+  await callJev("k", {}, {}, h.options);
+  assert.deepEqual(h.waits(), [1_000]);
+});
+
+test("a Retry-After that leaves no room for the retry skips it", async () => {
+  const h = harness([{ status: 503, retryAfter: "3" }, {}]);
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, h.options)), { kind: "http5xx", status: 503 });
+  assert.equal(h.fetchCalls(), 1);
+});
+
+test("a retry that cannot finish in what is left of the budget is not started", async () => {
+  // The first attempt used 2.6 s of 4 s; after the default wait 1.15 s remain, under the 1.5 s a call needs.
+  const h = harness([{ status: 500, takesMs: 2_600 }, {}]);
+  assert.deepEqual(await failureOf(callJev("k", {}, {}, h.options)), { kind: "http5xx", status: 500 });
+  assert.equal(h.fetchCalls(), 1);
+});
+
+test("a retry that fits is given only what is left of the budget", async () => {
+  const budgets: number[] = [];
+  const h = harness([{ status: 500, takesMs: 1_000 }, {}]);
+  const sleepImpl = h.options.sleepImpl;
+  assert.ok(sleepImpl !== undefined);
+  await callJev("k", {}, {}, {
+    ...h.options,
+    sleepImpl: (ms, signal) => {
+      if (signal !== undefined) budgets.push(ms);
+      return sleepImpl(ms, signal);
+    },
+  });
+  assert.equal(budgets[0], 4_000);
+  assert.equal(budgets[1], 4_000 - 1_000 - 250);
 });
