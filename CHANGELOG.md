@@ -2,6 +2,19 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.24
+
+- **A git discard is refused only when it would lose something.**
+  - Today's rule matched `reset --hard`, `clean -f`, `checkout -- <path>`, `checkout .`, `checkout -f` and `restore` by spelling. It now runs one bounded git call in the directory the command acts on: the hook's cwd, a leading `cd X &&`, or `-C`.
+    - `reset --hard` counts staged and unstaged changes to tracked files.
+    - `clean` counts what a dry run of the same arguments would remove. The argument list is rebuilt without `-f`, and a test proves the dry run deletes nothing.
+    - `checkout` and `restore` count worktree changes under their paths.
+  - **Nothing would be lost:** the command takes the ordinary Jev path. It is never a local allow.
+  - **Something would be lost:** the refusal names a count and an example, and gives the exact `git stash push` to run.
+  - **Not a loss:** `next-env.d.ts`, `*.tsbuildinfo`, `.next/` and build folders that tools regenerate. A secret is still a loss.
+  - **The refusal stays:** inside `ssh`, `eval`, `bash -c` or `$(…)`; with `--git-dir`, `--work-tree` or `GIT_DIR=`; outside a repository; or on a git error or timeout. (JEVADV-100)
+- **`gh pr update-branch` writes only the pull request's branch.** A local fact now tells Jev which branch the command writes, the same way the deploy/publish signal does. Before: 5 of 5 refused under a "never write on main" policy. After: 5 of 5 allowed. `gh pr merge` and a push to main are judged as before. `GATE_DECISION_RULES_VERSION` is now 8, so verdicts cached under the old rules are judged again. (JEVADV-103)
+
 ## 0.6.23
 
 - **Agents band: where each agent works.** Each row shows the agent's
