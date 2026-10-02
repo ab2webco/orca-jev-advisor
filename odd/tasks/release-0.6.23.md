@@ -83,3 +83,5 @@ export interface AgentPlace {
 - **T2 follow-up, 446ab50 (lead):** keeps the place at 80 and 40 columns (RED 1, then GREEN). A row with no place lends its cells to its description (RED 1, then GREEN).
 - **T3:** 16 screenshots in `odd/qa/shots-0.6.23/`, all looked at.
 - **Integrated branch (lead):** typecheck 0, npm test 3172 of 3172, privacy 0. No gate file changed.
+- T4: released as v0.6.23 at 538fe74 (#36). The live scenario ran: both subagents wrote in the right worktrees.
+  - Left open: the painted band with places was not looked at live (see the QA file). T4 stays unchecked until someone looks at it.
