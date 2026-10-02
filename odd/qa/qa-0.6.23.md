@@ -46,4 +46,20 @@ The first version gave the place up at 80 and at 40. The lead changed that (446a
 
 ## Live check after the release
 
-Pending.
+Released as v0.6.23 at 538fe74 (#36, CI green in 26 min). The dev copy `orca-jev-advisor-dev` was pulled to 538fe74. All five installed `orca-jev-mod-skills` copies match it and carry `src/core/agent_place.ts`. All five Claude Code settings files hold 8 gate hook entries.
+
+The test repo got a second worktree, `feat-app-side`, on the branch `feature/band-place`. A real Claude Code session (Sonnet 5.5, second account) ran in an Orca terminal in the first worktree and spawned two subagents:
+- one ran `cd …/feat-app-side && git status --short` and then wrote `notes.txt` there;
+- the control wrote `control.txt` in place.
+
+Both files were written where expected.
+
+**Not looked at: the band as Claude Code paints it in that session.**
+- The engine keeps the running set in memory (`$.state`), so there is no file to read the stored `place` from.
+- `orca terminal read` and `orca terminal show` return the session's text interleaved, and no read contained the band at all. This was tried three times, and a fourth run was not attempted.
+- In the first two runs the subagents ended almost at once: they sent `sleep` to the background, and Claude Code blocks a foreground `sleep`.
+- A screen capture showed another session's tab, not this one. It was deleted right away and never kept.
+
+The place logic is covered by the hook tests (S1–S7). The band layout is covered by the 16 screenshots painted from the real hook's tree. The first live look at a painted band with places is still to come.
+
+**Observation N-23.** A Claude Code session that was already open when the update was installed shows "Update installed · Restart to update". It keeps the previous mod, so its band shows no places until it restarts.
