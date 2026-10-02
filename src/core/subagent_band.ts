@@ -8,13 +8,17 @@
 // and draws each row as one Text; this lays the rows out to the band's
 // width. Every line it returns fits `columns`; narrow widths give way in
 // this order: the effort column, the reason's long wording, the description.
+// 0.6.23 T2 (JEVADV-102): a place column (the agent's branch, and its
+// worktree when it is not the lead's) sits between the description and the
+// model; it gives way after the effort and the reason's long wording, and
+// before the description.
 
 import { translate } from "./i18n.ts";
 import type { Locale } from "./i18n.ts";
 import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
 import type { ModelRouterKey } from "./i18n_model_router.ts";
 import type { SessionEffort } from "./model_router_decide.ts";
-import type { RunningSubagent, SubagentWhy } from "./subagent_status.ts";
+import type { AgentPlace, RunningSubagent, SubagentWhy } from "./subagent_status.ts";
 
 /** One agent's row: `text` is every column but the reason (padded), `why` the reason, drawn dim. */
 export interface BandRow {
@@ -37,6 +41,13 @@ const TYPE_FLOOR = 6;
 const REASON_FLOOR = 12;
 /** The most cells the one-line layout sets aside for the reason when it sizes the description. */
 const REASON_ROOM = 16;
+/** 0.6.23 T2: the most cells the place column takes; a longer branch is cut from the left. */
+const PLACE_MAX = 28;
+const PLACE_SEPARATOR = " · ";
+/** The fewest cells a squeezed place keeps before it goes: a short branch, or the end of a long one. */
+const PLACE_FLOOR = 10;
+/** On the two-line layout: the most cells the place takes before the description. */
+const PLACE_TWO_LINE_MAX = 16;
 
 /**
  * The engine's own agent types: never a project's, so they never hold back
@@ -62,6 +73,40 @@ export function sharedTypePrefix(types: readonly string[]): string {
   }
   const cut = common.lastIndexOf("-");
   return cut > 0 ? common.slice(0, cut + 1) : "";
+}
+
+/**
+ * 0.6.23 T2 (JEVADV-102): the leading `word/` segments every branch shown
+ * shares, to drop from the rows like `sharedTypePrefix` does for types. Needs
+ * two different branches; "" when there is none. The lead's own branch is not
+ * known here, so only the shown rows count.
+ */
+export function sharedBranchPrefix(branches: readonly (string | null)[]): string {
+  const shown = [...new Set(branches.filter((branch): branch is string => branch !== null && branch.length > 0))];
+  if (shown.length < 2) return "";
+  const lead = (shown[0] ?? "").split("/").slice(0, -1);
+  let common = lead.length;
+  for (const branch of shown) {
+    const segments = branch.split("/").slice(0, -1);
+    let i = 0;
+    while (i < common && i < segments.length && segments[i] === lead[i] && (segments[i] ?? "").length > 0) i += 1;
+    common = i;
+  }
+  return common === 0 ? "" : `${lead.slice(0, common).join("/")}/`;
+}
+
+/**
+ * A row's place: the branch (less the shared prefix), the worktree's name
+ * before it when apart; "" when unknown. `short`: the branch alone (the
+ * worktree only when there is no branch), for a band too narrow for both.
+ */
+function placeText(locale: Locale, place: AgentPlace | undefined, prefix: string, short: boolean): string {
+  if (place === undefined) return "";
+  if (place.pendingIsolation === true) return translate(MODEL_ROUTER_CATALOG, locale, "agents.place.pending");
+  const branch = place.branch !== null && prefix.length > 0 && place.branch.startsWith(prefix) ? place.branch.slice(prefix.length) : place.branch;
+  const worktree = place.apart && place.worktree !== null && place.worktree.length > 0 ? place.worktree : null;
+  const parts = [worktree, branch].filter((part): part is string => part !== null && part.length > 0);
+  return short ? (parts.at(-1) ?? "") : parts.join(PLACE_SEPARATOR);
 }
 
 const WHY_KEY: Readonly<Record<SubagentWhy, ModelRouterKey>> = {
@@ -121,6 +166,12 @@ function fit(text: string, width: number): string {
   return width === 1 ? "…" : `${text.slice(0, width - 1)}…`;
 }
 
+/** `text` in `width` cells, cut from the left with an ellipsis so its end stays visible, or padded. */
+function fitEnd(text: string, width: number): string {
+  if (text.length <= width) return text.padEnd(width);
+  return width <= 1 ? "…".slice(0, Math.max(width, 0)) : `…${text.slice(text.length - (width - 1))}`;
+}
+
 function widest(cells: readonly string[]): number {
   return cells.reduce((max, cell) => Math.max(max, cell.length), 0);
 }
@@ -130,6 +181,8 @@ interface Cells {
   readonly description: string;
   readonly model: string;
   readonly effort: string;
+  readonly place: string;
+  readonly placeShort: string;
   readonly whyFull: string;
   readonly whyShort: string;
 }
@@ -143,22 +196,27 @@ function reasonFor(text: string, cells: Cells, columns: number): string {
 
 /**
  * The band for the agents running now, sized to `columns`; null when none
- * runs. One line per agent: type, description, model, effort, reason. As
- * the band narrows: a reason that does not fit its row takes its short
+ * runs. One line per agent: type, description, place, model, effort,
+ * reason. As the band narrows: a reason that does not fit its row takes its short
  * wording (that row alone, so one long reason does not cost every row its
  * effort); the effort column goes once the description would get fewer than
- * DESC_ROOM cells; then the description is cut harder; below DESC_FLOOR
- * cells each agent takes two lines (type and reason; then the model and
- * the description, indented), so the description is still readable at 40.
+ * DESC_ROOM cells; then the description is cut, down to DESC_FLOOR, to keep
+ * the place; then the place shrinks to its branch alone and to PLACE_FLOOR,
+ * and goes; below DESC_FLOOR cells each agent takes two lines (type and
+ * reason; then the model, the branch and the description, indented), so
+ * the description is still readable at 40.
  */
 export function subagentBand(locale: Locale, agents: readonly RunningSubagent[], columns: number): SubagentBand | null {
   if (agents.length === 0) return null;
   const prefix = sharedTypePrefix(agents.map((agent) => agent.type));
+  const branchPrefix = sharedBranchPrefix(agents.map((agent) => agent.place?.branch ?? null));
   const cells: Cells[] = agents.map((agent) => ({
     type: prefix.length > 0 && agent.type.startsWith(prefix) ? agent.type.slice(prefix.length) : agent.type,
     description: agent.description,
     model: agent.label ?? "?",
     effort: effortText(locale, agent),
+    place: placeText(locale, agent.place, branchPrefix, false),
+    placeShort: placeText(locale, agent.place, branchPrefix, true),
     whyFull: whyText(locale, agent, false),
     whyShort: whyText(locale, agent, true),
   }));
@@ -167,18 +225,35 @@ export function subagentBand(locale: Locale, agents: readonly RunningSubagent[],
   const descMax = widest(cells.map((c) => c.description));
   const modelW = widest(cells.map((c) => c.model));
   const effortW = widest(cells.map((c) => c.effort));
+  const placeW = Math.min(PLACE_MAX, widest(cells.map((c) => c.place)));
   // The reason keeps its short wording's width, up to REASON_ROOM: one long
   // reason (an agent with no record) is cut at the edge rather than cutting
   // every row's description.
   const shortW = Math.min(REASON_ROOM, widest(cells.map((c) => c.whyShort)));
   // What is left for the description once every other column, and the reasons, have theirs.
-  const room = (withEffort: boolean): number => columns - typeW - modelW - (withEffort ? effortW + GAP.length : 0) - shortW - GAP.length * 3;
+  const room = (withEffort: boolean, place: number): number =>
+    columns - typeW - modelW - (withEffort ? effortW + GAP.length : 0) - (place > 0 ? place + GAP.length : 0) - shortW - GAP.length * 3;
 
-  const withEffort = room(true) >= Math.min(descMax, DESC_ROOM);
-  const descWidth = Math.min(descMax, room(withEffort));
-  if (descWidth >= Math.min(descMax, DESC_FLOOR)) {
+  // The effort goes first, then the description gives cells to the place
+  // (down to DESC_FLOOR), then the place shrinks to its branch alone and to
+  // PLACE_FLOOR; only then does it go. 80 columns is a common terminal and
+  // the place is what the row is for there.
+  const descRoom = Math.min(descMax, DESC_ROOM);
+  const descFloor = Math.min(descMax, DESC_FLOOR);
+  const squeezed = Math.min(placeW, room(false, 0) - GAP.length - descFloor);
+  const layouts: readonly (readonly [boolean, number, number])[] =
+    placeW > 0
+      ? [[true, placeW, descRoom], [false, placeW, descRoom], [false, squeezed >= PLACE_FLOOR ? squeezed : 0, descFloor], [false, 0, descFloor]]
+      : [[true, 0, descRoom], [false, 0, descRoom]];
+  const [withEffort, placeWidth] = layouts.find(([effort, place, least]) => room(effort, place) >= least) ?? [false, 0, descFloor];
+  const descWidth = Math.min(descMax, room(withEffort, placeWidth));
+  const placeCell = (c: Cells): string => fitEnd(c.place.length <= placeWidth ? c.place : c.placeShort, placeWidth);
+  if (descWidth >= descFloor) {
     const rows = cells.map((c): BandRow => {
-      const text = `${[fit(c.type, typeW), fit(c.description, descWidth), c.model.padEnd(modelW), ...(withEffort ? [c.effort.padEnd(effortW)] : [])].join(GAP)}${GAP}`;
+      // A row with no place lends its place cells to its description; the model column stays put.
+      const lend = placeWidth > 0 && c.place.length === 0;
+      const where = placeWidth === 0 ? [] : lend ? [] : [placeCell(c)];
+      const text = `${[fit(c.type, typeW), fit(c.description, lend ? descWidth + GAP.length + placeWidth : descWidth), ...where, c.model.padEnd(modelW), ...(withEffort ? [c.effort.padEnd(effortW)] : [])].join(GAP)}${GAP}`;
       if (text.length >= columns) return { text: fit(text, columns).trimEnd(), why: "" };
       return { text, why: reasonFor(text, c, columns) };
     });
@@ -192,7 +267,9 @@ export function subagentBand(locale: Locale, agents: readonly RunningSubagent[],
     const text = `${fit(c.type, Math.max(TYPE_FLOOR, Math.min(typeW, columns - GAP.length - REASON_FLOOR)))}${GAP}`;
     if (text.length >= columns) rows.push({ text: fit(text, columns).trimEnd(), why: "" });
     else rows.push({ text, why: reasonFor(text, c, columns) });
-    rows.push({ text: fit(`${indent}${c.model.padEnd(modelW)}${GAP}${c.description}`, columns).trimEnd(), why: "" });
+    // 0.6.23: the branch alone, before the description, cut from the left.
+    const place = c.placeShort.length === 0 ? "" : `${fitEnd(c.placeShort, Math.min(PLACE_TWO_LINE_MAX, c.placeShort.length)).trimEnd()}${GAP}`;
+    rows.push({ text: fit(`${indent}${c.model.padEnd(modelW)}${GAP}${place}${c.description}`, columns).trimEnd(), why: "" });
   }
   return { heading: fit(heading, columns).trimEnd(), rows };
 }

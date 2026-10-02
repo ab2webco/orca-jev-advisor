@@ -16,6 +16,18 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.23
+
+The agents band now shows where each agent works: its branch, and the worktree's name first when that is not the lead's. A subagent that is still creating its own worktree shows "new worktree".
+
+The engine does not tell the plugin where a subagent's shell is, so the place comes from:
+- the spawn's own directory, if it set one;
+- otherwise, the agent's own writes, `cd` and `git -C`.
+
+Reads never count, so an agent that only looks at another worktree stays where it is.
+
+Git is asked once per directory, after the tool call, never while the band is drawn. At 80 columns the description is cut before the branch goes. At 40 columns the branch moves to the second line.
+
 ## What changed in 0.6.22
 
 Jev's answers can now be checked with one command:

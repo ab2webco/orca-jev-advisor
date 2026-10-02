@@ -200,3 +200,91 @@ test("0.6.20 T3 subagentBand: a teammate routed at its first step, and one only 
   assert.match(en1 ?? "", /^teammate +researcher +Sonnet 5\.5 +medium \(Jev\) +teammate: routed at its first step$/);
   assert.match(en2 ?? "", /teammate: created outside the router · would use: Haiku 4\.5$/);
 });
+
+// 0.6.23 T2 (JEVADV-102): the place column, with neutral names.
+const PLACED: readonly RunningSubagent[] = [
+  { id: "p-1", type: "acme-frontend-developer", description: "Adding the login form", label: "Opus 5.5", effort: "xhigh", why: "explicit", wouldUse: null, place: { worktree: "app-feature", branch: "feature/login", apart: true } },
+  { id: "p-2", type: "acme-backend-developer", description: "Watching CI checks", label: "Sonnet 5.5", effort: "high", why: "explicit", wouldUse: null, place: { worktree: "app", branch: "main", apart: false } },
+  { id: "p-3", type: "general-purpose", description: "Preparing a clean checkout", label: "Sonnet 5.5", effort: "medium", why: "lowered", wouldUse: null, place: { worktree: null, branch: null, apart: false, pendingIsolation: true } },
+];
+
+test("0.6.23 T2 subagentBand: each row names its branch, the worktree first when it is not the lead's, and 'worktree' while one is pending", () => {
+  const [, apart, lead, pending] = lines(200, "en", PLACED);
+  assert.match(apart ?? "", /Adding the login form +app-feature · feature\/login +Opus 5\.5/);
+  assert.match(lead ?? "", /Watching CI checks +main +Sonnet 5\.5/);
+  assert.ok(!(lead ?? "").includes("app ·"), "the lead's own worktree is not named");
+  assert.match(pending ?? "", /Preparing a clean checkout +new worktree +Sonnet 5\.5/);
+  assert.match(lines(200, "es", PLACED)[3] ?? "", /worktree nuevo/);
+});
+
+test("0.6.23 T2 subagentBand: a row with no place, or no branch and no worktree of its own, shows nothing and the columns still line up", () => {
+  const mixed: readonly RunningSubagent[] = [
+    PLACED[0] as RunningSubagent,
+    { ...(OWNER_CASE[0] as RunningSubagent), id: "n-1" },
+    { ...(OWNER_CASE[2] as RunningSubagent), id: "n-2", place: { worktree: "app", branch: null, apart: false } },
+  ];
+  const rows = lines(200, "en", mixed).slice(1);
+  assert.equal(new Set(rows.map((row) => row.indexOf("Opus 5.5") + row.indexOf("Sonnet 5.5") + 1)).size >= 1, true);
+  assert.equal(rows[1]?.indexOf("Opus 5.5"), rows[0]?.indexOf("Opus 5.5"), "the model starts at one column");
+  assert.equal(rows[2]?.indexOf("Sonnet 5.5"), rows[0]?.indexOf("Opus 5.5"));
+  assert.ok(!/feature|main|app/.test((rows[1] ?? "").replace(/Adding Definition.*?to spec\.md/, "")), "nothing for the row without a place");
+});
+
+test("0.6.23 T2 subagentBand: a leading word/ every shown branch shares is dropped; otherwise the branch is whole", () => {
+  const share = (branches: readonly (string | null)[]): string[] =>
+    lines(200, "en", branches.map((branch, i): RunningSubagent => ({ ...(PLACED[0] as RunningSubagent), id: `s-${i}`, place: { worktree: "app", branch, apart: false } })));
+  const shared = share(["feature/login", "feature/signup"]).slice(1);
+  assert.match(shared[0] ?? "", / login /);
+  assert.ok(!shared.join("\n").includes("feature/"));
+  const deep = share(["team/feature/login", "team/feature/signup"]).slice(1);
+  assert.ok(!deep.join("\n").includes("team/") && !deep.join("\n").includes("feature/"));
+  assert.ok(share(["feature/login", "main"]).slice(1).join("\n").includes("feature/login"), "one without the prefix keeps it on every row");
+  assert.ok(share(["feature/login", "bugfix/login"]).slice(1).join("\n").includes("bugfix/login"));
+  assert.ok(share(["feature/login", "feature/login"]).slice(1).join("\n").includes("feature/login"), "one branch alone is not a shared prefix");
+  assert.ok(share(["feature/login", null]).slice(1).join("\n").includes("feature/login"), "one shown branch alone is not a shared prefix");
+});
+
+test("0.6.23 T2 subagentBand: the place gives way after the effort and the reason's long wording; the description is cut before the place goes", () => {
+  const w120 = lines(120, "en", PLACED).slice(1);
+  assert.match(w120[0] ?? "", /Adding the login form +app-feature · feature\/login +Opus 5\.5 +extra high/, "120 keeps place and effort");
+  const w100 = lines(100, "en", PLACED).slice(1);
+  assert.ok(w100.every((row) => !/ (extra high|high|medium) /.test(row)), `100 drops the effort: ${w100.join("\n")}`);
+  assert.ok(w100[0]?.includes("app-feature · feature/login"), `100 keeps the place: ${w100.join("\n")}`);
+  // 80 columns is a common terminal: the place stays, as the branch alone when the worktree does not fit too.
+  const w80 = lines(80, "en", PLACED).slice(1);
+  assert.ok(w80[0]?.includes("feature/login"), `80 keeps the branch: ${w80.join("\n")}`);
+  assert.ok(w80[1]?.includes(" main "), `80 keeps the lead's branch: ${w80.join("\n")}`);
+  assert.ok(w80[2]?.includes("new worktree"), `80 keeps a pending worktree: ${w80.join("\n")}`);
+  assert.ok(w80.every((row) => /Adding the lo|Watching CI c|Preparing a c/.test(row)), `80 still shows each description: ${w80.join("\n")}`);
+  // 40 columns: two lines per agent, the branch on the second, before the description.
+  const w40 = lines(40, "en", PLACED).slice(1);
+  assert.ok(w40.some((row) => /^ +Opus 5\.5 +feature\/login +Add/.test(row)), `40 keeps the branch: ${w40.join("\n")}`);
+  assert.ok(w40.some((row) => /^ +Sonnet 5\.5 +main +Watch/.test(row)), `40 keeps the lead's branch: ${w40.join("\n")}`);
+});
+
+test("0.6.23 T2 subagentBand: a long branch is cut from the left, so its end stays visible", () => {
+  const long: readonly RunningSubagent[] = [{ ...(PLACED[0] as RunningSubagent), place: { worktree: "app-feature", branch: "feature/a-very-long-branch-name-for-the-login-form-v2", apart: true } }, PLACED[1] as RunningSubagent];
+  const row = lines(200, "en", long)[1] ?? "";
+  assert.match(row, /…[a-z0-9-]*form-v2 +Opus 5\.5/);
+  assert.ok(!row.includes("app-feature"));
+});
+
+test("0.6.23 T2 subagentBand: every line with places fits at 200, 120, 80 and 40 columns, in both languages", () => {
+  for (const columns of [200, 120, 80, 40, 24]) {
+    for (const locale of ["es", "en"] as const) {
+      for (const line of lines(columns, locale, PLACED)) assert.ok(line.length <= columns, `${locale}@${columns}: ${line.length}: ${line}`);
+      for (const line of lines(columns, locale, [...OWNER_CASE, ...PLACED])) assert.ok(line.length <= columns, `${locale}@${columns}: ${line.length}: ${line}`);
+    }
+  }
+});
+
+test("0.6.23 T2 subagentBand: no glyph of ambiguous width in a place", () => {
+  for (const line of lines(200, "es", PLACED)) assert.ok(!/[⎇\u{1F300}-\u{1FAFF}]/u.test(line), line);
+});
+
+test("0.6.23 subagentBand: a row with no place gives its place cells to its description, and the model column stays aligned", () => {
+  const mixed: readonly RunningSubagent[] = [PLACED[0] as RunningSubagent, { ...(PLACED[1] as RunningSubagent), id: "n-1", description: "Reading playwright.config.ts", place: undefined }];
+  const [, placed, bare] = lines(80, "en", mixed);
+  assert.ok(bare?.includes("Reading playwright.config.ts"), `the bare row keeps its description whole: ${bare}`);
+  assert.equal(bare?.indexOf("Sonnet 5.5"), placed?.indexOf("Opus 5.5"), "the model starts at one column");
+});

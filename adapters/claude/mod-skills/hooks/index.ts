@@ -156,7 +156,9 @@ import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedSha
 import type { EffortSource } from '../../../../src/core/effort_source.ts'
 import type { AgentDefinitionFile } from '../../../../src/core/agent_definition.ts'
 import type { ExplicitModelsMode } from '../../../../src/core/explicit_models.ts'
-import type { ListedAgent, RunningSubagent, SubagentEffortSource, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import type { AgentPlace, ListedAgent, RunningSubagent, SubagentEffortSource, SubagentWhy } from '../../../../src/core/subagent_status.ts'
+import { PENDING_ISOLATION_PLACE, absolutePath, agentPlace, cachedGitPlace, callDirectory, newPlaceCache, samePlace } from '../../../../src/core/agent_place.ts'
+import type { GitPlace, PlaceCache } from '../../../../src/core/agent_place.ts'
 import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt } from '../../../../src/core/model_router_stage.ts'
@@ -820,6 +822,127 @@ async function noteSubagentEffort($: EngineInterface, running: RunningSet, agent
   running.agents.set(agentId, { ...agent, effort, effortSource })
   await persistRunning($, running)
 }
+
+/**
+ * 0.6.23 T1 (JEVADV-102): what this load knows of where each agent works
+ * (agent_place.ts). `lead` is the lead's own place, looked up once from
+ * `$.session.root()`; `bases` each agent's own directory (its spawn's cwd;
+ * null while a pending isolation hides it; absent: the session root);
+ * `lastDirs` the last directory each agent's calls showed, so an unchanged
+ * one is never looked up again; `isolated` the Agent calls (by
+ * tool_use_id) that asked for a worktree, for their spawn. `work` chains the
+ * lookups, off the call that caused them, so an older one never lands
+ * after a newer one.
+ */
+interface PlaceTracking {
+  readonly cache: PlaceCache
+  lead: Promise<GitPlace | null> | null
+  home: Promise<string | null> | null
+  readonly bases: Map<string, string | null>
+  readonly lastDirs: Map<string, string>
+  isolated: readonly string[]
+  work: Promise<void>
+}
+
+/** The most agents (and isolated Agent calls) whose directories are kept; the oldest go first. */
+const PLACE_AGENTS_MAX = 64
+
+function keepBounded<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key)
+  map.set(key, value)
+  for (const oldest of map.keys()) {
+    if (map.size <= PLACE_AGENTS_MAX) break
+    map.delete(oldest)
+  }
+}
+
+/** The lead's own place, looked up once per load; null when the session root is in no repository or git fails. */
+function leadPlace($: EngineInterface, places: PlaceTracking): Promise<GitPlace | null> {
+  places.lead ??= (async () => {
+    try {
+      return await cachedGitPlace(places.cache, makeProcessRun($), await $.session.root())
+    } catch {
+      return null
+    }
+  })()
+  return places.lead
+}
+
+function placeHome($: EngineInterface, places: PlaceTracking): Promise<string | null> {
+  places.home ??= (async () => {
+    try {
+      const home = await $.env.get('HOME')
+      return home !== undefined && home.length > 0 ? home : null
+    } catch {
+      return null
+    }
+  })()
+  return places.home
+}
+
+/** Runs `task` after the lookups already queued, never in the call that caused it. Fails open: a failed lookup costs that row's place, nothing else. */
+function queuePlace(places: PlaceTracking, task: () => Promise<void>): void {
+  places.work = places.work.then(task).catch(() => undefined)
+}
+
+/** `place` onto a recorded agent's row, persisted (the band redraws), only when it changed. */
+async function setAgentPlace($: EngineInterface, running: RunningSet, agentId: string, place: AgentPlace): Promise<void> {
+  await hydrateRunning($, running)
+  const agent = running.agents.get(agentId)
+  if (agent === undefined || samePlace(agent.place, place)) return
+  running.agents.set(agentId, { ...agent, place })
+  await persistRunning($, running)
+}
+
+/** The place git names for `dir`, as the band shows it against the lead's; null when git names none. */
+async function placeOfDirectory($: EngineInterface, places: PlaceTracking, dir: string): Promise<AgentPlace | null> {
+  const found = await cachedGitPlace(places.cache, makeProcessRun($), dir)
+  if (found === null) return null
+  return agentPlace(found, (await leadPlace($, places))?.toplevel ?? null)
+}
+
+/**
+ * 0.6.23 T1: a started agent's first place: its spawn's cwd when the call
+ * gave one, pending when its Agent call asked for a worktree (the path is
+ * known only once one of its own calls shows it), the lead's own otherwise.
+ */
+async function placeAtSpawn($: EngineInterface, running: RunningSet, places: PlaceTracking, e: Frozen<AgentSpawnInput>, agentId: string): Promise<void> {
+  if (e.cwd !== undefined) {
+    const cwd = absolutePath(e.cwd, await $.session.root(), await placeHome($, places))
+    keepBounded(places.bases, agentId, cwd)
+    if (cwd === null) return
+    keepBounded(places.lastDirs, agentId, cwd)
+    const place = await placeOfDirectory($, places, cwd)
+    if (place !== null) await setAgentPlace($, running, agentId, place)
+    return
+  }
+  if (places.isolated.includes(e.tool_use_id)) {
+    keepBounded(places.bases, agentId, null)
+    await setAgentPlace($, running, agentId, PENDING_ISOLATION_PLACE)
+    return
+  }
+  const lead = await leadPlace($, places)
+  if (lead !== null) await setAgentPlace($, running, agentId, agentPlace(lead, lead.toplevel))
+}
+
+/**
+ * 0.6.23 T1: a recorded agent's own call that shows where it works (a
+ * write, a `cd`, a `git -C`) moves its row there when that is a directory
+ * not seen last for it. Reads never count (callDirectory).
+ */
+async function placeFromCall($: EngineInterface, running: RunningSet, places: PlaceTracking, agentId: string, tool: string, args: Readonly<Record<string, unknown>>): Promise<void> {
+  await hydrateRunning($, running)
+  if (!running.agents.has(agentId)) return
+  const base = places.bases.has(agentId) ? (places.bases.get(agentId) ?? null) : await $.session.root()
+  const dir = callDirectory(tool, args, base, await placeHome($, places))
+  if (dir === null || places.lastDirs.get(agentId) === dir) return
+  keepBounded(places.lastDirs, agentId, dir)
+  const place = await placeOfDirectory($, places, dir)
+  if (place !== null) await setAgentPlace($, running, agentId, place)
+}
+
+/** The tools whose calls can say where an agent works; any other is never queued. */
+const PLACE_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit', 'Bash'])
 
 /** The account's model tiers, for a model's label; null when no account is at hand (the label is then its family or its id). */
 async function accountTiers($: EngineInterface): Promise<ResolvedTiers | null> {
@@ -1994,6 +2117,8 @@ export function register(on: On, options: PluginOptions): void {
   // in `$.state` too, so a reload does not forget them (RunningSet).
   const runningSubagents: RunningSet = { agents: new Map<string, RunningSubagent>(), hydrated: null, writes: Promise.resolve(), beforeLoad: null }
   const teammateRouting: TeammateRouting = { tasks: [], judged: new Set<string>() }
+  // 0.6.23 T1 (JEVADV-102): where each running agent works (PlaceTracking).
+  const places: PlaceTracking = { cache: newPlaceCache(), lead: null, home: null, bases: new Map<string, string | null>(), lastDirs: new Map<string, string>(), isolated: [], work: Promise.resolve() }
   let agentsStatusText: string | null = null
   const statusLine = (): string | null => composeStatusLine([promptStatusText, routerStatusText, agentsStatusText, stewardStatusText])
   // The main turn running now (turn.start → turn.complete), so the steward
@@ -2436,6 +2561,9 @@ export function register(on: On, options: PluginOptions): void {
   on('agent.spawn', async ($, e, next) => {
     const result = await routeSubagent($, e, next, routerMode, options, subagentEffortTarget, modSkillsProjectName(orcaContextCache), runningSubagents.agents)
     if ('agentId' in result && result.agentId !== undefined) {
+      // 0.6.23 T1: its first place, looked up after the spawn, never holding it.
+      const agentId = result.agentId
+      queuePlace(places, () => placeAtSpawn($, runningSubagents, places, e, agentId))
       try {
         agentsStatusText = await runningSubagentsStatus($, runningSubagents, result.agentId)
         $.ui.status(statusLine() ?? undefined)
@@ -2540,6 +2668,18 @@ export function register(on: On, options: PluginOptions): void {
     // 0.6.20 T3: the lead's Agent call that makes a teammate carries its task; keep it for the teammate's first step.
     if (e.agentId === undefined && e.tool === 'Agent' && isTeammateCall(e)) {
       teammateRouting.tasks = rememberTeammateTask(teammateRouting.tasks, { name: e.name, subagentType: e.subagent_type ?? null, description: e.description, prompt: e.prompt, model: e.model ?? null })
+    }
+    // 0.6.23 T1 (JEVADV-102): an Agent call that asks for a worktree marks its spawn's place pending; an
+    // agent's own write or `cd` moves its row. Only queued here: the git lookup runs after, off this call.
+    try {
+      if (e.tool === 'Agent' && e.isolation === 'worktree') places.isolated = [...places.isolated.filter((id) => id !== e.tool_use_id), e.tool_use_id].slice(-PLACE_AGENTS_MAX)
+      const agentId = e.agentId
+      if (agentId !== undefined && PLACE_TOOLS.has(e.tool)) {
+        const args = e as unknown as Readonly<Record<string, unknown>>
+        queuePlace(places, () => placeFromCall($, runningSubagents, places, agentId, e.tool, args))
+      }
+    } catch {
+      // Where an agent works is never a reason to touch the call.
     }
     if (pendingToolMeasurementId !== null && e.agentId === undefined) {
       const id = pendingToolMeasurementId

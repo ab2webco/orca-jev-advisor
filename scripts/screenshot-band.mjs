@@ -34,7 +34,7 @@ import { register } from '../adapters/claude/mod-skills/hooks/index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outFlag = process.argv.indexOf('--out')
-const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.20')
+const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.23')
 const COLUMNS = [200, 120, 80, 40]
 const THEMES = {
   dark: { background: '#1e1e1e', foreground: '#d4d4d4', label: '#8a8a8a' },
@@ -51,6 +51,10 @@ const RECORDED = [
   { id: 'agent-2', type: 'general-purpose', description: 'Creating a worktree for verify-report generation', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'lowered', wouldUse: null },
   { id: 'agent-3', type: 'acme-backend-developer', description: 'Watching CI checks on PR 867', label: 'Sonnet 5.5', effort: 'high', effortSource: 'inherited', why: 'explicit', wouldUse: null },
   { id: 'areviewer-1a2b', type: 'teammate', description: 'reviewer', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'teammate-routed', wouldUse: null },
+  // 0.6.23 T2 (JEVADV-102): where agents work -- apart in another worktree, on the lead's own, and a worktree asked for but not yet known.
+  { id: 'agent-4', type: 'acme-frontend-developer', description: 'Adding the login form', label: 'Opus 5.5', effort: 'high', effortSource: 'inherited', why: 'explicit', wouldUse: null, place: { worktree: 'app-feature', branch: 'feature/login', apart: true } },
+  { id: 'agent-5', type: 'acme-backend-developer', description: 'Reading the API routes', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'lowered', wouldUse: null, place: { worktree: 'app', branch: 'main', apart: false } },
+  { id: 'agent-6', type: 'general-purpose', description: 'Preparing a clean checkout', label: 'Sonnet 5.5', effort: 'medium', effortSource: 'jev', why: 'lowered', wouldUse: null, place: { worktree: null, branch: null, apart: false, pendingIsolation: true } },
 ]
 /** What the host runs at the load's session.start: agent-0 is already there. */
 const AT_LOAD = [

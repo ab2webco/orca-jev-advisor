@@ -38,6 +38,7 @@ export type ModelRouterKey =
   | "agents.effort.source.inherited"
   | "agents.effort.source.jev"
   | "agents.effort.source.frontmatter"
+  | "agents.place.pending"
   | "agents.row.wouldUse"
   | "agents.row.wouldUse.short"
   | "agents.why.explicit"
@@ -108,6 +109,8 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.effort.source.inherited": "heredado",
     "agents.effort.source.jev": "Jev",
     "agents.effort.source.frontmatter": "definición",
+    // 0.6.23 T2 (JEVADV-102): isolation asked for, no worktree known yet.
+    "agents.place.pending": "worktree nuevo",
     "agents.row.wouldUse": "{{why}} · mediría: {{model}}",
     "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "pedido explícito",
@@ -177,6 +180,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.effort.source.inherited": "inherited",
     "agents.effort.source.jev": "Jev",
     "agents.effort.source.frontmatter": "definition",
+    "agents.place.pending": "new worktree",
     "agents.row.wouldUse": "{{why}} · would use: {{model}}",
     "agents.row.wouldUse.short": "{{why}} → {{model}}",
     "agents.why.explicit": "explicit request",

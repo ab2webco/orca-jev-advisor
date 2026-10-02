@@ -2,6 +2,30 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.23
+
+- **Agents band: where each agent works.** Each row shows the agent's
+  branch, preceded by its worktree's name when it is not the lead's.
+  - A leading `word/` that every shown branch shares is dropped. A long
+    branch is cut from the left, so its end stays visible.
+  - An Agent call with `isolation: "worktree"` shows "new worktree" until
+    the agent's first write or `cd` reveals the path.
+- **Where the place comes from.** The engine never reports a subagent's
+  shell directory, so the place is, in order:
+  - the spawn's `cwd`;
+  - the directory of the agent's own Edit, Write or NotebookEdit;
+  - its Bash `cd <dir>` (alone or before `&&` / `;`);
+  - its `git -C <dir>`.
+
+  Read, Grep and Glob never count. Git runs once per directory (cached, 64
+  entries) after the tool call returns, never during the band render. A
+  detached HEAD or a git failure shows no branch.
+- **Layout.** The effort column goes first, then the reason's long wording.
+  Then the description is cut, down to 16 cells, to keep the place. Then the
+  place shrinks to the branch alone and to 10 cells. On the two-line layout
+  (40 columns) the branch sits on the second line, before the description.
+  A row with no place lends those cells to its description.
+
 ## 0.6.22
 
 - **Jev health probes.** `npm run jev-health -- <usage|flips|redaction>` calls
