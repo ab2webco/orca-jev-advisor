@@ -70,11 +70,14 @@ import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '..
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
 import { affectedSegments, composeAdviceText, MODEL_RISK_REASON } from '../../src/core/gate_advice_text.ts'
+import { assessDiscard, stashCommandFor } from '../../src/core/discard_loss.ts'
+import type { DiscardLossDetail } from '../../src/core/discard_loss.ts'
 import { resolveRecoverabilityTargets } from '../../src/core/git_recoverability.ts'
 import type { GitStatusSets, RecoverabilitySegmentResult } from '../../src/core/git_recoverability.ts'
 import { resolvePersonEffect } from '../../src/core/gate_person_effect.ts'
 import type { ResolvePersonEffectInput } from '../../src/core/gate_person_effect.ts'
 import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
+import { detectBranchEffect } from '../../src/core/branch_effect.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
@@ -564,6 +567,42 @@ function pushProtectedRule(ctx: RuleContext): RuleOutcome {
  * that parsed just fine).
  */
 function resetCleanRule(ctx: RuleContext): RuleOutcome {
+  discardLossFound = null
+  const assessment = assessDiscard(ctx.command, ctx.cwd, homedir(), gitOutput, RESET_CLEAN_RAW_PATTERN)
+  discardLossFound = assessment.loss
+  return assessment.severity
+}
+
+/**
+ * 0.6.24 T1 (JEVADV-100): what resetCleanRule found would be lost, handed to
+ * the emit below because a rule returns only its outcome. The hook is one
+ * process per command and tier 1b evaluates each rule once, so this is never
+ * stale; it is null for a refusal the check could not read (today's text).
+ */
+let discardLossFound: DiscardLossDetail | null = null
+
+/**
+ * What the model may do instead of being told to ask a person: set the work
+ * aside with a stash (reversible: `git stash pop` brings it back) as a
+ * command of its own, then run the discard again. The two are never chained
+ * on one line, because the tree is read before the line runs. A stash entry
+ * carries a tag so it can be found among those other worktrees add to the
+ * shared stack.
+ */
+function discardWayForward(loss: DiscardLossDetail): string {
+  const stash = stashCommandFor(loss, `jev-discard-${Date.now().toString(36)}`)
+  if (stash === null) return 'If the changes are not needed, commit or stash them first, as a separate command, then run the discard again.'
+  return `If the changes are not needed, set them aside first with this command, on its own: \`${stash}\` (a stash is reversible: \`git stash pop\` brings it back), then run the discard again. If they are real work, commit them instead. If these are files a tool regenerates on its own, say so and the person can list them in the Advisor panel.`
+}
+
+/** What would be lost, in words: "2 modified files, e.g. src/x.ts", in the language `translator` speaks. */
+function describeDiscardLoss(loss: DiscardLossDetail, translator: (key: GateKey, params?: Readonly<Record<string, string>>) => string): string {
+  const quantity = loss.count === 1 ? 'one' : 'other'
+  return translator(`discardLoss.${loss.kind}.${quantity}`, { count: String(loss.count), example: loss.example })
+}
+
+/** resetCleanRule's own spelling-only reading: no git call, for naming a segment of a rule that already matched. */
+function resetCleanSpelling(ctx: RuleContext): RuleOutcome {
   if (discardsUncommittedWork(ctx.command)) return 'deny'
   return someSegmentMatches(ctx.command, RESET_CLEAN_RAW_PATTERN)
 }
@@ -1640,7 +1679,9 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // JEVADV-96 T5: a state over the cap is condensed (blob words replaced by a
     // marker) and that is judged; only one still over the cap is not sent, since
     // it would be refused (HTTP 400) after spending the time budget.
-    const fit = fitJevState((condense) => buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames, { condense }))
+    // 0.6.24 T2 (JEVADV-103): which branch the command writes, where Jev keeps misreading it (gh pr update-branch).
+    const branchEffect = detectBranchEffect(command) ?? undefined
+    const fit = fitJevState((condense) => buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames, { condense, branchEffect }))
     if (fit === null) return { kind: 'oversized' }
     stateCondensed = fit.condensed
     const response = await callJev(apiKey, fit.state, questions, { budgetMs: BUDGET_MS })
@@ -1823,7 +1864,18 @@ async function main(): Promise<void> {
       // 0.5.2: the person-facing line names the command and the rule in
       // plain words -- never the model-facing REFUSED text (which used to
       // be reused verbatim for both readers, in English, even in `es`).
-      const segment = matchedSegmentForRule(inspected, cwd, evaluate)
+      if (why === 'rule.resetClean' && discardLossFound !== null) {
+        // 0.6.24 T1: the check read the tree and something would be lost, so
+        // both readers are told what; the segment is the one the check read.
+        const found = discardLossFound
+        emit(
+          'deny',
+          tEnglish('localRuleDenyLoss', { loss: describeDiscardLoss(found, tEnglish), next: discardWayForward(found) }),
+          t('blockedLine', { segment: truncateForPersonLine(found.segment), rule: t('rule.resetCleanLoss', { loss: describeDiscardLoss(found, t) }) }),
+        )
+        return
+      }
+      const segment = matchedSegmentForRule(inspected, cwd, why === 'rule.resetClean' ? resetCleanSpelling : evaluate)
       emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }), t('blockedLine', { segment, rule: t(why) }))
       return
     }
@@ -1849,15 +1901,16 @@ async function main(): Promise<void> {
     // not actually know here. A toggled-off rule carries no such doubt: its
     // match WAS a real command-position run, only the operator's own switch
     // decided not to hard-stop it.
+    const ruleEnglish = why === 'rule.resetClean' && discardLossFound !== null ? tEnglish('rule.resetCleanLoss', { loss: describeDiscardLoss(discardLossFound, tEnglish) }) : tEnglish(why)
     const reasonEnglish =
       kind === 'code'
-        ? `this text appears only inside inline interpreter code, which may be data rather than a command; if it ran, it would: ${tEnglish(why)}`
-        : tEnglish(why)
+        ? `this text appears only inside inline interpreter code, which may be data rather than a command; if it ran, it would: ${ruleEnglish}`
+        : ruleEnglish
     resolveAdviceOutcome({
       command, cwd, actingCwd, sessionId, toolUseId,
       reasonsEnglish: [reasonEnglish],
       effectSource: { ruleKey: why },
-      segment: matchedSegmentForRule(inspected, cwd, evaluate),
+      segment: matchedSegmentForRule(inspected, cwd, why === 'rule.resetClean' ? resetCleanSpelling : evaluate),
       source: 'local-rule', stopReason: 'local-rule',
     })
     return

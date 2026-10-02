@@ -18,6 +18,8 @@ export interface LocatedSegment {
   readonly outer: string;
   /** It runs inside a `$(...)`/backtick/`<(...)` substitution of another command. */
   readonly substituted: boolean;
+  /** It is the script of a `bash -c`/`sh -c`/`eval` of another command, not a command this line runs directly. */
+  readonly viaScript: boolean;
   /** The directory it starts in, or null when that cannot be known. */
   readonly dir: string | null;
 }
@@ -170,16 +172,16 @@ function withoutSubstitutions(segment: string, spans: readonly SubstitutionSpan[
   return out + segment.slice(from);
 }
 
-function walk(command: string, start: string | null, home: string, depth: number, out: LocatedSegment[], substituted = false): string | null {
+function walk(command: string, start: string | null, home: string, depth: number, out: LocatedSegment[], substituted = false, viaScript = false): string | null {
   let dir = start;
   for (const segment of splitOnCommandSeparators(command)) {
     const body = depth < MAX_DEPTH ? subshellBody(segment) : null;
     if (body !== null) {
-      walk(body, dir, home, depth + 1, out, substituted);
+      walk(body, dir, home, depth + 1, out, substituted, viaScript);
       continue;
     }
     const spans = depth < MAX_DEPTH ? substitutionSpans(segment) : [];
-    for (const span of spans) walk(span.body, dir, home, depth + 1, out, true);
+    for (const span of spans) walk(span.body, dir, home, depth + 1, out, true, viaScript);
     const outer = withoutSubstitutions(segment, spans);
     const words = tokenize(outer);
     const moved = directoryChange(words, dir, home);
@@ -189,10 +191,10 @@ function walk(command: string, start: string | null, home: string, depth: number
     }
     const script = depth < MAX_DEPTH ? innerScript(words) : null;
     if (script !== null) {
-      walk(script, dir, home, depth + 1, out, substituted);
+      walk(script, dir, home, depth + 1, out, substituted, true);
       continue;
     }
-    out.push({ segment, outer, dir, substituted });
+    out.push({ segment, outer, dir, substituted, viaScript });
   }
   return dir;
 }

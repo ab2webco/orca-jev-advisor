@@ -1444,6 +1444,289 @@ for (const command of NON_DISCARDING_COMMANDS) {
 }
 
 // ---------------------------------------------------------------------------
+// 0.6.24 T1 (JEVADV-100): a discard is refused only when it would lose
+// something that exists now. `git reset --hard origin/main` on a clean
+// worktree was refused from its spelling alone. These run the real hook
+// against real temporary repositories: a clean tree goes to the ordinary Jev
+// path (here the no-key notice, never a local allow); a dirty one is refused
+// with what would be lost; and every case the check cannot read keeps
+// today's refusal.
+// ---------------------------------------------------------------------------
+
+/** A repository under `home` with two tracked files and one commit. */
+function makeRepo (home, name) {
+  const repo = join(home, name)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=qa', '-c', 'user.email=qa@example.com', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, env: { ...process.env, HOME: home }, stdio: 'ignore' })
+  git('init', '-q')
+  writeFileSync(join(repo, 'src', 'x.ts'), 'x\n')
+  writeFileSync(join(repo, 'src', 'y.ts'), 'y\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
+  return { repo, git }
+}
+
+/** The hook's whole answer for `command` run from `cwd`. */
+function answerFor (home, command, cwd) {
+  const stdout = run(home, command, { cwd })
+  return stdout === '' ? { permissionDecision: 'none', reason: '', message: '' } : (() => {
+    const payload = JSON.parse(stdout)
+    return { permissionDecision: payload.hookSpecificOutput?.permissionDecision ?? 'none', reason: payload.hookSpecificOutput?.permissionDecisionReason ?? '', message: payload.systemMessage ?? '' }
+  })()
+}
+
+/** What `state(repo)` leaves in the tree for each row of the table below. */
+const LOSS_TABLE = [
+  { command: 'git reset --hard origin/main', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git reset --hard', dirty: ({ repo, git }) => { writeFileSync(join(repo, 'src', 'x.ts'), 'staged\n'); git('add', 'src/x.ts') }, kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git clean -fd', dirty: ({ repo }) => writeFileSync(join(repo, 'loose.txt'), 'l\n'), kind: /1 untracked file, e\.g\. loose\.txt/ },
+  { command: 'git clean -fdx src/', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'new.ts'), 'n\n'), kind: /1 untracked file, e\.g\. src\/new\.ts/ },
+  { command: 'git checkout -- src/x.ts', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git checkout .', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'y.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/y\.ts/ },
+  { command: 'git checkout -f', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'y.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/y\.ts/ },
+  { command: 'git restore src/x.ts', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git restore .', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git restore --source=HEAD src/x.ts', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git restore --staged --worktree src/x.ts', dirty: ({ repo, git }) => { writeFileSync(join(repo, 'src', 'x.ts'), 'staged\n'); git('add', 'src/x.ts') }, kind: /1 modified file, e\.g\. src\/x\.ts/ },
+  { command: 'git restore -SW src/x.ts', dirty: ({ repo }) => writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n'), kind: /1 modified file, e\.g\. src\/x\.ts/ },
+]
+
+for (const { command, dirty, kind } of LOSS_TABLE) {
+  test(`0.6.24 T1: ${command} goes to the ordinary path on a clean tree and is refused, naming the loss, on a dirty one`, () => {
+    const home = makeHome()
+    const state = makeRepo(home, 'repo')
+    const clean = answerFor(home, command, state.repo)
+    assert.equal(clean.permissionDecision, 'none', `a clean tree is not a local verdict, got ${clean.permissionDecision}: ${clean.reason}`)
+    assert.match(clean.message, /no key configured/i, 'a clean tree reaches the Jev path, whose no-key notice this is')
+    assert.ok(!gateLogText(home).includes('"local-rule"'), 'a clean tree writes no local-rule record')
+    dirty(state)
+    const refused = answerFor(home, command, state.repo)
+    assert.equal(refused.permissionDecision, 'deny')
+    assert.match(refused.reason, /REFUSED: discards uncommitted work: /)
+    assert.match(refused.reason, kind)
+    assert.match(gateLogText(home), /"local-rule"/)
+  })
+}
+
+test('0.6.24 T1: untracked files survive a hard reset; a staged-only change survives restore of the worktree; the wrong path is not at risk', () => {
+  const home = makeHome()
+  const { repo, git } = makeRepo(home, 'repo')
+  writeFileSync(join(repo, 'loose.txt'), 'l\n')
+  assert.equal(answerFor(home, 'git reset --hard', repo).permissionDecision, 'none')
+  writeFileSync(join(repo, 'src', 'y.ts'), 'staged\n')
+  git('add', 'src/y.ts')
+  assert.equal(answerFor(home, 'git restore src/y.ts', repo).permissionDecision, 'none')
+  assert.equal(answerFor(home, 'git restore --staged --worktree src/y.ts', repo).permissionDecision, 'deny')
+  writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n')
+  assert.equal(answerFor(home, 'git checkout -- src/y.ts', repo).permissionDecision, 'none', 'x.ts is dirty but the command names y.ts')
+  assert.equal(answerFor(home, 'git checkout -- src/x.ts', repo).permissionDecision, 'deny')
+})
+
+test('0.6.24 T1: the directory is the one the command acts on: a leading cd, and git -C', () => {
+  const home = makeHome()
+  const clean = makeRepo(home, 'clean-repo')
+  const dirty = makeRepo(home, 'dirty-repo')
+  writeFileSync(join(dirty.repo, 'src', 'x.ts'), 'changed\n')
+  assert.equal(answerFor(home, `cd ${clean.repo} && git reset --hard origin/main`, dirty.repo).permissionDecision, 'none', 'cd into a clean repo from a dirty cwd')
+  assert.equal(answerFor(home, `cd ${dirty.repo}; git reset --hard origin/main`, clean.repo).permissionDecision, 'deny', 'cd into a dirty repo from a clean cwd')
+  assert.equal(answerFor(home, `cd ../dirty-repo && git reset --hard`, clean.repo).permissionDecision, 'deny', 'a relative cd')
+  assert.equal(answerFor(home, `git -C ${clean.repo} reset --hard`, dirty.repo).permissionDecision, 'none', '-C into a clean repo from a dirty cwd')
+  assert.equal(answerFor(home, `git -C ${dirty.repo} reset --hard`, clean.repo).permissionDecision, 'deny', '-C into a dirty repo from a clean cwd')
+  assert.equal(answerFor(home, `git -C ../clean-repo clean -fd`, dirty.repo).permissionDecision, 'none')
+})
+
+const FAIL_CLOSED_COMMANDS = [
+  'bash -c "git reset --hard"',
+  'sh -c "git clean -fd"',
+  'eval "git reset --hard"',
+  'ssh dev-host "git reset --hard"',
+  'su -c "git reset --hard"',
+  'watch git reset --hard',
+  'script -c "git reset --hard" /dev/null',
+  'echo "$(git reset --hard)"',
+  'echo `git clean -fd`',
+  'find . -name x | xargs git checkout --',
+  'git --git-dir=.git reset --hard',
+  'git --work-tree=. reset --hard',
+  'HOME=/nonexistent git reset --hard',
+  'GIT_DIR=.git git reset --hard',
+  'GIT_WORK_TREE=. git reset --hard',
+  'git checkout --pathspec-from-file=paths.txt',
+  'cd "$SOME_REPO" && git reset --hard',
+  'git stash pop && git reset --hard',
+]
+
+for (const command of FAIL_CLOSED_COMMANDS) {
+  test(`0.6.24 T1: fails closed to today's refusal on a clean tree: ${command}`, () => {
+    const home = makeHome()
+    const { repo } = makeRepo(home, 'repo')
+    const refused = answerFor(home, command, repo)
+    assert.equal(refused.permissionDecision, 'deny')
+    assert.match(refused.reason, /REFUSED: discards uncommitted work — nothing to recover it from\./)
+    assert.doesNotMatch(refused.reason, /e\.g\./)
+  })
+}
+
+test("0.6.24 T1: fails closed when the directory is not a repository", () => {
+  const home = makeHome()
+  mkdirSync(join(home, 'plain'))
+  const refused = answerFor(home, 'git reset --hard', join(home, 'plain'))
+  assert.equal(refused.permissionDecision, 'deny')
+  assert.match(refused.reason, /nothing to recover it from/)
+})
+
+test('0.6.24 T1: the clean dry run never deletes: the untracked files are still there after the hook ran', () => {
+  const home = makeHome()
+  const { repo } = makeRepo(home, 'repo')
+  mkdirSync(join(repo, 'scratch'))
+  writeFileSync(join(repo, 'scratch', 'keep.txt'), 'k\n')
+  writeFileSync(join(repo, 'loose.txt'), 'l\n')
+  for (const command of ['git clean -fd', 'git clean -ffdx', 'git clean -f -d scratch/']) {
+    assert.equal(answerFor(home, command, repo).permissionDecision, 'deny', command)
+    assert.ok(existsSync(join(repo, 'loose.txt')) && existsSync(join(repo, 'scratch', 'keep.txt')), `${command} must leave the files alone`)
+  }
+})
+
+test('0.6.24 T1: the refusal names the loss in the person-facing line, in Spanish too', () => {
+  const home = makeHome()
+  const { repo } = makeRepo(home, 'repo')
+  writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n')
+  writeFileSync(join(repo, 'src', 'y.ts'), 'changed\n')
+  writeLocale(home, 'es')
+  const refused = answerFor(home, 'git reset --hard origin/main', repo)
+  assert.equal(refused.permissionDecision, 'deny')
+  assert.match(refused.message, /2 archivos modificados, p\. ej\. src\/x\.ts/)
+  assert.match(refused.reason, /2 modified files, e\.g\. src\/x\.ts/, 'the model reads English whatever the locale')
+})
+
+test('0.6.24 T1: a refusal that depends on repository state is a local rule: it never reaches the verdict cache', () => {
+  const home = makeHome()
+  const { repo } = makeRepo(home, 'repo')
+  writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n')
+  assert.equal(answerFor(home, 'git reset --hard', repo).permissionDecision, 'deny')
+  assert.equal(existsSync(verdictCachePath(home)), false, 'a local-rule deny writes no cached verdict')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.24 T1b: a discard whose every target is regenerated by tooling loses
+// nothing. The owner's case: `git restore apps/web/CLAUDE.md
+// apps/web/next-env.d.ts`, files a Next dev server rewrites on every start.
+// Real work next to them is still refused, and the refusal hands the agent a
+// reversible way forward: a `git stash push` of exactly that work.
+// ---------------------------------------------------------------------------
+
+/** A repository with a web app whose dev server rewrites one of its files. */
+function makeWebRepo (home) {
+  const { repo, git } = makeRepo(home, 'web')
+  mkdirSync(join(repo, 'apps', 'web'), { recursive: true })
+  for (const name of ['CLAUDE.md', 'next-env.d.ts', 'page.tsx']) writeFileSync(join(repo, 'apps', 'web', name), `${name}\n`)
+  git('add', '.')
+  git('commit', '-q', '-m', 'web')
+  return { repo, git }
+}
+
+function rewriteByDevServer (repo) {
+  writeFileSync(join(repo, 'apps', 'web', 'next-env.d.ts'), 'rewritten by the dev server\n')
+}
+
+test('0.6.24 T1b: a file tooling is known to rewrite is no loss', () => {
+  const home = makeHome()
+  const { repo } = makeWebRepo(home)
+  writeFileSync(join(repo, 'apps', 'web', 'next-env.d.ts'), 'rewritten\n')
+  writeFileSync(join(repo, 'tsconfig.tsbuildinfo'), 'x\n')
+  const answer = answerFor(home, 'git restore apps/web/next-env.d.ts', repo)
+  assert.equal(answer.permissionDecision, 'none', answer.reason)
+  assert.match(answer.message, /no key configured/i)
+})
+
+test('0.6.24 T1b: a project file nobody listed as regenerated (CLAUDE.md) is a change like any other', () => {
+  const home = makeHome()
+  const { repo } = makeWebRepo(home)
+  writeFileSync(join(repo, 'apps', 'web', 'CLAUDE.md'), 'edited\n')
+  assert.equal(answerFor(home, 'git restore apps/web/CLAUDE.md', repo).permissionDecision, 'deny')
+  rewriteByDevServer(repo)
+  assert.equal(answerFor(home, 'git restore apps/web/CLAUDE.md apps/web/next-env.d.ts', repo).permissionDecision, 'deny')
+})
+
+test('0.6.24 T1b: a secret is refused even when it sits in an output folder', () => {
+  const home = makeHome()
+  const { repo } = makeWebRepo(home)
+  mkdirSync(join(repo, 'dist'))
+  writeFileSync(join(repo, 'dist', '.env'), 'TOKEN=1\n')
+  assert.equal(answerFor(home, 'git clean -fd', repo).permissionDecision, 'deny')
+  rmSync(join(repo, 'dist', '.env'))
+  writeFileSync(join(repo, 'dist', 'bundle.js'), 'b\n')
+  assert.equal(answerFor(home, 'git clean -fd', repo).permissionDecision, 'none', 'output folder, no secret')
+})
+
+test('0.6.24 T1b: a tracked change under src/build or tmp is source and still refused', () => {
+  const home = makeHome()
+  const { repo, git } = makeRepo(home, 'repo')
+  mkdirSync(join(repo, 'src', 'build'))
+  writeFileSync(join(repo, 'src', 'build', 'config.ts'), 'c\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'build')
+  writeFileSync(join(repo, 'src', 'build', 'config.ts'), 'edited\n')
+  assert.equal(answerFor(home, 'git restore src/build/config.ts', repo).permissionDecision, 'deny')
+})
+
+test('0.6.24 T1b: real work next to regenerated files is refused, names only the work, and offers a stash that unblocks the retry', () => {
+  const home = makeHome()
+  const { repo, git } = makeWebRepo(home)
+  rewriteByDevServer(repo)
+  writeFileSync(join(repo, 'apps', 'web', 'page.tsx'), 'REAL WORK\n')
+  const command = 'git restore apps/web/next-env.d.ts apps/web/page.tsx'
+  const refused = answerFor(home, command, repo)
+  assert.equal(refused.permissionDecision, 'deny')
+  assert.match(refused.reason, /1 modified file, e\.g\. apps\/web\/page\.tsx/)
+  assert.doesNotMatch(refused.reason, /next-env/, 'the regenerated file is not named as lost')
+  const stash = /`(git stash push [^`]+)`/.exec(refused.reason)?.[1]
+  assert.ok(stash !== undefined, `the reason carries a stash command: ${refused.reason}`)
+  assert.match(stash, /^git stash push -m 'jev-discard-[a-z0-9]+' -- 'apps\/web\/page\.tsx'$/)
+  assert.equal(answerFor(home, stash, repo).permissionDecision, 'none', 'the stash itself is not a discard')
+  execFileSync('sh', ['-c', stash], { cwd: repo, env: { ...process.env, HOME: home }, stdio: 'ignore' })
+  assert.match(execFileSync('git', ['stash', 'list'], { cwd: repo, encoding: 'utf8', env: { ...process.env, HOME: home } }), /jev-discard-/)
+  assert.equal(answerFor(home, command, repo).permissionDecision, 'none', 'with the work set aside only regenerated files are left')
+  git('stash', 'pop', '-q')
+})
+
+test('0.6.24 T1b: the stash command works from a subdirectory too', () => {
+  const home = makeHome()
+  const { repo } = makeWebRepo(home)
+  const cwd = join(repo, 'apps', 'web')
+  writeFileSync(join(cwd, 'page.tsx'), 'REAL WORK\n')
+  const refused = answerFor(home, 'git restore page.tsx', cwd)
+  assert.equal(refused.permissionDecision, 'deny')
+  const stash = /`(git stash push [^`]+)`/.exec(refused.reason)?.[1]
+  assert.ok(stash !== undefined)
+  assert.match(stash, /-- ':\/apps\/web\/page\.tsx'$/)
+  execFileSync('sh', ['-c', stash], { cwd, env: { ...process.env, HOME: home }, stdio: 'ignore' })
+  assert.equal(answerFor(home, 'git restore page.tsx', cwd).permissionDecision, 'none')
+})
+
+test('0.6.24 T1b: untracked work is stashed with -u, and a stash chained to the discard on one line is still refused', () => {
+  const home = makeHome()
+  const { repo } = makeRepo(home, 'repo')
+  writeFileSync(join(repo, 'notes.md'), 'mine\n')
+  const refused = answerFor(home, 'git clean -fd', repo)
+  assert.equal(refused.permissionDecision, 'deny')
+  const stash = /`(git stash push [^`]+)`/.exec(refused.reason)?.[1]
+  assert.ok(stash !== undefined)
+  assert.match(stash, /^git stash push -u -m 'jev-discard-[a-z0-9]+' -- 'notes\.md'$/)
+  assert.equal(answerFor(home, `${stash} && git clean -fd`, repo).permissionDecision, 'deny', 'the tree is read before the line runs, so a chained stash cannot be trusted')
+  assert.equal(answerFor(home, stash, repo).permissionDecision, 'none')
+})
+
+test('0.6.24 T1b: git stash push on its own is never refused by the discard rule', () => {
+  const home = makeHome()
+  const { repo } = makeRepo(home, 'repo')
+  writeFileSync(join(repo, 'src', 'x.ts'), 'changed\n')
+  for (const command of ["git stash push -m tag -- src/x.ts", 'git stash push -u -m tag', 'git stash push', 'git stash -u', "git stash push -a -m tag -- 'src/x.ts'"]) {
+    assert.equal(answerFor(home, command, repo).permissionDecision, 'none', command)
+  }
+})
+
+// ---------------------------------------------------------------------------
 // odd/tasks/release-0.5.1.md T8 (JEVADV-24) -- the exact command observed
 // live on 2026-09-25: a `printf` whose double-quoted text spelled out a
 // hard reset, followed by an unrelated `orca plane comment add` call, was

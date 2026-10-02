@@ -8,6 +8,11 @@ export type GateKey =
   | "rule.pushProtected"
   | "rule.rmRf"
   | "rule.resetClean"
+  | "rule.resetCleanLoss"
+  | "discardLoss.modified.one"
+  | "discardLoss.modified.other"
+  | "discardLoss.untracked.one"
+  | "discardLoss.untracked.other"
   | "rule.dropTable"
   | "rule.kubectlDelete"
   | "rule.terraformApply"
@@ -17,6 +22,7 @@ export type GateKey =
   | "ownFileEditDeny"
   | "localRule"
   | "localRuleDeny"
+  | "localRuleDenyLoss"
   | "policyDeny"
   | "advisedLine"
   | "advisedRetryLine"
@@ -56,6 +62,11 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "rule.pushProtected": "empuja directo a una rama compartida, sin pasar por revisión",
     "rule.rmRf": "borrado recursivo desde / o $HOME — sin deshacer",
     "rule.resetClean": "descarta trabajo sin confirmar — no hay de dónde recuperarlo",
+    "rule.resetCleanLoss": "descarta trabajo sin confirmar: {{loss}}",
+    "discardLoss.modified.one": "{{count}} archivo modificado, p. ej. {{example}}",
+    "discardLoss.modified.other": "{{count}} archivos modificados, p. ej. {{example}}",
+    "discardLoss.untracked.one": "{{count}} archivo sin seguimiento, p. ej. {{example}}",
+    "discardLoss.untracked.other": "{{count}} archivos sin seguimiento, p. ej. {{example}}",
     "rule.dropTable": "elimina una tabla o una base entera",
     "rule.kubectlDelete": "borra algo que está corriendo y sirviendo ahora mismo",
     "rule.terraformApply": "crea o cambia infraestructura real",
@@ -66,6 +77,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // Deliberately identical to the English entry: this string is read by the
     // model, not by a person. See the note on the English one.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    localRuleDenyLoss: "REFUSED: discards uncommitted work: {{loss}}. Those changes exist only in the working tree, so nothing could bring them back. Do not run this command as written, and do not delete or overwrite the same files by another command, tool or script. {{next}} Continue with the rest of the work.",
     // 0.6.17 T2: the file tools' counterpart of localRuleDeny, English in both catalogs for the same reason.
     ownFileEditDeny: "REFUSED: {{why}}. You cannot make this edit. Do not retry it, and do not reach the same result by another tool, command or script. If it genuinely needs to change, say so and let the person change it in the Advisor panel. Continue with the rest of the work.",
     // A `prohibits` team policy match: the same REFUSED wording pattern as
@@ -162,6 +174,11 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "rule.pushProtected": "pushes straight to a shared branch, skipping review",
     "rule.rmRf": "recursive delete from / or $HOME — no undo",
     "rule.resetClean": "discards uncommitted work — nothing to recover it from",
+    "rule.resetCleanLoss": "discards uncommitted work: {{loss}}",
+    "discardLoss.modified.one": "{{count}} modified file, e.g. {{example}}",
+    "discardLoss.modified.other": "{{count}} modified files, e.g. {{example}}",
+    "discardLoss.untracked.one": "{{count}} untracked file, e.g. {{example}}",
+    "discardLoss.untracked.other": "{{count}} untracked files, e.g. {{example}}",
     "rule.dropTable": "drops a table or a whole database",
     "rule.kubectlDelete": "deletes something that is running and serving right now",
     "rule.terraformApply": "creates or changes real infrastructure",
@@ -179,6 +196,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // model that only learns "this was blocked" tends to try the same effect
     // by another route, which is the outcome the rule exists to prevent.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
+    localRuleDenyLoss: "REFUSED: discards uncommitted work: {{loss}}. Those changes exist only in the working tree, so nothing could bring them back. Do not run this command as written, and do not delete or overwrite the same files by another command, tool or script. {{next}} Continue with the rest of the work.",
     // 0.6.17 T2: the file tools' counterpart of localRuleDeny, English in both catalogs for the same reason.
     ownFileEditDeny: "REFUSED: {{why}}. You cannot make this edit. Do not retry it, and do not reach the same result by another tool, command or script. If it genuinely needs to change, say so and let the person change it in the Advisor panel. Continue with the rest of the work.",
     policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",

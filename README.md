@@ -16,6 +16,17 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.24
+
+The gate now checks whether a git discard would actually lose anything before it refuses one. For `git reset --hard`, `git clean -f`, `git checkout -- <path>`, `git checkout .` and `git restore`, it runs one bounded `git status` (or, for clean, a dry run) in the repository the command acts on.
+
+- **Nothing uncommitted would be lost:** the command is judged like any other command.
+- **Something would be lost:** the refusal names what, and gives the exact `git stash push` to keep it.
+- **Files tools regenerate on their own:** `next-env.d.ts`, `*.tsbuildinfo` and `.next/` are not counted as a loss. Secrets still are.
+- **The gate cannot tell:** a non-repository, `bash -c`, `ssh` or a timeout keeps the refusal.
+
+`gh pr update-branch` is no longer refused as a write to main. Jev is now told that it brings the base into the pull request's own branch and writes only that branch. Verdicts cached under the old wording are judged again.
+
 ## What changed in 0.6.23
 
 The agents band now shows where each agent works: its branch, and the worktree's name first when that is not the lead's. A subagent that is still creating its own worktree shows "new worktree".
