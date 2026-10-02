@@ -92,4 +92,8 @@ Nothing else waits to be shipped.
 
 ## Live check after the release
 
-Pending.
+Released as v0.6.24 at ca0863d (#38, CI green in 26 min). The dev copy `orca-jev-advisor-dev` is at the `v0.6.24` tag exactly. Every Claude Code session runs the gate from that copy, so the change is live in every session at once, with no restart. The five installed `orca-jev-mod-skills` copies match it, and the five settings files hold 8 gate hook entries each.
+
+- **L1.** The client checkout the refused agent works in is on `main`. The 5-run probe above ran there with the release's code: 5/5 allow, against 5/5 deny before. The installed copy is that code byte for byte.
+- **L2.** The lead's own live probe was a Bash command that `cd`s into that checkout and pipes a hook input into `node`. The live gate refused it under `never_write_to_main`. That verdict is on the probe itself (a script run in a checkout of main), not on `gh pr update-branch`, which sat inside a quoted `printf` and was read as data, as it should be. The refusal was not worked around.
+- **Not yet observed:** the refused agent itself retrying `gh pr update-branch 821`. The cache key now carries rules version 8, so the deny cached under version 7 cannot answer it.
