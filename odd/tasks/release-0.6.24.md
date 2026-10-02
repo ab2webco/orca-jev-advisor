@@ -50,7 +50,7 @@ The owner asked on 2026-10-02: "Podemos afinar esos comandos de git que realment
 - [x] T1 discard judged on actual loss (branch `0624-discard-loss`; 36 gate tests, 30 unit tests green)
 - [x] T1b regenerated files are no loss (built-in set), stash way forward (same branch)
 - [x] T2 update-branch fact and rules version (35bd9eb: RED at import, then GREEN 3/3; probe 5/5 deny before, 5/5 allow after)
-- [ ] T3 README, CHANGELOG, QA, release, live check
+- [x] T3 README, CHANGELOG, QA, release, live check
 
 ## Acceptance criteria
 - Strict TDD for each behaviour change (RED observed, then GREEN).
@@ -59,3 +59,4 @@ The owner asked on 2026-10-02: "Podemos afinar esos comandos de git que realment
 - The privacy test exits 0.
 - Probe after T1b: the owner's `git restore` of a regenerated file is allowed by the rule and by the real Jev (5 of 5), and the stash it suggests is allowed too.
 - Probe after T2: the verdict on `gh pr update-branch 821` recorded against the 5/5 baseline.
+- T3: released as v0.6.24 at ca0863d (#38); live check in `odd/qa/qa-0.6.24.md`.
