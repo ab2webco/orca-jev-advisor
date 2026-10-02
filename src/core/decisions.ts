@@ -747,8 +747,12 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  * through, so a 'deny' cached for `gh pr merge` from a checkout on main (the
  * refusal this fixes) and an 'allow' cached for an API branch merge into
  * main are judged again.
+ *
+ * Bumped to 8 for 0.6.24 T2: `gh pr update-branch` carries the branch it
+ * writes (branch_effect.ts), so a 'deny' cached for it under a "never write
+ * on main" policy is judged again.
  */
-export const GATE_DECISION_RULES_VERSION = 7;
+export const GATE_DECISION_RULES_VERSION = 8;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
@@ -793,6 +797,8 @@ export type GateStateRedactor = (text: string) => RedactSecretsResult;
 
 export interface BuildGateStateOptions {
   readonly condense?: boolean;
+  /** 0.6.24 T2 (JEVADV-103): detectBranchEffect's fact, "This command {{branchEffect}}." in the state. */
+  readonly branchEffect?: string;
   /**
    * 0.6.22 T4 (JEVADV-97): an injected redactor, default redactSecretsForJev.
    * Only the redaction-impact probe (src/core/jev_health_redaction.ts) passes
@@ -878,6 +884,10 @@ export function buildActionGateState(command: string, context: string, destinati
   }
   if (deployPublishSignal !== undefined) {
     state["deployPublishSignal"] = deployPublishSignal;
+  }
+  // 0.6.24 T2 (JEVADV-103): which branch the command writes (branch_effect.ts); omitted when unknown, like the signal above.
+  if (options.branchEffect !== undefined) {
+    state["branchEffect"] = `This command ${options.branchEffect}.`;
   }
   return state;
 }

@@ -40,7 +40,10 @@ The owner asked on 2026-10-02: "Podemos afinar esos comandos de git que realment
 - **T3** README, CHANGELOG, version, QA in `odd/qa/qa-0.6.24.md`, release, live check.
 
 ## Expected replay delta
-- The replay discard cases (D10, the H-discard-* rows) run in directories that are dirty, or not repositories (`/tmp`), or wrapped in `bash -c`. All stay refused, so the expected delta is **0 flips**.
+- Expected before the change: 0 flips. That was wrong: the H-discard rows run in a directory whose only changes are 3 untracked files, which I had counted as dirty.
+- **Measured:** 5 rows now go to Jev instead of being refused, all of them correctly. `checkout .`, `restore .`, `reset --hard`, `env A=1 git reset --hard` and `checkout -- src/a.ts` leave untracked files alone, so nothing would be lost.
+- **Still refused:** `clean -fd`, which deletes untracked files; the `/tmp` and `-C /tmp` rows (not a repository); `bash -c "git clean -fdx"`; and D10.
+- Replay-0615 passes 244/244 and the other five sets are unchanged.
 - New replay rows: a clean repo for each table row, which go to Jev; a dirty one, which is refused; and `gh pr update-branch`.
 
 ## Checklist

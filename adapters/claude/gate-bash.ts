@@ -77,6 +77,7 @@ import type { GitStatusSets, RecoverabilitySegmentResult } from '../../src/core/
 import { resolvePersonEffect } from '../../src/core/gate_person_effect.ts'
 import type { ResolvePersonEffectInput } from '../../src/core/gate_person_effect.ts'
 import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
+import { detectBranchEffect } from '../../src/core/branch_effect.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
@@ -1678,7 +1679,9 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // JEVADV-96 T5: a state over the cap is condensed (blob words replaced by a
     // marker) and that is judged; only one still over the cap is not sent, since
     // it would be refused (HTTP 400) after spending the time budget.
-    const fit = fitJevState((condense) => buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames, { condense }))
+    // 0.6.24 T2 (JEVADV-103): which branch the command writes, where Jev keeps misreading it (gh pr update-branch).
+    const branchEffect = detectBranchEffect(command) ?? undefined
+    const fit = fitJevState((condense) => buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames, { condense, branchEffect }))
     if (fit === null) return { kind: 'oversized' }
     stateCondensed = fit.condensed
     const response = await callJev(apiKey, fit.state, questions, { budgetMs: BUDGET_MS })
