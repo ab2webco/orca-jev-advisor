@@ -751,8 +751,13 @@ export const CONSEQUENCE_NOISE_MARGIN = 0.12;
  * Bumped to 8 for 0.6.24 T2: `gh pr update-branch` carries the branch it
  * writes (branch_effect.ts), so a 'deny' cached for it under a "never write
  * on main" policy is judged again.
+ *
+ * Bumped to 9 for 0.6.25 (JEVADV-104): syncing the current branch with its
+ * own remote branch (`git pull`, `git merge origin/main`) carries its effect
+ * (branch_effect.ts), so a 'deny' cached for it from a checkout on main is
+ * judged again.
  */
-export const GATE_DECISION_RULES_VERSION = 8;
+export const GATE_DECISION_RULES_VERSION = 9;
 
 /** Builds the command gate's three Jev questions (same shape as adapters/claude/gate-bash.ts). */
 export function buildActionGateQuestions(): Record<string, Question> {
