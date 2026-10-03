@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "policies": [
     {
       "id": "read_and_test",
@@ -14,7 +14,7 @@
     {
       "id": "never_write_to_main",
       "kind": "prohibits",
-      "rule": "Never write directly on main, master or develop, not even a one-line fix."
+      "rule": "Never write directly on main, master or develop, not even a one-line fix: no editing their files, committing, cherry-picking or merging your own work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch."
     },
     {
       "id": "unit_commits",
@@ -25,7 +25,7 @@
       "id": "discard_uncommitted_work",
       "kind": "prohibits",
       "scope": "local-rule",
-      "rule": "The agent never discards uncommitted work: no git checkout -- <path>, git checkout ., git checkout <ref> <path>, git checkout -f, git restore <path> or git restore . (without --staged), git reset --hard, or git clean -f. Changes that were never committed have no reflog behind them; once they are gone nothing brings them back. If files need to go back to their committed state, the agent commits or stashes the work first, or says so and lets the person decide. Unstaging with git restore --staged only touches the index and is fine, and so is switching branches with git checkout <branch> or git switch."
+      "rule": "The agent never discards uncommitted work. git checkout -- <path>, git checkout ., git checkout <ref> <path>, git checkout -f, git restore <path> or git restore . (without --staged), git reset --hard and git clean -f are refused when they would lose changes that were never committed: those have no reflog behind them, and once they are gone nothing brings them back. The agent keeps that work first with git stash push (or a commit), or says so and lets the person decide. When nothing would be lost (a clean tree, untracked files a hard reset leaves alone, or only files tools regenerate on their own such as next-env.d.ts), the command is fine. Unstaging with git restore --staged only touches the index and is fine, and so is switching branches with git checkout <branch> or git switch."
     },
     {
       "id": "no_force_push",

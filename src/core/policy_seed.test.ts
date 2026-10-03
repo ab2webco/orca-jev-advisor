@@ -224,7 +224,7 @@ function sortKeysDeep(value: unknown): unknown {
  *  loudly here instead of silently reaching an install that will never know
  *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
  *  which decides `due` from `version` alone and never looks at content. */
-const PINNED_DIGEST = "4bf63a78101f82546fd55f82f3e1404a154e20ce21333b3c4084f1d10a88a6f1";
+const PINNED_DIGEST = "d259cd9989f4487be6e2dc315ad64ff76f5e0bcbddec257cfce328990acfe3a9";
 
 test("editing a shipped policy row without bumping the seed version fails loudly", () => {
   // Pinned together on purpose: a row edit changes the digest, and the
@@ -243,8 +243,32 @@ test("editing a shipped policy row without bumping the seed version fails loudly
   );
   assert.equal(
     parseSeedVersion(seedFile),
-    3,
+    4,
     'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
       "PINNED_DIGEST once the rows for that release are final).",
   );
+});
+
+test("0.6.25 (JEVADV-104): never_write_to_main forbids writing on main and says that syncing it is not writing", () => {
+  // Measured on real Jev in a checkout on main: the old wording ("Never write
+  // directly on main or develop") refused git pull, git merge origin/main and
+  // git rebase origin/main as writes to main. This wording keeps editing,
+  // committing, cherry-picking, merging other work and pushing forbidden, and
+  // names the sync forms as fine (odd/qa/qa-0.6.25.md).
+  const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "never_write_to_main");
+  assert.ok(row, "no never_write_to_main row in the shipped seed");
+  assert.equal(row.kind, "prohibits");
+  for (const forbidden of ["editing their files", "committing", "cherry-picking", "pushing to them"]) {
+    assert.ok(row.rule.includes(forbidden), `the rule no longer forbids ${forbidden}`);
+  }
+  for (const fine of ["git fetch", "git pull", "origin/main into main", "gh pr update-branch"]) {
+    assert.ok(row.rule.includes(fine), `the rule does not name ${fine} as fine`);
+  }
+});
+
+test("0.6.25 (JEVADV-100): discard_uncommitted_work says the gate refuses only when something would be lost", () => {
+  const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "discard_uncommitted_work");
+  assert.ok(row, "no discard_uncommitted_work row in the shipped seed");
+  assert.ok(row.rule.includes("git stash push"), "the rule does not name the way to keep the work");
+  assert.ok(row.rule.includes("nothing would be lost"), "the rule does not say a discard that loses nothing is fine");
 });
