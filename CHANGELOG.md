@@ -2,6 +2,32 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.25
+
+- **Syncing a branch from its own remote is not writing to it.**
+  - `branch_effect.ts` adds a fact for the command forms that only sync the current branch with its own remote branch:
+    - `git pull`, alone or with `--ff-only`, `--rebase` or `--no-rebase`;
+    - `git pull <remote> <current>`;
+    - `git merge [--ff-only] <remote>/<current>` or `@{u}`;
+    - `git rebase <remote>/<current>` or `@{u}`.
+  - The current branch and the remotes are read with bounded git calls, in the directory the command acts on (a leading `cd`, `git -C`). Those calls run only when the command contains a pull, merge or rebase.
+  - Pulling or merging another branch, an unknown remote, or extra flags such as `--squash` get no fact.
+  - `GATE_DECISION_RULES_VERSION` is 9. (JEVADV-104)
+- **The shipped policies, refined on real Jev measurements** (seed version 4):
+  - `never_write_to_main` now names what writing on main is (editing its files, committing, cherry-picking or merging your own work into it, pushing to it) and what is fine (switching to it, fetch, pull, merging or rebasing its own remote branch into it, `gh pr update-branch`).
+  - `discard_uncommitted_work` now says what the gate does since 0.6.24: refuse only when uncommitted work would be lost, and keep it with `git stash push`.
+  - Installs that already hold the baseline are offered the two changes in the Advisor panel; nothing a person edited is overwritten.
+- **Measured** in a client checkout on main, with real Jev, an empty cache, 3 runs each:
+
+  | Command | 0.6.24 + old text | 0.6.25 + new text |
+  |---|---|---|
+  | `git merge origin/main` | 3/3 refused by the policy | 2/3 allowed, 1/3 advised |
+  | `git merge --ff-only origin/main` | 3/3 refused by the policy | 3/3 allowed |
+  | `git rebase origin/main` | 3/3 refused by the policy | 3/3 allowed |
+  | `git pull` | refused by the policy | advised (goes through on retry) |
+  | `git commit`, `git merge feature/login`, `git cherry-pick`, editing a file | refused by the policy | still refused by the policy |
+  | push to main | local rule | local rule |
+
 ## 0.6.24
 
 - **A git discard is refused only when it would lose something.**
