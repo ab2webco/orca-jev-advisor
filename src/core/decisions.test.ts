@@ -867,8 +867,8 @@ test("interpretDestinationPolicy: needs_person below its gate, or naming a rule 
   assert.equal(interpretDestinationPolicy(ACTION, T2_POLICIES, needsPersonAnswer("policy_2", 0.95)), null);
 });
 
-test("GATE_DECISION_RULES_VERSION: 8 since gh pr update-branch carries the branch it writes, so a refusal cached for it under a never-write-on-main policy is judged again", () => {
-  assert.equal(GATE_DECISION_RULES_VERSION, 8);
+test("GATE_DECISION_RULES_VERSION: 9 since syncing a branch from its own remote carries its effect, so a refusal cached for git pull on main is judged again", () => {
+  assert.equal(GATE_DECISION_RULES_VERSION, 9);
 });
 
 test("interpretDestinationPolicy: needs_person asks only above the measured band (0.78 for an unrelated merge, 0.96 for a reserved action)", () => {

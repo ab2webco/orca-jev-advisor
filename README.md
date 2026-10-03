@@ -16,6 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.25
+
+Everyday git on a checkout of main is no longer read as writing to main. When a command only syncs the current branch with its own remote branch (`git pull`, `git merge origin/main`, `git rebase origin/main`), the gate tells Jev so. Pulling or merging another branch into main is judged as before.
+
+The shipped `never_write_to_main` policy now says what writing on main is: editing its files, committing, cherry-picking, merging your own work into it, or pushing to it. It also says that syncing main is fine. The shipped `discard_uncommitted_work` row now matches the gate since 0.6.24: refused only when work would be lost, with `git stash push` as the way to keep it.
+
+The policy baseline moves to version 4. Every install that already has the policies sees the changes offered in the Advisor panel and adopts them with one click. Nothing a person edited is overwritten.
+
 ## What changed in 0.6.24
 
 The gate now checks whether a git discard would actually lose anything before it refuses one. For `git reset --hard`, `git clean -f`, `git checkout -- <path>`, `git checkout .` and `git restore`, it runs one bounded `git status` (or, for clean, a dry run) in the repository the command acts on.

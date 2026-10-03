@@ -77,7 +77,7 @@ import type { GitStatusSets, RecoverabilitySegmentResult } from '../../src/core/
 import { resolvePersonEffect } from '../../src/core/gate_person_effect.ts'
 import type { ResolvePersonEffectInput } from '../../src/core/gate_person_effect.ts'
 import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
-import { detectBranchEffect } from '../../src/core/branch_effect.ts'
+import { detectBranchEffect, syncActingDirectories } from '../../src/core/branch_effect.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
@@ -1663,7 +1663,7 @@ let stateCondensed = false
  * team-internal command (0.6.8 T3) -- the cache key and this question must
  * judge the very same policy set.
  */
-async function askJev(apiKey: string, command: string, jevContext: string, jevNames: JevNames, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[]): Promise<JevOutcome> {
+async function askJev(apiKey: string, command: string, jevContext: string, jevNames: JevNames, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[], cwd: string): Promise<JevOutcome> {
   try {
     const questions = {
       ...buildActionGateQuestions(),
@@ -1680,7 +1680,12 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // marker) and that is judged; only one still over the cap is not sent, since
     // it would be refused (HTTP 400) after spending the time budget.
     // 0.6.24 T2 (JEVADV-103): which branch the command writes, where Jev keeps misreading it (gh pr update-branch).
-    const branchEffect = detectBranchEffect(command) ?? undefined
+    // 0.6.25 (JEVADV-104): syncing the current branch with its own remote one needs that branch and those remotes, read where the git segment acts and only for such a command.
+    const syncDirs = new Set(syncActingDirectories(command, cwd, HOME_PATHS.home))
+    const syncDir = syncDirs.size === 1 ? ([...syncDirs][0] ?? null) : null
+    const head = syncDir === null ? null : gitOutput(['rev-parse', '--abbrev-ref', 'HEAD'], syncDir)?.trim() ?? null
+    const remoteNames = syncDir === null ? null : gitOutput(['remote'], syncDir)?.split('\n').map((name) => name.trim()).filter((name) => name.length > 0) ?? null
+    const branchEffect = detectBranchEffect(command, head === 'HEAD' || head === '' ? null : head, remoteNames) ?? undefined
     const fit = fitJevState((condense) => buildActionGateState(command, jevContext, destination, deployPublish?.description, jevNames, { condense, branchEffect }))
     if (fit === null) return { kind: 'oversized' }
     stateCondensed = fit.condensed
@@ -2152,7 +2157,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies)
+  const outcome = await askJev(apiKey, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies, cwd)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
