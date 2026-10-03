@@ -47,4 +47,30 @@ The probe is `scratchpad/0625/policy-wording.mjs`. It feeds the gate hook each c
 
 ## Live check after the release
 
-Pending.
+Released as v0.6.25 at 1724452 (#40, CI green in 26 min). The dev copy `orca-jev-advisor-dev` is at that commit. The five settings files hold 8 gate hook entries each. The five installed `orca-jev-mod-skills` copies were reinstalled on the pull: 55 of their 57 files are byte-identical to the dev copy, and the other two (`hooks/hooks.json`, `.claude-plugin/plugin.json`) are the ones the install generates with rewritten paths.
+
+The installed gate was fed each command as hook input, twice per command, with an empty cache, in a client checkout on `main`. Nothing was executed. Two policy sets were compared:
+
+- **live:** the owner's stored policies, which still hold the old never_write_to_main text ("Never write directly on main or develop, not even a one-line fix.").
+- **new:** the same policies with the seed v4 rows.
+
+| Command on `main` | Wanted | live (old text) | new (seed v4) |
+|---|---|---|---|
+| `git pull` | pass | policy 2 | advice (risk) 2 |
+| `git pull origin main` | pass | allow 1, policy 1 | advice (risk) 2 |
+| `git merge origin/main` | pass | policy 2 | allow 1, advice (risk) 1 |
+| `git merge --ff-only origin/main` | pass | policy 2 | allow 2 |
+| `git rebase origin/main` | pass | policy 2 | allow 2 |
+| `gh pr update-branch 821` | pass | allow 2 | allow 2 |
+| `git commit -am "fix typo"` | stop | policy 2 | policy 2 |
+| `git merge feature/login` | stop | policy 2 | policy 2 |
+| `git push origin main` | stop | local rule 2 | local rule 2 |
+| `git cherry-pick 1a2b3c4` | stop | policy 2 | policy 2 |
+| `echo ... >> src/config.ts` | stop | policy 2 | policy 2 |
+
+What this shows:
+
+- **The gate's sync fact alone does not fix it.** With the old stored text, Jev still reads a pull on `main` as writing to `main`. The fix takes effect once the seed v4 rows are adopted.
+- **With seed v4, every sync command passes or gets advice.** Advice goes through when the agent repeats the command unchanged. Every write to `main` is still refused.
+
+**Not looked at:** the Advisor panel's Team Policies notice offering seed v4. Its storage is not readable from here, and the notice logic is covered by unit tests only. The owner adopts the rows from that notice; until then, the old text is what the gate uses on this machine.

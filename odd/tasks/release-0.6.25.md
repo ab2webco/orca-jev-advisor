@@ -17,7 +17,7 @@ An agent in a client checkout on main could not run `git pull`. It was refused u
 ## Checklist
 - [x] T1 sync fact (53a94e3: RED at load, GREEN 11/11; npm test 3261/3261)
 - [x] T2 refined seed texts, version 4 (RED 2, then GREEN 22/22; digest re-pinned)
-- [ ] T3 README, CHANGELOG, QA, release, live check
+- [x] T3 README, CHANGELOG, QA, release, live check
 
 ## Acceptance criteria
 - Strict TDD; typecheck 0; npm test green; privacy 0.
