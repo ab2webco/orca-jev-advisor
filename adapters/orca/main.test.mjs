@@ -56,6 +56,9 @@ const {
   claudeIntegrationPermissionArgs,
   describeClaudeIntegration,
   claudeIntegrationResultPayload,
+  currentNewerInstallSkip,
+  installClaudeIntegration,
+  publishClaudeIntegrationStatus,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
   consumptionSidecarArgv,
@@ -257,6 +260,98 @@ test('claudeIntegrationPermissionArgs: install may read the Node version manager
   assert.ok(install.some((arg) => arg.startsWith('--allow-fs-read=') && arg.endsWith('.nvm/versions/node')))
   assert.ok(install.some((arg) => arg.startsWith('--allow-fs-write=')))
   assert.ok(!claudeIntegrationPermissionArgs('status').some((arg) => arg.startsWith('--allow-fs-write=')))
+})
+
+// 0.6.26 T3: activation must never replace a newer install; a person's own
+// Install always may. Every test injects `runScript`, so none of them spawns
+// the real installer against this developer's ~/.claude.
+
+/** A `runScript` double that records each call and answers by mode. */
+function recordingRunScript (answers) {
+  const calls = []
+  const runScript = async (mode, args, reads) => {
+    calls.push({ mode, args, reads })
+    return answers[mode] ?? { ok: true }
+  }
+  return { runScript, calls }
+}
+
+const NEWER_SKIP = {
+  ok: true,
+  skipped: true,
+  reason: 'newer-install-present',
+  detail: 'version 0.6.25 is already installed from /work/advisor-dev; this plugin root is 0.6.10, so nothing was changed.',
+  installed: { version: '0.6.25', root: '/work/advisor-dev' },
+  ownVersion: '0.6.10'
+}
+
+test('installClaudeIntegration: on activation it grants the install sidecar reading of the installed roots, and logs a skip for a newer install', async () => {
+  const orca = fakeOrca()
+  const { runScript, calls } = recordingRunScript({
+    'installed-roots': { ok: true, packageJsons: ['/work/advisor-dev/package.json'] },
+    install: NEWER_SKIP
+  })
+  const result = await installClaudeIntegration(orca, { runScript })
+  assert.equal(result.skipped, true)
+  assert.deepEqual(calls.map((call) => call.mode), ['installed-roots', 'install'])
+  assert.deepEqual(calls[1].reads, ['/work/advisor-dev/package.json'])
+  assert.ok(!calls[1].args.includes('--force'))
+  assert.equal(orca._logs.length, 1)
+  assert.match(orca._logs[0], /newer install|newer-install-present/)
+  assert.ok(orca._logs[0].includes('0.6.25') && orca._logs[0].includes('/work/advisor-dev'))
+  assert.deepEqual(currentNewerInstallSkip(), { version: '0.6.25', root: '/work/advisor-dev', ownVersion: '0.6.10' })
+})
+
+test('installClaudeIntegration: a person\'s own Install passes --force, probes nothing, and clears the remembered skip', async () => {
+  const orca = fakeOrca()
+  const { runScript, calls } = recordingRunScript({ install: { ok: true } })
+  await installClaudeIntegration(orca, { runScript, force: true })
+  assert.deepEqual(calls.map((call) => call.mode), ['install'])
+  assert.ok(calls[0].args.includes('--force'))
+  assert.equal(currentNewerInstallSkip(), null)
+  assert.equal(orca._logs.length, 0)
+})
+
+test('installClaudeIntegration: an install that was not skipped clears an earlier skip', async () => {
+  const orca = fakeOrca()
+  await installClaudeIntegration(orca, { runScript: recordingRunScript({ install: NEWER_SKIP }).runScript })
+  assert.notEqual(currentNewerInstallSkip(), null)
+  await installClaudeIntegration(orca, { runScript: recordingRunScript({ install: { ok: true } }).runScript })
+  assert.equal(currentNewerInstallSkip(), null)
+})
+
+test('installClaudeIntegration: a failed probe still installs, with no extra reads', async () => {
+  const { runScript, calls } = recordingRunScript({ 'installed-roots': { ok: false, reason: 'exception' } })
+  await installClaudeIntegration(fakeOrca(), { runScript })
+  assert.deepEqual(calls.map((call) => call.mode), ['installed-roots', 'install'])
+  assert.deepEqual(calls[1].reads, [])
+})
+
+test('attendClaudeIntegrationRequest: the panel\'s install request is a person\'s own Install, so it forces', async () => {
+  const storageHost = fakeStorageHost({ claudeIntegrationRequest: { id: 'ci-force', at: new Date().toISOString(), intent: 'install' } })
+  const { runScript, calls } = recordingRunScript({ install: { ok: true }, status: { ok: true, targets: [] } })
+  await attendClaudeIntegrationRequest(fakeOrca(), storageHost, { runScript, mirror: async () => ({ ok: true }) })
+  const install = calls.find((call) => call.mode === 'install')
+  assert.ok(install.args.includes('--force'))
+  assert.equal((await storageHost.get(CLAUDE_INTEGRATION_RESULT_KEY)).ok, true)
+})
+
+test('publishClaudeIntegrationStatus: carries the newer install an activation left alone, for the panel to name', async () => {
+  const orca = fakeOrca()
+  await installClaudeIntegration(orca, { runScript: recordingRunScript({ install: NEWER_SKIP }).runScript })
+  const storageHost = fakeStorageHost()
+  const { runScript } = recordingRunScript({ status: { ok: true, targets: [] } })
+  await publishClaudeIntegrationStatus(orca, storageHost, { runScript, mirror: async () => ({ ok: true }) })
+  const published = await storageHost.get('claudeIntegrationStatus')
+  assert.deepEqual(published.newerInstall, { version: '0.6.25', root: '/work/advisor-dev', ownVersion: '0.6.10' })
+})
+
+test('claudeIntegrationPermissionArgs: extra reads are granted file by file, and installed-roots stays read-only without child processes', () => {
+  const args = claudeIntegrationPermissionArgs('install', ['/work/advisor-dev/package.json'])
+  assert.ok(args.includes('--allow-fs-read=/work/advisor-dev/package.json'))
+  const probe = claudeIntegrationPermissionArgs('installed-roots')
+  assert.ok(!probe.some((arg) => arg.startsWith('--allow-fs-write=')))
+  assert.ok(!probe.includes('--allow-child-process'))
 })
 
 const HEALTHY_STATUS = {

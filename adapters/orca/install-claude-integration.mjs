@@ -8,7 +8,7 @@
  * does: the worker's own permission sandbox only lets it read its plugin
  * root, and every one of these lives outside it.
  *
- * Usage: node install-claude-integration.mjs <install|uninstall|status|hooks-check|doctor> <pluginRoot>
+ * Usage: node install-claude-integration.mjs <install|uninstall|status|hooks-check|doctor|installed-roots> <pluginRoot> [--force]
  *        node install-claude-integration.mjs router-mode-status
  *        node install-claude-integration.mjs router-mode-set <target> <mode>
  *
@@ -47,6 +47,10 @@
  *             and not a symlink. Every settings.json write is atomic (temp
  *             file + rename) and preceded, on the very first install, by a
  *             full backup.
+ *             Never replaces a strictly newer install (see "an older plugin
+ *             root never replaces a newer install" below): that returns
+ *             `skipped` / `newer-install-present` and writes nothing, unless
+ *             `--force` (a person's own Install) is passed after pluginRoot.
  * uninstall   Surgical: removes only the hook entry that is ours (the
  *             script it runs, or the `statusMessage` an older version
  *             marked it with; see isOwnHook), from whichever matcher group (`Bash`
@@ -1079,12 +1083,127 @@ function modCopyPathFor (target) {
   return join(skillsDirFor(PLATFORM, target), 'orca-jev-mod-skills')
 }
 
-async function install (pluginRoot) {
+// ---------------------------------------------------------------------------
+// 0.6.26: an older plugin root never replaces a newer install.
+//
+// The worker runs `install` on EVERY activation, from whichever plugin root
+// Orca activated. On 2026-10-03 that was Orca's marketplace copy (0.6.10),
+// and it rewrote the hooks and the skills mod of a 0.6.25 install back to
+// 0.6.10. What an install leaves on disk already names where it came from
+// (the mod marker's `source`) and which version that was (the copy's
+// generated manifest), so the decision needs no state file of its own.
+// ---------------------------------------------------------------------------
+
+const NEWER_INSTALL_REASON = 'newer-install-present'
+
+/** [major, minor, patch] of a `x.y.z` version (a `-pre`/`+build` suffix is ignored), or null when it is not one. */
+function parseVersion (value) {
+  const match = typeof value === 'string' ? /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(value) : null
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null
+}
+
+/** Whether `candidate` is strictly newer than `baseline`; an unparsable side is never newer. */
+export function isStrictlyNewerVersion (candidate, baseline) {
+  const a = parseVersion(candidate)
+  const b = parseVersion(baseline)
+  if (a === null || b === null) return false
+  for (let i = 0; i < 3; i += 1) {
+    if (a[i] !== b[i]) return a[i] > b[i]
+  }
+  return false
+}
+
+/**
+ * Whether an install from `installedRoot` (at `installedVersion`) must be
+ * left alone by an install from `ownRoot` (at `ownVersion`): only when it is
+ * strictly newer AND its root is still on disk (a gone root leaves hooks
+ * that point at nothing, which installing repairs) AND it is not another
+ * content-hash directory of the same Orca plugin key (there Orca's own
+ * activation is authoritative, which keeps a catalog rollback possible).
+ */
+export function blocksInstallForNewerInstall ({ installedVersion, installedRoot, rootPresent, ownVersion, ownRoot }) {
+  return isStrictlyNewerVersion(installedVersion, ownVersion) && rootPresent === true && dirname(installedRoot) !== dirname(ownRoot)
+}
+
+/** The plugin root a mod marker's `source` came from, or null when `source` is not `<root>/adapters/claude/mod-skills`. */
+function installedRootFromSource (source) {
+  const root = dirname(dirname(dirname(source)))
+  return source === join(root, 'adapters', 'claude', 'mod-skills') ? root : null
+}
+
+/** The root and version of the install that wrote `target`'s mod copy, or null when it never did or left no readable trace. */
+async function readInstalledMod (target) {
+  const modCopyPath = modCopyPathFor(target)
+  const marker = await readModCopyMarker(modCopyMarkerPathFor(modCopyPath))
+  if (marker === null) return null
+  const root = installedRootFromSource(marker.source)
+  if (root === null) return null
+  let version = null
+  try {
+    const manifest = JSON.parse(await readFile(join(modCopyPath, ...MOD_SKILLS_MANIFEST_PATH.split('/')), 'utf8'))
+    version = isRecord(manifest) && typeof manifest.version === 'string' ? manifest.version : null
+  } catch {
+    version = null
+  }
+  return { root, version }
+}
+
+/** Only a missing file proves the root is gone; any other failure keeps the newer install protected. */
+async function rootPackagePresent (root) {
+  return readFile(join(root, 'package.json')).then(
+    () => true,
+    (error) => error?.code !== 'ENOENT' && error?.code !== 'ENOTDIR'
+  )
+}
+
+/** The newest install, over every target, that `pluginRoot` must not replace; null when none. */
+async function findBlockingInstall (pluginRoot, targets) {
+  const ownVersion = await readFile(join(pluginRoot, 'package.json'), 'utf8').then((raw) => {
+    const pkg = JSON.parse(raw)
+    return isRecord(pkg) && typeof pkg.version === 'string' ? pkg.version : null
+  }).catch(() => null)
+  let blocking = null
+  for (const target of targets) {
+    const installed = await readInstalledMod(target)
+    if (installed === null) continue
+    const rootPresent = await rootPackagePresent(installed.root)
+    if (!blocksInstallForNewerInstall({ installedVersion: installed.version, installedRoot: installed.root, rootPresent, ownVersion, ownRoot: pluginRoot })) continue
+    if (blocking === null || isStrictlyNewerVersion(installed.version, blocking.version)) blocking = { version: installed.version, root: installed.root }
+  }
+  return blocking === null ? null : { ...blocking, ownVersion }
+}
+
+/** `installed-roots`: the package.json of every root a mod copy came from, so the worker can grant the install sidecar reading exactly those files (its `--permission` sandbox otherwise cannot tell a gone root from a forbidden one). */
+async function installedRoots () {
+  const discovery = await discoverTargets()
+  const packageJsons = new Set()
+  for (const target of discovery.targets) {
+    const installed = await readInstalledMod(target)
+    if (installed !== null) packageJsons.add(join(installed.root, 'package.json'))
+  }
+  return { ok: true, packageJsons: [...packageJsons] }
+}
+
+/** `force` is a person's own Install: it replaces whatever is there, newer or not. */
+async function install (pluginRoot, { force = false } = {}) {
+  const discovery = await discoverTargets()
+  // Decided once, before anything is written (backups included), over every
+  // target: hooks and mod must never end on different versions.
+  const newer = force ? null : await findBlockingInstall(pluginRoot, discovery.targets)
+  if (newer !== null) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: NEWER_INSTALL_REASON,
+      detail: `version ${newer.version} is already installed from ${newer.root}; this plugin root is ${newer.ownVersion ?? 'of unknown version'}, so nothing was changed. Press Install to replace it anyway.`,
+      installed: { version: newer.version, root: newer.root },
+      ownVersion: newer.ownVersion
+    }
+  }
   await tightenSettingsBackups()
   const locale = await resolveLocale()
   const node = await resolveNode()
   const { specs } = hookSpecs(pluginRoot, locale, node)
-  const discovery = await discoverTargets()
   const stored = (await readInstallState()) ?? {}
   const states = targetStates(stored)
   const installedAt = stored.installedAt ?? new Date().toISOString()
@@ -1737,7 +1856,9 @@ async function main () {
       if (typeof pluginRoot !== 'string' || pluginRoot.length === 0) {
         result = { ok: false, reason: 'missing-plugin-root', detail: 'usage: install-claude-integration.mjs <install|uninstall|status|hooks-check|doctor> <pluginRoot>' }
       } else if (mode === 'install') {
-        result = await install(pluginRoot)
+        result = await install(pluginRoot, { force: process.argv.slice(4).includes('--force') })
+      } else if (mode === 'installed-roots') {
+        result = await installedRoots()
       } else if (mode === 'uninstall') {
         result = await uninstall(pluginRoot)
       } else if (mode === 'status') {

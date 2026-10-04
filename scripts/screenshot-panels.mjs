@@ -846,6 +846,22 @@ const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED
 SCENARIOS['skills-ready'] = SKILLS_READY
 
 /**
+ * 0.6.26 T3 -- an older plugin copy (Orca's marketplace one) activated over a
+ * newer install and left it alone: main.mjs publishes what it skipped as
+ * `newerInstall` next to the rest of the integration status.
+ */
+SCENARIOS['newer-install'] = {
+  ...READY,
+  claudeIntegrationStatus: {
+    ...READY.claudeIntegrationStatus,
+    // The newer install's copy is on disk; seen from this older root its
+    // digest is not ours, so it exists but is not "installed".
+    modCopy: { installed: false, exists: true, hasManifest: true },
+    newerInstall: { version: '0.6.25', root: '/home/you/Projects/orca-jev-advisor-dev', ownVersion: '0.6.10' },
+  },
+}
+
+/**
  * odd/tasks/board-leftovers.md L6 -- the owner's live panel with 63 agents:
  * one project and branch repeated more than ten times, rows marked working
  * three days after their last signal, and rows from days ago mixed in with

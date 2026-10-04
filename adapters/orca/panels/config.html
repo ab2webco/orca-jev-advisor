@@ -653,6 +653,7 @@
           'integration.modCopyFailed': 'no se pudo copiar el mod de skills a su lugar; el hook de Bash y el resto de la integración sí quedaron instalados.',
           'integration.modCopyIncomplete': 'el mod de skills se copió, pero quedaron entradas que el instalador no puede reproducir; lo que hay en el disco no es exactamente lo que trae el plugin.',
           'integration.modCopyForeign': 'ya hay una carpeta orca-jev-mod-skills que no instaló Orca Jev; se dejó intacta y el mod de skills no quedó instalado. Renómbrala o bórrala y vuelve a configurar.',
+          'integration.newerInstallPresent': 'Ya hay una instalación más nueva (versión {{installed}}, en {{root}}); esta copia del plugin es la {{own}} y la dejó como estaba. Pulsa «Configurar» para reemplazarla de todos modos.',
           'integration.nodeOk': 'Los hooks se ejecutan con Node {{version}} ({{path}}).',
           'integration.nodeTooOld': 'Se requiere Node 24 o superior; se encontró {{version}} en {{path}}.',
           'integration.nodeMissing': 'Se requiere Node 24 o superior; no se encontró ninguno.',
@@ -974,6 +975,7 @@
           'integration.modCopyFailed': 'could not copy the skills mod into place; the Bash hook and the rest of the integration are still installed.',
           'integration.modCopyIncomplete': "the skills mod was copied, but some entries the installer cannot reproduce were left out; what is on disk is not exactly what the plugin ships.",
           'integration.modCopyForeign': 'an orca-jev-mod-skills folder that Orca Jev did not install is already there; it was left untouched and the skills mod is not installed. Rename or delete it, then configure again.',
+          'integration.newerInstallPresent': 'A newer install is already in place (version {{installed}}, from {{root}}); this plugin copy is {{own}} and left it as it was. Press "Set up" to replace it anyway.',
           'integration.nodeOk': 'The hooks run on Node {{version}} ({{path}}).',
           'integration.nodeTooOld': 'Node 24 or newer is required; found {{version}} at {{path}}.',
           'integration.nodeMissing': 'Node 24 or newer is required; none was found.',
@@ -3482,6 +3484,18 @@
           claudeIntegrationStatusEl.appendChild(li(t('integration.statusUnavailable')))
           return
         }
+        // The worker's last install left a newer one alone (an older plugin
+        // copy activated over it): said first, because the hook line below
+        // describes THIS copy's paths and would otherwise read as broken.
+        var newer = status.newerInstall
+        if (newer && typeof newer.version === 'string' && typeof newer.root === 'string') {
+          claudeIntegrationStatusEl.appendChild(li(t('integration.newerInstallPresent', {
+            installed: newer.version,
+            root: newer.root,
+            own: typeof newer.ownVersion === 'string' ? newer.ownVersion : '?'
+          })))
+        }
+
         var hookLine = status.hook && status.hook.installed
           ? t('integration.hookCount', { installed: String(status.hook.installedCount), total: String(status.hook.totalCount) })
           : t('integration.hookNotInstalled')

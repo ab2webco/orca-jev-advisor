@@ -22,6 +22,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
+import { blocksInstallForNewerInstall, isStrictlyNewerVersion } from './install-claude-integration.mjs'
+
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const PLUGIN_ROOT = join(__dirname, '..', '..')
 const SCRIPT_PATH = join(__dirname, 'install-claude-integration.mjs')
@@ -56,7 +58,7 @@ function modCopyMarkerPathFor (home) {
  *  skills-mod copy to fail (P5) passes a directory with no `adapters/claude/
  *  mod-skills` under it instead, which fails `cp()` the same way a real
  *  permission problem would -- no chmod gymnastics needed. */
-function run (mode, home, pluginRoot = PLUGIN_ROOT, extraEnv = {}) {
+function run (mode, home, pluginRoot = PLUGIN_ROOT, extraEnv = {}, extraArgs = []) {
   const env = { ...process.env, HOME: home, ...extraEnv }
   delete env.ORCA_USER_DATA_PATH
   delete env.XDG_CONFIG_HOME
@@ -66,7 +68,7 @@ function run (mode, home, pluginRoot = PLUGIN_ROOT, extraEnv = {}) {
   // points it at exactly the directory it would have computed for `home`
   // on darwin with no XDG override, matching the `stateDir` fixture below.
   env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
-  const stdout = execFileSync(process.execPath, [SCRIPT_PATH, mode, pluginRoot], { env, encoding: 'utf8' })
+  const stdout = execFileSync(process.execPath, [SCRIPT_PATH, mode, pluginRoot, ...extraArgs], { env, encoding: 'utf8' })
   return JSON.parse(stdout)
 }
 
@@ -1674,4 +1676,171 @@ test('0.6.19: the install state is written as each target is written, so a kill 
   const state = JSON.parse(readFileSync(statePath, 'utf8'))
   assert.equal(state.targets.home.hooksObjectExistedBefore, false)
   assert.equal(state.targets.home.events.PreToolUse.arrayExistedBefore, false)
+})
+
+// 0.6.26 T3: an older plugin root activating must never replace a newer
+// install. Owner, 2026-10-03: Orca's marketplace copy (0.6.10) rewrote the
+// hooks and the skills mod of a 0.6.25 install back to 0.6.10.
+
+test('isStrictlyNewerVersion compares x.y.z numerically and treats anything unparsable as not newer', () => {
+  assert.equal(isStrictlyNewerVersion('0.6.25', '0.6.10'), true)
+  assert.equal(isStrictlyNewerVersion('0.6.10', '0.6.9'), true, 'numeric, not lexical')
+  assert.equal(isStrictlyNewerVersion('1.0.0', '0.99.99'), true)
+  assert.equal(isStrictlyNewerVersion('0.6.10', '0.6.10'), false)
+  assert.equal(isStrictlyNewerVersion('0.6.9', '0.6.10'), false)
+  assert.equal(isStrictlyNewerVersion('0.6.26-rc.1', '0.6.25'), true)
+  assert.equal(isStrictlyNewerVersion('garbage', '0.6.10'), false)
+  assert.equal(isStrictlyNewerVersion('0.6.25', 'garbage'), false)
+  assert.equal(isStrictlyNewerVersion(undefined, '0.6.10'), false)
+  assert.equal(isStrictlyNewerVersion('0.6', '0.5.9'), false)
+})
+
+const NEWER = { installedVersion: '0.6.25', installedRoot: '/work/advisor-dev', rootPresent: true, ownVersion: '0.6.10', ownRoot: '/orca/plugins/ab2web.orca-jev-advisor/abc123' }
+
+test('blocksInstallForNewerInstall: a strictly newer install whose root is still there blocks', () => {
+  assert.equal(blocksInstallForNewerInstall(NEWER), true)
+})
+
+test('blocksInstallForNewerInstall: an equal or older install does not block', () => {
+  assert.equal(blocksInstallForNewerInstall({ ...NEWER, installedVersion: '0.6.10' }), false)
+  assert.equal(blocksInstallForNewerInstall({ ...NEWER, installedVersion: '0.6.9' }), false)
+})
+
+test('blocksInstallForNewerInstall: a newer install whose root is gone does not block, so the hooks it left behind are repaired', () => {
+  assert.equal(blocksInstallForNewerInstall({ ...NEWER, rootPresent: false }), false)
+})
+
+test('blocksInstallForNewerInstall: a content-hash sibling of this same Orca plugin key does not block, so a catalog rollback stays possible', () => {
+  const sibling = { ...NEWER, installedRoot: '/orca/plugins/ab2web.orca-jev-advisor/def456' }
+  assert.equal(blocksInstallForNewerInstall(sibling), false)
+})
+
+test('blocksInstallForNewerInstall: an unparsable version on either side does not block', () => {
+  assert.equal(blocksInstallForNewerInstall({ ...NEWER, installedVersion: null }), false)
+  assert.equal(blocksInstallForNewerInstall({ ...NEWER, ownVersion: null }), false)
+})
+
+/** Every file under `dir`, relative path to its bytes and mtime, so a test can say "nothing anywhere changed". */
+function snapshotTree (dir) {
+  const out = new Map()
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name)
+      if (entry.isDirectory()) { out.set(`${full.slice(dir.length)}/`, 'dir'); walk(full) } else {
+        out.set(full.slice(dir.length), `${statSync(full).mtimeMs}:${readFileSync(full, 'utf8')}`)
+      }
+    }
+  }
+  walk(dir)
+  return out
+}
+
+/** A home that holds a finished install from `installedRoot` at `version`: its mod copy, marker and a settings.json that names that root. */
+function plantInstallFrom (home, installedRoot, version, { manifest = true } = {}) {
+  mkdirSync(installedRoot, { recursive: true })
+  writeFileSync(join(installedRoot, 'package.json'), JSON.stringify({ name: 'orca-jev-advisor', version }), 'utf8')
+  const copyPath = modCopyPathFor(home)
+  mkdirSync(join(copyPath, '.claude-plugin'), { recursive: true })
+  if (manifest) writeFileSync(join(copyPath, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'orca-jev-mod-skills', version }), 'utf8')
+  writeFileSync(join(copyPath, 'canary.txt'), `copy from ${version}`, 'utf8')
+  writeFileSync(modCopyMarkerPathFor(home), JSON.stringify({ source: join(installedRoot, 'adapters', 'claude', 'mod-skills'), digest: 'planted' }), 'utf8')
+  writeSettings(home, { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node', args: [join(installedRoot, 'adapters', 'claude', 'gate-bash.ts')], statusMessage: GATE_MARKER }] }] } })
+}
+
+test('0.6.26 T3: with a strictly newer install in place, install writes nothing anywhere and says why', () => {
+  const home = makeHome()
+  const newerRoot = join(home, 'checkouts', 'advisor-newer')
+  plantInstallFrom(home, newerRoot, '99.0.0')
+  const before = snapshotTree(home)
+
+  const result = run('install', home)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.skipped, true)
+  assert.equal(result.reason, 'newer-install-present')
+  assert.deepEqual(result.installed, { version: '99.0.0', root: newerRoot })
+  assert.match(result.detail, /99\.0\.0/)
+  assert.ok(result.detail.includes(newerRoot))
+  assert.deepEqual(snapshotTree(home), before, 'no settings.json, backup, state file, marker or mod copy file may change')
+})
+
+test('0.6.26 T3: install skips even when only one of two targets holds the newer install', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const userDataDir = makeUserDataWithAccount(home, accountId)
+  plantInstallFrom(home, join(home, 'checkouts', 'advisor-newer'), '99.0.0')
+  const before = snapshotTree(home)
+  const env = { ...process.env, HOME: home, ORCA_USER_DATA_PATH: userDataDir, ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor') }
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  const result = JSON.parse(execFileSync(process.execPath, [SCRIPT_PATH, 'install', PLUGIN_ROOT], { env, encoding: 'utf8' }))
+  assert.equal(result.reason, 'newer-install-present')
+  assert.deepEqual(snapshotTree(home), before, 'the account must not get hooks the home keeps off: hooks and mod stay on one version')
+})
+
+test('0.6.26 T3: --force (a person pressing Install) replaces the newer install', () => {
+  const home = makeHome()
+  plantInstallFrom(home, join(home, 'checkouts', 'advisor-newer'), '99.0.0')
+
+  const result = run('install', home, PLUGIN_ROOT, {}, ['--force'])
+
+  assert.equal(result.ok, true)
+  assert.notEqual(result.skipped, true)
+  assert.equal(result.changes.modCopy, true)
+  assert.equal(JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8')).source, MOD_SOURCE)
+  assert.equal(existsSync(join(modCopyPathFor(home), 'canary.txt')), false)
+  assert.equal(ownEntries(readSettings(home), 'PreToolUse', GATE_MARKER).length, 1)
+})
+
+test('0.6.26 T3: an older or equal installed version is replaced as before', () => {
+  const home = makeHome()
+  plantInstallFrom(home, join(home, 'checkouts', 'advisor-older'), '0.0.1')
+  const result = run('install', home)
+  assert.notEqual(result.skipped, true)
+  assert.equal(result.changes.modCopy, true)
+  assert.equal(JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8')).source, MOD_SOURCE)
+})
+
+test('0.6.26 T3: a newer install whose root is gone is replaced, so its dangling hooks are repaired', () => {
+  const home = makeHome()
+  const goneRoot = join(home, 'checkouts', 'advisor-gone')
+  plantInstallFrom(home, goneRoot, '99.0.0')
+  rmSync(goneRoot, { recursive: true, force: true })
+  const result = run('install', home)
+  assert.notEqual(result.skipped, true)
+  assert.equal(JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8')).source, MOD_SOURCE)
+})
+
+test('0.6.26 T3: a copy whose manifest is missing or garbled says nothing about its version, so install proceeds', () => {
+  const missing = makeHome()
+  plantInstallFrom(missing, join(missing, 'checkouts', 'advisor-newer'), '99.0.0', { manifest: false })
+  assert.notEqual(run('install', missing).skipped, true)
+
+  const garbled = makeHome()
+  plantInstallFrom(garbled, join(garbled, 'checkouts', 'advisor-newer'), '99.0.0')
+  writeFileSync(join(modCopyPathFor(garbled), '.claude-plugin', 'plugin.json'), '{not json', 'utf8')
+  assert.notEqual(run('install', garbled).skipped, true)
+})
+
+test('0.6.26 T3: a newer install under the same Orca plugin key (another content-hash directory) is replaced, so Orca\'s own activation stays authoritative', () => {
+  const home = makeHome()
+  const pluginsDir = join(home, 'orca-plugins', 'ab2web.orca-jev-advisor')
+  plantInstallFrom(home, join(pluginsDir, 'hash-newer'), '99.0.0')
+  const ownRoot = join(pluginsDir, 'hash-own')
+  symlinkSync(PLUGIN_ROOT, ownRoot, 'dir')
+  const result = run('install', home, ownRoot)
+  assert.notEqual(result.skipped, true)
+  assert.equal(JSON.parse(readFileSync(modCopyMarkerPathFor(home), 'utf8')).source, join(ownRoot, 'adapters', 'claude', 'mod-skills'))
+})
+
+test('0.6.26 T3: installed-roots lists the package.json of every installed root, read-only, so the worker can grant exactly those reads', () => {
+  const home = makeHome()
+  const newerRoot = join(home, 'checkouts', 'advisor-newer')
+  plantInstallFrom(home, newerRoot, '99.0.0')
+  const before = snapshotTree(home)
+  const result = run('installed-roots', home)
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.packageJsons, [join(newerRoot, 'package.json')])
+  assert.deepEqual(snapshotTree(home), before)
+  assert.deepEqual(run('installed-roots', makeHome()).packageJsons, [])
 })

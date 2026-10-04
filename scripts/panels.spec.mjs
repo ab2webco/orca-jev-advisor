@@ -1529,6 +1529,35 @@ for (const [locale, installedText, missingText] of [['en', /Edit guard \(the gat
   })
 }
 
+// 0.6.26 T3 -- an older plugin copy that left a newer install alone says so,
+// with both versions and the root, in both languages; nothing when the worker
+// reports no skip.
+for (const [locale, expected] of [['en', /A newer install is already in place \(version 0\.6\.25, from \/work\/advisor-dev\); this plugin copy is 0\.6\.10/], ['es', /Ya hay una instalación más nueva \(versión 0\.6\.25, en \/work\/advisor-dev\); esta copia del plugin es la 0\.6\.10/]]) {
+  test(`the newer-install line names the installed version and root (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    for (const [newerInstall, shouldShow] of [[{ version: '0.6.25', root: '/work/advisor-dev', ownVersion: '0.6.10' }, true], [null, false]]) {
+      const { browser, page, errors } = await openPanel({
+        claudeIntegrationStatus: {
+          ok: true,
+          hook: { installed: true, installedCount: 2, totalCount: 2, orcaPaneCount: 2 },
+          env: { installed: true, name: 'ORCA_SUPERVISOR_GATE' },
+          secretMirror: { ok: true, exists: false },
+          newerInstall,
+          checkedAt: new Date().toISOString()
+        }
+      }, locale)
+      try {
+        const lines = await page.evaluate(() => Array.from(document.querySelectorAll('#claude-integration-status li')).map((li) => li.innerText))
+        if (shouldShow) assert.ok(lines.some((line) => expected.test(line)), `no newer-install line: ${JSON.stringify(lines)}`)
+        else assert.ok(!lines.some((line) => /newer install|instalación más nueva/i.test(line)), `a newer-install line rendered with no skip: ${JSON.stringify(lines)}`)
+        assert.ok(!lines.some((line) => /undefined|\{\{/.test(line)), `an integration line leaked a missing value: ${JSON.stringify(lines)}`)
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    }
+  })
+}
+
 // 0.6.11 T2a -- the Node the installed hooks run on: a clear line when it is
 // too old or missing, a plain confirmation when it is fine, nothing when an
 // older worker never reported it.

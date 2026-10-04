@@ -835,19 +835,22 @@ const HOOKS_CHECK_TIMEOUT_MS = 15000
 // `router-mode-status` is read-only, like `status`; every other mode
 // (install, uninstall, router-mode-set, router-effort-set) needs the write
 // grants too.
-const READ_ONLY_MODES = ['status', 'router-mode-status', 'hooks-check']
+const READ_ONLY_MODES = ['status', 'router-mode-status', 'hooks-check', 'installed-roots']
 // The modes that run `node --version` (and, for the doctor, the hooks
 // themselves): everything else must stay unable to start a process.
 const CHILD_PROCESS_MODES = ['install', 'status', 'hooks-check']
 
-/** The `--permission` flags the installer runs under for `mode`. */
-function claudeIntegrationPermissionArgs (mode) {
+/** The `--permission` flags the installer runs under for `mode`. `extraReads`
+ *  are individual files granted on top (install reads the package.json of the
+ *  root an earlier install came from: see `installedRoots` in the script). */
+function claudeIntegrationPermissionArgs (mode, extraReads = []) {
   const args = [
     '--permission',
     `--allow-fs-read=${PLUGIN_ROOT}`,
     `--allow-fs-read=${CONFIG_DIR}`,
     `--allow-fs-read=${CLAUDE_HOME_DIR}`,
-    `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`
+    `--allow-fs-read=${CLAUDE_ACCOUNTS_DIR}`,
+    ...extraReads.map((path) => `--allow-fs-read=${path}`)
   ]
   if (!READ_ONLY_MODES.includes(mode)) {
     args.push(`--allow-fs-write=${CONFIG_DIR}`, `--allow-fs-write=${CLAUDE_HOME_DIR}`, `--allow-fs-write=${CLAUDE_ACCOUNTS_DIR}`)
@@ -863,10 +866,10 @@ function claudeIntegrationPermissionArgs (mode) {
 /** `extraArgs` replaces the single positional `pluginRoot` every OTHER mode
  *  passes by default -- router-mode-status needs none, router-mode-set
  *  needs `[target, mode]` instead, and neither touches the plugin tree. */
-function runClaudeIntegrationScript (mode, extraArgs = [PLUGIN_ROOT]) {
+function runClaudeIntegrationScript (mode, extraArgs = [PLUGIN_ROOT], extraReads = []) {
   return new Promise((resolve) => {
     try {
-      const permissionArgs = claudeIntegrationPermissionArgs(mode)
+      const permissionArgs = claudeIntegrationPermissionArgs(mode, extraReads)
       execFile(process.execPath, [...permissionArgs, CLAUDE_INTEGRATION_SCRIPT, mode, ...extraArgs], {
         timeout: mode === 'hooks-check' ? HOOKS_CHECK_TIMEOUT_MS : CLAUDE_INTEGRATION_TIMEOUT_MS,
         maxBuffer: 256 * 1024,
@@ -890,8 +893,41 @@ function runClaudeIntegrationScript (mode, extraArgs = [PLUGIN_ROOT]) {
   })
 }
 
-async function installClaudeIntegration (orca) {
-  const result = await runClaudeIntegrationScript('install')
+// What the last install left alone because a newer one was already in place
+// ({version, root, ownVersion}), or null. In memory on purpose: the worker
+// installs again on every activation, which recomputes it, and the panel only
+// needs it while that is true.
+let newerInstallSkip = null
+
+function currentNewerInstallSkip () {
+  return newerInstallSkip
+}
+
+/**
+ * Installs the Claude Code integration from this plugin root. Activation and
+ * the periodic rescan call it as is, and the installer then refuses to
+ * replace a strictly newer install (an older root, like Orca's marketplace
+ * copy, must never take hooks and mod back a version). A person's own Install
+ * (the panel button, the `advisor.installClaude` command) passes `force`.
+ * `options.runScript` replaces the real subprocess for tests.
+ */
+async function installClaudeIntegration (orca, options = {}) {
+  const runScript = options.runScript ?? runClaudeIntegrationScript
+  const force = options.force === true
+  // The installer's sandbox cannot tell a gone root from a forbidden one, so
+  // it is granted reading the package.json of each root a copy came from.
+  let reads = []
+  if (!force) {
+    const roots = await runScript('installed-roots', [PLUGIN_ROOT])
+    if (roots.ok && Array.isArray(roots.packageJsons)) reads = roots.packageJsons.filter((path) => typeof path === 'string')
+  }
+  const result = await runScript('install', force ? [PLUGIN_ROOT, '--force'] : [PLUGIN_ROOT], reads)
+  if (result.ok && result.skipped === true && result.reason === 'newer-install-present' && isRecord(result.installed)) {
+    newerInstallSkip = { version: String(result.installed.version), root: String(result.installed.root), ownVersion: typeof result.ownVersion === 'string' ? result.ownVersion : null }
+    orca.log(`claude integration install skipped: newer-install-present -- ${String(result.detail ?? '').slice(0, 300)}`)
+    return result
+  }
+  newerInstallSkip = null
   if (!result.ok) {
     orca.log(`claude integration install failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 200)}`)
   } else if (result.modCopyWarning) {
@@ -1700,15 +1736,15 @@ const CLAUDE_INTEGRATION_REQUEST_KEY = 'claudeIntegrationRequest'
 const CLAUDE_INTEGRATION_RESULT_KEY = 'claudeIntegrationResult'
 const CLAUDE_INTEGRATION_STATUS_KEY = 'claudeIntegrationStatus'
 
-async function publishClaudeIntegrationStatus (orca, storageHost) {
-  const status = await claudeIntegrationStatus()
-  const mirror = await statSecretMirror()
-  await storageHost.set(CLAUDE_INTEGRATION_STATUS_KEY, { ...status, secretMirror: mirror, checkedAt: new Date().toISOString() })
+async function publishClaudeIntegrationStatus (orca, storageHost, options = {}) {
+  const status = await (options.runScript ?? runClaudeIntegrationScript)('status', [PLUGIN_ROOT])
+  const mirror = await (options.mirror ?? statSecretMirror)()
+  await storageHost.set(CLAUDE_INTEGRATION_STATUS_KEY, { ...status, secretMirror: mirror, newerInstall: newerInstallSkip, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`claude integration status publish failed: ${error.message}`))
 }
 
 /** Attends one pending install/uninstall request from the panel, if any. */
-async function attendClaudeIntegrationRequest (orca, storageHost) {
+async function attendClaudeIntegrationRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(CLAUDE_INTEGRATION_REQUEST_KEY)
   if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
 
@@ -1725,7 +1761,8 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
 
   let result
   if (request.intent === 'install') {
-    result = await installClaudeIntegration(orca)
+    // A person pressed Install: it replaces a newer install too.
+    result = await installClaudeIntegration(orca, { ...options, force: true })
   } else if (request.intent === 'uninstall') {
     result = await uninstallClaudeIntegration(orca)
   } else {
@@ -1735,7 +1772,7 @@ async function attendClaudeIntegrationRequest (orca, storageHost) {
   await storageHost.set(CLAUDE_INTEGRATION_RESULT_KEY, claudeIntegrationResultPayload(request.id, result))
     .catch((err) => orca.log(`claude integration result publish failed: ${err.message}`))
 
-  await publishClaudeIntegrationStatus(orca, storageHost)
+  await publishClaudeIntegrationStatus(orca, storageHost, options)
 }
 
 /**
@@ -2700,7 +2737,7 @@ export default function activate (orca) {
   orca.commands.register('advisor.decide', (args) => cmdDecide(orca, storageHost, secretsHost, args))
   orca.commands.register('advisor.board', () => cmdBoard(storageHost))
   orca.commands.register('advisor.doctor', () => cmdDoctor(orca, storageHost, secretsHost))
-  orca.commands.register('advisor.installClaude', () => installClaudeIntegration(orca))
+  orca.commands.register('advisor.installClaude', () => installClaudeIntegration(orca, { force: true }))
   orca.commands.register('advisor.uninstallClaude', () => uninstallClaudeIntegration(orca))
   orca.commands.register('advisor.refreshCatalog', () => cmdRefreshCatalog(orca, storageHost))
 
@@ -2969,6 +3006,9 @@ export {
   claudeIntegrationPermissionArgs,
   describeClaudeIntegration,
   claudeIntegrationResultPayload,
+  currentNewerInstallSkip,
+  installClaudeIntegration,
+  publishClaudeIntegrationStatus,
   cmdImportPolicySeeds,
   cmdRefreshCatalog,
   consumptionSidecarArgv,
