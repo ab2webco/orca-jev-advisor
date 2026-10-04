@@ -2,6 +2,16 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.26
+
+- **An install never goes back a version.**
+  - The plugin runs its installer on every activation, from the copy Orca started. An older copy (Orca's marketplace one at 0.6.10) rewrote the hooks in every settings file and the skills mod of a 0.6.25 install.
+  - `install()` now decides once, before any write: when the mod marker names another root whose generated manifest is strictly newer, and that root still exists, nothing is written and the result carries `newer-install-present` with the installed version and root.
+  - Same-plugin-key sibling roots (Orca's own content-hash directories), equal or older versions, a gone root or an unreadable manifest install as before.
+  - The sidecar gets a read grant for each installed root's `package.json`, so the check is not blind under Node's permission model.
+  - The worker logs the skip; the Advisor panel names it in English and Spanish. A person's own Set up (panel, `advisor.installClaude`) passes `--force`.
+- **The catalog follows releases.** orcalab-plugins had pinned v0.6.10 since 0.6.10 (fixed in orcalab-plugins #29). Its new `Follow releases` workflow (#30) moves each pin to the newest stable `vX.Y.Z` tag hourly, forward only.
+
 ## 0.6.25
 
 - **Syncing a branch from its own remote is not writing to it.**

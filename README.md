@@ -16,6 +16,16 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.26
+
+An update can no longer take you back a version. Until now the plugin ran its installer every time Orca started it, from whatever copy Orca had, so an older copy rewrote the hooks and the skills mod of a newer install. On 2026-10-03 that put a 0.6.25 install back to 0.6.10, and the running-agents band and every gate fix since went with it.
+
+- **The installer checks first.** If a newer install is already in place and its folder still exists, it writes nothing, neither the hooks nor the skills mod, and the Advisor panel says which version is installed and where. "Set up" in the panel still replaces it when you mean to.
+- **Orca's own rollback still works.** Another copy of this same Orca plugin is never treated as a newer install, so a rollback from Orca's plugin settings goes through.
+- **Releases now reach the catalog.** The orcalab-plugins catalog had stayed on v0.6.10 through fifteen releases, so everyone who updated got 0.6.10. It now follows each new release tag on its own, every hour.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update. Orca never updates a plugin on its own.
+
 ## What changed in 0.6.25
 
 Everyday git on a checkout of main is no longer read as writing to main. When a command only syncs the current branch with its own remote branch (`git pull`, `git merge origin/main`, `git rebase origin/main`), the gate tells Jev so. Pulling or merging another branch into main is judged as before.
