@@ -854,6 +854,9 @@ SCENARIOS['newer-install'] = {
   ...READY,
   claudeIntegrationStatus: {
     ...READY.claudeIntegrationStatus,
+    // The newer install's copy is on disk; seen from this older root its
+    // digest is not ours, so it exists but is not "installed".
+    modCopy: { installed: false, exists: true, hasManifest: true },
     newerInstall: { version: '0.6.25', root: '/home/you/Projects/orca-jev-advisor-dev', ownVersion: '0.6.10' },
   },
 }
