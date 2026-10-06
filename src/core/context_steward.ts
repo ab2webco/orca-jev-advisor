@@ -550,14 +550,16 @@ export function verifyStewardSaving(stewardRows: readonly unknown[], usageRows: 
   const stepsBySession = new Map<string, MainStep[]>();
   let mainContextTokens = 0;
   for (const row of usageRows) {
-    if (!isRecord(row) || row.agent !== "main" || typeof row.sessionId !== "string" || typeof row.at !== "string") continue;
+    if (!isRecord(row) || row.agent !== "main" || typeof row.at !== "string") continue;
     const atMs = Date.parse(row.at);
     const context = stepContext(row);
     if (Number.isNaN(atMs) || context === null) continue;
+    // Every main step is context read; only one with a session id can be placed against a compaction.
+    if (inWindow(atMs)) mainContextTokens += context;
+    if (typeof row.sessionId !== "string") continue;
     const steps = stepsBySession.get(row.sessionId) ?? [];
     steps.push({ atMs, context });
     stepsBySession.set(row.sessionId, steps);
-    if (inWindow(atMs)) mainContextTokens += context;
   }
   for (const steps of stepsBySession.values()) steps.sort((a, b) => a.atMs - b.atMs);
 

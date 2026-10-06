@@ -363,7 +363,8 @@ test("verified saving rule 1: a step's context is input + cacheRead + cacheWrite
     { ...mainStep("s1", "2026-10-06T10:35:00.000Z", 50_000), sessionId: null },
   ];
   const result = verifyStewardSaving([compaction("s1", "2026-10-06T10:15:00.000Z")], usage, VERIFY_NOW, VERIFY_WEEK);
-  assert.deepEqual(result, { compactions: 1, verified: 1, steps: 2, tokensNotReread: 400_000, mainContextTokens: 510_000, share: 400_000 / 910_000 });
+  // The main step without a session id cannot be placed against a compaction, but it is still context the main agent read.
+  assert.deepEqual(result, { compactions: 1, verified: 1, steps: 2, tokensNotReread: 400_000, mainContextTokens: 560_000, share: 400_000 / 960_000 });
 });
 
 test("verified saving rule 2: only applied compactions with a session id, inside the window, are checked; all applied ones in the window are counted", () => {
