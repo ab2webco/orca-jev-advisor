@@ -696,9 +696,10 @@
           'consumption.modelRouterNoEstimateYet': 'Todavía no hay ninguna bajada en un cambio de etapa que estimar.',
           'consumption.stewardHeading': 'Guardián de contexto',
           'consumption.stewardEmpty': 'Todavía no hay decisiones del guardián de contexto.',
-          'consumption.stewardApplied': 'Compactaciones aplicadas: {{applied}} · habría compactado: {{would}} (solo mide)',
+          'consumption.stewardApplied': 'Compactaciones aplicadas (24 h): {{applied}} · habría compactado: {{would}} (solo mide)',
           'consumption.stewardFreed': 'Estimación: en promedio, unos {{tokens}} tokens menos que releer en cada paso siguiente de una sesión compactada.',
           'consumption.stewardNoFreed': 'Todavía no hay compactaciones aplicadas que estimar.',
+          'consumption.stewardVerified': 'Ahorro verificado (7 días): {{tokens}} tokens que el agente principal no releyó, un {{share}} de su contexto. Medido sobre el uso real en {{verified}} de {{compactions}} compactaciones.',
         },
         en: {
           'window.label': 'Time window',
@@ -896,9 +897,10 @@
           'consumption.modelRouterNoEstimateYet': 'No downgrade at a stage change to estimate yet.',
           'consumption.stewardHeading': 'Context steward',
           'consumption.stewardEmpty': 'No context steward decisions yet.',
-          'consumption.stewardApplied': 'Compactions applied: {{applied}} · would have compacted: {{would}} (measuring only)',
+          'consumption.stewardApplied': 'Compactions applied (24 h): {{applied}} · would have compacted: {{would}} (measuring only)',
           'consumption.stewardFreed': 'Estimate: on average, about {{tokens}} tokens fewer to re-read on each later step of a compacted session.',
           'consumption.stewardNoFreed': 'No applied compaction to estimate yet.',
+          'consumption.stewardVerified': 'Verified saving (7 days): {{tokens}} tokens the main agent did not re-read, {{share}} of its context. Measured on real usage in {{verified}} of {{compactions}} compactions.',
         }
       }
       /**
@@ -1851,12 +1853,24 @@
       /**
        * The context steward (odd/tasks/jev-context-steward.md): the last
        * 24h's compactions, and an ESTIMATE of the context each one took off
-       * every later step (per step, never multiplied: the logs carry no
-       * session id). `steward` null: no log yet, one honest line.
+       * every later step. When `steward.verified` (verifyStewardSaving)
+       * confirms a saving on real usage over 7 days, that measured total
+       * replaces the per-step estimate, which overstates the drop.
+       * `steward` null: no log yet, one honest line.
        */
       function consumptionStewardBlock (steward) {
         if (!steward) return line(t('consumption.stewardEmpty'), 'empty-line')
         var parts = [line(t('consumption.stewardApplied', { applied: num(steward.applied), would: num(steward.wouldCompact) }))]
+        var verified = steward.verified
+        if (verified && verified.verified > 0) {
+          parts.push(line(t('consumption.stewardVerified', {
+            tokens: num(verified.tokensNotReread),
+            share: verified.share === null || verified.share === undefined ? '—' : Math.round(verified.share * 100) + '%',
+            verified: num(verified.verified),
+            compactions: num(verified.compactions)
+          })))
+          return parts.join('')
+        }
         parts.push(steward.freedPerStep === null || steward.freedPerStep === undefined
           ? line(t('consumption.stewardNoFreed'), 'empty-line')
           : line(t('consumption.stewardFreed', { tokens: num(steward.freedPerStep) })))

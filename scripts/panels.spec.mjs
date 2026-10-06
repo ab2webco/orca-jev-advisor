@@ -2088,10 +2088,39 @@ test('steward: the Consumption tab shows compactions applied and the context no 
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Context steward/)
-    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /Compactions applied \(24 h\): 2/)
     assert.match(text, /on average, about 140,000 tokens/)
     assert.match(text, /estimate/i)
     assert.match(text, /would have compacted: 1/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('steward: a verified saving replaces the estimated per-step line with the saving measured on real usage', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const verified = { compactions: 59, verified: 32, steps: 4891, tokensNotReread: 1380000000, mainContextTokens: 3500000000, share: 0.283 }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, verified } }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Compactions applied \(24 h\): 2/)
+    assert.match(text, /Verified saving \(7 days\): 1,380,000,000 tokens the main agent did not re-read, 28% of its context\. Measured on real usage in 32 of 59 compactions\./)
+    assert.doesNotMatch(text, /on average, about 140,000 tokens/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('steward: a verified result with nothing verified keeps the estimated per-step line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const verified = { compactions: 3, verified: 0, steps: 0, tokensNotReread: 0, mainContextTokens: 0, share: null }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, verified } }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /on average, about 140,000 tokens/)
+    assert.doesNotMatch(text, /Verified saving/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

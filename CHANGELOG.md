@@ -2,6 +2,17 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.27
+
+- **The context steward's saving is verified against real usage.**
+  - `verifyStewardSaving()` (`src/core/context_steward.ts`) measures each applied compaction that names its session:
+    - The drop is the main agent's context (input + cache read + cache write) on its last step before the compaction minus its first step after, from `turn-usage` rows.
+    - The saving is that drop times the main steps that followed, up to the next applied compaction in the same session.
+    - Compactions with a missing side or no drop are skipped.
+  - `read-consumption.mjs` adds it as `steward.verified` over 7 days. The board shows it in place of the per-step estimate, which came from `tokensAfter`: the real drop is about 84% of it (median, 32 compactions).
+  - Real data on 2026-10-06: 32 of 50 compactions verified, 4,941 steps, 1.38 B tokens not re-read, 32% of the main agent's 7-day context.
+- The steward's applied line is labeled `(24 h)`, so it no longer reads as contradicting the 7-day line.
+
 ## 0.6.26
 
 - **An install never goes back a version.**

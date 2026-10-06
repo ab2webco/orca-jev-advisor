@@ -741,8 +741,14 @@ const ROUTER_READY = {
       savedEstimate: 0.0847,
       switchesEstimated: 3,
     },
-    // summarizeStewardDecisions' shape; synthetic figures.
-    steward: { decisions: 7, applied: 3, wouldCompact: 2, freedPerStep: 114000 },
+    // summarizeStewardDecisions' shape plus verifyStewardSaving's; synthetic figures.
+    steward: {
+      decisions: 7,
+      applied: 3,
+      wouldCompact: 2,
+      freedPerStep: 114000,
+      verified: { compactions: 59, verified: 32, steps: 4891, tokensNotReread: 1380000000, mainContextTokens: 3500000000, share: 0.283 },
+    },
   },
 }
 

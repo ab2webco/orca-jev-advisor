@@ -473,9 +473,10 @@ export interface StewardSummary {
    * An ESTIMATE: the context each applied compaction took off every later
    * step of its session (before − after), averaged over those compactions
    * and rounded. Never summed: the sum across sessions is not what any one
-   * step saves. Per step, not multiplied by the steps that followed: the
-   * logs carry no session id, and an account often runs several sessions
-   * at once. null when no applied compaction recorded its size afterwards.
+   * step saves. It also overstates the drop, since `contextAfter` leaves out
+   * what is reloaded after a compaction; the total measured on real usage
+   * is `verifyStewardSaving`. null when no applied compaction recorded its
+   * size afterwards.
    */
   readonly freedPerStep: number | null;
 }
@@ -503,4 +504,107 @@ export function summarizeStewardDecisions(rows: readonly unknown[], nowMs: numbe
     }
   }
   return { decisions, applied, wouldCompact, freedPerStep: measured === 0 ? null : Math.round(freedTotal / measured) };
+}
+
+export interface VerifiedStewardSaving {
+  /** Applied compactions in the window, with or without a session id. */
+  readonly compactions: number;
+  /** The ones whose saving the real usage confirms (a positive drop with steps on both sides). */
+  readonly verified: number;
+  /** Main-agent steps that ran after a verified compaction, up to the next one in that session. */
+  readonly steps: number;
+  /** Sum over verified compactions of (drop × steps): context the main agent did not re-read. */
+  readonly tokensNotReread: number;
+  /** Context the main agent did read in the window (input + cacheRead + cacheWrite per step). */
+  readonly mainContextTokens: number;
+  /** tokensNotReread / (mainContextTokens + tokensNotReread); null when both are zero. */
+  readonly share: number | null;
+}
+
+interface MainStep {
+  readonly atMs: number;
+  readonly context: number;
+}
+
+function stepContext(row: Record<string, unknown>): number | null {
+  const parts = [row.input, row.cacheRead, row.cacheWrite];
+  let total = 0;
+  for (const part of parts) {
+    if (typeof part !== "number" || !Number.isFinite(part)) return null;
+    total += part;
+  }
+  return total;
+}
+
+/**
+ * The steward's saving, measured on real usage instead of its own `contextAfter`
+ * (which leaves out the system prompt and tools reloaded after a compaction).
+ * For each applied compaction in the window that names its session: the drop is
+ * the main agent's context on its last step before minus its first step after,
+ * and it is saved on every main step until the next applied compaction in that
+ * session or the end of the data. Rows are parsed tolerantly. null when the
+ * window holds no applied compaction.
+ */
+export function verifyStewardSaving(stewardRows: readonly unknown[], usageRows: readonly unknown[], nowMs: number, windowMs: number): VerifiedStewardSaving | null {
+  const inWindow = (atMs: number): boolean => atMs <= nowMs && atMs >= nowMs - windowMs;
+  const stepsBySession = new Map<string, MainStep[]>();
+  let mainContextTokens = 0;
+  for (const row of usageRows) {
+    if (!isRecord(row) || row.agent !== "main" || typeof row.at !== "string") continue;
+    const atMs = Date.parse(row.at);
+    const context = stepContext(row);
+    if (Number.isNaN(atMs) || context === null) continue;
+    // Every main step is context read; only one with a session id can be placed against a compaction.
+    if (inWindow(atMs)) mainContextTokens += context;
+    if (typeof row.sessionId !== "string") continue;
+    const steps = stepsBySession.get(row.sessionId) ?? [];
+    steps.push({ atMs, context });
+    stepsBySession.set(row.sessionId, steps);
+  }
+  for (const steps of stepsBySession.values()) steps.sort((a, b) => a.atMs - b.atMs);
+
+  const appliedBySession = new Map<string, number[]>();
+  const candidates: { readonly sessionId: string; readonly atMs: number }[] = [];
+  let compactions = 0;
+  for (const row of stewardRows) {
+    if (!isRecord(row) || row.applied !== true || typeof row.at !== "string") continue;
+    const atMs = Date.parse(row.at);
+    if (Number.isNaN(atMs)) continue;
+    const sessionId = typeof row.sessionId === "string" ? row.sessionId : null;
+    if (sessionId !== null) {
+      const applied = appliedBySession.get(sessionId) ?? [];
+      applied.push(atMs);
+      appliedBySession.set(sessionId, applied);
+    }
+    if (!inWindow(atMs)) continue;
+    compactions += 1;
+    if (sessionId !== null) candidates.push({ sessionId, atMs });
+  }
+  if (compactions === 0) return null;
+
+  let verified = 0;
+  let stepsTotal = 0;
+  let tokensNotReread = 0;
+  for (const { sessionId, atMs } of candidates) {
+    const steps = stepsBySession.get(sessionId) ?? [];
+    const nextMs = Math.min(...(appliedBySession.get(sessionId) ?? []).filter((ms) => ms > atMs), Number.POSITIVE_INFINITY);
+    let before: MainStep | null = null;
+    let after: MainStep | null = null;
+    let count = 0;
+    for (const step of steps) {
+      if (step.atMs < atMs) before = step;
+      else if (step.atMs > atMs && step.atMs < nextMs) {
+        after ??= step;
+        count += 1;
+      }
+    }
+    if (before === null || after === null) continue;
+    const drop = before.context - after.context;
+    if (drop <= 0) continue;
+    verified += 1;
+    stepsTotal += count;
+    tokensNotReread += drop * count;
+  }
+  const denominator = mainContextTokens + tokensNotReread;
+  return { compactions, verified, steps: stepsTotal, tokensNotReread, mainContextTokens, share: denominator === 0 ? null : tokensNotReread / denominator };
 }
