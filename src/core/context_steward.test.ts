@@ -340,3 +340,100 @@ test("0.6.22 T1 steward answer and record: the margin is written when Jev gave o
   assert.equal(stewardDecisionRecord({ ...input, margin: 0.4 }).margin, 0.4);
   assert.ok(!JSON.stringify(stewardDecisionRecord(input)).includes("margin"));
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.27 T1: the saving, verified against real usage
+// ---------------------------------------------------------------------------
+
+import { verifyStewardSaving } from "./context_steward.ts";
+
+const VERIFY_NOW = Date.parse("2026-10-06T12:00:00.000Z");
+const VERIFY_WEEK = 7 * 24 * 3600_000;
+// A main step whose context is `ctx`, split across the three input kinds; output is large and must never count.
+const mainStep = (sessionId: string, at: string, ctx: number): Record<string, unknown> => ({ at, agent: "main", sessionId, turnId: "t", index: 0, agentId: null, model: "m", input: 1_000, output: 999_999, cacheRead: ctx - 3_000, cacheWrite: 2_000, account: "acct-a", project: "project-c" });
+const compaction = (sessionId: string | undefined, at: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ at, account: "acct-a", project: "project-c", mode: "active", contextBefore: 300_000, decision: "boundary", confidence: 0.9, compact: true, applied: true, contextAfter: 40_000, ...(sessionId === undefined ? {} : { sessionId }), ...extra });
+
+test("verified saving rule 1: a step's context is input + cacheRead + cacheWrite of the MAIN agent, never output or subagents", () => {
+  const usage: unknown[] = [
+    mainStep("s1", "2026-10-06T10:00:00.000Z", 300_000),
+    { ...mainStep("s1", "2026-10-06T10:14:00.000Z", 900_000), agent: "subagent" },
+    { ...mainStep("s1", "2026-10-06T10:16:00.000Z", 5_000), agent: "subagent" },
+    mainStep("s1", "2026-10-06T10:20:00.000Z", 100_000),
+    mainStep("s1", "2026-10-06T10:30:00.000Z", 110_000),
+    { ...mainStep("s1", "2026-10-06T10:35:00.000Z", 50_000), sessionId: null },
+  ];
+  const result = verifyStewardSaving([compaction("s1", "2026-10-06T10:15:00.000Z")], usage, VERIFY_NOW, VERIFY_WEEK);
+  assert.deepEqual(result, { compactions: 1, verified: 1, steps: 2, tokensNotReread: 400_000, mainContextTokens: 510_000, share: 400_000 / 910_000 });
+});
+
+test("verified saving rule 2: only applied compactions with a session id, inside the window, are checked; all applied ones in the window are counted", () => {
+  const usage: unknown[] = [mainStep("s1", "2026-10-06T10:00:00.000Z", 300_000), mainStep("s1", "2026-10-06T10:20:00.000Z", 100_000)];
+  const steward: unknown[] = [
+    compaction("s1", "2026-10-06T10:15:00.000Z"),
+    compaction(undefined, "2026-10-06T10:16:00.000Z"),
+    compaction("s1", "2026-10-06T10:17:00.000Z", { applied: false, contextAfter: null }),
+    compaction("s1", "2026-09-20T10:15:00.000Z"),
+    compaction("s1", "2026-10-06T13:00:00.000Z"),
+    "not a row",
+    { at: "garbage", applied: true },
+  ];
+  const result = verifyStewardSaving(steward, usage, VERIFY_NOW, VERIFY_WEEK);
+  assert.equal(result?.compactions, 2);
+  assert.equal(result?.verified, 1);
+  assert.equal(result?.tokensNotReread, 200_000);
+});
+
+test("verified saving rule 3: drop = last main step before minus first after, same session; skipped when a side is missing or the drop is not positive", () => {
+  const usage: unknown[] = [
+    mainStep("other", "2026-10-06T09:00:00.000Z", 500_000),
+    mainStep("a", "2026-10-06T10:20:00.000Z", 100_000),
+    mainStep("b", "2026-10-06T10:00:00.000Z", 200_000),
+    mainStep("c", "2026-10-06T10:00:00.000Z", 100_000),
+    mainStep("c", "2026-10-06T10:20:00.000Z", 120_000),
+    mainStep("d", "2026-10-06T10:00:00.000Z", 250_000),
+    mainStep("d", "2026-10-06T10:10:00.000Z", 300_000),
+    mainStep("d", "2026-10-06T10:20:00.000Z", 60_000),
+    mainStep("d", "2026-10-06T10:30:00.000Z", 900_000),
+  ];
+  const steward: unknown[] = ["a", "b", "c", "d"].map((sid) => compaction(sid, "2026-10-06T10:15:00.000Z"));
+  const result = verifyStewardSaving(steward, usage, VERIFY_NOW, VERIFY_WEEK);
+  assert.equal(result?.compactions, 4);
+  assert.equal(result?.verified, 1);
+  assert.equal(result?.steps, 2);
+  assert.equal(result?.tokensNotReread, (300_000 - 60_000) * 2);
+});
+
+test("verified saving rule 4: the steps run up to the next applied compaction in the same session only", () => {
+  const usage: unknown[] = [
+    mainStep("s1", "2026-10-06T10:00:00.000Z", 300_000),
+    mainStep("s1", "2026-10-06T10:20:00.000Z", 100_000),
+    mainStep("s1", "2026-10-06T10:30:00.000Z", 250_000),
+    mainStep("s1", "2026-10-06T10:50:00.000Z", 50_000),
+    mainStep("s1", "2026-10-06T11:00:00.000Z", 60_000),
+    mainStep("s1", "2026-10-06T11:10:00.000Z", 70_000),
+  ];
+  const steward: unknown[] = [compaction("s1", "2026-10-06T10:15:00.000Z"), compaction("other", "2026-10-06T10:25:00.000Z"), compaction("s1", "2026-10-06T10:40:00.000Z")];
+  const result = verifyStewardSaving(steward, usage, VERIFY_NOW, VERIFY_WEEK);
+  assert.equal(result?.verified, 2);
+  assert.equal(result?.steps, 2 + 3);
+  assert.equal(result?.tokensNotReread, (300_000 - 100_000) * 2 + (250_000 - 50_000) * 3);
+});
+
+test("verified saving rule 5: times compare as instants, not as strings", () => {
+  // 12:10+02:00 is 10:10Z: before the compaction, though it sorts after it as a string.
+  const usage: unknown[] = [mainStep("s1", "2026-10-06T12:10:00+02:00", 300_000), mainStep("s1", "2026-10-06T10:20:00.000Z", 100_000)];
+  const result = verifyStewardSaving([compaction("s1", "2026-10-06T10:15:00.000Z")], usage, VERIFY_NOW, VERIFY_WEEK);
+  assert.equal(result?.verified, 1);
+  assert.equal(result?.tokensNotReread, 200_000);
+});
+
+test("verified saving rule 6: null without an applied compaction in the window; share null when there is nothing to divide by", () => {
+  assert.equal(verifyStewardSaving([], [mainStep("s1", "2026-10-06T10:00:00.000Z", 1)], VERIFY_NOW, VERIFY_WEEK), null);
+  assert.equal(verifyStewardSaving([compaction("s1", "2026-10-06T10:15:00.000Z", { applied: false })], [], VERIFY_NOW, VERIFY_WEEK), null);
+  assert.deepEqual(verifyStewardSaving([compaction("s1", "2026-10-06T10:15:00.000Z")], [], VERIFY_NOW, VERIFY_WEEK), { compactions: 1, verified: 0, steps: 0, tokensNotReread: 0, mainContextTokens: 0, share: null });
+});
+
+test("verified saving: main context counts only steps inside the window", () => {
+  const usage: unknown[] = [mainStep("s1", "2026-09-01T10:00:00.000Z", 999_000), mainStep("s1", "2026-10-06T10:00:00.000Z", 300_000), mainStep("s1", "2026-10-06T10:20:00.000Z", 100_000)];
+  assert.equal(verifyStewardSaving([compaction("s1", "2026-10-06T10:15:00.000Z")], usage, VERIFY_NOW, VERIFY_WEEK)?.mainContextTokens, 400_000);
+});
