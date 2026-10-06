@@ -36,6 +36,12 @@ export interface DeliveryClassOptions {
    * Absent, such a push never qualifies.
    */
   readonly implicitPushDestination?: (cdDir: string | null, head: boolean) => ImplicitPushDestination;
+  /**
+   * Whether a pull request named by URL (`gh pr merge https://.../pull/7`)
+   * belongs to the repository the authorization is keyed by. A URL can name
+   * any repository, so absent, such a line never qualifies.
+   */
+  readonly prUrlInRepository?: (url: string) => boolean;
 }
 
 /** The only remote a delivery push may name: the authorization is keyed by origin's URL, so another remote would carry it to another repository. */
@@ -90,11 +96,17 @@ function isPrMerge(args: readonly string[]): boolean {
 
 const PR_UPDATE_VERBS: ReadonlySet<string> = new Set(["edit", "comment", "review", "ready"]);
 
+/** A pull request named by URL, which may live in any repository. */
+function isUrl(arg: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(arg);
+}
+
 /** The class of one `gh` segment's words, or null. */
-function ghClass(tokens: readonly string[]): DeliveryClass | null {
+function ghClass(tokens: readonly string[], options: DeliveryClassOptions): DeliveryClass | null {
   if (tokens[0] !== "gh") return null;
   const args = tokens.slice(3);
   if (namesAnotherRepository(args)) return null;
+  if (tokens[1] === "pr" && args.some((arg) => isUrl(arg) && options.prUrlInRepository?.(arg) !== true)) return null;
   if (tokens[1] === "release") return tokens[2] === "create" ? "release-create" : null;
   if (tokens[1] !== "pr") return null;
   const verb = tokens[2] ?? "";
@@ -145,7 +157,7 @@ export function deliveryClassesOf(command: string, options: DeliveryClassOptions
       found.add("push-branch");
       continue;
     }
-    const gh = ghClass(tokens);
+    const gh = ghClass(tokens, options);
     if (gh !== null) {
       found.add(gh);
       continue;

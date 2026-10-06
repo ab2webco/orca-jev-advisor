@@ -14,8 +14,16 @@ test("a merge with its plumbing: a leading cd, the merge flags and a trailing fe
   assert.deepEqual(deliveryClassesOf("cd /p && gh pr merge 45 --squash --delete-branch --author-email a@b && git fetch -q origin"), ["pr-merge"]);
 });
 
-test("a merge by URL or branch, with the other merge methods and value flags", () => {
-  assert.deepEqual(deliveryClassesOf("gh pr merge https://github.com/o/r/pull/7 --rebase --auto"), ["pr-merge"]);
+test("a PR named by URL qualifies only when the caller confirms the URL is in this repository", () => {
+  const sameRepo = { prUrlInRepository: (url: string) => url.startsWith("https://github.com/o/r/") };
+  assert.equal(deliveryClassesOf("gh pr merge https://github.com/o/r/pull/7 --squash"), null, "no predicate: a URL fails closed");
+  assert.deepEqual(deliveryClassesOf("gh pr merge https://github.com/o/r/pull/7 --rebase --auto", sameRepo), ["pr-merge"]);
+  assert.equal(deliveryClassesOf("gh pr merge https://github.com/o/other/pull/7 --squash", sameRepo), null);
+  assert.equal(deliveryClassesOf("gh pr comment https://github.com/o/other/pull/7 --body ok", sameRepo), null);
+  assert.deepEqual(deliveryClassesOf("gh pr review https://github.com/o/r/pull/7 --approve", sameRepo), ["pr-update"]);
+});
+
+test("a merge by number or branch, with the other merge methods and value flags", () => {
   assert.deepEqual(deliveryClassesOf('gh pr merge feat/x --merge --subject "Release 1.2" --body "notes here"'), ["pr-merge"]);
   assert.deepEqual(deliveryClassesOf("gh pr merge 45 -s -d"), ["pr-merge"]);
 });

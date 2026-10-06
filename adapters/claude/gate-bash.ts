@@ -1088,10 +1088,15 @@ function writeAuthorizationStore(store: AuthorizationStore): void {
   }
 }
 
-/** The delivery classes of `command`, a push naming no branch read where it runs: the leading `cd` target, else the session's cwd. */
-function deliveryClassesForCommand(command: string, sessionCwd: string): readonly DeliveryClass[] | null {
+/**
+ * The delivery classes of `command` for `repo`: a push naming no branch read
+ * where it runs (the leading `cd` target, else the session's cwd), and a pull
+ * request named by URL accepted only when the URL is in `repo` itself.
+ */
+function deliveryClassesForCommand(command: string, sessionCwd: string, repo: string): readonly DeliveryClass[] | null {
   return deliveryClassesOf(command, {
     implicitPushDestination: (cdDir, head) => resolveImplicitPushDestination({ cwd: cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir), head }),
+    prUrlInRepository: (url) => repoIdentity(url.replace(/\/pull\/.*$/, ''), null) === repo,
   })
 }
 
@@ -1101,10 +1106,10 @@ function authorizationRepo(actingCwd: string): string | null {
 }
 
 function learnAuthorization(command: string, sessionCwd: string, actingCwd: string): void {
-  const classes = deliveryClassesForCommand(command, sessionCwd)
-  if (classes === null) return
   const repo = authorizationRepo(actingCwd)
   if (repo === null) return
+  const classes = deliveryClassesForCommand(command, sessionCwd, repo)
+  if (classes === null) return
   writeAuthorizationStore(recordAuthorization(readAuthorizationStore(), repo, classes, new Date().toISOString()))
 }
 
@@ -1122,10 +1127,10 @@ function tryAuthorizedPass(input: {
   readonly latencyMs: number | null
   readonly teamInternal: boolean
 }): boolean {
-  const classes = deliveryClassesForCommand(input.command, input.cwd)
-  if (classes === null) return false
   const repo = authorizationRepo(input.actingCwd)
   if (repo === null) return false
+  const classes = deliveryClassesForCommand(input.command, input.cwd, repo)
+  if (classes === null) return false
   const store = readAuthorizationStore()
   if (!isAuthorized(store, repo, classes, Date.now())) return false
   writeAuthorizationStore(touchAuthorization(store, repo, classes, new Date().toISOString()))

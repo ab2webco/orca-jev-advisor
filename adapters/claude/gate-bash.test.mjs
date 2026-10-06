@@ -3676,3 +3676,17 @@ test('T3: a local-rule advice is never relaxed by an authorization', () => {
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.equal(lastGateRecord(home).stopReason, 'local-rule')
 })
+
+test('T3: a merge of a PR named by URL in another repository never passes on this repository\'s authorization', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const elsewhere = 'gh pr merge https://github.com/acme/other/pull/9 --squash'
+  const here = 'gh pr merge https://github.com/acme/widgets/pull/9 --squash'
+  seedAdvice(home, repo, [elsewhere, here])
+  const payload = JSON.parse(run(home, elsewhere, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-url-other' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'risk')
+  const same = JSON.parse(run(home, here, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-url-same' }))
+  assert.equal(same.hookSpecificOutput.permissionDecision, 'allow')
+})
