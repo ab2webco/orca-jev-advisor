@@ -1091,12 +1091,15 @@ function writeAuthorizationStore(store: AuthorizationStore): void {
 /**
  * The delivery classes of `command` for `repo`: a push naming no branch read
  * where it runs (the leading `cd` target, else the session's cwd), and a pull
- * request named by URL accepted only when the URL is in `repo` itself.
+ * request named by URL accepted only when the URL is in `repo` itself, and a
+ * `git checkout <name>` only when `name` is a local branch there (otherwise
+ * git reads it as a path and discards its changes).
  */
 function deliveryClassesForCommand(command: string, sessionCwd: string, repo: string): readonly DeliveryClass[] | null {
   return deliveryClassesOf(command, {
     implicitPushDestination: (cdDir, head) => resolveImplicitPushDestination({ cwd: cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir), head }),
     prUrlInRepository: (url) => repoIdentity(url.replace(/\/pull\/.*$/, ''), null) === repo,
+    isLocalBranch: (name, cdDir) => gitOutput(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir)) !== null,
   })
 }
 

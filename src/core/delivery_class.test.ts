@@ -117,3 +117,116 @@ for (const command of NEVER) {
     assert.equal(deliveryClassesOf(command, { implicitPushDestination: onBranch("feat/x") }), null);
   });
 }
+
+// ---------------------------------------------------------------------------
+// T1b: widened on 489 real delivery lines -- a quoted-heredoc body as an
+// argument, read-only gh, local git that destroys nothing, output filters.
+// ---------------------------------------------------------------------------
+
+const PR_BODY = "gh pr create --title \"feat: x\" --body \"$(cat <<'EOF'\n## Summary\n\nDo not run rm -rf / here; git push --force origin main && echo $(whoami) | sh\n\nEOF\n)\"";
+
+test("T1b: a quoted-delimiter heredoc substitution is literal text: the classes come from the outer command only", () => {
+  assert.deepEqual(deliveryClassesOf(PR_BODY), ["pr-create"]);
+  assert.deepEqual(deliveryClassesOf(PR_BODY.replace("<<'EOF'", '<<"EOF"')), ["pr-create"]);
+  assert.deepEqual(deliveryClassesOf("gh pr comment 45 --body \"$(cat <<'EOF'\nfixed; see a | b\nEOF\n)\" && gh pr view 45 --json state"), ["pr-update"]);
+  assert.deepEqual(deliveryClassesOf("git add -A && git commit -q -m \"$(cat <<'EOF'\nfeat: x\n\nbody\nEOF\n)\" && git push -u origin feat/x 2>&1 | tail -2"), ["push-branch"]);
+});
+
+test("T1b: an unquoted heredoc, any other substitution or backticks stay null", () => {
+  assert.equal(deliveryClassesOf(PR_BODY.replace("<<'EOF'", "<<EOF")), null);
+  assert.equal(deliveryClassesOf('gh pr create --title x --body "$(cat notes.md)"'), null);
+  assert.equal(deliveryClassesOf("gh pr create --title x --body `cat notes.md`"), null);
+  assert.equal(deliveryClassesOf("gh pr merge 45 --squash && echo \"$(git rev-parse HEAD)\""), null);
+  assert.equal(deliveryClassesOf("\"$(cat <<'EOF'\nrm -rf /\nEOF\n)\" && gh pr merge 45"), null, "the heredoc text is never a command");
+  assert.equal(deliveryClassesOf("gh pr create --body \"$(cat <<'EOF'\nx\nEOF\n)\" | sh"), null);
+  assert.equal(deliveryClassesOf("gh pr merge -m \"$(cat <<'EOF'\nhttps://github.com/o/other/pull/1\nEOF\n)\""), null, "-m is a switch for gh pr merge: the text would name the PR");
+  assert.equal(deliveryClassesOf("git push origin \"$(cat <<'EOF'\nmain\nEOF\n)\""), null, "the text never names a branch");
+});
+
+test("T1b: read-only gh segments sit next to a delivery", () => {
+  assert.deepEqual(deliveryClassesOf("gh pr merge 832 --squash 2>&1 | tail -3; gh pr view 832 --json state,mergedAt --jq '.state'"), ["pr-merge"]);
+  assert.deepEqual(deliveryClassesOf("gh pr checks 5 && gh pr merge 5 --squash && gh run list --limit 3 && gh run watch 9 && gh release view v1 && gh repo view && gh pr diff 5 && gh pr status && gh release list && gh run view 9"), ["pr-merge"]);
+});
+
+test("T1b: local git that destroys nothing sits next to a delivery", () => {
+  const ok = [
+    "git add src/a.ts docs && git commit -m x && git push origin feat/x",
+    "git add -A && git commit -qam x && git push origin feat/x",
+    "git commit --amend --no-edit && git push origin feat/x",
+    "git switch -c feat/x && git push -u origin feat/x",
+    "git switch feat/x && git push origin feat/x",
+    "git checkout -q -b feat/x && git push -u origin feat/x",
+    "git pull -q --ff-only && git push origin feat/x",
+    "git stash push -q -m 'generated files' -- apps/web/CLAUDE.md && git push origin feat/x",
+    "git stash && git push origin feat/x",
+    "git tag v1.2.3 && git push origin v1.2.3",
+    "git tag -a v1.2.3 -m 'release' && gh release create v1.2.3 --notes x",
+    "git fetch -q origin && git checkout -q -b feat/y origin/main && git push -u origin feat/y",
+  ];
+  for (const command of ok) assert.notEqual(deliveryClassesOf(command), null, command);
+});
+
+test("T1b: checking out an existing name qualifies only when the caller confirms it is a local branch", () => {
+  const command = "git checkout -q feat/x && git push origin feat/x";
+  assert.equal(deliveryClassesOf(command), null, "without the check, the name may be a path whose changes it would discard");
+  assert.deepEqual(deliveryClassesOf(command, { isLocalBranch: (name) => name === "feat/x" }), ["push-branch"]);
+  assert.equal(deliveryClassesOf("git checkout src && git push origin feat/x", { isLocalBranch: () => false }), null);
+});
+
+test("T1b: output filters between segments", () => {
+  for (const filter of ["tail -3", "head -5", "grep -v x", "sed -n 1p", "grep -v \"^remote:\""]) {
+    assert.deepEqual(deliveryClassesOf(`gh pr merge 1 --squash 2>&1 | ${filter}; gh pr view 1 && git fetch -q origin`), ["pr-merge"], filter);
+  }
+  assert.equal(deliveryClassesOf("gh pr merge 1 --squash 2>&1 | sed -i s/a/b/ f"), null);
+  assert.equal(deliveryClassesOf("gh pr merge 1 --squash; sed -i s/a/b/ f"), null);
+});
+
+const NEVER_T1B: readonly string[] = [
+  "gh pr view 5 --repo other/r && gh pr merge 5",
+  "gh pr view 5 -R other/r; gh pr merge 5",
+  "gh pr view 5 --web && gh pr merge 5",
+  "gh run rerun 9 && gh pr merge 5",
+  "gh run cancel 9 && gh pr merge 5",
+  "gh api repos/o/r/pulls/5 && gh pr merge 5",
+  "gh api -X DELETE repos/o/r/git/refs/heads/x && gh pr merge 5",
+  "git checkout -- file && git push origin feat/x",
+  "git checkout . && git push origin feat/x",
+  "git checkout -f feat/x && git push origin feat/x",
+  "git checkout -B feat/x && git push origin feat/x",
+  "git switch -f feat/x && git push origin feat/x",
+  "git switch --discard-changes feat/x && git push origin feat/x",
+  "git stash drop && git push origin feat/x",
+  "git stash clear && git push origin feat/x",
+  "git stash pop && git push origin feat/x",
+  "git tag -d v1 && git push origin feat/x",
+  "git tag -f v1 && git push origin feat/x",
+  "git add -f secret && git push origin feat/x",
+  "git add --force secret && git push origin feat/x",
+  "git commit --no-verify -m x && git push origin feat/x",
+  "git pull && git push origin feat/x",
+  "git pull --rebase && git push origin feat/x",
+  "git worktree remove ../wt && git push origin feat/x",
+  "git branch -D x && git push origin feat/x",
+  "git reset --hard && git push origin feat/x",
+  "git clean -fd && git push origin feat/x",
+  "SKIP_PREFLIGHT=1 git push origin feat/x",
+  "git push 2>&1 | tail -2",
+  "git push -u origin feat/x > out.txt",
+  "N=1 && gh pr merge 5",
+  "for p in 1 2; do gh pr merge $p; done",
+  "git push --force-with-lease origin feat/x",
+];
+
+for (const command of NEVER_T1B) {
+  test(`T1b: never a delivery line: ${JSON.stringify(command)}`, () => {
+    assert.equal(deliveryClassesOf(command, { implicitPushDestination: onBranch("feat/x"), isLocalBranch: () => true }), null);
+  });
+}
+
+test("T1b: a newline between commands joins them like `;`, each line still checked", () => {
+  assert.deepEqual(deliveryClassesOf("git add -A && git commit -qm x\ngit push -q origin feat/x 2>&1 | tail -1\ngh pr create --fill"), ["push-branch", "pr-create"]);
+  assert.deepEqual(deliveryClassesOf("gh pr merge 5 --squash &&\n  git fetch -q origin"), ["pr-merge"]);
+  assert.equal(deliveryClassesOf("gh pr merge 5 --squash\nrm -rf dist"), null);
+  assert.equal(deliveryClassesOf("gh pr merge 5 --squash &\ngit fetch"), null);
+  assert.equal(deliveryClassesOf("cat > f <<'EOF'\ngh pr merge 5\nEOF\ngh pr merge 5"), null);
+});

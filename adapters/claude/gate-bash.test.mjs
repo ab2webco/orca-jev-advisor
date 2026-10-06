@@ -3690,3 +3690,18 @@ test('T3: a merge of a PR named by URL in another repository never passes on thi
   const same = JSON.parse(run(home, here, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-url-same' }))
   assert.equal(same.hookSpecificOutput.permissionDecision, 'allow')
 })
+
+test('T1b: a checkout of an existing name passes on an authorization only when it is a local branch, never a path', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  git(['branch', 'feat/x'], repo)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  writeAuthorizations(home, { [WIDGETS]: { 'push-branch': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const branch = 'git checkout -q feat/x && git push origin feat/x'
+  const path = 'git checkout -q src && git push origin feat/x'
+  seedAdvice(home, repo, [branch, path])
+  const onBranch = JSON.parse(run(home, branch, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-checkout-branch' }))
+  assert.equal(onBranch.hookSpecificOutput.permissionDecision, 'allow')
+  const onPath = JSON.parse(run(home, path, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-checkout-path' }))
+  assert.equal(onPath.hookSpecificOutput.permissionDecision, 'deny')
+})
