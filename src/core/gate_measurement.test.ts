@@ -325,6 +325,21 @@ test("an advise verdict with stopReason 'advice-retry' round-trips -- an identic
   assert.deepEqual(parseGateDecisionRecords(raw), [record]);
 });
 
+test("an allow with stopReason 'authorized' round-trips -- a remembered delivery authorization is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-authorized",
+    at: "2026-10-06T00:00:00.000Z",
+    project: null,
+    command: "gh pr merge 46 --squash",
+    source: "cache",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "authorized",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
 test("an 'advise' verdict round-trips and is never dropped as an unrecognised verdict", () => {
   const record = buildGateDecisionRecord({
     id: "sr-advise",

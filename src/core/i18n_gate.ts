@@ -26,6 +26,7 @@ export type GateKey =
   | "policyDeny"
   | "advisedLine"
   | "advisedRetryLine"
+  | "authorizedLine"
   | "blockedLine"
   | "policyBlockedLine"
   | "policyAskLine"
@@ -98,6 +99,8 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // silent success is indistinguishable from the model quietly doing
     // something else instead, so it is now its own visible line.
     advisedRetryLine: "jev · el modelo lo confirmó y se ejecutó: `{{segment}}`",
+    // 0.6.28: a delivery already confirmed in this repository ran without a new advice.
+    authorizedLine: "jev · ya lo confirmaste en este repositorio, se ejecutó: `{{segment}}`",
     // A LOCAL NEVER_SILENTLY rule's hard stop -- names the command and the
     // rule in plain words, never the model-facing REFUSED text
     // (localRuleDeny stays English and keeps talking to the model; this
@@ -202,6 +205,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     advisedLine: "jev · advised the model before `{{segment}}`: {{effect}}",
     advisedRetryLine: "jev · the model confirmed it and it ran: `{{segment}}`",
+    authorizedLine: "jev · already confirmed in this repository, it ran: `{{segment}}`",
     blockedLine: "jev · blocked `{{segment}}`: {{rule}}",
     policyBlockedLine: "jev · blocked `{{segment}}`: forbidden by the policy {{policyId}}",
     policyAskLine: "jev · {{policyId}} asks you to decide: `{{segment}}`",

@@ -78,6 +78,11 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    who is not there; the verdict is "advise" (the model
  *                    was refused this attempt and told to carry on) and
  *                    `policyId` names the policy.
+ *   "authorized"  -- 0.6.28: a risk advice (never a policy or a local rule)
+ *                    on a delivery line (src/core/delivery_class.ts) whose
+ *                    every class this repository already confirmed
+ *                    (src/core/gate_authorizations.ts); the verdict is
+ *                    "allow" and the advice reached the model as context.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -95,7 +100,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
 export type GateFailure = JevFailure | { readonly kind: "oversized" };
 export type GateFailureClass = GateFailure["kind"];
 
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -401,7 +406,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "unreachable" ||
     value === "cache" ||
     value === "advice-retry" ||
-    value === "queue"
+    value === "queue" ||
+    value === "authorized"
   );
 }
 

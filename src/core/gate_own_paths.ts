@@ -25,7 +25,7 @@ export const GATE_OWN_CONFIG_FILES: readonly string[] = [
 ];
 
 /** The cache directory's files the gate reads back as a verdict or a pass. */
-export const GATE_OWN_CACHE_FILES: readonly string[] = ["gate-bash.json", "gate-advice-retry.json", "gate-enablement.json", "agent-model-enablement.json", "human-queue.jsonl"];
+export const GATE_OWN_CACHE_FILES: readonly string[] = ["gate-bash.json", "gate-advice-retry.json", "gate-authorizations.json", "gate-enablement.json", "agent-model-enablement.json", "human-queue.jsonl"];
 
 /**
  * The plugin's own Orca storage, `<Orca user data>/plugins-data/<plugin id>/`

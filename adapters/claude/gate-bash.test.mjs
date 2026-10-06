@@ -3519,3 +3519,160 @@ test('JEVADV-96: an oversized command is not put to Jev, says so, and records th
   assert.equal(records[0].commandFamily, 'some-unmeasured-tool')
   assert.equal(JSON.stringify(records[0]).includes('word123'), false, 'the row never carries the command')
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T3: remembered delivery authorizations. When the agent re-runs an
+// advised delivery line unchanged (the retry pass), its delivery classes are
+// remembered for the repository (its normalized origin URL); a later risk
+// advice on a line made only of authorized classes, in any worktree or clone
+// of that repository, becomes an allow. A policy, a local rule or a line with
+// anything else in it is never relaxed. Every judged command has its advice
+// seeded in the verdict cache, so no run reaches the network.
+// ---------------------------------------------------------------------------
+
+function authorizationsPath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-authorizations.json')
+}
+
+function readAuthorizations (home) {
+  return existsSync(authorizationsPath(home)) ? JSON.parse(readFileSync(authorizationsPath(home), 'utf8')) : null
+}
+
+function writeAuthorizations (home, repos) {
+  mkdirSync(dirname(authorizationsPath(home)), { recursive: true })
+  writeFileSync(authorizationsPath(home), JSON.stringify({ version: 1, repos }))
+}
+
+function writeVerdictCacheEntries (home, entries) {
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(entries))
+}
+
+/** A repository with `origin` set to `url`, outside the throwaway home. */
+function repoWithOrigin (url) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-authorized-')))
+  tempDirs.push(dir)
+  initRepo(dir)
+  git(['remote', 'add', 'origin', url], dir)
+  return dir
+}
+
+/** Seeds a risk advice for each command, keyed exactly as the hook keys it from `cwd`. */
+function seedAdvice (home, cwd, commands, { policies = [], entry = { decision: 'advise', reason: 'it publishes to the shared remote', at: Date.now() } } = {}) {
+  const existing = existsSync(verdictCachePath(home)) ? JSON.parse(readFileSync(verdictCachePath(home), 'utf8')) : {}
+  const repoContext = computeRepoContextForTest(cwd)
+  for (const command of commands) existing[computeCacheKey(command, cwd, home, { repoContext, policies })] = entry
+  writeVerdictCacheEntries(home, existing)
+}
+
+const WIDGETS = 'github.com/acme/widgets'
+const MERGE_45 = 'gh pr merge 45 --squash --delete-branch'
+const MERGE_46 = 'gh pr merge 46 --squash --delete-branch'
+
+function lastGateRecord (home) {
+  const records = gateLogText(home).trim().split('\n').map((line) => JSON.parse(line))
+  return records[records.length - 1]
+}
+
+test('T3: the retry pass of an advised merge remembers pr-merge for the repository, and a merge of another PR then passes in a new session', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/Acme/widgets.git')
+  seedAdvice(home, repo, [MERGE_45, MERGE_46])
+
+  const first = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-s1' }))
+  assert.equal(first.hookSpecificOutput.permissionDecision, 'deny', 'the first merge is advised')
+  assert.equal(readAuthorizations(home), null, 'an advice alone remembers nothing')
+
+  const retry = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-s1' }))
+  assert.equal(retry.hookSpecificOutput.permissionDecision, 'allow')
+  const store = readAuthorizations(home)
+  assert.deepEqual(Object.keys(store.repos), [WIDGETS])
+  assert.equal(store.repos[WIDGETS]['pr-merge'].uses, 1)
+
+  const other = JSON.parse(run(home, MERGE_46, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-s2' }))
+  assert.equal(other.hookSpecificOutput.permissionDecision, 'allow', 'another PR number, another session: no block')
+  assert.match(other.hookSpecificOutput.additionalContext, /it publishes to the shared remote/, "Jev's advice still reaches the model, without blocking")
+  assert.match(other.systemMessage, /gh pr merge 46/)
+  const record = lastGateRecord(home)
+  assert.equal(record.verdict, 'allow')
+  assert.equal(record.stopReason, 'authorized')
+  assert.equal(readAuthorizations(home).repos[WIDGETS]['pr-merge'].uses, 2, 'a use refreshes the authorization')
+})
+
+test('T3: a second clone with the same origin in another URL spelling shares the authorization', () => {
+  const home = makeHome()
+  const clone = repoWithOrigin('git@github.com:acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const command = 'cd ' + clone + ' && gh pr merge 47 --squash'
+  seedAdvice(home, clone, [command])
+  const payload = JSON.parse(run(home, command, { cwd: clone, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-clone' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'authorized')
+})
+
+test('T3: an authorization of one repository never passes a merge in another', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/other.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  seedAdvice(home, repo, [MERGE_45])
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-other' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'still advised')
+  assert.equal(lastGateRecord(home).stopReason, 'risk')
+})
+
+test('T3: an expired authorization no longer passes', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString()
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: old, lastAt: old, uses: 3 } } })
+  seedAdvice(home, repo, [MERGE_45])
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-expired' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('T3: a policy ask for a merge still asks, even with pr-merge authorized', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  writePoliciesMirror(home, [QUEUE_POLICY])
+  seedAdvice(home, repo, [MERGE_45], { policies: [QUEUE_POLICY], entry: { decision: 'ask', reason: 'covered by the client_always_asks policy', policyId: 'client_always_asks', at: Date.now() } })
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-policy' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+test('T3: a line that also runs rm never learns, and never passes on an authorization', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  const command = 'gh pr merge 45 --squash && rm -rf dist'
+  seedAdvice(home, repo, [command])
+  run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-rm' })
+  const retry = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-rm' }))
+  assert.equal(retry.hookSpecificOutput.permissionDecision, 'allow', 'the ordinary retry pass is unchanged')
+  assert.equal(readAuthorizations(home), null, 'but nothing is remembered')
+
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const fresh = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-rm-2' }))
+  assert.equal(fresh.hookSpecificOutput.permissionDecision, 'deny', 'still advised in a new session')
+})
+
+test('T3: a release floored into an advice passes once release-create is authorized', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'release-create': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const command = 'gh release create v1.2.3 --notes x'
+  seedAdvice(home, repo, [command], { entry: { decision: 'advise', reason: 'creates a GitHub release', deployPublishKind: 'publish', at: Date.now() } })
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-release' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.match(payload.hookSpecificOutput.additionalContext, /creates a GitHub release/)
+})
+
+test('T3: a local-rule advice is never relaxed by an authorization', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'push-branch': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  writeDenyTierConfig(home, { denyPushProtected: false })
+  const payload = JSON.parse(run(home, 'git push origin main', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-local' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'local-rule')
+})

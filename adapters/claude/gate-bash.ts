@@ -61,9 +61,9 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
@@ -97,6 +97,10 @@ import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQu
 import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
+import { deliveryClassesOf } from '../../src/core/delivery_class.ts'
+import type { DeliveryClass } from '../../src/core/delivery_class.ts'
+import { EMPTY_AUTHORIZATIONS, isAuthorized, parseAuthorizations, pruneExpired, recordAuthorization, repoIdentity, touchAuthorization } from '../../src/core/gate_authorizations.ts'
+import type { AuthorizationStore } from '../../src/core/gate_authorizations.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
 import { fitJevState } from '../../src/core/jev_state_cap.ts'
 import { callJev, jevFailureOf, JevRequestError, type JevFailure } from '../../src/core/jev.ts'
@@ -176,6 +180,10 @@ const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // Never the real ~/.config or ~/.cache paths in a test -- same
 // ORCA_SUPERVISOR_CACHE_DIR override every other path in this file honors.
 const ADVICE_RETRY_PATH = join(CACHE_DIR, 'gate-advice-retry.json')
+// 0.6.28: the delivery classes each repository already confirmed -- see
+// src/core/gate_authorizations.ts. One of the gate's own files
+// (gate_own_paths.ts), so the model cannot write itself an authorization.
+const AUTHORIZATIONS_PATH = join(CACHE_DIR, 'gate-authorizations.json')
 // This file runs IN PLACE from `<pluginRoot>/adapters/claude/gate-bash.ts`
 // (see adapters/orca/install-claude-integration.mjs's hookSpecs, which
 // points Claude Code's hook entry straight at the installed copy rather
@@ -1041,10 +1049,98 @@ function emitAdvice(segment: string, effect: string, modelText: string): void {
  * 'jev' for the risk-stage/deploy-floor/cache-hit paths, 'local-rule' for a
  * local rule's own toggled-off/interpreter-code advice.
  */
-function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null, teamInternal = false): boolean {
+function tryAdviceRetryPass(command: string, sessionCwd: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null, teamInternal = false): boolean {
   if (!checkAdviceRetryPass(sessionId, command)) return false
+  // 0.6.28: re-running an advised delivery line unchanged is the confirmation
+  // the gate remembers for the repository. Never a local rule's own advice:
+  // only the risk stage's advice may ever be relaxed later.
+  if (source !== 'local-rule') learnAuthorization(command, sessionCwd, cwd)
   appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal)
   emit('allow', 'Jev: identical retry within the advice window; proceeding.', t('advisedRetryLine', { segment: jevSegmentFor(command) }))
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.28: remembered delivery authorizations. The store is read and written
+// here; what a delivery line is (src/core/delivery_class.ts) and how the store
+// changes (src/core/gate_authorizations.ts) are pure. Every read fails open to
+// an empty store and every write is best effort: an authorization that cannot
+// be read only costs the ordinary advice, never a crash or a block.
+// ---------------------------------------------------------------------------
+
+function readAuthorizationStore(): AuthorizationStore {
+  try {
+    return parseAuthorizations(JSON.parse(readFileSync(AUTHORIZATIONS_PATH, 'utf8')))
+  } catch {
+    return EMPTY_AUTHORIZATIONS
+  }
+}
+
+/** Written to a temporary file and renamed over the store, so a reader never sees half a file. */
+function writeAuthorizationStore(store: AuthorizationStore): void {
+  const temporary = `${AUTHORIZATIONS_PATH}.${process.pid}.tmp`
+  try {
+    mkdirSync(dirname(AUTHORIZATIONS_PATH), { recursive: true })
+    writeFileSync(temporary, JSON.stringify(pruneExpired(store, Date.now())), 'utf8')
+    renameSync(temporary, AUTHORIZATIONS_PATH)
+  } catch {
+    // Not remembered this time; the next confirmation tries again.
+  }
+}
+
+/** The delivery classes of `command`, a push naming no branch read where it runs: the leading `cd` target, else the session's cwd. */
+function deliveryClassesForCommand(command: string, sessionCwd: string): readonly DeliveryClass[] | null {
+  return deliveryClassesOf(command, {
+    implicitPushDestination: (cdDir, head) => resolveImplicitPushDestination({ cwd: cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir), head }),
+  })
+}
+
+/** The repository `actingCwd` belongs to: its normalized origin URL, shared by every worktree and clone, else its root. */
+function authorizationRepo(actingCwd: string): string | null {
+  return repoIdentity(gitOutput(['remote', 'get-url', 'origin'], actingCwd), getRepoRootForAdvice(actingCwd))
+}
+
+function learnAuthorization(command: string, sessionCwd: string, actingCwd: string): void {
+  const classes = deliveryClassesForCommand(command, sessionCwd)
+  if (classes === null) return
+  const repo = authorizationRepo(actingCwd)
+  if (repo === null) return
+  writeAuthorizationStore(recordAuthorization(readAuthorizationStore(), repo, classes, new Date().toISOString()))
+}
+
+/**
+ * A risk advice on a delivery line whose every class this repository already
+ * confirmed: an allow, with Jev's advice handed to the model as non-blocking
+ * context, the person told in one line, and the log row `authorized`.
+ */
+function tryAuthorizedPass(input: {
+  readonly command: string
+  readonly cwd: string
+  readonly actingCwd: string
+  readonly reasonsEnglish: readonly string[]
+  readonly source: GateSource
+  readonly latencyMs: number | null
+  readonly teamInternal: boolean
+}): boolean {
+  const classes = deliveryClassesForCommand(input.command, input.cwd)
+  if (classes === null) return false
+  const repo = authorizationRepo(input.actingCwd)
+  if (repo === null) return false
+  const store = readAuthorizationStore()
+  if (!isAuthorized(store, repo, classes, Date.now())) return false
+  writeAuthorizationStore(touchAuthorization(store, repo, classes, new Date().toISOString()))
+  appendGateRecord(input.actingCwd, input.command, input.source, 'allow', input.latencyMs, 'authorized', null, input.teamInternal)
+  const advice = input.reasonsEnglish.filter((reason) => reason.length > 0).join(' · ')
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      permissionDecisionReason: 'Jev: this delivery was already confirmed in this repository; proceeding.',
+      additionalContext: `Jev advice (not a block; this delivery was already confirmed in this repository, so it runs): ${advice.length > 0 ? advice : 'it may affect something worth a second look'}`,
+    },
+    systemMessage: t('authorizedLine', { segment: jevSegmentFor(input.command) }),
+  }
+  writeSync(1, JSON.stringify(payload))
   return true
 }
 
@@ -1081,10 +1177,13 @@ function resolveAdviceOutcome(input: {
   readonly latencyMs?: number | null
   /** 0.6.8 T3: the requires_human policies were set aside for this command. */
   readonly teamInternal?: boolean
+  /** 0.6.28: a risk advice with no policy behind it (fresh, floored or replayed from the cache), which a remembered authorization may turn into an allow. Never set for a local rule's advice. */
+  readonly authorizable?: boolean
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
   const teamInternal = input.teamInternal ?? false
-  if (tryAdviceRetryPass(command, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
+  if (tryAdviceRetryPass(command, cwd, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
+  if (input.authorizable === true && tryAuthorizedPass({ command, cwd, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
   appendGateRecord(input.actingCwd ?? cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
@@ -2027,7 +2126,7 @@ async function main(): Promise<void> {
   // costs neither a wasted network round trip nor even the no-key notice
   // machinery below -- true for an uncacheable command shape exactly as much
   // as a cacheable one.
-  if (tryAdviceRetryPass(command, actingCwd, sessionId, 'jev', null, teamInternal)) return
+  if (tryAdviceRetryPass(command, cwd, actingCwd, sessionId, 'jev', null, teamInternal)) return
 
   const apiKey = await resolveApiKey()
   const previouslyWarnedNoKey = readNoKeyWarned()
@@ -2113,7 +2212,7 @@ async function main(): Promise<void> {
       // empty status line.
       const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
         hit.deployPublishKind !== undefined ? { deployPublishKind: hit.deployPublishKind } : { riskReasonKeys: cachedRiskReasonKeys(hit) }
-      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
+      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal, authorizable: true })
       return
     }
     // 0.6.8 T4: a cached requires_human ask is queued the same way a fresh
@@ -2245,7 +2344,7 @@ async function main(): Promise<void> {
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
       effectSource: { riskReasonKeys: resolved.riskAdviceReasonKeys },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal, authorizable: true,
     })
     return
   }
@@ -2269,7 +2368,7 @@ async function main(): Promise<void> {
       reasonsEnglish: [resolved.deployPublishAdvice],
       effectSource: { deployPublishKind: resolved.deployPublishKind },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal, authorizable: true,
     })
     return
   }
