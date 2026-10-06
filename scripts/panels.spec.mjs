@@ -2088,7 +2088,7 @@ test('steward: the Consumption tab shows compactions applied and the context no 
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Context steward/)
-    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /Compactions applied \(24 h\): 2/)
     assert.match(text, /on average, about 140,000 tokens/)
     assert.match(text, /estimate/i)
     assert.match(text, /would have compacted: 1/i)
@@ -2104,7 +2104,7 @@ test('steward: a verified saving replaces the estimated per-step line with the s
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
-    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /Compactions applied \(24 h\): 2/)
     assert.match(text, /Verified saving \(7 days\): 1,380,000,000 tokens the main agent did not re-read, 28% of its context\. Measured on real usage in 32 of 59 compactions\./)
     assert.doesNotMatch(text, /on average, about 140,000 tokens/)
     assert.deepEqual(errors, [])
