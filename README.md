@@ -16,6 +16,16 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.27
+
+The context steward's saving is now measured, not estimated. The Consumption tab used to show how much context each compaction removed, using the size Claude Code reports right after compacting. That figure leaves out the system prompt and tools that load again, so the real drop is about 84% of it, and the panel never added anything up.
+
+- **Verified saving (7 days).** For each compaction, the panel compares the main agent's context on its last step before and its first step after, as recorded in real usage. It multiplies that drop by the steps that followed, up to the next compaction in the same session. On the author's machine that came to about 1.38 billion tokens the main agent did not re-read, in 32 of 50 compactions over the week.
+- **The applied count names its window.** "Compactions applied (24 h)" makes it clear that the two lines cover different periods.
+- Compactions logged without a session id are counted but cannot be verified, so the figure is a minimum. All of them came from versions before 0.6.15 or from the 0.6.10 copy the catalog reinstalled on 2026-10-03.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.6.26
 
 An update can no longer take you back a version. Until now the plugin ran its installer every time Orca started it, from whatever copy Orca had, so an older copy rewrote the hooks and the skills mod of a newer install. On 2026-10-03 that put a 0.6.25 install back to 0.6.10, and the running-agents band and every gate fix since went with it.
