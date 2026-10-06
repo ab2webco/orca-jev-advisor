@@ -63,6 +63,21 @@ function identityFromUrl(url: string): string | null {
   return `${host}/${cleanPath}`.toLowerCase();
 }
 
+/**
+ * T1c: the identity a `gh --repo`/`-R` value names, comparable with
+ * repoIdentity's: `OWNER/REPO` on github.com (gh's default host),
+ * `HOST/OWNER/REPO`, or a full URL. Null for anything else.
+ */
+export function repoSpecIdentity(spec: string): string | null {
+  const text = spec.trim();
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(text)) return identityFromUrl(text);
+  const parts = text.split("/");
+  if (!parts.every((part) => /^[A-Za-z0-9_.-]+$/.test(part) && part !== "." && part !== "..")) return null;
+  if (parts.length === 2) return `github.com/${text}`.replace(/\.git$/i, "").toLowerCase();
+  if (parts.length === 3) return text.replace(/\.git$/i, "").toLowerCase();
+  return null;
+}
+
 function isDeliveryClass(value: string): value is DeliveryClass {
   return (DELIVERY_CLASSES as readonly string[]).includes(value);
 }

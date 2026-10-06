@@ -14,6 +14,7 @@ import {
   pruneExpired,
   recordAuthorization,
   repoIdentity,
+  repoSpecIdentity,
   touchAuthorization,
 } from "./gate_authorizations.ts";
 
@@ -117,4 +118,13 @@ test("pruneExpired drops expired classes and empty repositories", () => {
   const pruned = pruneExpired(mixed, T0_MS + 31 * DAY_MS);
   assert.deepEqual(Object.keys(pruned.repos), [REPO]);
   assert.deepEqual(Object.keys(pruned.repos[REPO] ?? {}), ["push-branch"]);
+});
+
+test("T1c: repoSpecIdentity reads gh's --repo value as the same identity as the remote", () => {
+  assert.equal(repoSpecIdentity("acme/widgets"), "github.com/acme/widgets");
+  assert.equal(repoSpecIdentity("Acme/Widgets"), "github.com/acme/widgets");
+  assert.equal(repoSpecIdentity("github.com/acme/widgets"), "github.com/acme/widgets");
+  assert.equal(repoSpecIdentity("ghe.example.com/acme/widgets"), "ghe.example.com/acme/widgets");
+  assert.equal(repoSpecIdentity("https://github.com/acme/widgets.git"), "github.com/acme/widgets");
+  for (const bad of ["", "widgets", "/acme/widgets", "acme/", "a/b/c/d", "acme/wid gets", "../x/y"]) assert.equal(repoSpecIdentity(bad), null, bad);
 });

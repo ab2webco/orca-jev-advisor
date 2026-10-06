@@ -3705,3 +3705,14 @@ test('T1b: a checkout of an existing name passes on an authorization only when i
   const onPath = JSON.parse(run(home, path, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-checkout-path' }))
   assert.equal(onPath.hookSpecificOutput.permissionDecision, 'deny')
 })
+
+test('T1c: a merge with -R naming this repository passes on its authorization; -R naming another never does', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('git@github.com:acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const here = 'gh pr merge 45 -R Acme/widgets --squash'
+  const elsewhere = 'gh pr merge 45 -R acme/other --squash'
+  seedAdvice(home, repo, [here, elsewhere])
+  assert.equal(JSON.parse(run(home, here, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-repo-here' })).hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(JSON.parse(run(home, elsewhere, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-repo-else' })).hookSpecificOutput.permissionDecision, 'deny')
+})

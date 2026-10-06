@@ -230,3 +230,41 @@ test("T1b: a newline between commands joins them like `;`, each line still check
   assert.equal(deliveryClassesOf("gh pr merge 5 --squash &\ngit fetch"), null);
   assert.equal(deliveryClassesOf("cat > f <<'EOF'\ngh pr merge 5\nEOF\ngh pr merge 5"), null);
 });
+
+// ---------------------------------------------------------------------------
+// T1c: `--repo`/`-R` qualifies only when the caller confirms it names the
+// repository the authorization belongs to.
+// ---------------------------------------------------------------------------
+
+const ACME = { repoInRepository: (spec: string) => spec === "acme/widgets" || spec === "github.com/acme/widgets" };
+
+test("T1c: --repo, --repo=, -R and -RX naming this repository qualify", () => {
+  assert.deepEqual(deliveryClassesOf("gh pr merge 5 --repo acme/widgets --squash", ACME), ["pr-merge"]);
+  assert.deepEqual(deliveryClassesOf("gh pr merge 5 --repo=acme/widgets --squash", ACME), ["pr-merge"]);
+  assert.deepEqual(deliveryClassesOf("gh pr merge 5 -R acme/widgets --squash 2>&1 | tail -2; gh pr view 5 -R acme/widgets --json state", ACME), ["pr-merge"]);
+  assert.deepEqual(deliveryClassesOf("gh release create v1 -Racme/widgets --notes x", ACME), ["release-create"]);
+  assert.deepEqual(deliveryClassesOf("gh pr create --repo github.com/acme/widgets --fill", ACME), ["pr-create"]);
+});
+
+test("T1c: without the check, any --repo keeps the line null", () => {
+  assert.equal(deliveryClassesOf("gh pr merge 5 --repo acme/widgets --squash"), null);
+});
+
+const NEVER_T1C: readonly string[] = [
+  "gh pr merge 5 --repo other/widgets --squash",
+  "gh pr merge 5 --repo acme/other --squash",
+  "gh pr merge 5 --repo gitlab.com/acme/widgets --squash",
+  "gh pr merge 5 --repo= --squash",
+  "gh pr merge 5 --repo --squash",
+  "gh pr merge 5 -R",
+  "gh pr merge 5 --repo acme/widgets --repo other/widgets --squash",
+  "gh pr merge https://github.com/acme/other/pull/5 --repo acme/widgets --squash",
+  "gh release create v1 -R other/widgets --notes x",
+  "gh pr merge 5 --squash && gh pr view 5 -R other/widgets",
+];
+
+for (const command of NEVER_T1C) {
+  test(`T1c: never a delivery line: ${JSON.stringify(command)}`, () => {
+    assert.equal(deliveryClassesOf(command, { ...ACME, prUrlInRepository: (url: string) => url.includes("/acme/widgets/") }), null);
+  });
+}

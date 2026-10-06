@@ -49,6 +49,11 @@ export interface DeliveryClassOptions {
    * a checkout of an existing name never qualifies.
    */
   readonly isLocalBranch?: (name: string, cdDir: string | null) => boolean;
+  /**
+   * T1c: whether a `--repo`/`-R` value names the repository the authorization
+   * belongs to. Absent, any `--repo` keeps the line null.
+   */
+  readonly repoInRepository?: (spec: string) => boolean;
 }
 
 /** The only remote a delivery push may name: the authorization is keyed by origin's URL, so another remote would carry it to another repository. */
@@ -76,13 +81,24 @@ function isBranchPush(tokens: readonly string[], cdDir: string | null, options: 
   return isPlainBranchRefspec(target) && !isProtected(target);
 }
 
-/** `--repo`/`-R` points gh at another repository than the one the authorization belongs to. */
-function namesAnotherRepository(args: readonly string[]): boolean {
-  return args.some((arg) => arg === "--repo" || arg === "-R" || arg.startsWith("--repo=") || /^-R./.test(arg));
+/**
+ * `--repo`/`-R` points gh at a repository: every value given (`--repo X`,
+ * `--repo=X`, `-R X`, `-RX`) must be the one the authorization belongs to,
+ * as the caller confirms. An empty or missing value never is.
+ */
+function namesAnotherRepository(args: readonly string[], options: DeliveryClassOptions): boolean {
+  const named = (spec: string | undefined): boolean => spec === undefined || spec.length === 0 || spec.startsWith("-") || options.repoInRepository?.(spec) !== true;
+  return args.some((arg, at) => {
+    if (arg === "--repo" || arg === "-R") return named(args[at + 1]);
+    if (arg.startsWith("--repo=")) return named(arg.slice("--repo=".length));
+    if (/^-R./.test(arg)) return named(arg.slice(2));
+    return false;
+  });
 }
 
 const MERGE_SWITCHES: ReadonlySet<string> = new Set(["--squash", "-s", "--merge", "-m", "--rebase", "-r", "--delete-branch", "-d", "--auto"]);
-const MERGE_VALUE_FLAGS: ReadonlySet<string> = new Set(["--author-email", "-A", "--subject", "-t", "--body", "-b", "--match-head-commit"]);
+// `--repo`/`-R` are read (and confirmed) by namesAnotherRepository before this.
+const MERGE_VALUE_FLAGS: ReadonlySet<string> = new Set(["--author-email", "-A", "--subject", "-t", "--body", "-b", "--match-head-commit", "--repo", "-R"]);
 
 /** `gh pr merge [<number>|<url>|<branch>]` with only the allowlisted flags; `--admin` (bypasses the branch's own protection) and anything unknown never qualify. */
 function isPrMerge(args: readonly string[]): boolean {
@@ -91,7 +107,7 @@ function isPrMerge(args: readonly string[]): boolean {
     const arg = args[at] ?? "";
     if (arg.startsWith("-")) {
       const name = arg.startsWith("--") && arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
-      if (MERGE_SWITCHES.has(arg)) continue;
+      if (MERGE_SWITCHES.has(arg) || /^-R./.test(arg)) continue;
       if (!MERGE_VALUE_FLAGS.has(name)) return false;
       if (name === arg) at += 1;
       continue;
@@ -131,7 +147,7 @@ function isReadOnlyGh(tokens: readonly string[]): boolean {
 function ghClass(tokens: readonly string[], options: DeliveryClassOptions): DeliveryClass | null {
   if (tokens[0] !== "gh") return null;
   const args = tokens.slice(3);
-  if (namesAnotherRepository(args)) return null;
+  if (namesAnotherRepository(args, options)) return null;
   if (tokens[1] === "pr" && args.some((arg) => isUrl(arg) && options.prUrlInRepository?.(arg) !== true)) return null;
   if (tokens[1] === "release") return tokens[2] === "create" ? "release-create" : null;
   if (tokens[1] !== "pr") return null;
@@ -350,7 +366,7 @@ export function deliveryClassesOf(command: string, options: DeliveryClassOptions
       continue;
     }
     if (tokens[0] === "gh") {
-      if (namesAnotherRepository(tokens.slice(2))) return null;
+      if (namesAnotherRepository(tokens.slice(2), options)) return null;
       const gh = ghClass(tokens, options);
       if (gh !== null) found.add(gh);
       else if (!isReadOnlyGh(tokens)) return null;

@@ -99,7 +99,7 @@ import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_ow
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import { deliveryClassesOf } from '../../src/core/delivery_class.ts'
 import type { DeliveryClass } from '../../src/core/delivery_class.ts'
-import { EMPTY_AUTHORIZATIONS, isAuthorized, parseAuthorizations, pruneExpired, recordAuthorization, repoIdentity, touchAuthorization } from '../../src/core/gate_authorizations.ts'
+import { EMPTY_AUTHORIZATIONS, isAuthorized, parseAuthorizations, pruneExpired, recordAuthorization, repoIdentity, repoSpecIdentity, touchAuthorization } from '../../src/core/gate_authorizations.ts'
 import type { AuthorizationStore } from '../../src/core/gate_authorizations.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
 import { fitJevState } from '../../src/core/jev_state_cap.ts'
@@ -1091,7 +1091,7 @@ function writeAuthorizationStore(store: AuthorizationStore): void {
 /**
  * The delivery classes of `command` for `repo`: a push naming no branch read
  * where it runs (the leading `cd` target, else the session's cwd), and a pull
- * request named by URL accepted only when the URL is in `repo` itself, and a
+ * request named by URL (or a `--repo`/`-R`) accepted only when it is `repo` itself, and a
  * `git checkout <name>` only when `name` is a local branch there (otherwise
  * git reads it as a path and discards its changes).
  */
@@ -1099,6 +1099,7 @@ function deliveryClassesForCommand(command: string, sessionCwd: string, repo: st
   return deliveryClassesOf(command, {
     implicitPushDestination: (cdDir, head) => resolveImplicitPushDestination({ cwd: cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir), head }),
     prUrlInRepository: (url) => repoIdentity(url.replace(/\/pull\/.*$/, ''), null) === repo,
+    repoInRepository: (spec) => repoSpecIdentity(spec) === repo,
     isLocalBranch: (name, cdDir) => gitOutput(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir)) !== null,
   })
 }
