@@ -184,7 +184,7 @@ export interface SkillFs {
   stat(path: string): Promise<SkillFsStat>;
 }
 
-export type SkillSource = "project" | "user" | "synced";
+export type SkillSource = "project" | "user" | "synced" | "plugin";
 
 export interface SkillSummary {
   readonly name: string;
@@ -199,6 +199,29 @@ export interface SkillInventoryRoots {
   readonly projectSkillsDir: string | null;
   /** Claude Code's own user skills folder for this session: `$CLAUDE_CONFIG_DIR/skills` when that variable is set, else `<home>/.claude/skills`; null when neither is known. See adapters/claude/mod-skills/hooks/runtime.ts's `resolveUserSkillsDir`, which computes this for the one real caller. */
   readonly userSkillsDir: string | null;
+  /** Local addition (not upstream): `skills/` of each enabled plugin, see `enabledPluginSkillDirs`. Named `<plugin>:<skill>`, as Claude Code lists them. */
+  readonly pluginSkillsDirs?: readonly { readonly plugin: string; readonly dir: string }[];
+}
+
+/**
+ * Local addition (not upstream): the `skills/` folder of every plugin this
+ * config dir enables at user scope, read from Claude Code's own
+ * `settings.json` (`enabledPlugins`) and `plugins/installed_plugins.json`.
+ * Without it a plugin's skills (ponytail, for one) never reach Jev, and in
+ * active mode the withheld listing hides them from the model too.
+ * ponytail: user scope only; a project-scoped plugin is left out until it matters.
+ */
+export function enabledPluginSkillDirs(settings: unknown, installed: unknown): { plugin: string; dir: string }[] {
+  const enabled = isRecord(settings) && isRecord(settings.enabledPlugins) ? settings.enabledPlugins : {};
+  const plugins = isRecord(installed) && isRecord(installed.plugins) ? installed.plugins : {};
+  const dirs: { plugin: string; dir: string }[] = [];
+  for (const [key, on] of Object.entries(enabled)) {
+    const entries = plugins[key];
+    if (on !== true || !Array.isArray(entries)) continue;
+    const user = entries.find((x) => isRecord(x) && x.scope === "user" && isString(x.installPath));
+    if (user) dirs.push({ plugin: key.split("@")[0] ?? key, dir: `${String(user.installPath).replace(/\\/g, "/")}/skills` });
+  }
+  return dirs;
 }
 
 function isSkillFsEntry(value: unknown): value is SkillFsEntry {
@@ -307,6 +330,17 @@ export async function listSkillInventory(fs: SkillFs, roots: SkillInventoryRoots
 
   if (roots.projectSkillsDir) await addFrom(roots.projectSkillsDir, "project");
   if (roots.userSkillsDir) await addFrom(roots.userSkillsDir, "user");
+
+  for (const { plugin, dir } of roots.pluginSkillsDirs ?? []) {
+    for (const dirName of await skillDirNames(fs, dir)) {
+      const skill = await readSkillAt(fs, `${dir}/${dirName}`, dirName, "plugin");
+      const name = skill === null ? "" : `${plugin}:${skill.name}`;
+      if (skill !== null && !seen.has(name)) {
+        seen.add(name);
+        skills.push({ ...skill, name });
+      }
+    }
+  }
 
   if (roots.userSkillsDir) {
     // dirNamesUnder already yields [] when `synced/` is missing or

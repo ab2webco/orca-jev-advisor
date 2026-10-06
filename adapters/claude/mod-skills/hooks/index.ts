@@ -81,7 +81,7 @@ import { JevRequestError, callJev } from '../../../../src/core/jev.ts'
 import { resolveOrcaContext } from '../../../../src/core/orca_context.ts'
 import type { OrcaContext, ProcessRun, RunResult } from '../../../../src/core/orca_context.ts'
 import { modSkillsProjectName } from '../../../../src/core/project_name.ts'
-import { listSkillInventory, stripSkillFrontmatter } from '../../../../src/core/skill_inventory.ts'
+import { enabledPluginSkillDirs, listSkillInventory, stripSkillFrontmatter } from '../../../../src/core/skill_inventory.ts'
 import type { SkillFs, SkillFsEntry, SkillFsStat, SkillSummary } from '../../../../src/core/skill_inventory.ts'
 import { measurementFileName, measurementFilesToRead, measurementLegacyFileName, type MeasurementLog } from '../../../../src/core/measurement_files.ts'
 import {
@@ -1015,10 +1015,15 @@ async function readJsonFile($: EngineInterface, path: string): Promise<unknown> 
  * router options the config panel writes.
  */
 async function readVaultSettings($: EngineInterface): Promise<unknown> {
+  const dir = await vaultDir($)
+  return dir === null ? null : readJsonFile($, `${dir}/settings.json`)
+}
+
+/** This session's Claude Code config dir: `CLAUDE_CONFIG_DIR`, else `~/.claude`; null when neither is known. */
+async function vaultDir($: EngineInterface): Promise<string | null> {
   const paths = await resolveHomePaths($)
   const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
-  const vaultDir = claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
-  return vaultDir === null ? null : readJsonFile($, `${vaultDir}/settings.json`)
+  return claudeConfigDir !== undefined && claudeConfigDir.length > 0 ? claudeConfigDir : paths ? `${paths.home}/.claude` : null
 }
 
 /**
@@ -2239,9 +2244,11 @@ export function register(on: On, options: PluginOptions): void {
           // own doc in runtime.ts for why `<home>/.claude/skills` alone is
           // wrong there.
           const claudeConfigDir = await $.env.get('CLAUDE_CONFIG_DIR')
+          const configDir = await vaultDir($)
           inventoryCache = await listSkillInventory(makeSkillFs($), {
             projectSkillsDir: `${cwd}/.claude/skills`,
             userSkillsDir: resolveUserSkillsDir({ claudeConfigDir, home }),
+            pluginSkillsDirs: configDir === null ? [] : enabledPluginSkillDirs(await readVaultSettings($), await readJsonFile($, `${configDir}/plugins/installed_plugins.json`)),
           })
         }
         const inventory = inventoryCache
