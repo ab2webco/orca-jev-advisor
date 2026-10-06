@@ -101,9 +101,10 @@ export function isPlainBranchRefspec(ref: string): boolean {
 /**
  * `cd`'s own segment: exactly two shell words, `cd` and a plain (non-flag)
  * directory argument -- that argument itself, or `null` when the segment is
- * not this exact shape.
+ * not this exact shape. Exported for delivery_class.ts, which accepts the
+ * same leading `cd <dir> &&` prefix.
  */
-function parseCdSegment(segmentText: string): string | null {
+export function parseCdSegment(segmentText: string): string | null {
   const tokens = tokenize(segmentText);
   if (tokens.length !== 2 || tokens[0] !== "cd") return null;
   const dir = tokens[1] ?? "";
