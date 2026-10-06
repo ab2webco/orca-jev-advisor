@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   AUTHORIZATION_TTL_MS,
+  authorizationRows,
   EMPTY_AUTHORIZATIONS,
   forgetAuthorization,
   isAuthorized,
@@ -127,4 +128,20 @@ test("T1c: repoSpecIdentity reads gh's --repo value as the same identity as the 
   assert.equal(repoSpecIdentity("ghe.example.com/acme/widgets"), "ghe.example.com/acme/widgets");
   assert.equal(repoSpecIdentity("https://github.com/acme/widgets.git"), "github.com/acme/widgets");
   for (const bad of ["", "widgets", "/acme/widgets", "acme/", "a/b/c/d", "acme/wid gets", "../x/y"]) assert.equal(repoSpecIdentity(bad), null, bad);
+});
+
+test("T4: authorizationRows lists each live repository with its classes, last use and expiry, for the panel", () => {
+  const store = recordAuthorization(
+    recordAuthorization(recordAuthorization(EMPTY_AUTHORIZATIONS, "github.com/zeta/app", ["pr-merge"], T0), REPO, ["release-create", "pr-merge"], T0),
+    "github.com/old/gone",
+    ["push-branch"],
+    new Date(T0_MS - 40 * DAY_MS).toISOString(),
+  );
+  const rows = authorizationRows(store, T0_MS + DAY_MS);
+  assert.deepEqual(rows.map((row) => row.repo), [REPO, "github.com/zeta/app"], "sorted, and the expired repository is left out");
+  assert.deepEqual(rows[0]?.classes, [
+    { cls: "pr-merge", firstAt: T0, lastAt: T0, uses: 1, expiresAt: new Date(T0_MS + AUTHORIZATION_TTL_MS).toISOString() },
+    { cls: "release-create", firstAt: T0, lastAt: T0, uses: 1, expiresAt: new Date(T0_MS + AUTHORIZATION_TTL_MS).toISOString() },
+  ]);
+  assert.deepEqual(authorizationRows(EMPTY_AUTHORIZATIONS, T0_MS), []);
 });

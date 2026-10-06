@@ -99,7 +99,7 @@ import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_ow
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import { deliveryClassesOf } from '../../src/core/delivery_class.ts'
 import type { DeliveryClass } from '../../src/core/delivery_class.ts'
-import { EMPTY_AUTHORIZATIONS, isAuthorized, parseAuthorizations, pruneExpired, recordAuthorization, repoIdentity, repoSpecIdentity, touchAuthorization } from '../../src/core/gate_authorizations.ts'
+import { AUTHORIZATIONS_FILE, EMPTY_AUTHORIZATIONS, isAuthorized, parseAuthorizations, pruneExpired, recordAuthorization, repoIdentity, repoSpecIdentity, touchAuthorization } from '../../src/core/gate_authorizations.ts'
 import type { AuthorizationStore } from '../../src/core/gate_authorizations.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
 import { fitJevState } from '../../src/core/jev_state_cap.ts'
@@ -183,7 +183,7 @@ const ADVICE_RETRY_PATH = join(CACHE_DIR, 'gate-advice-retry.json')
 // 0.6.28: the delivery classes each repository already confirmed -- see
 // src/core/gate_authorizations.ts. One of the gate's own files
 // (gate_own_paths.ts), so the model cannot write itself an authorization.
-const AUTHORIZATIONS_PATH = join(CACHE_DIR, 'gate-authorizations.json')
+const AUTHORIZATIONS_PATH = join(CACHE_DIR, AUTHORIZATIONS_FILE)
 // This file runs IN PLACE from `<pluginRoot>/adapters/claude/gate-bash.ts`
 // (see adapters/orca/install-claude-integration.mjs's hookSpecs, which
 // points Claude Code's hook entry straight at the installed copy rather

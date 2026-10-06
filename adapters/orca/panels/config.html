@@ -250,6 +250,14 @@
          #config-tabbar in the body). flex-wrap is what keeps this from
          ever needing horizontal scroll at 320px: a tab that does not fit
          the row wraps to the next line instead of overflowing it. */
+      /* 0.6.28 T4: one bordered entry per repository, one line per class. */
+      .gate-auth-repo header { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+      .gate-auth-name { font-weight: 600; overflow-wrap: break-word; min-width: 0; flex: 1 1 12em; font-size: 12px; }
+      .gate-auth-class { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+        border-top: 1px solid var(--border, var(--fb-border)); padding-top: 8px; }
+      .gate-auth-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 14em; }
+      .gate-auth-label { font-size: 12px; font-weight: 500; }
+      .gate-auth-text .hint { margin-top: 0; overflow-wrap: anywhere; }
       .tabbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; border-top: 1px solid var(--border, var(--fb-border)); }
       .tab {
         border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -572,6 +580,24 @@
           <span class="said" id="deny-tier-said"></span>
         </div>
       </section>
+
+      <!--
+        0.6.28 T4. The deliveries the gate remembers per repository
+        (src/core/gate_authorizations.ts), published by the worker as
+        `gateAuthorizationsStatus` from adapters/orca/gate-authorizations.mjs.
+        A forget is a request the worker attends; the panel never writes the
+        store itself (it lives in the cache dir, which only the sidecar may
+        write).
+      -->
+      <section id="gate-authorizations-section">
+        <h2 data-i18n="gateAuth.heading"></h2>
+        <p class="hint" data-i18n="gateAuth.hint"></p>
+        <p class="hint" id="gate-auth-empty" data-i18n="gateAuth.loading"></p>
+        <div id="gate-auth-rows"></div>
+        <div class="actions">
+          <span class="said" id="gate-auth-said"></span>
+        </div>
+      </section>
       </div>
 
       <section id="save-section">
@@ -811,6 +837,23 @@
           'denyTier.save': 'Guardar nivel de bloqueo',
           'denyTier.saving': 'Guardando…',
           'denyTier.saved': 'Guardado.',
+          'gateAuth.heading': 'Autorizaciones recordadas',
+          'gateAuth.hint': 'Entregas que el agente confirmó después de un aviso, por repositorio. En ese repositorio, subir una rama de trabajo, un pull request o un release pasa sin un aviso nuevo. Cada una vence 30 días después de su último uso. Una política que pregunta o prohíbe, y el nivel de bloqueo de arriba, siempre siguen decidiendo.',
+          'gateAuth.empty': 'Aún no hay nada recordado. Cuando el agente confirma la misma línea de entrega después de un aviso, queda recordada aquí para ese repositorio.',
+          'gateAuth.unreadable': 'No se pudieron leer las autorizaciones recordadas. Vuelve a abrir este panel en un momento.',
+          'gateAuth.lastUsed': 'Último uso: {{when}}',
+          'gateAuth.expires': 'Vence: {{when}}',
+          'gateAuth.uses': 'Usos: {{count}}',
+          'gateAuth.forget': 'Olvidar',
+          'gateAuth.forgetAll': 'Olvidar todo',
+          'gateAuth.forgetting': 'Olvidando…',
+          'gateAuth.forgotten': 'Olvidado.',
+          'gateAuth.loading': 'Leyendo las autorizaciones recordadas…',
+          'gateAuth.class.push-branch': 'Subir una rama de trabajo',
+          'gateAuth.class.pr-create': 'Abrir un pull request',
+          'gateAuth.class.pr-merge': 'Fusionar un pull request',
+          'gateAuth.class.pr-update': 'Editar, comentar o revisar un pull request',
+          'gateAuth.class.release-create': 'Crear un release',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
@@ -1133,6 +1176,23 @@
           'denyTier.save': 'Save deny tier',
           'denyTier.saving': 'Saving…',
           'denyTier.saved': 'Saved.',
+          'gateAuth.heading': 'Remembered authorizations',
+          'gateAuth.hint': 'Deliveries the agent confirmed after an advice, per repository. In that repository, pushing a feature branch, a pull request or a release goes through without a new advice. Each one lapses 30 days after its last use. A policy that asks or forbids, and the deny tier above, still always decide.',
+          'gateAuth.empty': 'Nothing remembered yet. When the agent confirms the same delivery line after an advice, it is remembered here for that repository.',
+          'gateAuth.unreadable': 'The remembered authorizations could not be read. Open this panel again in a moment.',
+          'gateAuth.lastUsed': 'Last used: {{when}}',
+          'gateAuth.expires': 'Expires: {{when}}',
+          'gateAuth.uses': 'Uses: {{count}}',
+          'gateAuth.forget': 'Forget',
+          'gateAuth.forgetAll': 'Forget all',
+          'gateAuth.forgetting': 'Forgetting…',
+          'gateAuth.forgotten': 'Forgotten.',
+          'gateAuth.loading': 'Reading the remembered authorizations…',
+          'gateAuth.class.push-branch': 'Push a feature branch',
+          'gateAuth.class.pr-create': 'Open a pull request',
+          'gateAuth.class.pr-merge': 'Merge a pull request',
+          'gateAuth.class.pr-update': 'Edit, comment on or review a pull request',
+          'gateAuth.class.release-create': 'Create a release',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
@@ -3241,6 +3301,116 @@
         })
       })
 
+      // ---------- remembered authorizations (0.6.28 T4) ----------------------
+      // Same request/result pattern as the deny tier above: the store lives in
+      // the cache dir, which only the worker's sidecar may write.
+      var GATE_AUTH_STATUS_KEY = 'gateAuthorizationsStatus'
+      var GATE_AUTH_FORGET_REQUEST_KEY = 'gateAuthorizationForgetRequest'
+      var GATE_AUTH_FORGET_RESULT_KEY = 'gateAuthorizationForgetResult'
+      // src/core/delivery_class.ts's DELIVERY_CLASSES; a class this panel does
+      // not know is not shown rather than shown as a raw key.
+      var GATE_AUTH_CLASSES = ['push-branch', 'pr-create', 'pr-merge', 'pr-update', 'release-create']
+      var gateAuthSaidEl = el('gate-auth-said')
+
+      function waitForGateAuthForgetResult (requestId, deadline) {
+        return read(GATE_AUTH_FORGET_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(errorMessageFor(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForGateAuthForgetResult(requestId, deadline) })
+        })
+      }
+
+      function sendGateAuthForget (repo, cls) {
+        var requestId = 'gate-auth-forget-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        signalPanelOpen()
+        return write(GATE_AUTH_FORGET_REQUEST_KEY, { id: requestId, at: new Date().toISOString(), repo: repo, cls: cls }).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForGateAuthForgetResult(requestId, Date.now() + 20000)
+        })
+      }
+
+      /** A day in the person's own locale; the raw text when it cannot be read. */
+      function formatGateAuthDay (iso) {
+        var ms = Date.parse(String(iso || ''))
+        if (!ms) return String(iso || '')
+        try { return new Date(ms).toLocaleDateString(currentLocale, { year: 'numeric', month: 'short', day: 'numeric' }) } catch (error) { return new Date(ms).toISOString().slice(0, 10) }
+      }
+
+      function forgetGateAuth (repo, cls, button) {
+        button.disabled = true
+        said(gateAuthSaidEl, t('gateAuth.forgetting'))
+        sendGateAuthForget(repo, cls).then(function () {
+          said(gateAuthSaidEl, t('gateAuth.forgotten'))
+          return read(GATE_AUTH_STATUS_KEY, false).then(renderGateAuthorizations)
+        }).catch(function (error) {
+          button.disabled = false
+          said(gateAuthSaidEl, errorText(error), true)
+        })
+      }
+
+      function gateAuthClassLine (repo, row) {
+        var line = elMake('div', 'gate-auth-class')
+        var text = elMake('div', 'gate-auth-text')
+        var label = elMake('span', 'gate-auth-label')
+        label.textContent = t('gateAuth.class.' + row.cls)
+        var meta = elMake('span', 'hint')
+        meta.textContent = [
+          t('gateAuth.lastUsed', { when: formatGateAuthDay(row.lastAt) }),
+          t('gateAuth.expires', { when: formatGateAuthDay(row.expiresAt) }),
+          t('gateAuth.uses', { count: String(row.uses) })
+        ].join(' · ')
+        text.appendChild(label)
+        text.appendChild(meta)
+        var forget = elMake('button')
+        forget.type = 'button'
+        forget.textContent = t('gateAuth.forget')
+        forget.setAttribute('aria-label', t('gateAuth.forget') + ': ' + label.textContent + ', ' + repo)
+        forget.addEventListener('click', function () { forgetGateAuth(repo, row.cls, forget) })
+        line.appendChild(text)
+        line.appendChild(forget)
+        return line
+      }
+
+      /** One entry per repository from the worker's GATE_AUTH_STATUS_KEY; the empty line says how one is learned. */
+      function renderGateAuthorizations (status) {
+        var host = el('gate-auth-rows')
+        host.innerHTML = ''
+        var repos = status && Array.isArray(status.repos) ? status.repos : []
+        repos.forEach(function (repoRow) {
+          if (!repoRow || typeof repoRow.repo !== 'string' || !Array.isArray(repoRow.classes)) return
+          var classes = repoRow.classes.filter(function (row) { return row && GATE_AUTH_CLASSES.indexOf(row.cls) !== -1 })
+          if (classes.length === 0) return
+          var box = elMake('div', 'entry gate-auth-repo')
+          var head = elMake('header')
+          var name = elMake('code', 'gate-auth-name')
+          // A break opportunity after each `/`, so a narrow panel wraps
+          // between host, owner and repository rather than mid-word.
+          repoRow.repo.split('/').forEach(function (part, index, parts) {
+            name.appendChild(document.createTextNode(index < parts.length - 1 ? part + '/' : part))
+            if (index < parts.length - 1) name.appendChild(elMake('wbr'))
+          })
+          var all = elMake('button', 'gate-auth-forget-all')
+          all.type = 'button'
+          all.textContent = t('gateAuth.forgetAll')
+          all.setAttribute('aria-label', t('gateAuth.forgetAll') + ': ' + repoRow.repo)
+          all.addEventListener('click', function () { forgetGateAuth(repoRow.repo, null, all) })
+          head.appendChild(name)
+          head.appendChild(all)
+          box.appendChild(head)
+          classes.forEach(function (row) { box.appendChild(gateAuthClassLine(repoRow.repo, row)) })
+          host.appendChild(box)
+        })
+        var empty = el('gate-auth-empty')
+        empty.textContent = t(status && status.ok === false ? 'gateAuth.unreadable' : 'gateAuth.empty')
+        empty.style.display = host.childNodes.length > 0 ? 'none' : ''
+        // Lets a test or the screenshot harness wait for the real list instead of the reading line.
+        el('gate-authorizations-section').setAttribute('data-state', 'ready')
+      }
+
       // ---------- umbrales --------------------------------------------------
 
       // Mirrors main.mjs's GATE_DEFAULTS_KEY (see that file's own module
@@ -3700,6 +3870,12 @@
           fillTeamOwners(results[11])
           fillQueueMode(results[12])
           fillExplicitModels(results[13])
+          // 0.6.28 T4: read on its own, after the first paint. The reads
+          // above already fill the host's per-window quota (measured: the
+          // locale and router results already wait for the next 10 s window),
+          // and one more in that batch held the whole panel back a full
+          // window. Until it arrives the section says it is reading.
+          read(GATE_AUTH_STATUS_KEY, false).then(renderGateAuthorizations).catch(function () { renderGateAuthorizations({ ok: false, repos: [] }) })
           // 0.6.2 E7: what storage holds may predate a mode set from a
           // terminal; ask the worker for a fresh read and redraw with it.
           refreshModelRouterStatus().then(function (fresh) { if (!modelRouterEdited) renderModelRouterRows(fresh) }).catch(function () {})

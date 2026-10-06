@@ -12,6 +12,9 @@
 import { DELIVERY_CLASSES } from "./delivery_class.ts";
 import type { DeliveryClass } from "./delivery_class.ts";
 
+/** The store's file name in the cache dir, shared by the gate hook and the panel's sidecar. */
+export const AUTHORIZATIONS_FILE = "gate-authorizations.json";
+
 export const AUTHORIZATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** One remembered class: when it was first confirmed, last used, and how often. */
@@ -78,7 +81,8 @@ export function repoSpecIdentity(spec: string): string | null {
   return null;
 }
 
-function isDeliveryClass(value: string): value is DeliveryClass {
+/** Whether `value` names a delivery class -- for a request read from outside (the panel's forget). */
+export function isDeliveryClass(value: string): value is DeliveryClass {
   return (DELIVERY_CLASSES as readonly string[]).includes(value);
 }
 
@@ -172,4 +176,31 @@ export function pruneExpired(store: AuthorizationStore, nowMs: number): Authoriz
     next = withRepo(next, repo, kept);
   }
   return next;
+}
+
+/** One remembered class as the panel lists it: when it was confirmed, last used, and when it lapses without another use. */
+export interface AuthorizationClassRow extends AuthorizationUse {
+  readonly cls: DeliveryClass;
+  readonly expiresAt: string;
+}
+
+export interface AuthorizationRepoRow {
+  readonly repo: string;
+  readonly classes: readonly AuthorizationClassRow[];
+}
+
+/** The live authorizations, one row per repository (sorted), classes in DELIVERY_CLASSES order; expired ones are left out. */
+export function authorizationRows(store: AuthorizationStore, nowMs: number): readonly AuthorizationRepoRow[] {
+  const live = pruneExpired(store, nowMs);
+  return Object.keys(live.repos)
+    .sort()
+    .map((repo) => {
+      const entry = live.repos[repo] ?? {};
+      const classes: AuthorizationClassRow[] = [];
+      for (const cls of DELIVERY_CLASSES) {
+        const use = entry[cls];
+        if (use !== undefined) classes.push({ cls, ...use, expiresAt: new Date(Date.parse(use.lastAt) + AUTHORIZATION_TTL_MS).toISOString() });
+      }
+      return { repo, classes };
+    });
 }

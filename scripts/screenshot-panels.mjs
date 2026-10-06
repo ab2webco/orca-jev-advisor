@@ -37,6 +37,7 @@ import { decideModelSeedNotice, diffModelSeed } from '../src/core/model_seed_not
 import { summarizeModelMeasurements } from '../src/core/model_measurement.ts'
 import { foldGateDecisions } from '../src/core/gate_stats.ts'
 import { foldAbResults } from '../src/core/ab_report.ts'
+import { EMPTY_AUTHORIZATIONS, authorizationRows, recordAuthorization } from '../src/core/gate_authorizations.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
@@ -225,6 +226,17 @@ function emptyWindow (key) {
 }
 
 /** A machine where the worker has run and published everything it mirrors. */
+// 0.6.28 T4: the Rules tab's remembered authorizations, built with the real
+// store functions and authorizationRows -- the same producer the worker's
+// sidecar (adapters/orca/gate-authorizations.mjs) publishes from. One
+// repository holds three classes, one holds one. Example repositories.
+const READY_AUTHORIZATIONS = recordAuthorization(
+  recordAuthorization(EMPTY_AUTHORIZATIONS, 'github.com/example/orca-supervisor', ['push-branch', 'pr-create', 'pr-merge'], '2026-09-21T15:40:00.000Z'),
+  'github.com/example/website',
+  ['release-create'],
+  '2026-09-22T09:05:00.000Z',
+)
+
 const READY = {
   // 'now' is resolved by hostBridge at the moment the page asks, not here.
   // liveIso() at module load was the second version of this bug: one run
@@ -301,6 +313,7 @@ const READY = {
   // 0.6.8 T4: queue mode on, so the Policies tab photographs the choice
   // the board's "Waiting for you" list depends on.
   queueMode: { enabled: true },
+  gateAuthorizationsStatus: { ok: true, repos: authorizationRows(READY_AUTHORIZATIONS, Date.parse(iso)), checkedAt: iso },
   // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
   // project (the raw Orca projectId, plus the projectName the worker
   // resolves from it -- the same name "By project" shows below) and branch;
@@ -1161,6 +1174,9 @@ async function main() {
             for (const tabKey of tabKeys) {
               await page.click(`#tab-${tabKey}`)
               await page.waitForTimeout(300)
+              // 0.6.28 T4: the remembered authorizations are read after the
+              // panel's first batch of reads, a host quota window later.
+              if (tabKey === 'rules') await page.waitForSelector('#gate-authorizations-section[data-state="ready"]', { timeout: 15000 })
 
               const overflow = await page.evaluate(() => ({
                 scrollWidth: document.documentElement.scrollWidth,

@@ -39,6 +39,11 @@ const {
   attendClaudeIntegrationRequest,
   attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
+  attendGateAuthorizationForgetRequest,
+  gateAuthorizationsArgv,
+  GATE_AUTHORIZATIONS_STATUS_KEY,
+  GATE_AUTHORIZATION_FORGET_RESULT_KEY,
+  publishGateAuthorizations,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
   attendModelRouterStatusRefresh,
@@ -2332,4 +2337,99 @@ test('mirrorCatalogAndPolicies logs a failed explicit models mirror by reason, n
   const run = async (mode) => (mode === 'explicit-models-save' ? { ok: false, reason: 'exception', detail: 'disk full' } : { ok: true })
   await mirrorCatalogAndPolicies(orca, fakeStorageHost(), { run })
   assert.ok(orca._logs.some((line) => /explicit models mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T4: the remembered delivery authorizations -- listed for the config
+// panel and forgotten from it, through adapters/orca/gate-authorizations.mjs
+// (its own subprocess tests are in gate-authorizations.test.mjs).
+// ---------------------------------------------------------------------------
+
+const AUTH_ROWS = [{ repo: 'github.com/acme/widgets', classes: [{ cls: 'pr-merge', firstAt: 'a', lastAt: 'b', uses: 2, expiresAt: 'c' }] }]
+
+test('gateAuthorizationsArgv: reads the cache dir, and only forget may write it', () => {
+  const read = gateAuthorizationsArgv('read')
+  const forget = gateAuthorizationsArgv('forget')
+  assert.ok(read.includes('--permission'))
+  assert.ok(read.some((arg) => arg.startsWith('--allow-fs-read=') && arg.endsWith('cache')), 'the cache dir is readable')
+  assert.equal(read.some((arg) => arg.startsWith('--allow-fs-write=')), false, 'read never writes')
+  assert.ok(forget.some((arg) => arg.startsWith('--allow-fs-write=') && arg.endsWith('cache')))
+  assert.ok(read.at(-2).endsWith('gate-authorizations.mjs'))
+  assert.equal(read.at(-1), 'read')
+})
+
+test('publishGateAuthorizations: publishes the sidecar rows for the panel', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  await publishGateAuthorizations(orca, storageHost, { run: async (mode) => (mode === 'read' ? { ok: true, value: { repos: AUTH_ROWS } } : { ok: false }) })
+  const status = await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)
+  assert.equal(status.ok, true)
+  assert.deepEqual(status.repos, AUTH_ROWS)
+  assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('publishGateAuthorizations: a failed read publishes an empty list marked not ok, never stale rows', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [GATE_AUTHORIZATIONS_STATUS_KEY]: { ok: true, repos: AUTH_ROWS } })
+  await publishGateAuthorizations(orca, storageHost, { run: async () => ({ ok: false, reason: 'no-json' }) })
+  const status = await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)
+  assert.equal(status.ok, false)
+  assert.deepEqual(status.repos, [])
+})
+
+test('attendGateAuthorizationForgetRequest: an expired request is never forwarded', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-1', at: TEN_MINUTES_AGO, repo: 'github.com/acme/widgets', cls: 'pr-merge' } })
+  const calls = []
+  await attendGateAuthorizationForgetRequest(orca, storageHost, { run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: [] } } } })
+  const result = await storageHost.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)
+  assert.equal(result.id, 'ga-1')
+  assert.equal(result.reason, 'expired')
+  assert.deepEqual(calls, [])
+})
+
+test('attendGateAuthorizationForgetRequest: forgets one class, then republishes what is left', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-2', at: new Date().toISOString(), repo: 'github.com/acme/widgets', cls: 'pr-merge' } })
+  const calls = []
+  await attendGateAuthorizationForgetRequest(orca, storageHost, {
+    run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: mode === 'read' ? AUTH_ROWS : [] } } }
+  })
+  assert.deepEqual(calls[0], ['forget', JSON.stringify({ repo: 'github.com/acme/widgets', cls: 'pr-merge' })])
+  const result = await storageHost.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)
+  assert.equal(result.id, 'ga-2')
+  assert.equal(result.ok, true)
+  assert.deepEqual((await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)).repos, AUTH_ROWS)
+  assert.equal(await storageHost.get('gateAuthorizationForgetRequest'), null, 'the request is consumed')
+})
+
+test('attendGateAuthorizationForgetRequest: forget-all sends a null class; a request with no repository is refused', async () => {
+  const orca = fakeOrca()
+  const calls = []
+  const run = async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: [] } } }
+  const all = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-3', at: new Date().toISOString(), repo: 'github.com/acme/widgets', cls: null } })
+  await attendGateAuthorizationForgetRequest(orca, all, { run })
+  assert.deepEqual(calls[0], ['forget', JSON.stringify({ repo: 'github.com/acme/widgets', cls: null })])
+  calls.length = 0
+  const bad = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-4', at: new Date().toISOString(), repo: '' } })
+  await attendGateAuthorizationForgetRequest(orca, bad, { run })
+  assert.equal((await bad.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)).reason, 'invalid-request')
+  assert.deepEqual(calls, [])
+})
+
+test('the real gate-authorizations sidecar reads and forgets under exactly the grants gateAuthorizationsArgv gives it', async () => {
+  const cache = join(PATHS_OVERRIDE_DIR, 'cache')
+  const { mkdirSync } = await import('node:fs')
+  mkdirSync(cache, { recursive: true })
+  const now = new Date().toISOString()
+  writeFileSync(join(cache, 'gate-authorizations.json'), JSON.stringify({ version: 1, repos: { 'github.com/acme/widgets': { 'pr-merge': { firstAt: now, lastAt: now, uses: 1 }, 'push-branch': { firstAt: now, lastAt: now, uses: 4 } } } }))
+  const env = { ...process.env }
+  const read = await spawnSidecar(gateAuthorizationsArgv('read'), { env, timeout: 20000 })
+  assert.equal(read.ok, true, JSON.stringify(read))
+  assert.deepEqual(read.value.repos[0].classes.map((row) => row.cls), ['push-branch', 'pr-merge'])
+  const forget = await spawnSidecar(gateAuthorizationsArgv('forget'), { env, timeout: 20000 }, JSON.stringify({ repo: 'github.com/acme/widgets', cls: 'pr-merge' }))
+  assert.equal(forget.ok, true, JSON.stringify(forget))
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(cache, 'gate-authorizations.json'), 'utf8')).repos['github.com/acme/widgets']), ['push-branch'])
+  const readOnlyForget = await spawnSidecar(gateAuthorizationsArgv('read').slice(0, -1).concat('forget'), { env, timeout: 20000 }, JSON.stringify({ repo: 'github.com/acme/widgets', cls: null }))
+  assert.equal(readOnlyForget.ok, false, 'without the write grant a forget cannot write')
 })

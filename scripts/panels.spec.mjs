@@ -4116,3 +4116,83 @@ test('models: saving the legacy switch writes the ready override with it, and an
     await browser.close()
   }
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T4: remembered delivery authorizations, in the Rules tab. The worker
+// publishes `gateAuthorizationsStatus` ({ ok, repos }) from
+// adapters/orca/gate-authorizations.mjs; a forget is a
+// `gateAuthorizationForgetRequest` ({ id, at, repo, cls }), cls null for all.
+// ---------------------------------------------------------------------------
+
+const AUTH_AT = '2026-10-01T09:30:00.000Z'
+const AUTH_EXPIRES = '2026-10-31T09:30:00.000Z'
+const AUTH_STATUS = {
+  ok: true,
+  checkedAt: AUTH_AT,
+  repos: [
+    { repo: 'github.com/acme/widgets', classes: [
+      { cls: 'push-branch', firstAt: AUTH_AT, lastAt: AUTH_AT, uses: 4, expiresAt: AUTH_EXPIRES },
+      { cls: 'pr-merge', firstAt: AUTH_AT, lastAt: AUTH_AT, uses: 2, expiresAt: AUTH_EXPIRES },
+    ] },
+    { repo: 'github.com/acme/<b>site</b>', classes: [{ cls: 'release-create', firstAt: AUTH_AT, lastAt: AUTH_AT, uses: 1, expiresAt: AUTH_EXPIRES }] },
+  ],
+}
+
+test('remembered authorizations: each repository lists its classes with last use and expiry, and nothing else shows the empty line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ gateAuthorizationsStatus: AUTH_STATUS })
+  try {
+    await page.click('#tab-rules')
+    await page.waitForSelector('#gate-auth-rows .gate-auth-repo', { timeout: 15000 })
+    const text = await page.innerText('#gate-auth-rows')
+    assert.match(text, /github\.com\/acme\/widgets/)
+    assert.match(text, /github\.com\/acme\/<b>site<\/b>/, 'a repository name is shown as text, never as markup')
+    assert.match(text, /Push a feature branch/)
+    assert.match(text, /Merge a pull request/)
+    assert.match(text, /Create a release/)
+    assert.match(text, /Last used/)
+    assert.match(text, /Expires/)
+    assert.equal(await page.locator('#gate-auth-rows .gate-auth-class').count(), 3)
+    assert.equal(await page.isVisible('#gate-auth-empty'), false)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('remembered authorizations: forgetting one class, or a whole repository, sends exactly that request', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ gateAuthorizationsStatus: AUTH_STATUS })
+  try {
+    await page.click('#tab-rules')
+    await page.click('#gate-auth-rows .gate-auth-repo:first-child .gate-auth-class:nth-of-type(2) button')
+    await page.waitForFunction(() => !!window.__written.gateAuthorizationForgetRequest, undefined, { timeout: 25000 })
+    const one = await page.evaluate(() => window.__written.gateAuthorizationForgetRequest)
+    assert.equal(one.repo, 'github.com/acme/widgets')
+    assert.equal(one.cls, 'pr-merge')
+    assert.equal(typeof one.id, 'string')
+    assert.equal(typeof one.at, 'string')
+    await page.evaluate(() => { delete window.__written.gateAuthorizationForgetRequest })
+    await page.click('#gate-auth-rows .gate-auth-repo:nth-child(2) .gate-auth-forget-all')
+    await page.waitForFunction(() => !!window.__written.gateAuthorizationForgetRequest, undefined, { timeout: 25000 })
+    const all = await page.evaluate(() => window.__written.gateAuthorizationForgetRequest)
+    assert.equal(all.repo, 'github.com/acme/<b>site</b>')
+    assert.equal(all.cls, null)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const [locale, learned] of [['en', /confirms the same/i], ['es', /confirma la misma/i]]) {
+  test(`remembered authorizations: with none, one line says how they are learned (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel({}, locale)
+    try {
+      await page.click('#tab-rules')
+      await page.waitForFunction((source) => new RegExp(source, 'i').test(document.getElementById('gate-auth-empty').innerText), learned.source, { timeout: 15000 })
+      assert.equal(await page.isVisible('#gate-auth-empty'), true)
+      assert.equal(await page.locator('#gate-auth-rows .gate-auth-repo').count(), 0)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}

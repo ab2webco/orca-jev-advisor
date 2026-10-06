@@ -177,3 +177,27 @@ test('the empty fixture is exactly what read-measurements.mjs publishes for an e
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+// 0.6.28 T4: the Rules tab's remembered authorizations. The fixture is
+// `{ ok, repos, checkedAt }` as publishGateAuthorizations stores it, its rows
+// in exactly the shape the real sidecar answers.
+test('ready.gateAuthorizationsStatus has the keys the real gate-authorizations sidecar publishes', SKIP_NO_PLAYWRIGHT, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'orca-fixture-shape-auth-'))
+  try {
+    const now = new Date().toISOString()
+    writeFileSync(join(dir, 'gate-authorizations.json'), JSON.stringify({ version: 1, repos: { 'github.com/acme/widgets': { 'pr-merge': { firstAt: now, lastAt: now, uses: 1 } } } }))
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--experimental-strip-types', '--no-warnings', join(ROOT, 'adapters', 'orca', 'gate-authorizations.mjs'), 'read'],
+      { env: { ...process.env, ORCA_SUPERVISOR_CACHE_DIR: dir }, cwd: ROOT }
+    )
+    const real = JSON.parse(stdout)
+    assert.equal(real.ok, true)
+    const fixture = READY.gateAuthorizationsStatus
+    assert.deepEqual(Object.keys(fixture).sort(), ['checkedAt', 'ok', 'repos'])
+    assert.deepEqual(keyPaths(fixture.repos).sort(), keyPaths(real.value.repos).sort())
+    assert.ok(fixture.repos.some((row) => row.classes.length >= 2), 'one repository holds two or more classes')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
