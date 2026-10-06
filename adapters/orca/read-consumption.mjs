@@ -34,7 +34,9 @@
  * `summarizeRouterDecisions`'s own summary over the last 24h, read and
  * pruned the same way as turn-usage. `steward` is the same for the context
  * steward's `context-steward-decisions-*.jsonl` (summarizeStewardDecisions,
- * odd/tasks/jev-context-steward.md): null until a file exists.
+ * odd/tasks/jev-context-steward.md): null until a file exists. Its
+ * `verified` (verifyStewardSaving) is the saving measured on the raw
+ * turn-usage rows over the last 7 days, the usage window.
  */
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -57,7 +59,7 @@ import {
   toTurnUsageRecord,
   TURN_USAGE_FILE_PATTERN,
 } from './log-files.mjs'
-import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions } from '../../src/core/context_steward.ts'
+import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions, verifyStewardSaving } from '../../src/core/context_steward.ts'
 import { foldGateDecisionLog } from './gate-log-fold.mjs'
 
 const PLATFORM = normalizePlatform(process.platform)
@@ -83,6 +85,7 @@ const CLAUDE_MD_PATH = join(CLAUDE_HOME_DIR, 'CLAUDE.md')
 const CLAUDE_JSON_PATH = join(HOME, '.claude.json')
 
 const MODEL_ROUTER_WINDOW_MS = 24 * 60 * 60 * 1000
+const STEWARD_VERIFIED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 const PRUNE_AFTER_MS = 8 * 24 * 60 * 60 * 1000
 
 /**
@@ -198,7 +201,9 @@ async function main () {
       ? null
       : summarizeRouterDecisions(decisionRows, rows, now, MODEL_ROUTER_WINDOW_MS)
 
-    const steward = stewardFiles.length === 0 ? null : summarizeStewardDecisions(stewardRows, now, MODEL_ROUTER_WINDOW_MS)
+    const steward = stewardFiles.length === 0
+      ? null
+      : { ...summarizeStewardDecisions(stewardRows, now, MODEL_ROUTER_WINDOW_MS), verified: verifyStewardSaving(stewardRows, rows, now, STEWARD_VERIFIED_WINDOW_MS) }
 
     result = { ok: true, usage, quota, recommendations, modelRouter, steward }
   } catch (error) {

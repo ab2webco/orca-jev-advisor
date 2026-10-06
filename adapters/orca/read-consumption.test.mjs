@@ -320,7 +320,25 @@ test('steward summarizes the last 24h: compactions applied, measure-mode ones, c
   const now = Date.now()
   writeStewardFile(home, now, [stewardRow(), stewardRow({ mode: 'measure', applied: false, contextAfter: null }), stewardRow({ decision: 'mid-task', compact: false, applied: false, contextAfter: null })])
   const result = run(home)
-  assert.deepEqual(result.steward, { decisions: 3, applied: 1, wouldCompact: 1, freedPerStep: 120000 })
+  assert.deepEqual(result.steward, { decisions: 3, applied: 1, wouldCompact: 1, freedPerStep: 120000, verified: { compactions: 1, verified: 0, steps: 0, tokensNotReread: 0, mainContextTokens: 0, share: null } })
+})
+
+// 0.6.27 T2: the saving measured on real usage, over the 7-day usage window.
+test('steward.verified measures the saving on the main agent\'s real turn usage over the last 7 days', () => {
+  const home = makeHome()
+  const now = Date.now()
+  const at = (hoursAgo) => new Date(now - hoursAgo * 60 * 60 * 1000).toISOString()
+  // Two days ago: outside the 24h summary, inside the 7-day verified window.
+  writeStewardFile(home, now, [stewardRow({ at: at(48), sessionId: 's1' })])
+  writeTurnUsageFile(home, now, [
+    usageRow({ at: at(49), sessionId: 's1', input: 0, cacheRead: 280000, cacheWrite: 20000 }),
+    usageRow({ at: at(47), sessionId: 's1', input: 0, cacheRead: 90000, cacheWrite: 10000 }),
+    usageRow({ at: at(46), sessionId: 's1', input: 0, cacheRead: 100000, cacheWrite: 10000 }),
+    usageRow({ at: at(47.5), agent: 'subagent', sessionId: 's1', input: 0, cacheRead: 5000, cacheWrite: 0 }),
+  ])
+  const result = run(home)
+  assert.equal(result.steward.applied, 0)
+  assert.deepEqual(result.steward.verified, { compactions: 1, verified: 1, steps: 2, tokensNotReread: 400000, mainContextTokens: 510000, share: 400000 / 910000 })
 })
 
 test('a steward log more than 8 days old is pruned, same retention as the others', () => {
