@@ -42,7 +42,7 @@ Today the only memory is a 10-minute, per-session, exact-string retry (`src/core
 ## Checklist
 - [x] T1 core: `deliveryClassesOf(command)`, line rule plus classes, with negative tests (`--admin`, `push --delete`, `:ref`, `+refspec`, `--force`, protected branch, `branch -D`, `rm`, `ssh`). Commit ed381d6. RED: 8 of 48 failing against a stub; GREEN: 48/48.
 - [x] T2 core: authorization store (repo identity normalization, record, check with expiry, forget), pure, persisted by the adapter. Commit 247a86f. RED: 8 of 9 failing against a stub; GREEN: 9/9.
-- [x] T3 hook: learn on the retry pass; turn a risk advise into an allow when authorized; a policy ask or deny is never relaxed (test). Commit a5d830e. RED: 3 of 9 subprocess tests failing; GREEN: 9/9. Full `npm test`: 3358/3358, typecheck 0.
+- [x] T3 hook: learn on the retry pass; turn a risk advise into an allow when authorized; a policy ask or deny is never relaxed (test). Commit a5d830e. RED: 3 of the 8 new subprocess tests failing; GREEN: 8/8. The `authorized` round-trip and the own-file entry were written after the change; RED observed afterwards by removing each (2 failing), then restored. Fix 4429379: a PR named by URL qualifies only inside the authorized repository (RED: 1 unit, 1 subprocess allow-instead-of-deny; GREEN). Full `npm test`: 3360/3360, typecheck 0. Not to be released without T4: until the panel can forget, the store is a gate-owned file only a person can delete.
 - [ ] T4 panel and worker: list and forget, es/en, shots at 1440/768/390/320 in both themes
 - [ ] T5 replay `advise_events.json` (blocks removed; zero `rm`/`ssh`/force/protected passes), docs, 0.6.28, release, catalog, live check
 
