@@ -28,7 +28,7 @@ Verified by hand on 2026-10-06:
 - [x] T1 core function (b28fba8, fix 91e1de2: RED missing export, then 7 assertion fails; GREEN 47/47)
 - [x] T2 reader (1deee29: RED 2, GREEN 19/19)
 - [x] T3 panel (f6c3a49, a0ba9b1: RED then GREEN; test:panels 194/194; shots looked at in 4 widths and 2 themes)
-- [ ] T4 docs, release, live check (docs, version and QA written; release and live check pending)
+- [x] T4 docs, release, live check (#44 → 9735378, v0.6.27, catalog pin v0.6.27; live PASS in odd/qa/qa-0.6.27.md row 12)
 
 ## Acceptance criteria
 - Strict TDD: RED observed per rule, then GREEN. Typecheck 0, `npm test` green, `npm run test:panels` green.
