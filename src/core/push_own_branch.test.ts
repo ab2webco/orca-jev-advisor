@@ -610,3 +610,40 @@ test("does not qualify: git worktree add -b $NAME ../w -- the -b value is a vari
 test("does not qualify: git worktree add $DEST -- a variable path", () => {
   assertDoesNotQualify("git worktree add $DEST");
 });
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T4: `git -C <dir> push <remote> <refspec>` qualifies like `cd <dir>
+// && git push`, with the same options and refspec rules. The destination is
+// the explicit refspec, so the branch's upstream does not matter; without an
+// explicit refspec it never qualifies. -C with any other global option never
+// does. Measured: ~40 advice blocks in three days.
+// ---------------------------------------------------------------------------
+
+test("0.6.28 T4: git -C <dir> push of an own branch qualifies, with output plumbing and -u", () => {
+  for (const command of ["git -C /p push origin feat/x", "git -C /p push origin feat/x 2>&1 | tail -3", "git -C /p push -u origin feat/x", 'git -C "/p q" push -q origin feat/x']) {
+    assert.deepEqual(qualifiesForLocalGitAllow({ command, cwd: NO_REPO_CWD }), { qualifies: true, reasonKind: "ownBranchPush" }, command);
+  }
+});
+
+test("0.6.28 T4: git -C <dir> push never qualifies to a protected branch, without a refspec, or with a force or delete shape", () => {
+  for (const command of [
+    "git -C /p push origin main",
+    "git -C /p push origin HEAD:main",
+    "git -C /p push origin HEAD",
+    "git -C /p push origin",
+    "git -C /p push",
+    "git -C /p push origin +feat/x",
+    "git -C /p push --force origin feat/x",
+    "git -C /p push --force-with-lease origin feat/x",
+    "git -C /p push --delete origin feat/x",
+    "git -C /p push origin :feat/x",
+    "git -C /p -c core.sshCommand=x push origin feat/x",
+    "git -c core.sshCommand=x -C /p push origin feat/x",
+    "git -C /p --git-dir=/q/.git push origin feat/x",
+    "git -C /p --work-tree=/q push origin feat/x",
+    "git -C /p -C /q push origin feat/x",
+    "git -C $DIR push origin feat/x",
+  ]) {
+    assert.equal(qualifiesForLocalGitAllow({ command, cwd: NO_REPO_CWD }).qualifies, false, command);
+  }
+});

@@ -3852,3 +3852,23 @@ test('T2: a delete outside the temp roots, or through a symlink that leaves them
   }
   assert.ok(existsSync(join(home, 'project')), 'the hook only judges; nothing is deleted')
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T4: `git -C <dir> push origin <own branch>` qualifies like `cd <dir>
+// && git push`; with T1, the branch policy is read at the -C directory, so a
+// session sitting on main does not keep never_write_to_main for it.
+// ---------------------------------------------------------------------------
+
+test('T4: git -C <feature checkout> push origin feat/x from a session on main is allowed locally', () => {
+  const home = makeHome()
+  const session = repoNamedBranch('main')
+  const feature = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertAllowedByOwnBranchPush(home, `git -C ${feature} push origin feat/x 2>&1 | tail -3`, session)
+})
+
+test('T4: git -C <dir> push origin main is never allowed locally', () => {
+  const home = makeHome()
+  const feature = repoNamedBranch('feat/x')
+  assertNotAllowedByOwnBranchPush(home, `git -C ${feature} push origin main`, feature)
+})
