@@ -3872,3 +3872,10 @@ test('T4: git -C <dir> push origin main is never allowed locally', () => {
   const feature = repoNamedBranch('feat/x')
   assertNotAllowedByOwnBranchPush(home, `git -C ${feature} push origin main`, feature)
 })
+
+test('T1 fix: on main, a guarded delete that also discards its output still goes to the policy stage', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertNotAllowedByOwnBranchPush(home, 'git branch -d feat/old 2>/dev/null', repo)
+})

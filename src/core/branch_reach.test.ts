@@ -68,3 +68,35 @@ test("branchReachPlaces: a place that cannot be known is null", () => {
 test("branchReachPlaces: an obviously safe command reaches no place", () => {
   assert.deepEqual(branchReachPlaces("git status", "/work/repo", "/Users/someone"), []);
 });
+
+test("branchReachPlaces: a git command keeps its own directory even when it also writes a file", () => {
+  assert.ok(branchReachPlaces("git commit -am x > /tmp/out.log 2>&1", "/work/repo", "/Users/someone").includes("/work/repo"));
+  assert.ok(branchReachPlaces("git add x 2>/tmp/err", "/work/repo", "/Users/someone").includes("/work/repo"));
+});
+
+test("branchReachPlaces: a program that may edit files keeps its directory beside a redirect target", () => {
+  assert.ok(branchReachPlaces("node scripts/edit.mjs > /tmp/log", "/work/repo", "/Users/someone").includes("/work/repo"));
+});
+
+test("branchReachPlaces: a plain delete or copy acts only where its files are", () => {
+  assert.deepEqual(branchReachPlaces("rm /other/repo/f", "/work/repo", "/Users/someone"), ["/other/repo/f"]);
+  assert.ok(branchReachPlaces("rm /other/repo/f $X", "/work/repo", "/Users/someone").includes(null));
+});
+
+test("namesProtectedBranch: a branch the text cannot name keeps the policy", () => {
+  for (const command of [
+    "git checkout - && git commit -m x",
+    "git checkout @{-1}",
+    'git checkout "$BASE" && git merge feat/x',
+    'git push origin "$B"',
+    "git push origin HEAD:`cat b`",
+    "git switch -",
+  ]) {
+    assert.equal(namesProtectedBranch(command, PROTECTED), true, command);
+  }
+  assert.equal(namesProtectedBranch('git commit -m "$MSG"', PROTECTED), false);
+});
+
+test("branchReachPlaces: a move out of the checkout writes the checkout too", () => {
+  assert.ok(branchReachPlaces("mv src/a.ts /tmp/x", "/work/repo", "/Users/someone").includes("/work/repo"));
+});
