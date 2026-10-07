@@ -31,6 +31,9 @@
 //     unquoted heredoc whose body would expand `$` or backticks;
 //   - a copy or a `cat` whose source is outside the temp roots (reading a
 //     secret into /tmp is a copy, judged like `cp`).
+// The Bash tool runs the owner's shell, zsh as often as bash, so zsh's own
+// expansions fail closed too: `$S:h` and `$S[1]`, `=cmd`, `>!`, and a
+// relative `cd` (cdpath).
 // Which segments run is followed through `&&`, `||` and `;` the way the
 // shell runs them, so `cd /tmp/x; rm -rf src` (a failed cd deletes the
 // project's src) is not contained while `cd /tmp/x && rm -rf src` is.
@@ -312,6 +315,8 @@ class Reader {
   }
 
   private readTarget(): Word {
+    // zsh's `>!` clobbers the NEXT word, not a file named `!`.
+    if (this.text[this.index] === "!") unreadable();
     while (this.text[this.index] === " " || this.text[this.index] === "\t") this.index += 1;
     const word = this.readWord();
     if (word.length === 0) unreadable();
@@ -363,6 +368,9 @@ class Reader {
       } else if (char === "$") {
         parts.push(this.readVariable("none"));
       } else if (char === "`" || char === "{" || char === "}") {
+        unreadable();
+      } else if (char === "=" && this.tildeMayStartHere(parts)) {
+        // zsh expands `=cmd` to the program's path.
         unreadable();
       } else if (char === "~" && this.tildeMayStartHere(parts)) {
         const after = text[this.index + 1] ?? "";
@@ -427,6 +435,9 @@ class Reader {
     let end = this.index + 1;
     while (end < text.length && NAME_CHAR.test(text[end] ?? "")) end += 1;
     const name = text.slice(this.index + 1, end);
+    // zsh applies `:h`/`:t` modifiers and `[n]` subscripts to an unbraced
+    // parameter, inside double quotes too: `$S:h:h` reaches `/`.
+    if (text[end] === ":" || text[end] === "[") unreadable();
     this.index = end;
     return { kind: "var", name, quote };
   }
@@ -740,7 +751,9 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
 
   if (program === "cd") {
     if (piped || segment.redirects.length > 0 || segment.heredoc !== null || args.length > 1) return null;
-    const target = args.length === 0 ? env["HOME"] ?? null : args[0]?.glob === "none" && !(args[0]?.text ?? "").startsWith("-") ? absolutePath(args[0]?.text ?? "", state.cwd) : null;
+    // Only an absolute target: CDPATH, or zsh's cdpath from the profile, can
+    // send `cd sub` anywhere, and the hook's environment does not show it.
+    const target = args.length === 0 ? env["HOME"] ?? null : args[0]?.glob === "none" && posix.isAbsolute(args[0]?.text ?? "") ? absolutePath(args[0]?.text ?? "", state.cwd) : null;
     if (target === null || !posix.isAbsolute(target)) return null;
     return [
       { cwd: target, status: "ok", vars: state.vars },

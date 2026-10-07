@@ -181,3 +181,16 @@ test("tempRootsFromEnvironment: the system roots, TMPDIR and Claude's per-user r
   assert.deepEqual([...roots].sort(), [CLAUDE_ROOT, "/private/tmp", "/tmp", "/var/folders", MAC_TMP].sort());
   assert.deepEqual([...tempRootsFromEnvironment({ TMPDIR: "relative/dir" }, "/tmp", null)].sort(), ["/private/tmp", "/tmp", "/var/folders"]);
 });
+
+// The Bash tool runs the owner's zsh: its expansions must not read as bash's.
+test("must stop: zsh modifiers, subscripts, =cmd and the clobber redirect", () => {
+  assert.equal(contained("S=/tmp/x/a; rm -rf $S:h:h:h"), false);
+  assert.equal(contained('S=/tmp/x/a; rm -rf "$S:t"'), false);
+  assert.equal(contained('S=/tmp/x/a; rm -rf "$S[1]"'), false);
+  assert.equal(contained("cd /tmp/x && cp /tmp/x/evil =git"), false);
+  assert.equal(contained("cd /tmp/x && echo x >! ~/.zshrc"), false);
+});
+
+test("must stop: a relative cd, which CDPATH or zsh's cdpath can send anywhere", () => {
+  assert.equal(contained("cd /tmp/x && cd sub && rm -rf build"), false);
+});
