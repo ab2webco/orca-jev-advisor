@@ -3870,17 +3870,19 @@
           fillTeamOwners(results[11])
           fillQueueMode(results[12])
           fillExplicitModels(results[13])
-          // 0.6.28 T4: read on its own, after the first paint. The reads
-          // above already fill the host's per-window quota (measured: the
-          // locale and router results already wait for the next 10 s window),
-          // and one more in that batch held the whole panel back a full
-          // window. Until it arrives the section says it is reading.
-          read(GATE_AUTH_STATUS_KEY, false).then(renderGateAuthorizations).catch(function () { renderGateAuthorizations({ ok: false, repos: [] }) })
           // 0.6.2 E7: what storage holds may predate a mode set from a
           // terminal; ask the worker for a fresh read and redraw with it.
           refreshModelRouterStatus().then(function (fresh) { if (!modelRouterEdited) renderModelRouterRows(fresh) }).catch(function () {})
         }).catch(function (error) {
           said(saveSaidEl, errorText(error), true)
+        }).then(function () {
+          // 0.6.28 T4: read on its own, after the first paint, whether that
+          // paint succeeded or not. The reads above already fill the host's
+          // per-window quota (measured: the locale and router results already
+          // wait for the next 10 s window), and one more in that batch held
+          // the whole panel back a full window. Until it arrives the section
+          // says it is reading.
+          return read(GATE_AUTH_STATUS_KEY, false).then(renderGateAuthorizations).catch(function () { renderGateAuthorizations({ ok: false, repos: [] }) })
         })
       }
 

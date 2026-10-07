@@ -2265,8 +2265,17 @@ async function attendGateAuthorizationForgetRequest (orca, storageHost, options 
   if (!result.ok) {
     orca.log(`gate authorization forget failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }
+  // The rows the forget left are published BEFORE the result: the panel
+  // re-reads the list as soon as it sees the result, and must never get the
+  // list from before the forget. A failed forget re-reads instead.
+  const left = authorizationRowsOf(result)
+  if (left !== null) {
+    await storageHost.set(GATE_AUTHORIZATIONS_STATUS_KEY, { ok: true, repos: left, checkedAt: new Date().toISOString() })
+      .catch((error) => orca.log(`gate authorizations publish failed: ${error.message}`))
+  } else {
+    await publishGateAuthorizations(orca, storageHost, options)
+  }
   await publishResult({ ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null })
-  await publishGateAuthorizations(orca, storageHost, options)
 }
 
 // ---------------------------------------------------------------------------

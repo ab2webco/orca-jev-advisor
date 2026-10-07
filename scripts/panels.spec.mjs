@@ -4196,3 +4196,17 @@ for (const [locale, learned] of [['en', /confirms the same/i], ['es', /confirma 
     }
   })
 }
+
+test('remembered authorizations: the list still arrives when the rest of the panel fails to load', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  // `policies` as an object, not an array: the main load throws in
+  // addPolicyRow and paints its own error. The authorizations must not hang
+  // on "Reading…" because of it.
+  const { browser, page } = await openPanel({ policies: { rules: [] }, gateAuthorizationsStatus: AUTH_STATUS })
+  try {
+    await page.click('#tab-rules')
+    await page.waitForSelector('#gate-authorizations-section[data-state="ready"]', { timeout: 15000 })
+    assert.equal(await page.locator('#gate-auth-rows .gate-auth-repo').count(), 2)
+  } finally {
+    await browser.close()
+  }
+})

@@ -2388,18 +2388,23 @@ test('attendGateAuthorizationForgetRequest: an expired request is never forwarde
   assert.deepEqual(calls, [])
 })
 
-test('attendGateAuthorizationForgetRequest: forgets one class, then republishes what is left', async () => {
+test('attendGateAuthorizationForgetRequest: publishes the rows the forget left BEFORE the result, so the panel never reads the old list after "Forgotten."', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-2', at: new Date().toISOString(), repo: 'github.com/acme/widgets', cls: 'pr-merge' } })
+  const order = []
+  const set = storageHost.set
+  storageHost.set = async (key, value) => { order.push(key); return set(key, value) }
+  const left = [{ repo: 'github.com/acme/widgets', classes: [{ cls: 'push-branch', firstAt: 'a', lastAt: 'b', uses: 1, expiresAt: 'c' }] }]
   const calls = []
   await attendGateAuthorizationForgetRequest(orca, storageHost, {
-    run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: mode === 'read' ? AUTH_ROWS : [] } } }
+    run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: mode === 'forget' ? left : AUTH_ROWS } } }
   })
-  assert.deepEqual(calls[0], ['forget', JSON.stringify({ repo: 'github.com/acme/widgets', cls: 'pr-merge' })])
+  assert.deepEqual(calls, [['forget', JSON.stringify({ repo: 'github.com/acme/widgets', cls: 'pr-merge' })]], 'no second read: the forget already answers what is left')
   const result = await storageHost.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)
   assert.equal(result.id, 'ga-2')
   assert.equal(result.ok, true)
-  assert.deepEqual((await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)).repos, AUTH_ROWS)
+  assert.deepEqual((await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)).repos, left)
+  assert.ok(order.indexOf(GATE_AUTHORIZATIONS_STATUS_KEY) < order.indexOf(GATE_AUTHORIZATION_FORGET_RESULT_KEY), `status before result, got ${order.join(', ')}`)
   assert.equal(await storageHost.get('gateAuthorizationForgetRequest'), null, 'the request is consumed')
 })
 
