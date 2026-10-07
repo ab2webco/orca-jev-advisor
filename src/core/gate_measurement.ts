@@ -87,6 +87,10 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    deletes only inside a temp root
  *                    (src/core/contained_effect.ts); allowed locally after
  *                    the local deny rules, with no policy, cache or Jev.
+ *   "own-tree"    -- 0.6.28 T6: plain file writes and local git in the
+ *                    session's own working tree on a working branch
+ *                    (contained_effect.ts's isOwnTreeWork), allowed locally
+ *                    only when no command-scoped policy survives.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -104,7 +108,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
 export type GateFailure = JevFailure | { readonly kind: "oversized" };
 export type GateFailureClass = GateFailure["kind"];
 
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained" | "own-tree";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -412,7 +416,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "advice-retry" ||
     value === "queue" ||
     value === "authorized" ||
-    value === "contained"
+    value === "contained" ||
+    value === "own-tree"
   );
 }
 

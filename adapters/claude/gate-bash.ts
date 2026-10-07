@@ -83,7 +83,8 @@ import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/c
 import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
-import { isContainedToTempRoots, tempRootsFromEnvironment } from '../../src/core/contained_effect.ts'
+import { isContainedToTempRoots, isOwnTreeWork, tempRootsFromEnvironment } from '../../src/core/contained_effect.ts'
+import type { ContainedEffectInput } from '../../src/core/contained_effect.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
 import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
@@ -1908,20 +1909,45 @@ function gateOwnFileWritten(command: string, cwd: string): string | null {
 function commandIsContained(command: string, cwd: string): boolean {
   if (PLATFORM === 'win32') return false
   try {
-    const env: Readonly<Record<string, string | undefined>> = process.env
-    return isContainedToTempRoots(command, {
-      tempRoots: tempRootsFromEnvironment(env, tmpdir(), process.getuid?.() ?? null),
-      cwd,
-      env,
-      realpath: (path) => {
-        try {
-          return realpathSync(path)
-        } catch {
-          return null
-        }
+    return isContainedToTempRoots(command, containedEffectInput(cwd))
+  } catch {
+    return false
+  }
+}
+
+/** What contained_effect.ts reads from this process: its environment, the filesystem, the session's repository. */
+function containedEffectInput(cwd: string): ContainedEffectInput {
+  const env: Readonly<Record<string, string | undefined>> = process.env
+  return {
+    tempRoots: tempRootsFromEnvironment(env, tmpdir(), process.getuid?.() ?? null),
+    cwd,
+    env,
+    realpath: (path) => {
+      try {
+        return realpathSync(path)
+      } catch {
+        return null
+      }
+    },
+    sessionRepoRoot: resolveRepoRootForCwd(cwd),
+    isLinkedWorktree: (path) => resolveLinkedWorktreeMainCheckout(path) !== null,
+  }
+}
+
+/**
+ * 0.6.28 T6: whether `command` is plain local work in an own working tree
+ * (contained_effect.ts's isOwnTreeWork): each tree's root, branch and shared
+ * git directory read from the filesystem the way T1 reads them.
+ */
+function commandIsOwnTreeWork(command: string, cwd: string): boolean {
+  if (PLATFORM === 'win32') return false
+  try {
+    return isOwnTreeWork(command, containedEffectInput(cwd), {
+      treeOf: (path) => {
+        const root = resolveRepoRootForCwd(path)
+        return root === null ? null : { root, branch: resolveBranchForCwd(path), commonDir: resolveGitDirForConfig(path) }
       },
-      sessionRepoRoot: resolveRepoRootForCwd(cwd),
-      isLinkedWorktree: (path) => resolveLinkedWorktreeMainCheckout(path) !== null,
+      protectedBranches: SHARED_BRANCH_NAMES,
     })
   } catch {
     return false
@@ -2066,7 +2092,7 @@ async function main(): Promise<void> {
   // or Jev call: Jev reads every path pseudonymised and cannot see that a
   // scratchpad is temporary. src/core/contained_effect.ts fails closed on
   // anything it cannot resolve from the text and the filesystem.
-  if (!mentionOnly && commandIsContained(command, cwd)) {
+  if (commandIsContained(command, cwd)) {
     appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'contained', null)
     emit('allow', t('reason.contained'))
     return
@@ -2124,13 +2150,15 @@ async function main(): Promise<void> {
   // command writes in (after `cd`, `git -C`, a write's own target) and at
   // every push destination, implicit ones included; a place whose branch
   // cannot be known keeps the policy, a place outside any repository has
-  // no branch to protect.
-  const pushes = mentionOnly || !/\bpush\b/.test(inspected) ? [] : pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
-  const reachBranches = mentionOnly ? [] : branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) === null ? [] : [resolveBranchForCwd(place)]))
+  // no branch to protect. Read even for a command whose verbs only print
+  // (mentionOnly): `echo x > notes.md` on main still writes main.
+  const pushes = !/\bpush\b/.test(inspected) ? [] : pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
+  const namesProtected = namesProtectedBranch(inspected, SHARED_BRANCH_NAMES)
+  const reachBranches = branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) === null ? [] : [resolveBranchForCwd(place)]))
   const scopedPolicies = filterPoliciesForBranchReach(
     filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID),
     SEED_SCOPE_BY_ID,
-    { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected: !mentionOnly && namesProtectedBranch(inspected, SHARED_BRANCH_NAMES), protectedBranches: SHARED_BRANCH_NAMES },
+    { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected, protectedBranches: SHARED_BRANCH_NAMES },
   )
 
   // 0.6.8 T3: a requires_human policy protects work that reaches a client,
@@ -2173,6 +2201,17 @@ async function main(): Promise<void> {
   //     askJev: the risk axes never decide for a qualifying command, but the
   //     policy coverage question still does (see decisions.ts's
   //     decideGateAction and its own `localAllowQualifies` option).
+  // 0.6.28 T6: plain file writes and local git in the session's own working
+  // tree on a working branch -- the effect of Claude Code's own Edit and
+  // Write tools, which never reach this gate -- are allowed here, like
+  // Option D below: only when no command-scoped policy survives (after T1's
+  // branch reach) and nothing in the text names a shared branch.
+  if (commandScopedPolicies.length === 0 && !namesProtected && commandIsOwnTreeWork(command, cwd)) {
+    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'own-tree', null, teamInternal)
+    emit('allow', t('reason.ownTree'))
+    return
+  }
+
   const localGitAllow: LocalGitAllowResult = mentionOnly ? { qualifies: false } : qualifiesForLocalGitAllow({ command, cwd })
   if (localGitAllow.qualifies && commandScopedPolicies.length === 0) {
     appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'local-allow', null, teamInternal)

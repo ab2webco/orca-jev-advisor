@@ -355,6 +355,21 @@ test("an allow with stopReason 'contained' round-trips -- a temp-root-only comma
   assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
 });
 
+test("an allow with stopReason 'own-tree' round-trips -- local work in the own working tree is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-own-tree",
+    at: "2026-10-07T00:00:00.000Z",
+    project: null,
+    command: "git add -A && git commit -qm x",
+    source: "local-rule",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "own-tree",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
 test("an 'advise' verdict round-trips and is never dropped as an unrecognised verdict", () => {
   const record = buildGateDecisionRecord({
     id: "sr-advise",

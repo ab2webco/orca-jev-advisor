@@ -3756,12 +3756,13 @@ function seedBothPolicySets (home, command, repo) {
   }))
 }
 
-test('T1: git add on a working branch is never judged against never_write_to_main', () => {
+test('T1: a write on a working branch is never judged against never_write_to_main', () => {
+  // (`git add x` itself is now allowed before this stage by T6's own-tree layer.)
   const home = makeHome()
   const repo = repoNamedBranch('feat/x')
   writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
-  seedBothPolicySets(home, 'git add x', repo)
-  const payload = JSON.parse(run(home, 'git add x', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  seedBothPolicySets(home, 'some-unmeasured-tool --write x', repo)
+  const payload = JSON.parse(run(home, 'some-unmeasured-tool --write x', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
   assert.match(payload.systemMessage ?? '', /judged with no branch policy/)
 })
 
@@ -3878,4 +3879,63 @@ test('T1 fix: on main, a guarded delete that also discards its output still goes
   const repo = repoNamedBranch('main')
   writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
   assertNotAllowedByOwnBranchPush(home, 'git branch -d feat/old 2>/dev/null', repo)
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T6: plain local work in the session's own working tree, on a working
+// branch, is allowed locally (stopReason `own-tree`) when no command-scoped
+// policy survives -- the same effect as Claude Code's Edit and Write tools.
+// ---------------------------------------------------------------------------
+
+const OWN_TREE_REASON_TEXT = 'only edits files or runs local git in your own working tree, on a working branch'
+
+function ownTreeRepo (branch) {
+  const repo = repoNamedBranch(branch)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  return repo
+}
+
+test('T6: a heredoc into a source file on a working branch is allowed locally', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  const payload = JSON.parse(run(home, "cat > src/a.ts <<'EOF'\nexport const a = 1\nEOF", { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, OWN_TREE_REASON_TEXT)
+  assert.equal(lastGateRecord(home).stopReason, 'own-tree')
+  assert.equal(lastGateRecord(home).source, 'local-rule')
+})
+
+test('T6: add and commit on a working branch under never_write_to_main are allowed locally', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  const payload = JSON.parse(run(home, 'git add -A && git commit -qm "chore: x"', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'own-tree')
+})
+
+test('T6: the same work on main is never allowed as own-tree work', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, 'git add -A && git commit -qm "chore: x"', { cwd: repo })
+  run(home, "cat > src/a.ts <<'EOF'\nx\nEOF", { cwd: repo })
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
+})
+
+test('T6: a command-scoped policy that survives sends own-tree work on to the policy stage', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
+  run(home, 'git add -A && git commit -qm "chore: x"', { cwd: repo })
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
+})
+
+test('T1 fix: on main, a write through a print verb (read as a mention) is still judged against never_write_to_main', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  seedBothPolicySets(home, 'echo x > notes.md', repo)
+  const payload = JSON.parse(run(home, 'echo x > notes.md', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.match(payload.systemMessage ?? '', /judged with never_write_to_main/)
 })

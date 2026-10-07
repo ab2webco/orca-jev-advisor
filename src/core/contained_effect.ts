@@ -34,6 +34,9 @@
 // The Bash tool runs the owner's shell, zsh as often as bash, so zsh's own
 // expansions fail closed too: `$S:h` and `$S[1]`, `=cmd`, `>!`, and a
 // relative `cd` (cdpath).
+// 0.6.28 T6: the same reading also answers isOwnTreeWork -- plain file writes
+// and local git in the session's own working tree on a working branch (see
+// that function), where the temp roots alone answer isContainedToTempRoots.
 // Which segments run is followed through `&&`, `||` and `;` the way the
 // shell runs them, so `cd /tmp/x; rm -rf src` (a failed cd deletes the
 // project's src) is not contained while `cd /tmp/x && rm -rf src` is.
@@ -54,6 +57,25 @@ export interface ContainedEffectInput {
   readonly sessionRepoRoot: string | null;
   /** Whether a real path sits in a linked worktree: real work, never contained. */
   readonly isLinkedWorktree: (path: string) => boolean;
+}
+
+/**
+ * 0.6.28 T6: one repository working tree as the hook reads it: its root, its
+ * current branch (null when detached or unknown) and the git directory it
+ * shares with its linked worktrees.
+ */
+export interface OwnTree {
+  readonly root: string;
+  readonly branch: string | null;
+  readonly commonDir: string | null;
+}
+
+/** 0.6.28 T6: what isOwnTreeWork needs beyond the temp reading. */
+export interface OwnTreeInput {
+  /** The working tree a path sits in, or null outside any repository. */
+  readonly treeOf: (path: string) => OwnTree | null;
+  /** Branch names, lower case, that are never an own tree (client_reach.ts's SHARED_BRANCH_NAMES). */
+  readonly protectedBranches: ReadonlySet<string>;
 }
 
 /** The variables a command may use without assigning them first. */
@@ -534,6 +556,10 @@ interface Places {
   readonly links: string[];
   /** Copy and move destinations made earlier: nothing under them is known. */
   readonly copies: string[];
+  /** 0.6.28 T6: set only by isOwnTreeWork; null reads temp roots alone. */
+  readonly ownTrees: OwnTreeInput | null;
+  /** The session's own tree, its root and common directory realpath'd, when its branch is an own one. */
+  readonly sessionTree: OwnTree | null;
 }
 
 /** The real location of `path`: realpath of its deepest existing part, the rest appended. */
@@ -559,20 +585,82 @@ function absolutePath(text: string, cwd: string): string | null {
   return withoutTrailingSlash(posix.normalize(posix.isAbsolute(text) ? text : posix.join(cwd, text)));
 }
 
+/** Whether `path` (or its real location) sits at or under a symlink, or under a copy, made earlier in this command. */
+function madeEarlier(path: string, real: string, places: Places): boolean {
+  for (const link of places.links) if (link === path || link === real || isUnder(path, link) || isUnder(real, link)) return true;
+  for (const copy of places.copies) if (isUnder(path, copy) || isUnder(real, copy)) return true;
+  return false;
+}
+
 /** Whether `text`, from `cwd`, is a path strictly inside a temp root and nothing this layer protects. */
 function isContainedPath(text: string, cwd: string, places: Places): boolean {
   const path = absolutePath(text, cwd);
   if (path === null) return false;
   const real = realLocation(path, places.input.realpath);
   if (real === null) return false;
-  for (const link of places.links) if (link === path || link === real || isUnder(path, link) || isUnder(real, link)) return false;
-  for (const copy of places.copies) if (isUnder(path, copy) || isUnder(real, copy)) return false;
+  if (madeEarlier(path, real, places)) return false;
   if (!places.roots.some((root) => isUnder(real, root))) return false;
   // A root nested in another (TMPDIR in /var/folders) is never a target either.
   if (places.roots.some((root) => root === real || isUnder(root, real))) return false;
   if (places.guards.some((guard) => guard === real || isUnder(guard, real))) return false;
   if (places.sessionRepo !== null && isUnder(real, places.sessionRepo)) return false;
   return !places.input.isLinkedWorktree(real);
+}
+
+/** A tree whose branch is known and not shared, with its root and common directory realpath'd; null otherwise. */
+function ownBranchTree(tree: OwnTree | null, places: Places): OwnTree | null {
+  const own = places.ownTrees;
+  if (tree === null || own === null || tree.branch === null || own.protectedBranches.has(tree.branch.toLowerCase())) return null;
+  const root = realLocation(tree.root, places.input.realpath);
+  if (root === null) return null;
+  const commonDir = tree.commonDir === null ? null : realLocation(tree.commonDir, places.input.realpath);
+  return { root, branch: tree.branch, commonDir };
+}
+
+/**
+ * 0.6.28 T6: the own tree a real path sits in, when the command may write
+ * there: the session's tree, a linked worktree of the same repository, or
+ * the tree the command itself runs in (`cd`, `git -C`), each on a known,
+ * non-shared branch. Null for any other repository.
+ */
+function writableTreeAt(real: string, cwd: string, places: Places): OwnTree | null {
+  const own = places.ownTrees;
+  if (own === null) return null;
+  const tree = ownBranchTree(own.treeOf(real), places);
+  if (tree === null) return null;
+  const session = places.sessionTree;
+  if (session !== null && (tree.root === session.root || (tree.commonDir !== null && tree.commonDir === session.commonDir))) return tree;
+  const acting = realLocation(cwd, places.input.realpath);
+  const actingTree = acting === null ? null : ownBranchTree(own.treeOf(acting), places);
+  return actingTree !== null && actingTree.root === tree.root ? tree : null;
+}
+
+/**
+ * 0.6.28 T6: whether `text`, from `cwd`, is a file or directory strictly
+ * inside an own working tree -- never the tree's root, never its `.git`,
+ * never through a symlink or a `..` that leaves it (the written path and its
+ * real location must be in the same tree), never home or the session's
+ * directory itself.
+ */
+function isOwnTreePath(text: string, cwd: string, places: Places): boolean {
+  const own = places.ownTrees;
+  if (own === null) return false;
+  const path = absolutePath(text, cwd);
+  if (path === null) return false;
+  const real = realLocation(path, places.input.realpath);
+  if (real === null || madeEarlier(path, real, places)) return false;
+  const tree = writableTreeAt(real, cwd, places);
+  if (tree === null || !isUnder(real, tree.root)) return false;
+  const written = own.treeOf(path);
+  if (written === null || realLocation(written.root, places.input.realpath) !== tree.root) return false;
+  const gitDir = `${tree.root}/.git`;
+  if (real === gitDir || isUnder(real, gitDir)) return false;
+  return !places.guards.some((guard) => guard !== tree.root && (guard === real || isUnder(guard, real)));
+}
+
+/** A path this command may write: inside a temp root, or (isOwnTreeWork only) inside an own working tree. */
+function isWritablePath(text: string, cwd: string, places: Places): boolean {
+  return isContainedPath(text, cwd, places) || isOwnTreePath(text, cwd, places);
 }
 
 /** `rm`'s one accepted glob: a final `*` in a directory strictly inside a temp root. */
@@ -616,7 +704,7 @@ function allOptions(options: readonly string[], allowed: RegExp): boolean {
 }
 
 function operandsContained(operands: readonly Expanded[], cwd: string, places: Places): boolean {
-  return operands.every((operand) => operand.glob === "none" && isContainedPath(operand.text, cwd, places));
+  return operands.every((operand) => operand.glob === "none" && isWritablePath(operand.text, cwd, places));
 }
 
 /** Programs whose output is only the text they were given or a temp file's content. */
@@ -625,16 +713,27 @@ const DATA_PRODUCERS: ReadonlySet<string> = new Set(["echo", "printf", "cat", "t
 /** Programs that read stdin into what they write: their pipe input must be data too. */
 const STDIN_WRITERS: ReadonlySet<string> = new Set(["cat", "tee"]);
 
-const WRITERS: ReadonlySet<string> = new Set(["rm", "mkdir", "touch", "cp", "mv", "ln", "cat", "echo", "printf", "tee", "git"]);
+const WRITERS: ReadonlySet<string> = new Set(["rm", "mkdir", "touch", "cp", "mv", "ln", "cat", "echo", "printf", "tee", "git", "sed"]);
 
 /** Whether `program` with `args`, run from `cwd`, writes only inside the temp roots. */
 function writerContained(program: string, args: readonly Expanded[], cwd: string, places: Places): boolean {
   if (program === "echo" || program === "printf") return true;
-  if (program === "git") return gitInitContained(args, cwd, places);
+  if (program === "git") return args[0]?.text === "init" ? gitInitContained(args, cwd, places) : localGitContained(args, cwd, places);
+  if (program === "sed") return sedInPlaceContained(args, cwd, places);
   const { options, operands } = splitOptions(args);
   switch (program) {
-    case "rm":
-      return operands.length > 0 && operands.every((operand) => (operand.glob === "star" ? isContainedGlob(operand.text, cwd, places) : operand.glob === "none" && isContainedPath(operand.text, cwd, places)));
+    case "rm": {
+      // In an own tree only files: no -r, no glob (T6).
+      const filesOnly = allOptions(options, /^-[fv]+$/);
+      return (
+        operands.length > 0 &&
+        operands.every((operand) =>
+          operand.glob === "star"
+            ? isContainedGlob(operand.text, cwd, places)
+            : operand.glob === "none" && (isContainedPath(operand.text, cwd, places) || (filesOnly && isOwnTreePath(operand.text, cwd, places))),
+        )
+      );
+    }
     case "mkdir":
       return mkdirContained(args, cwd, places);
     case "touch":
@@ -655,7 +754,7 @@ function writerContained(program: string, args: readonly Expanded[], cwd: string
       if (!allOptions(options, /^-[sfnv]+$/) || !options.some((option) => option.includes("s"))) return false;
       const link = operands[1];
       if (operands.length !== 2 || link === undefined || link.glob !== "none" || operands[0]?.glob !== "none") return false;
-      if (!isContainedPath(link.text, cwd, places)) return false;
+      if (!isWritablePath(link.text, cwd, places)) return false;
       rememberPath(link.text, cwd, places, places.links);
       return true;
     }
@@ -692,13 +791,142 @@ function gitInitContained(args: readonly Expanded[], cwd: string, places: Places
   return dir === undefined ? isContainedPath(cwd, cwd, places) : dir.glob === "none" && isContainedPath(dir.text, cwd, places);
 }
 
+/**
+ * 0.6.28 T6: a sed script made only of `s` commands, each with an optional
+ * address (`N`, `$`, `/re/`, a range), whose flags only choose which match
+ * and how (`g`, `p`, `i`/`I`, `m`/`M`, a number). GNU sed's `e` flag and
+ * command run a shell, `w` writes another file and `r`/`R` read one into
+ * this one, so a script with any of them, or anything else, is not read.
+ * The existing sed reading (git_discard.ts's scriptProgramCodePosition) finds
+ * where the script is, not what it may do, so this is its own small reader.
+ */
+function isSubstitutionOnlySedScript(script: string): boolean {
+  let index = 0;
+  const skipAddress = (): boolean => {
+    for (let part = 0; part < 2; part += 1) {
+      if (/\d/.test(script[index] ?? "")) while (/\d/.test(script[index] ?? "")) index += 1;
+      else if (script[index] === "$") index += 1;
+      else if (script[index] === "/") {
+        index += 1;
+        while (index < script.length && script[index] !== "/") index += script[index] === "\\" ? 2 : 1;
+        if (script[index] !== "/") return false;
+        index += 1;
+        if (script[index] === "I") index += 1;
+      } else if (part === 1) return false;
+      if (part === 0 && script[index] === ",") index += 1;
+      else break;
+    }
+    return true;
+  };
+  let commands = 0;
+  while (index < script.length) {
+    while (/[\s;]/.test(script[index] ?? "")) index += 1;
+    if (index >= script.length) break;
+    if (!skipAddress()) return false;
+    while (script[index] === " ") index += 1;
+    if (script[index] !== "s") return false;
+    const delimiter = script[index + 1] ?? "";
+    if (delimiter === "" || delimiter === "\\" || delimiter === "\n" || /\s/.test(delimiter)) return false;
+    index += 2;
+    for (let part = 0; part < 2; part += 1) {
+      while (index < script.length && script[index] !== delimiter) index += script[index] === "\\" ? 2 : 1;
+      if (script[index] !== delimiter) return false;
+      index += 1;
+    }
+    while (/[gpiImM0-9]/.test(script[index] ?? "")) index += 1;
+    commands += 1;
+    if (index < script.length && !/[\s;]/.test(script[index] ?? "")) return false;
+  }
+  return commands > 0;
+}
+
+/** `sed -i[suffix] [-i ''] [-E|-r] [-e script]... [script] file...`, every file writable and every script substitution-only. */
+function sedInPlaceContained(args: readonly Expanded[], cwd: string, places: Places): boolean {
+  const scripts: string[] = [];
+  const files: Expanded[] = [];
+  let inPlace = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? { text: "", glob: "none" };
+    const text = arg.text;
+    if (text === "-i" || text === "--in-place") {
+      inPlace = true;
+      // BSD sed's suffix is its own word, empty for none: `-i ''`.
+      if (args[index + 1]?.text === "") index += 1;
+    } else if (/^-i[\w.~-]+$/.test(text) || text.startsWith("--in-place=")) inPlace = true;
+    else if (text === "-E" || text === "-r" || text === "--regexp-extended") continue;
+    else if (text === "-e" || text === "--expression") {
+      scripts.push(args[index + 1]?.text ?? "");
+      index += 1;
+    } else if (text.startsWith("-")) return false;
+    else if (scripts.length === 0 && files.length === 0 && !args.slice(0, index).some((a) => a.text === "-e" || a.text === "--expression")) scripts.push(text);
+    else files.push(arg);
+  }
+  return inPlace && scripts.length > 0 && scripts.every(isSubstitutionOnlySedScript) && files.length > 0 && operandsContained(files, cwd, places);
+}
+
+/** A branch name a local git command may create or switch to: plain, and not a shared one. */
+function isOwnBranchName(name: string, places: Places): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) || name.includes("..")) return false;
+  const shared = places.ownTrees?.protectedBranches ?? new Set<string>();
+  const last = name.slice(name.lastIndexOf("/") + 1);
+  return !shared.has(name.toLowerCase()) && !shared.has(last.toLowerCase());
+}
+
+/**
+ * 0.6.28 T6: git that only changes the own tree's index, its branch list or
+ * its own history on a working branch: `add`, `commit` (never
+ * `--no-verify`/`-n`), `checkout -b`, `switch -c`/`switch <name>`, `stash`
+ * (`push`/`save`), `restore --staged`. Only `-C <dir>` may come before the
+ * subcommand. Never anything that discards work, rewrites history from
+ * elsewhere, pushes, or names a shared branch.
+ */
+function localGitContained(args: readonly Expanded[], cwd: string, places: Places): boolean {
+  if (places.ownTrees === null || args.some((arg) => arg.glob === "other")) return false;
+  let at = 0;
+  let dir = cwd;
+  if (args[0]?.text === "-C") {
+    const named = absolutePath(args[1]?.text ?? "", cwd);
+    if (named === null) return false;
+    dir = named;
+    at = 2;
+  }
+  const realDir = realLocation(dir, places.input.realpath);
+  if (realDir === null) return false;
+  const tree = writableTreeAt(realDir, dir, places);
+  if (tree === null || realDir === `${tree.root}/.git` || isUnder(realDir, `${tree.root}/.git`)) return false;
+  const subcommand = args[at]?.text ?? "";
+  const rest = args.slice(at + 1).map((arg) => arg.text);
+  const quiet = (word: string): boolean => word === "-q" || word === "--quiet";
+  switch (subcommand) {
+    case "add":
+      return true;
+    case "commit":
+      return !rest.some((word) => word === "--no-verify" || /^-[A-Za-z]*n[A-Za-z]*$/.test(word));
+    case "checkout": {
+      const words = rest.filter((word) => !quiet(word));
+      return words[0] === "-b" && (words.length === 2 || words.length === 3) && words.slice(1).every((name) => isOwnBranchName(name, places));
+    }
+    case "switch": {
+      const words = rest.filter((word) => !quiet(word));
+      if (words[0] === "-c") return (words.length === 2 || words.length === 3) && words.slice(1).every((name) => isOwnBranchName(name, places));
+      return words.length === 1 && isOwnBranchName(words[0] ?? "", places);
+    }
+    case "stash":
+      return rest.length === 0 || rest[0] === "push" || rest[0] === "save";
+    case "restore":
+      return rest.some((word) => word === "--staged" || word === "-S") && !rest.some((word) => word === "--worktree" || /^-[A-Za-z]*W/.test(word));
+    default:
+      return false;
+  }
+}
+
 function redirectsContained(segment: Segment, state: State, places: Places): boolean {
   for (const redirect of segment.redirects) {
     if (redirect.kind === "dup") continue;
     const target = expandWord(redirect.target, state.vars, places.input.env, true);
     if (target === null || target.glob !== "none") return false;
     if (redirect.kind === "out" && target.text === "/dev/null") continue;
-    if (!isContainedPath(target.text, state.cwd, places)) return false;
+    if (!isWritablePath(target.text, state.cwd, places)) return false;
   }
   return true;
 }
@@ -761,7 +989,9 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
     ];
   }
 
-  if (!WRITERS.has(program) || (program === "git" && args[0]?.text !== "init")) {
+  const readOnlyGit = program === "git" && args[0]?.text !== "init" && places.ownTrees === null;
+  const readOnlySed = program === "sed" && !args.some((arg) => arg.text === "-i" || arg.text.startsWith("-i") || arg.text.startsWith("--in-place"));
+  if (!WRITERS.has(program) || readOnlyGit || readOnlySed) {
     return segment.heredoc === null && isSafeSegment(segment.raw) ? [any] : null;
   }
   if (segment.heredoc !== null && (!STDIN_WRITERS.has(program) || !heredocIsData(segment.heredoc))) return null;
@@ -770,7 +1000,9 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
   const readsPipe = piped && segment.heredoc === null && (program === "tee" || (program === "cat" && splitOptions(args).operands.length === 0));
   if (readsPipe && !upstreamIsData) return null;
   if (!redirectsContained(segment, state, places)) return null;
-  return writerContained(program, args, state.cwd, places) ? [any] : null;
+  if (writerContained(program, args, state.cwd, places)) return [any];
+  // A read-only git command beside own-tree work (`git status`) is still safe.
+  return program === "git" && segment.heredoc === null && isSafeSegment(segment.raw) ? [any] : null;
 }
 
 function isLiteral(word: Word, text: string): boolean {
@@ -819,6 +1051,23 @@ function runPipeline(stages: readonly Segment[], state: State, places: Places): 
  * shell could run it -- see the module note for what fails closed.
  */
 export function isContainedToTempRoots(command: string, input: ContainedEffectInput): boolean {
+  return effectStaysInside(command, input, null);
+}
+
+/**
+ * 0.6.28 T6: true only when every segment of `command` is obviously safe,
+ * contained to a temp root, or plain local work in an own working tree: a
+ * file write (the temp writers plus a substitution-only `sed -i`; `rm` of
+ * files only), or local git (localGitContained). An own tree is the
+ * session's repository, a linked worktree of it, or the tree a `cd`/`git -C`
+ * runs in, on a known branch that is not shared -- the same effect as
+ * Claude Code's own Edit and Write tools, which the gate never sees.
+ */
+export function isOwnTreeWork(command: string, input: ContainedEffectInput, ownTrees: OwnTreeInput): boolean {
+  return effectStaysInside(command, input, ownTrees);
+}
+
+function effectStaysInside(command: string, input: ContainedEffectInput, ownTrees: OwnTreeInput | null): boolean {
   const segments = readSegments(command);
   if (segments === null || segments.length === 0) return false;
 
@@ -830,9 +1079,11 @@ export function isContainedToTempRoots(command: string, input: ContainedEffectIn
   const roots = input.tempRoots
     .map((root) => input.realpath(root))
     .filter((root): root is string => root !== null && root !== "/" && root !== home && !isUnder(home, root));
-  if (roots.length === 0) return false;
+  if (roots.length === 0 && ownTrees === null) return false;
   const sessionRepo = input.sessionRepoRoot === null ? null : realLocation(input.sessionRepoRoot, input.realpath);
-  const places: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [] };
+  const places: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [], ownTrees, sessionTree: null };
+  const sessionTree = ownTrees === null ? null : ownBranchTree(ownTrees.treeOf(cwd), places);
+  const evaluated: Places = { ...places, sessionTree };
 
   let states: State[] = [{ cwd: input.cwd, status: "any", vars: new Map() }];
   for (const stages of pipelines(segments)) {
@@ -843,7 +1094,7 @@ export function isContainedToTempRoots(command: string, input: ContainedEffectIn
       if (joiner === "&&" && state.status !== "ok") next.push({ ...state, status: "fail" });
       if (joiner === "||" && state.status !== "fail") next.push({ ...state, status: "ok" });
       if (!runs) continue;
-      const after = runPipeline(stages, state, places);
+      const after = runPipeline(stages, state, evaluated);
       if (after === null) return false;
       next.push(...after);
     }
