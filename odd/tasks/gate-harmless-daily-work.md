@@ -46,7 +46,7 @@ Deterministic layers decide before Jev, so Jev's noise cannot reach harmless wor
 - `ssh`/`scp` and interpreter heredocs stay with Jev.
 
 ## Checklist
-- [ ] T1 `protected-branch` policy scope; seed `never_write_to_main` uses it; hook passes the resolved branches
+- [x] T1 `protected-branch` policy scope; seed `never_write_to_main` uses it (seed version 5); hook passes the resolved branches. Commit 2c6305d. `filterPoliciesForBranchReach` (decisions.ts) keeps the policy when any branch the command writes on (acting_location.ts places after `cd`/`git -C`/a write target, plus every push destination, implicit ones included) is protected (client_reach.ts `SHARED_BRANCH_NAMES`: main, master, production, develop, staging), unknown or detached, or the text names one (`branch_reach.ts`: whole word, refspec side, `origin/main`; any non-safe `gh` counts). A place outside any repository has no branch and drops out. RED: 3 unit (2 files on missing exports, the seed scope) and 2 of 5 subprocess (`git add` and `git branch -d` on `feat/x`); GREEN: 238/238 unit across decisions, policy_seed, branch_reach, client_reach, acting_location, seed import, fingerprint; 5/5 subprocess; gate-bash.test.mjs and main.test.mjs 489/489. Typecheck 0.
 - [ ] T2 contained-effect layer (temp roots, assignment expansion, fail-closed)
 - [ ] T3 wider read-only segments
 - [ ] T4 `git -C <dir> push` own branch
