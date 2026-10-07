@@ -65,7 +65,7 @@ import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, writ
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
@@ -90,7 +90,8 @@ import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cro
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
 import { parseGitConfigRemotes } from '../../src/core/push_remote.ts'
-import { classifyClientReach } from '../../src/core/client_reach.ts'
+import { SHARED_BRANCH_NAMES, classifyClientReach } from '../../src/core/client_reach.ts'
+import { branchReachPlaces, namesProtectedBranch } from '../../src/core/branch_reach.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
 import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
@@ -2075,7 +2076,20 @@ async function main(): Promise<void> {
       : null
   const matchedDestination = catalogMatch?.destination ?? null
   const policiesMirror = readPoliciesMirror()
-  const scopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+  // 0.6.28 T1: a `protected-branch` policy (never_write_to_main) is judged
+  // only when the command can reach a protected branch -- see
+  // filterPoliciesForBranchReach. The branch is read at every place the
+  // command writes in (after `cd`, `git -C`, a write's own target) and at
+  // every push destination, implicit ones included; a place whose branch
+  // cannot be known keeps the policy, a place outside any repository has
+  // no branch to protect.
+  const pushes = mentionOnly || !/\bpush\b/.test(inspected) ? [] : pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
+  const reachBranches = mentionOnly ? [] : branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) === null ? [] : [resolveBranchForCwd(place)]))
+  const scopedPolicies = filterPoliciesForBranchReach(
+    filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID),
+    SEED_SCOPE_BY_ID,
+    { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected: !mentionOnly && namesProtectedBranch(inspected, SHARED_BRANCH_NAMES), protectedBranches: SHARED_BRANCH_NAMES },
+  )
 
   // 0.6.8 T3: a requires_human policy protects work that reaches a client,
   // and Jev, asked from the sentence alone, also asked about work that never
@@ -2167,7 +2181,7 @@ async function main(): Promise<void> {
   const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
   const jevNames = createJevPseudonyms()
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
-  const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head })), jevNames)
+  const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushes, jevNames)
   // 0.6.17 T1 (JEVADV-93): a `gh` merge says what it goes through -- a pull
   // request's review, or none for an API branch merge -- so a reviewed merge
   // is not judged by the checkout's branch. Jev's copy only, like the push.

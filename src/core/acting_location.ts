@@ -13,13 +13,14 @@ import { gitInvocation, locateCommandSegments } from "./command_locations.ts";
 import { resolveCommandTargetDirs } from "./command_targets.ts";
 import { isObviouslySafeCommand } from "./gate_safe_command.ts";
 
-interface ActingPlace {
+export interface ActingPlace {
   readonly path: string | null;
   /** A file the command writes, rather than the directory a part runs in. */
   readonly isFile: boolean;
 }
 
-function actingPlaces(command: string, cwd: string, home: string): readonly ActingPlace[] {
+/** Exported for branch_reach.ts (0.6.28 T1): the branch a command can write on is read at these same places. */
+export function actingPlaces(command: string, cwd: string, home: string): readonly ActingPlace[] {
   const places: ActingPlace[] = [];
   for (const { outer, dir } of locateCommandSegments(command, cwd, home)) {
     if (isObviouslySafeCommand(outer)) continue;

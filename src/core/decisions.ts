@@ -84,8 +84,13 @@ export type PolicyKind = "permits" | "requires_human" | "prohibits";
  * (odd/tasks/release-0.5.1.md, JEVADV-34). See filterPoliciesForCommandScope
  * below for where this stops a `"process"` or `"local-rule"` policy from
  * ever reaching the coverage question at all.
+ *
+ * 0.6.28 T1: `"protected-branch"` is a command policy that is judged only
+ * when the command can reach a protected branch (never_write_to_main). Asked
+ * about every command, Jev refused `git add` on a working branch under it;
+ * see filterPoliciesForBranchReach below.
  */
-export type PolicyScope = "command" | "process" | "local-rule";
+export type PolicyScope = "command" | "process" | "local-rule" | "protected-branch";
 
 export interface Policy {
   readonly id: string;
@@ -453,9 +458,9 @@ export function filterPoliciesForDestination(policies: readonly Policy[], destin
  *  a "must be one of: ..." error message -- derives that
  *  list from here too, instead of a fifth hardcoded copy drifting out of
  *  sync with this one. */
-export const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule"]);
+export const POLICY_SCOPE_VALUES: ReadonlySet<PolicyScope> = new Set<PolicyScope>(["command", "process", "local-rule", "protected-branch"]);
 
-/** Whether `value` is one of PolicyScope's three real members -- the single
+/** Whether `value` is one of PolicyScope's real members -- the single
  *  guard every reader of a raw, possibly-mistyped `scope` field should call,
  *  instead of each keeping its own copy of the member list. */
 export function isPolicyScope(value: unknown): value is PolicyScope {
@@ -513,7 +518,40 @@ export function resolvePolicyScope(policy: Pick<Policy, "id" | "scope">, seedSco
  * this stage ever runs (odd/tasks/release-0.5.1.md, JEVADV-34).
  */
 export function filterPoliciesForCommandScope(policies: readonly Policy[], seedScopeById: ReadonlyMap<string, PolicyScope>): readonly Policy[] {
-  return policies.filter((policy) => resolvePolicyScope(policy, seedScopeById) === "command");
+  return policies.filter((policy) => {
+    const scope = resolvePolicyScope(policy, seedScopeById);
+    return scope === "command" || scope === "protected-branch";
+  });
+}
+
+/** What a command can reach, as filterPoliciesForBranchReach reads it. */
+export interface BranchReach {
+  /**
+   * The branch of every place the command writes in (acting directory,
+   * target directories, push destinations); null where it cannot be known
+   * or HEAD is detached. A place outside any repository has no branch and
+   * is left out by the caller.
+   */
+  readonly branches: readonly (string | null)[];
+  /** Whether the command text names a protected branch (src/core/branch_reach.ts). */
+  readonly namesProtected: boolean;
+  /** The protected branch names, lower case (client_reach.ts's SHARED_BRANCH_NAMES). */
+  readonly protectedBranches: ReadonlySet<string>;
+}
+
+/**
+ * 0.6.28 T1: drops every `"protected-branch"` policy when the command
+ * cannot reach a protected branch; every other policy is returned as it is.
+ * It can reach one when any branch it writes on is protected, unknown or
+ * detached (fail closed), or when its text names one (`git push origin
+ * main`, `HEAD:main`, `checkout main`). On a working branch, with nothing
+ * protected named, never_write_to_main is never asked: the local push rules
+ * still refuse a push to a protected branch before this stage.
+ */
+export function filterPoliciesForBranchReach(policies: readonly Policy[], seedScopeById: ReadonlyMap<string, PolicyScope>, reach: BranchReach): readonly Policy[] {
+  const reaches = reach.namesProtected || reach.branches.some((branch) => branch === null || reach.protectedBranches.has(branch.toLowerCase()));
+  if (reaches) return policies;
+  return policies.filter((policy) => resolvePolicyScope(policy, seedScopeById) !== "protected-branch");
 }
 
 /**

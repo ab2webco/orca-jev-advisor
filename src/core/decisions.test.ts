@@ -22,6 +22,7 @@ import {
   CONSEQUENCE_NOISE_MARGIN,
   decideAction,
   decideGateAction,
+  filterPoliciesForBranchReach,
   filterPoliciesForCommandScope,
   filterPoliciesForDestination,
   GATE_CONSEQUENCE_CEILING,
@@ -262,6 +263,53 @@ test("filterPoliciesForCommandScope: an explicit 'command' scope keeps a policy 
     filtered.map((p) => p.id),
     ["visual_evidence"],
   );
+});
+
+// ===========================================================================
+// 0.6.28 T1: the `protected-branch` scope. never_write_to_main used to be
+// offered to Jev for every command, so `git add` on a working branch was
+// refused under it. Such a policy is judged only when the command can reach
+// a protected branch; on a working branch it is never asked.
+// ===========================================================================
+
+const PROTECTED: ReadonlySet<string> = new Set(["main", "master", "production", "develop", "staging"]);
+const neverWriteToMain: Policy = { id: "never_write_to_main", rule: "Never write directly on main.", kind: "prohibits" };
+const branchScoped = seedScope({ never_write_to_main: "protected-branch" });
+
+test("isPolicyScope: 'protected-branch' is a real scope, so the seed keeps it", () => {
+  assert.equal(isPolicyScope("protected-branch"), true);
+});
+
+test("filterPoliciesForCommandScope: a 'protected-branch' policy is still one a command can be judged against", () => {
+  assert.deepEqual(filterPoliciesForCommandScope([neverWriteToMain], branchScoped).map((p) => p.id), ["never_write_to_main"]);
+});
+
+test("filterPoliciesForBranchReach: on a working branch, a protected-branch policy is dropped", () => {
+  const kept = filterPoliciesForBranchReach([neverWriteToMain], branchScoped, { branches: ["feat/x"], namesProtected: false, protectedBranches: PROTECTED });
+  assert.deepEqual(kept, []);
+});
+
+test("filterPoliciesForBranchReach: on main, or develop in any target, it is kept", () => {
+  assert.equal(filterPoliciesForBranchReach([neverWriteToMain], branchScoped, { branches: ["main"], namesProtected: false, protectedBranches: PROTECTED }).length, 1);
+  assert.equal(filterPoliciesForBranchReach([neverWriteToMain], branchScoped, { branches: ["feat/x", "develop"], namesProtected: false, protectedBranches: PROTECTED }).length, 1);
+});
+
+test("filterPoliciesForBranchReach: an unknown or detached branch keeps it (fail closed)", () => {
+  assert.equal(filterPoliciesForBranchReach([neverWriteToMain], branchScoped, { branches: ["feat/x", null], namesProtected: false, protectedBranches: PROTECTED }).length, 1);
+});
+
+test("filterPoliciesForBranchReach: a command naming a protected branch keeps it, even from a working branch", () => {
+  assert.equal(filterPoliciesForBranchReach([neverWriteToMain], branchScoped, { branches: ["feat/x"], namesProtected: true, protectedBranches: PROTECTED }).length, 1);
+});
+
+test("filterPoliciesForBranchReach: a command that writes nowhere and names nothing drops it", () => {
+  assert.deepEqual(filterPoliciesForBranchReach([neverWriteToMain], branchScoped, { branches: [], namesProtected: false, protectedBranches: PROTECTED }), []);
+});
+
+test("filterPoliciesForBranchReach: policies of any other scope are never touched", () => {
+  const ownBranch: Policy = { id: "own_branch", rule: "work goes on a feature branch", kind: "permits" };
+  const kept = filterPoliciesForBranchReach([ownBranch, neverWriteToMain], branchScoped, { branches: ["feat/x"], namesProtected: false, protectedBranches: PROTECTED });
+  assert.deepEqual(kept.map((p) => p.id), ["own_branch"]);
 });
 
 test("filterPoliciesForCommandScope: with no seed index and no explicit scope, every policy keeps today's behavior (all 'command')", () => {

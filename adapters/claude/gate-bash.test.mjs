@@ -20,7 +20,8 @@ import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
 import { commandShape } from '../../src/core/command_shape.ts'
-import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
+import { GATE_DECISION_RULES_VERSION, buildSeedScopeIndex } from '../../src/core/decisions.ts'
+import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey } from '../../src/core/gate_advice_retry.ts'
 import { gateDecisionFileName, gateDecisionFilesToRead } from '../../src/core/measurement_files.ts'
@@ -3715,4 +3716,77 @@ test('T1c: a merge with -R naming this repository passes on its authorization; -
   seedAdvice(home, repo, [here, elsewhere])
   assert.equal(JSON.parse(run(home, here, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-repo-here' })).hookSpecificOutput.permissionDecision, 'allow')
   assert.equal(JSON.parse(run(home, elsewhere, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-repo-else' })).hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T1: never_write_to_main is a `protected-branch` policy. It is offered
+// to Jev only when the command can reach a protected branch: the branch it
+// acts on is protected, unknown or detached, or the text names one. The
+// owner, 2026-10-07: `git add` on a working branch was refused under it.
+// Observed through the verdict cache: one entry under the key with no
+// policies, one under the key with the policy, and the hook serves the one
+// whose policy set it really judged against.
+// ---------------------------------------------------------------------------
+
+const SHIPPED_SEED_SCOPES = buildSeedScopeIndex(parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8'))))
+const NEVER_WRITE_TO_MAIN = { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main, master or develop.' }
+
+/** A real repository whose only branch is `branch`, whatever git's own default name is. */
+function repoNamedBranch (branch) {
+  const root = join(realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-branch-reach-'))), 'repo')
+  initRepo(root)
+  git(['branch', '-M', branch], root)
+  return root
+}
+
+function seedBothPolicySets (home, command, repo) {
+  const repoContext = computeRepoContextForTest(repo)
+  const without = computeCacheKey(command, repo, home, { repoContext })
+  const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [NEVER_WRITE_TO_MAIN], seedScopeById: SHIPPED_SEED_SCOPES })
+  assert.notEqual(without, withPolicy)
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({
+    [without]: { decision: 'ask', reason: 'judged with no branch policy', at: Date.now() - 1000 },
+    [withPolicy]: { decision: 'ask', reason: 'judged with never_write_to_main', at: Date.now() - 1000 },
+  }))
+}
+
+test('T1: git add on a working branch is never judged against never_write_to_main', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  seedBothPolicySets(home, 'git add x', repo)
+  const payload = JSON.parse(run(home, 'git add x', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.match(payload.systemMessage ?? '', /judged with no branch policy/)
+})
+
+test('T1: git add on main is still judged against never_write_to_main', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  seedBothPolicySets(home, 'git add x', repo)
+  const payload = JSON.parse(run(home, 'git add x', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.match(payload.systemMessage ?? '', /judged with never_write_to_main/)
+})
+
+test('T1: a guarded delete on a working branch is allowed locally once never_write_to_main no longer applies', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertAllowedByOwnBranchPush(home, 'git branch -d feat/old', repo, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test('T1: the same guarded delete on main still goes to the policy stage', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertNotAllowedByOwnBranchPush(home, 'git branch -d feat/old', repo)
+})
+
+test('T1: a push naming develop from a working branch is never allowed locally', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertNotAllowedByOwnBranchPush(home, 'git push origin develop', repo)
 })

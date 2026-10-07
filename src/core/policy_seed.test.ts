@@ -171,6 +171,15 @@ test("the shipped seed marks exactly the two local-rule policies -- odd/tasks/re
   assert.deepEqual(localRuleScoped, ["discard_uncommitted_work", "no_force_push"]);
 });
 
+test("0.6.28 T1: the shipped seed marks exactly never_write_to_main as protected-branch", () => {
+  // Judged only when the command can reach main, master or develop: on a
+  // working branch `git add` was refused under it (the owner, 2026-10-07).
+  const branchScoped = parseSeedPolicies(seedFile)
+    .filter((row) => row.scope === "protected-branch")
+    .map((row) => row.id);
+  assert.deepEqual(branchScoped, ["never_write_to_main"]);
+});
+
 test("the shipped seed marks exactly the five process policies -- odd/tasks/release-0.5.1.md T2", () => {
   // Pinned by name, same loud-failure discipline as the prohibits count
   // below: these five describe how the agent works or what it claims, not
@@ -224,7 +233,7 @@ function sortKeysDeep(value: unknown): unknown {
  *  loudly here instead of silently reaching an install that will never know
  *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
  *  which decides `due` from `version` alone and never looks at content. */
-const PINNED_DIGEST = "d259cd9989f4487be6e2dc315ad64ff76f5e0bcbddec257cfce328990acfe3a9";
+const PINNED_DIGEST = "6d2acb3e92ecc21e105a53a920dc3a01673165a34f787d434a68b47e34f3b24d";
 
 test("editing a shipped policy row without bumping the seed version fails loudly", () => {
   // Pinned together on purpose: a row edit changes the digest, and the
@@ -243,7 +252,7 @@ test("editing a shipped policy row without bumping the seed version fails loudly
   );
   assert.equal(
     parseSeedVersion(seedFile),
-    4,
+    5,
     'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
       "PINNED_DIGEST once the rows for that release are final).",
   );
