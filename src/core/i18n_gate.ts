@@ -49,6 +49,7 @@ export type GateKey =
   | "reason.noDestinationMatched"
   | "reason.ownBranchPush"
   | "reason.guardedGitDelete"
+  | "reason.contained"
   | "effect.namedFiles"
   | "effect.deploy"
   | "effect.publish"
@@ -156,6 +157,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.noDestinationMatched": "este directorio no corresponde a ningún destino del catálogo, así que se usaron los umbrales globales",
     "reason.ownBranchPush": "sube tu propia rama, sin force y sin tocar ramas compartidas",
     "reason.guardedGitDelete": "solo usa borrados que git mismo protege: se niega si hay trabajo sin guardar o sin integrar",
+    "reason.contained": "solo escribe o borra dentro de un directorio temporal",
     // 0.5.2's own concrete-effect line (gate_person_effect.ts), in priority
     // order: named files first, then deploy/publish, then leaves-this-
     // machine, then cannot-undo, then the always-available others-notice
@@ -228,6 +230,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.noDestinationMatched": "this directory doesn't match any catalog destination, so the global thresholds were used",
     "reason.ownBranchPush": "pushes your own branch, with no force and no shared branch",
     "reason.guardedGitDelete": "only uses deletes git itself guards: it refuses when there is unsaved or unmerged work",
+    "reason.contained": "only writes or deletes inside a temporary directory",
     "effect.namedFiles": "deletes unsaved work: {{files}}",
     "effect.deploy": "triggers a deploy",
     "effect.publish": "publishes a package",

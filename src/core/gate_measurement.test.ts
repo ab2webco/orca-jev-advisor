@@ -340,6 +340,21 @@ test("an allow with stopReason 'authorized' round-trips -- a remembered delivery
   assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
 });
 
+test("an allow with stopReason 'contained' round-trips -- a temp-root-only command is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-contained",
+    at: "2026-10-07T00:00:00.000Z",
+    project: null,
+    command: "rm -rf /tmp/scratch/out",
+    source: "local-rule",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "contained",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
 test("an 'advise' verdict round-trips and is never dropped as an unrecognised verdict", () => {
   const record = buildGateDecisionRecord({
     id: "sr-advise",

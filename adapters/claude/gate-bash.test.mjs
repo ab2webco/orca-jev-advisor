@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -52,10 +52,14 @@ const MIDDLE_TIER_COMMAND = 'some-unmeasured-tool --flag'
  *  lets a test reach past the no-key path into the cache; GIT_CEILING_
  *  DIRECTORIES keeps `git` from walking up past the throwaway home even if
  *  the OS temp dir ever ends up nested under a real repository. */
-function run (home, command, { cwd, apiKey, sessionId } = {}) {
+function run (home, command, { cwd, apiKey, sessionId, extraEnv = {} } = {}) {
   const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home }
   delete env.XDG_CACHE_HOME
   delete env.XDG_CONFIG_HOME
+  // 0.6.28 T2: the developer's own Claude temp root is never one of the
+  // hook's temp roots under test; a test that needs one passes it.
+  delete env.CLAUDE_CODE_TMPDIR
+  Object.assign(env, extraEnv)
   // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute
   // a real path at all under node's test runner (see its module doc) --
   // this points them at exactly the directories they would have computed
@@ -3789,4 +3793,62 @@ test('T1: a push naming develop from a working branch is never allowed locally',
   const repo = repoNamedBranch('feat/x')
   writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
   assertNotAllowedByOwnBranchPush(home, 'git push origin develop', repo)
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T2: a command whose only effect is inside a temp root is allowed
+// locally (stopReason `contained`), after the local deny rules and before
+// any policy or Jev. The test's Claude temp root is its own directory, never
+// the developer's; the throwaway HOME sits in the OS temp directory, so that
+// root holds home and is never a temp root here.
+// ---------------------------------------------------------------------------
+
+const CONTAINED_REASON_TEXT = 'only writes or deletes inside a temporary directory'
+
+function claudeScratchpad () {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-contained-')))
+  const scratchpad = join(base, `claude-${process.getuid()}`, 'project', 'session', 'scratchpad')
+  mkdirSync(scratchpad, { recursive: true })
+  return { base, scratchpad }
+}
+
+test('T2: rm -rf inside the Claude scratchpad is allowed locally, with no Jev call', () => {
+  const home = makeHome()
+  const { base, scratchpad } = claudeScratchpad()
+  const payload = JSON.parse(run(home, `rm -rf ${scratchpad}/out`, { extraEnv: { CLAUDE_CODE_TMPDIR: base } }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, CONTAINED_REASON_TEXT)
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].source, 'local-rule')
+  assert.equal(records[0].stopReason, 'contained')
+})
+
+test('T2: a scratch repository rebuilt through one assignment is allowed locally', () => {
+  const home = makeHome()
+  const { base, scratchpad } = claudeScratchpad()
+  const command = `S=${scratchpad}/repo; rm -rf $S && mkdir -p $S && cd $S && git init -q`
+  const payload = JSON.parse(run(home, command, { extraEnv: { CLAUDE_CODE_TMPDIR: base } }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'contained')
+})
+
+test('T2: rm -rf of home is still refused by the local deny rule, never allowed as contained', () => {
+  const home = makeHome()
+  const { base } = claudeScratchpad()
+  const payload = JSON.parse(run(home, 'rm -rf ~', { extraEnv: { CLAUDE_CODE_TMPDIR: base } }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'contained'), false)
+})
+
+test('T2: a delete outside the temp roots, or through a symlink that leaves them, is never contained', () => {
+  const home = makeHome()
+  const { base, scratchpad } = claudeScratchpad()
+  mkdirSync(join(home, 'project'), { recursive: true })
+  symlinkSync(home, join(scratchpad, 'home-link'))
+  for (const command of [`rm -rf ${join(home, 'project')}`, `rm -rf ${scratchpad}/home-link/project`, `rm -rf ${scratchpad}/../../x`, 'rm -rf $UNSET/x']) {
+    run(home, command, { extraEnv: { CLAUDE_CODE_TMPDIR: base } })
+    assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'contained'), false, command)
+  }
+  assert.ok(existsSync(join(home, 'project')), 'the hook only judges; nothing is deleted')
 })

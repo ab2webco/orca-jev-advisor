@@ -62,7 +62,7 @@
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
@@ -82,7 +82,8 @@ import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
-import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { isContainedToTempRoots, tempRootsFromEnvironment } from '../../src/core/contained_effect.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
 import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
@@ -1898,6 +1899,35 @@ function gateOwnFileWritten(command: string, cwd: string): string | null {
   }
 }
 
+/**
+ * 0.6.28 T2: whether `command`, run from `cwd`, only writes or deletes inside
+ * a temp root -- the roots named by this process's environment
+ * (tempRootsFromEnvironment), never a path hardcoded per machine. A
+ * Windows host is never read: the check speaks POSIX paths only.
+ */
+function commandIsContained(command: string, cwd: string): boolean {
+  if (PLATFORM === 'win32') return false
+  try {
+    const env: Readonly<Record<string, string | undefined>> = process.env
+    return isContainedToTempRoots(command, {
+      tempRoots: tempRootsFromEnvironment(env, tmpdir(), process.getuid?.() ?? null),
+      cwd,
+      env,
+      realpath: (path) => {
+        try {
+          return realpathSync(path)
+        } catch {
+          return null
+        }
+      },
+      sessionRepoRoot: resolveRepoRootForCwd(cwd),
+      isLinkedWorktree: (path) => resolveLinkedWorktreeMainCheckout(path) !== null,
+    })
+  } catch {
+    return false
+  }
+}
+
 async function main(): Promise<void> {
   const input = readHookInput()
   if (input === null) passThrough()
@@ -2027,6 +2057,18 @@ async function main(): Promise<void> {
       segment: matchedSegmentForRule(inspected, cwd, why === 'rule.resetClean' ? resetCleanSpelling : evaluate),
       source: 'local-rule', stopReason: 'local-rule',
     })
+    return
+  }
+
+  // 0.6.28 T2: a command whose only effect is inside a temp root (Claude's
+  // scratchpad, /tmp, $TMPDIR) is allowed here, after the local deny rules
+  // above (`rm -rf ~` is still refused by them) and before any policy, cache
+  // or Jev call: Jev reads every path pseudonymised and cannot see that a
+  // scratchpad is temporary. src/core/contained_effect.ts fails closed on
+  // anything it cannot resolve from the text and the filesystem.
+  if (!mentionOnly && commandIsContained(command, cwd)) {
+    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'contained', null)
+    emit('allow', t('reason.contained'))
     return
   }
 

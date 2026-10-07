@@ -83,6 +83,10 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    every class this repository already confirmed
  *                    (src/core/gate_authorizations.ts); the verdict is
  *                    "allow" and the advice reached the model as context.
+ *   "contained"   -- 0.6.28 T2: every segment is obviously safe or writes and
+ *                    deletes only inside a temp root
+ *                    (src/core/contained_effect.ts); allowed locally after
+ *                    the local deny rules, with no policy, cache or Jev.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -100,7 +104,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
 export type GateFailure = JevFailure | { readonly kind: "oversized" };
 export type GateFailureClass = GateFailure["kind"];
 
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -407,7 +411,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "cache" ||
     value === "advice-retry" ||
     value === "queue" ||
-    value === "authorized"
+    value === "authorized" ||
+    value === "contained"
   );
 }
 
