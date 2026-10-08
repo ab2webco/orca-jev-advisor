@@ -2,6 +2,41 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.28
+
+- **`never_write_to_main` is judged only where a protected branch can be reached.**
+  - New policy scope `protected-branch` (seed version 5).
+  - `filterPoliciesForBranchReach` (`src/core/decisions.ts`, `src/core/branch_reach.ts`) keeps the policy only when one of these holds:
+    - any branch the command writes on (acting directory, `cd`/`git -C`, write targets, push destinations) is shared (`SHARED_BRANCH_NAMES`), unknown or detached;
+    - the text names a shared branch;
+    - a branch-selecting git command names a branch the text cannot spell.
+  - A git segment always counts its own directory.
+- **Contained effect** (`src/core/contained_effect.ts`, stopReason `contained`).
+  - A line whose every segment is obviously safe, or writes or deletes only inside temp roots, is allowed locally. It runs after the deny tier and before policies, the cache and Jev.
+  - Temp roots come from the environment: `os.tmpdir()`, `$TMPDIR`, `/tmp`, `/private/tmp`, `/var/folders` and `$CLAUDE_CODE_TMPDIR/claude-<uid>`.
+  - It has a quote-aware reader that expands assignments and fails closed on:
+    - zsh modifiers, `=word`, `>!` and a relative `cd`;
+    - shell-steering names such as `IFS`, `PATH`, `HOME` and `GIT_*`;
+    - symlinks, `..`, home, the session repository and linked worktrees.
+- **Own working tree** (stopReason `own-tree`).
+  - On a known, non-shared branch, file writes, substitution-only `sed -i`, file `rm` and local git (`add`, `commit` without `--no-verify`, `checkout -b`, `switch`, `stash`, `restore --staged`) inside the session's repository or a worktree of it skip the risk axes.
+  - As with Option D, a command-scoped policy is still asked through Jev, and the verdict is cached per shape.
+- **Wider tier 1a:**
+  - `set -e/-u/-x/-o pipefail`, `sleep`, `true`, `false`, `test`/`[`, `printf`, `sort` (no `-o`), `uniq`, `diff`, `du`, `df`, `stat`, `file` (no `-C`), `basename`, `dirname`, `realpath`, `tr` and `cut`;
+  - `git -C <dir>` with a read-only verb;
+  - `graft ask|grep|skeleton|callers|map`.
+- **`git -C <dir> push <remote> <branch>`** qualifies for the local git allow, with an explicit, unprotected, plain refspec only.
+- **Remembered delivery authorizations** (`src/core/delivery_class.ts`, `src/core/gate_authorizations.ts`, stopReason `authorized`).
+  - An advised line confirmed by an unchanged retry records its delivery classes for the repository, keyed by normalized origin, for 30 days: `push-branch`, `pr-create`, `pr-merge`, `pr-update` and `release-create`.
+  - Later risk advice on a fully authorized line becomes an allow.
+  - The Rules tab lists them and can forget each one.
+- **Trusted programs** (`src/core/trusted_programs.ts`, stopReason `trusted`).
+  - A person-edited list in the Rules tab, mirrored to the hook. Shells, interpreters and general tools are refused.
+  - The command word must resolve to a real file of that name, outside temp roots and writable trees.
+  - It is never trusted when the same line could plant or redirect it.
+  - `$(cat f)` is read up to 4 KB from regular files only, and never as an argument.
+- Qualifying own-tree and trusted lines cache their policy verdict under their own key.
+
 ## 0.6.27
 
 - **The context steward's saving is verified against real usage.**

@@ -16,6 +16,30 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.28
+
+The command gate now stops what can really affect something, not everyday project work. On the author's machine it advised about 9% of commands, roughly 250 a day. Many of those were Jev's risk score landing near its line on work that cannot hurt anyone, and some were refusals of `git add` on a working branch under *never write to main*. New layers decide before Jev is asked, and none of them can let through what the deny tier stops.
+
+- **Never write to main is asked only where main can be reached.** The policy now has a `protected-branch` scope, and Jev is asked about it only when the command can reach a protected branch:
+  - the branch the command works on is main, master, develop, production or staging;
+  - the branch is unknown or detached;
+  - or the command text names one of them.
+  
+  On a working branch it is not asked, so `git add`, `git commit` and a read like `graft skeleton` are no longer refused under it.
+- **Temporary folders.** A command that only writes or deletes inside temp folders is allowed without asking Jev. The temp folders are `$TMPDIR`, `/tmp`, `/var/folders` and Claude's own scratchpad root under `$CLAUDE_CODE_TMPDIR`. Variables assigned earlier in the same command are followed. The command is refused on anything that cannot be resolved: an unset variable, `$(...)`, `..`, a symlink that leaves the folder, zsh modifiers like `$S:h`, or a temp folder that holds your home.
+- **Your own working tree.** On a working branch, writing files in your repository or one of its worktrees skips the risk score. This covers `cat > file <<'EOF'`, `sed -i` with substitutions only, `mkdir`, `touch`, `cp`, `mv` and `rm` of single files. Local git skips it too: `add`, `commit`, `checkout -b`, `switch` and `stash`. It is the same effect as Claude Code's own Edit and Write tools. A team policy can still stop it.
+- **More read-only commands:**
+  - shell and text tools: `set -e`/`pipefail`, `sleep`, `test`, `printf`, `sort`, `uniq`, `diff`, `du` and `df`;
+  - `git -C <dir>` with a read verb;
+  - graft's read commands.
+- **`git -C <dir> push origin <branch>`** of your own branch now qualifies like `cd <dir> && git push`. The destination comes from the explicit branch name, never from what the branch tracks.
+- **Remembered delivery authorizations.** When the agent confirms a pushed branch, a pull request, a merge or a release once in a repository, the gate remembers it for 30 days, for every worktree of that repository. The panel's Rules tab lists them and can forget each one. A policy still decides when one applies.
+- **Trusted programs.** In Rules, you can list programs of your own that you trust, such as a notifier. Lines made only of them, plus read-only, temp or own-tree work, skip the risk score. A shell, an interpreter or a general tool cannot be added. A program that the same line could have planted or redirected is never trusted. Nothing is learned automatically.
+
+Measured offline on 834 real advised commands from three days: 132 now pass these layers without Jev. The rest mostly have a real effect outside the machine, such as messages to other people, ssh, `gh` delivery (which passes once remembered) or interpreter code. A set of 29 commands that must still stop all still stop: force push, push to main, `rm -rf ~`, a `..` escape, symlinks out of tmp, a planted program, and secrets in arguments.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.6.27
 
 The context steward's saving is now measured, not estimated. The Consumption tab used to show how much context each compaction removed, using the size Claude Code reports right after compacting. That figure leaves out the system prompt and tools that load again, so the real drop is about 84% of it, and the panel never added anything up.
