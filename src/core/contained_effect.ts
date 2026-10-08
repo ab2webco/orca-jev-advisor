@@ -144,7 +144,11 @@ type WordPart =
   | { readonly kind: "status" }
   // 0.6.28 T7: `$(cat <file>)`, the one substitution read: only ever an
   // assignment's value, resolved through ContainedEffectInput.readFirstLine.
-  | { readonly kind: "cat"; readonly file: Word };
+  | { readonly kind: "cat"; readonly file: Word }
+  // 0.6.28 pre-release A: `$(<command> <args>)` with no pipe, no redirect
+  // but `2>/dev/null` and no substitution inside -- only ever an
+  // assignment's whole value, read only when it runs one trusted program.
+  | { readonly kind: "sub"; readonly words: readonly Word[] };
 
 type Word = readonly WordPart[];
 
@@ -196,6 +200,8 @@ class Reader {
   private start = -1;
   private end = -1;
   private depth = 0;
+  /** Inside a `$(...)`: a second one inside it is never read. */
+  private inSubstitution = false;
   /** A `}` was just read: the next joiner joins the whole group. */
   private closedGroup = false;
 
@@ -502,7 +508,7 @@ class Reader {
       this.index += 2;
       return { kind: "status" };
     }
-    if (next === "(") return this.readCatSubstitution();
+    if (next === "(") return this.readSubstitution();
     if (next === "{") {
       const close = text.indexOf("}", this.index + 2);
       if (close === -1) unreadable();
@@ -522,20 +528,37 @@ class Reader {
     return { kind: "var", name, quote };
   }
 
-  /** 0.6.28 T7: `$(cat <one word>)`, spaces allowed inside the parentheses; any other substitution is not read. */
-  private readCatSubstitution(): WordPart {
+  /**
+   * `$(cat <one word>)` (0.6.28 T7), or `$(<command> <words>)` (pre-release
+   * A), each with an optional `2>/dev/null`. No pipe, no other redirect, no
+   * second substitution inside: anything else is not read.
+   */
+  private readSubstitution(): WordPart {
     const { text } = this;
+    if (this.inSubstitution) unreadable();
+    this.inSubstitution = true;
     this.index += 2;
-    while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
-    if (text.slice(this.index, this.index + 3) !== "cat" || !/[ \t]/.test(text[this.index + 3] ?? "")) unreadable();
-    this.index += 3;
-    while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
-    const file = this.readWord();
-    if (file.length === 0) unreadable();
-    while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
-    if (text[this.index] !== ")") unreadable();
+    const words: Word[] = [];
+    for (;;) {
+      while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
+      if (this.index >= text.length) unreadable();
+      if (text[this.index] === ")") break;
+      if (text.startsWith("2>/dev/null", this.index) && /^(?:[ \t)]|$)/.test(text[this.index + 11] ?? "")) {
+        this.index += 11;
+        continue;
+      }
+      const word = this.readWord();
+      if (word.length === 0 || !/^[ \t)]$/.test(text[this.index] ?? "")) unreadable();
+      words.push(word);
+    }
     this.index += 1;
-    return { kind: "cat", file };
+    this.inSubstitution = false;
+    if (words.length === 0) unreadable();
+    const first = words[0];
+    if (words.length === 2 && first !== undefined && first.length === 1 && first[0]?.kind === "text" && first[0].quote === "none" && first[0].text === "cat") {
+      return { kind: "cat", file: words[1] ?? [] };
+    }
+    return { kind: "sub", words };
   }
 }
 
@@ -563,8 +586,10 @@ interface State {
   readonly cwd: string;
   readonly status: "ok" | "fail" | "any";
   readonly vars: ReadonlyMap<string, string>;
-  /** 0.6.28 T7: variables whose value was read from a file (`$(cat f)`). */
+  /** 0.6.28 T7: variables whose value was read from a file (`$(cat f)`), or printed by a trusted program. */
   readonly derived: ReadonlySet<string>;
+  /** Pre-release A: the derived variables a trusted program printed -- arguments of a later trusted program, nothing else. */
+  readonly trustedValues: ReadonlySet<string>;
 }
 
 /** How a word may be expanded (0.6.28 T7). */
@@ -577,6 +602,8 @@ interface ExpandOptions {
   readonly readFirstLine?: (path: string) => string | null;
   /** Whether a file may be read for a value: nothing earlier in the line can have written it. */
   readonly readableFile?: (path: string) => boolean;
+  /** Pre-release A: whether a `$(<command> ...)` runs exactly one trusted program; only an assignment's value passes it. */
+  readonly runsTrusted?: (words: readonly Word[]) => boolean;
 }
 
 function variableValue(name: string, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>): string | null {
@@ -591,11 +618,20 @@ function expandWord(word: Word, vars: ReadonlyMap<string, string>, env: Readonly
 }
 
 /** expandWord, and whether the result came from a file (a `$(cat f)` or a variable read from one). */
-function expandWordDerived(word: Word, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>, splits: boolean, options: ExpandOptions): { readonly expanded: Expanded; readonly derived: boolean } | null {
+function expandWordDerived(word: Word, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>, splits: boolean, options: ExpandOptions): { readonly expanded: Expanded; readonly derived: boolean; readonly trustedValue: boolean } | null {
+  // Pre-release A: a trusted program's output is a value nobody can read
+  // here; it is the whole word or nothing (`X="$(acme-scope owner)"`).
+  const substitution = word.find((part) => part.kind === "sub");
+  if (substitution !== undefined) {
+    const alone = word.every((part) => part === substitution || (part.kind === "text" && part.text.length === 0));
+    if (!alone || substitution.kind !== "sub" || options.runsTrusted?.(substitution.words) !== true) return null;
+    return { expanded: { text: "", glob: "none" }, derived: true, trustedValue: true };
+  }
   let text = "";
   let glob: Glob = "none";
   let derived = false;
   for (const part of word) {
+    if (part.kind === "sub") return null;
     if (part.kind === "status") {
       text += "0";
     } else if (part.kind === "cat") {
@@ -628,7 +664,7 @@ function expandWordDerived(word: Word, vars: ReadonlyMap<string, string>, env: R
       text += part.text;
     }
   }
-  return { expanded: { text, glob }, derived };
+  return { expanded: { text, glob }, derived, trustedValue: false };
 }
 
 function isAssignment(word: Word): boolean {
@@ -637,24 +673,26 @@ function isAssignment(word: Word): boolean {
 }
 
 /** `NAME=value` as the shell assigns it: no splitting, no globbing. A value read from a file marks the name as derived. */
-function assign(word: Word, vars: Map<string, string>, derived: Set<string>, env: Readonly<Record<string, string | undefined>>, readFirstLine: ((path: string) => string | null) | undefined, readableFile: (path: string) => boolean): boolean {
+function assign(word: Word, vars: Map<string, string>, derived: Set<string>, trustedValues: Set<string>, env: Readonly<Record<string, string | undefined>>, options: ExpandOptions): boolean {
   const first = word[0];
   if (first === undefined || first.kind !== "text") return false;
   const equals = first.text.indexOf("=");
   const name = first.text.slice(0, equals);
   if (STEERING_NAMES.has(name) || STEERING_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
   const rest: WordPart[] = [{ kind: "text", text: first.text.slice(equals + 1), quote: "none" }, ...word.slice(1)];
-  const value = expandWordDerived(rest, vars, env, false, { derived, allowDerived: true, readFirstLine, readableFile });
+  const value = expandWordDerived(rest, vars, env, false, { ...options, derived, allowDerived: true });
   if (value === null) return false;
   vars.set(name, value.expanded.text);
   if (value.derived) derived.add(name);
   else derived.delete(name);
+  if (value.trustedValue) trustedValues.add(name);
+  else trustedValues.delete(name);
   return true;
 }
 
-/** Whether a word holds a `$(cat f)` or uses a variable read from a file. */
+/** Whether a word holds a substitution or uses a variable read from a file (or printed by a program). */
 function usesFileValue(word: Word, derived: ReadonlySet<string>): boolean {
-  return word.some((part) => part.kind === "cat" || (part.kind === "var" && derived.has(part.name)));
+  return word.some((part) => part.kind === "cat" || part.kind === "sub" || (part.kind === "var" && derived.has(part.name)));
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1194,8 @@ function trustedSegment(segment: Segment, words: readonly Word[], state: State, 
   if (trusted === null || commandWord === undefined) return null;
   const name = trustedCandidate(commandWord, trusted.names);
   if (name === null) return null;
+  // A program's printed output is never where a program lives.
+  if (commandWord.some((part) => part.kind === "var" && state.trustedValues.has(part.name))) return null;
   const word = expandWord(commandWord, state.vars, places.input.env, true, { derived: state.derived, allowDerived: true });
   if (word === null || word.glob !== "none") return null;
   const located = word.text.includes("/") ? absolutePath(word.text, state.cwd) : whichTrusted(word.text, state.cwd, places);
@@ -1165,7 +1205,9 @@ function trustedSegment(segment: Segment, words: readonly Word[], state: State, 
   if (madeEarlier(located, real, places)) return null;
   if (places.roots.some((root) => root === real || isUnder(real, root))) return null;
   if (places.ownTrees !== null && writableTreeAt(real, state.cwd, places) !== null) return null;
-  if (words.slice(1).some((arg) => usesFileValue(arg, state.derived))) return null;
+  // A value a trusted program printed may be handed on; one read from a file may not.
+  const fileValues = new Set([...state.derived].filter((name) => !state.trustedValues.has(name)));
+  if (words.slice(1).some((arg) => usesFileValue(arg, fileValues))) return null;
   if (segment.heredoc !== null && !heredocIsData(segment.heredoc)) return null;
   if (piped && !upstreamIsData) return null;
   for (const redirect of segment.redirects) {
@@ -1176,6 +1218,24 @@ function trustedSegment(segment: Segment, words: readonly Word[], state: State, 
   }
   if (!places.trustedRan.includes(name)) places.trustedRan.push(name);
   return [{ ...state, status: "any" }];
+}
+
+/**
+ * Pre-release A: whether `$(<words>)` runs exactly one trusted program whose
+ * arguments are literal text, `$?`, or variables assigned earlier in the line
+ * (a trusted program's output included, never a value read from a file).
+ */
+function runsOneTrustedProgram(words: readonly Word[], state: State, places: Places): boolean {
+  if (places.trusted === null) return false;
+  for (const arg of words.slice(1)) {
+    for (const part of arg) {
+      if (part.kind === "text" || part.kind === "status") continue;
+      if (part.kind !== "var" || !state.vars.has(part.name)) return false;
+      if (state.derived.has(part.name) && !state.trustedValues.has(part.name)) return false;
+    }
+  }
+  const segment: Segment = { joiner: null, raw: "", words, redirects: [], heredoc: null };
+  return trustedSegment(segment, words, state, places, false, false) !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1205,6 +1265,16 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
     if (piped || segment.redirects.length > 0 || segment.heredoc !== null) return null;
     const vars = new Map(state.vars);
     const derived = new Set(state.derived);
+    const trustedValues = new Set(state.trustedValues);
+    let ranProgram = false;
+    const options: ExpandOptions = {
+      readFirstLine: places.input.readFirstLine,
+      readableFile: (path) => isStableFile(path, state.cwd, places),
+      runsTrusted: (inner) => {
+        ranProgram = true;
+        return runsOneTrustedProgram(inner, { ...state, vars, derived, trustedValues }, places);
+      },
+    };
     for (const word of assignments) {
       if (!isAssignment(word)) {
         // `export NAME` exports what is already set; a bare command after
@@ -1212,9 +1282,10 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
         if (exported && word.length === 1 && word[0]?.kind === "text" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word[0].text)) continue;
         return null;
       }
-      if (!assign(word, vars, derived, env, places.input.readFirstLine, (path) => isStableFile(path, state.cwd, places))) return null;
+      if (!assign(word, vars, derived, trustedValues, env, options)) return null;
     }
-    return [{ cwd: state.cwd, status: "ok", vars, derived }];
+    // A program's output may fail, and `|| exit $?` reads that status.
+    return [{ cwd: state.cwd, status: ranProgram ? "any" : "ok", vars, derived, trustedValues }];
   }
 
   const any: State = { ...state, status: "any" };
@@ -1285,7 +1356,7 @@ function isLiteral(word: Word, text: string): boolean {
 }
 
 function stateKey(state: State): string {
-  return JSON.stringify([state.cwd, state.status, [...state.vars].sort(), [...state.derived].sort()]);
+  return JSON.stringify([state.cwd, state.status, [...state.vars].sort(), [...state.derived].sort(), [...state.trustedValues].sort()]);
 }
 
 function dedupe(states: readonly State[]): State[] {
@@ -1421,5 +1492,5 @@ function effectStaysInside(command: string, input: ContainedEffectInput, ownTree
   const base: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [], ownTrees, sessionTree: null, trusted, trustedRan: [], harnessDirs };
   const places: Places = { ...base, sessionTree: ownTrees === null ? null : ownBranchTree(ownTrees.treeOf(cwd), base) };
 
-  return runItems(list, [{ cwd: input.cwd, status: "any", vars: new Map(), derived: new Set() }], places) === null ? null : places.trustedRan;
+  return runItems(list, [{ cwd: input.cwd, status: "any", vars: new Map(), derived: new Set(), trustedValues: new Set() }], places) === null ? null : places.trustedRan;
 }

