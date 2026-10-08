@@ -61,7 +61,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { accessSync, appendFileSync, constants as fsConstants, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1342,13 +1342,30 @@ function readTrustedProgramsMirror(): readonly string[] {
   }
 }
 
-/** The first line of a small file, for a `X="$(cat f)"` assignment (0.6.28 T7); null when it cannot be read. */
+/** The most of a file a `$(cat f)` value is read from: a path, not a document. */
+const FIRST_LINE_MAX_BYTES = 4096
+
+/**
+ * The first line of a small regular file, for a `X="$(cat f)"` assignment
+ * (0.6.28 T7); null when it cannot be read. Never more than
+ * FIRST_LINE_MAX_BYTES, and never a device, a FIFO or a directory:
+ * `$(cat /dev/zero)` or a FIFO would otherwise stall or exhaust the hook,
+ * which fails open when it is killed.
+ */
 function readFirstLineOf(path: string): string | null {
+  let fd: number | null = null
   try {
-    const line = readFileSync(path, 'utf8').slice(0, 4096).split('\n')[0]?.trim() ?? ''
+    const stat = statSync(path)
+    if (!stat.isFile() || stat.size > FIRST_LINE_MAX_BYTES) return null
+    fd = openSync(path, 'r')
+    const buffer = Buffer.alloc(FIRST_LINE_MAX_BYTES)
+    const read = readSync(fd, buffer, 0, FIRST_LINE_MAX_BYTES, 0)
+    const line = buffer.subarray(0, read).toString('utf8').split('\n')[0]?.trim() ?? ''
     return line.length > 0 ? line : null
   } catch {
     return null
+  } finally {
+    if (fd !== null) closeSync(fd)
   }
 }
 

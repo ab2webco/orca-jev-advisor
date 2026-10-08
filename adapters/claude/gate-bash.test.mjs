@@ -4013,3 +4013,22 @@ test('T7: with no list, nothing is trusted', () => {
   run(home, `${program} hi`)
   assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false)
 })
+
+test('T7 fix: a value read from an endless file never stalls the hook', () => {
+  const home = makeHome()
+  const started = Date.now()
+  const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home, ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor'), ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor'), ORCA_USER_DATA_PATH: join(home, 'orca-userdata-does-not-exist') }
+  delete env.TYPESAFE_API_KEY
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], { env, input: JSON.stringify({ tool_input: { command: 'X="$(cat /dev/zero)"; some-unmeasured-tool --flag' }, cwd: home, tool_use_id: 't7-zero' }), encoding: 'utf8', timeout: 20000 })
+  assert.equal(result.signal, null, 'the hook must not be killed by the timeout')
+  assert.ok(Date.now() - started < 20000)
+})
+
+test('T7 fix: with the shipped seed and no key, a trusted line is never allowed locally', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-notify'])
+  writePoliciesMirror(home, parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8'))))
+  run(home, `${program} hi`)
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false)
+})
