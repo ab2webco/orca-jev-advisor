@@ -4146,3 +4146,17 @@ test("pre-release A: the owner's notify line, with both programs trusted, is all
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
   assert.equal(lastGateRecord(home).stopReason, 'trusted')
 })
+
+test("T7 fix: a session in a plugin workspace reads the tools' directory from a file named relative to it", () => {
+  const home = makeHome()
+  const scope = installProgram(home, 'acme-scope')
+  installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-scope', 'acme-notify'])
+  const workspace = join(home, 'workspace')
+  mkdirSync(workspace, { recursive: true })
+  writeFileSync(join(workspace, '.acme-bin'), `${dirname(scope)}\n`)
+  const command = 'WA="$(cat .acme-bin)"; "$WA/acme-scope" lock --note triage; echo "lock=$?"; echo; "$WA/acme-notify" hi 2>&1 | head -c 6000'
+  const payload = JSON.parse(run(home, command, { cwd: workspace }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'trusted')
+})

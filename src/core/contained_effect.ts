@@ -600,8 +600,12 @@ interface ExpandOptions {
   readonly allowDerived?: boolean;
   /** Resolves `$(cat f)`; only an assignment's value passes it. */
   readonly readFirstLine?: (path: string) => string | null;
-  /** Whether a file may be read for a value: nothing earlier in the line can have written it. */
-  readonly readableFile?: (path: string) => boolean;
+  /**
+   * The absolute path of a file that may be read for a value -- named
+   * absolutely or relative to the directory the shell is in at that point --
+   * when nothing earlier in the line can have written it; null otherwise.
+   */
+  readonly stableFile?: (path: string) => string | null;
   /** Pre-release A: whether a `$(<command> ...)` runs exactly one trusted program; only an assignment's value passes it. */
   readonly runsTrusted?: (words: readonly Word[]) => boolean;
 }
@@ -638,8 +642,9 @@ function expandWordDerived(word: Word, vars: ReadonlyMap<string, string>, env: R
       const read = options.readFirstLine;
       if (read === undefined) return null;
       const file = expandWord(part.file, vars, env, false, { derived: options.derived });
-      if (file === null || !posix.isAbsolute(file.text) || options.readableFile?.(file.text) !== true) return null;
-      const line = read(file.text);
+      const path = file === null ? null : options.stableFile?.(file.text) ?? null;
+      if (path === null) return null;
+      const line = read(path);
       if (line === null) return null;
       text += line;
       derived = true;
@@ -769,18 +774,21 @@ function namesTrustedProgram(path: string, places: Places): boolean {
 }
 
 /**
- * 0.6.28 T7: whether a file may be read for a `$(cat f)` value. The gate
- * reads it before the line runs, so a file an allowed segment could write
- * first -- inside a temp root or a writable tree, or under a link or copy
- * made earlier -- would show the gate one value and the shell another.
+ * 0.6.28 T7: the absolute path of a file that may be read for a `$(cat f)`
+ * value, or null. A relative name resolves against the directory the shell
+ * is in at that point (the session's, or an earlier absolute `cd`; a
+ * relative `cd` is never read). The gate reads the file before the line
+ * runs, so one an allowed segment could write first -- inside a temp root
+ * or a writable tree, or under a link or copy made earlier -- would show the
+ * gate one value and the shell another.
  */
-function isStableFile(text: string, cwd: string, places: Places): boolean {
+function stableFileAt(text: string, cwd: string, places: Places): string | null {
   const path = absolutePath(text, cwd);
-  if (path === null) return false;
+  if (path === null) return null;
   const real = realLocation(path, places.input.realpath);
-  if (real === null || madeEarlier(path, real, places)) return false;
-  if (places.roots.some((root) => root === real || isUnder(real, root))) return false;
-  return places.ownTrees === null || writableTreeAt(real, cwd, places) === null;
+  if (real === null || madeEarlier(path, real, places)) return null;
+  if (places.roots.some((root) => root === real || isUnder(real, root))) return null;
+  return places.ownTrees === null || writableTreeAt(real, cwd, places) === null ? path : null;
 }
 
 /**
@@ -1269,7 +1277,7 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
     let ranProgram = false;
     const options: ExpandOptions = {
       readFirstLine: places.input.readFirstLine,
-      readableFile: (path) => isStableFile(path, state.cwd, places),
+      stableFile: (path) => stableFileAt(path, state.cwd, places),
       runsTrusted: (inner) => {
         ranProgram = true;
         return runsOneTrustedProgram(inner, { ...state, vars, derived, trustedValues }, places);

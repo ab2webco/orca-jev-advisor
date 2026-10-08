@@ -57,7 +57,7 @@ const FS: TrustedLineFs = {
     const known = ["/", "/opt", "/opt/acme", "/opt/acme/bin", "/opt/acme/bin/acme-notify", "/opt/acme/bin/acme-scope", "/opt/acme/v2", "/opt/acme/v2/acme-notify", "/opt/other/bin/other-tool", "/private/tmp", "/private/tmp/x", "/private/tmp/x/own/acme-notify", HOME, `${HOME}/project`, "/bin/bash", "/bin/sh"];
     return known.includes(path) ? path : null;
   },
-  readFirstLine: (path) => ({ [`${HOME}/.acme-path`]: "/opt/acme/bin", "/opt/acme/current": "v2" })[path] ?? null,
+  readFirstLine: (path) => ({ [`${HOME}/.acme-path`]: "/opt/acme/bin", "/opt/acme/current": "v2", [`${HOME}/project/.acme-bin`]: "/opt/acme/bin" })[path] ?? null,
 };
 
 function trusted(command: string, fs: TrustedLineFs = FS): readonly string[] | null {
@@ -153,4 +153,22 @@ test("must stop: an untrusted or nested substitution, or a trusted value given t
   assert.equal(trusted('X="$(acme-scope owner > /tmp/x/o)"; acme-notify "$X"'), null);
   assert.equal(trusted('X="$(acme-scope "$UNSET")"; acme-notify "$X"'), null);
   assert.equal(trusted('TMPDIR="$(acme-scope owner)"; rm -rf "$TMPDIR/x"'), null);
+});
+
+// The owner's sessions run from a workspace directory that holds the file
+// naming where the tools live: `$(cat .acme-bin)`, relative to where the
+// shell is at that point.
+test("trusted: a value read from a file named relative to the session's directory, or to an earlier absolute cd", () => {
+  assert.deepEqual(trusted('WA="$(cat .acme-bin)"; "$WA/acme-scope" lock --note triage'), ["acme-scope"]);
+  assert.deepEqual(trusted('cd /opt/acme && B="$(cat current)" && "/opt/acme/$B/acme-notify" hi'), ["acme-notify"]);
+});
+
+test("must stop: a relative file after a relative cd, or one the line could have written", () => {
+  assert.equal(trusted('cd project && WA="$(cat .acme-bin)" && "$WA/acme-scope" lock'), null);
+  assert.equal(trusted('cd /tmp/x && WA="$(cat .acme-bin)" && "$WA/acme-scope" lock'), null);
+  assert.equal(trusted('WA="$(cat ../.acme-bin)"; "$WA/acme-scope" lock'), null);
+});
+
+test("trusted: echo with $?, a bare echo between trusted segments, and a safe reader after a pipe", () => {
+  assert.deepEqual(trusted('acme-scope lock --note triage; echo "lock=$?"; echo; acme-notify hi 2>&1 | head -c 6000'), ["acme-scope", "acme-notify"]);
 });
