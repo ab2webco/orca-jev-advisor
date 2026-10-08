@@ -40,6 +40,10 @@ const {
   attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
   attendGateAuthorizationForgetRequest,
+  attendTrustedProgramRequest,
+  publishTrustedPrograms,
+  TRUSTED_PROGRAMS_STATUS_KEY,
+  TRUSTED_PROGRAM_RESULT_KEY,
   gateAuthorizationsArgv,
   GATE_AUTHORIZATIONS_STATUS_KEY,
   GATE_AUTHORIZATION_FORGET_RESULT_KEY,
@@ -2275,7 +2279,7 @@ test('mirrorCatalogAndPolicies also mirrors the team owners, normalized, through
   const calls = []
   const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
   await mirrorCatalogAndPolicies(orca, storageHost, { run })
-  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save', 'queue-mode-save', 'explicit-models-save'])
+  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save', 'queue-mode-save', 'explicit-models-save', 'trusted-programs-save'])
   assert.deepEqual(JSON.parse(calls[2].stdin), ['acme-team', 'acme-tools'])
 })
 
@@ -2437,4 +2441,75 @@ test('the real gate-authorizations sidecar reads and forgets under exactly the g
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(cache, 'gate-authorizations.json'), 'utf8')).repos['github.com/acme/widgets']), ['push-branch'])
   const readOnlyForget = await spawnSidecar(gateAuthorizationsArgv('read').slice(0, -1).concat('forget'), { env, timeout: 20000 }, JSON.stringify({ repo: 'github.com/acme/widgets', cls: null }))
   assert.equal(readOnlyForget.ok, false, 'without the write grant a forget cannot write')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T7: the trusted programs list. The panel asks to add or remove a
+// name; the worker validates it (src/core/trusted_programs.ts), keeps the
+// list under `trustedPrograms`, mirrors it through trusted-programs-save and
+// publishes the list before the result, so the panel never shows the old one.
+// ---------------------------------------------------------------------------
+
+test('mirrorCatalogAndPolicies always mirrors the trusted programs, the empty list included', async () => {
+  const calls = []
+  const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost({ trustedPrograms: ['Acme-Notify', 'bash'] }), { run })
+  assert.deepEqual(JSON.parse(calls.find((call) => call.mode === 'trusted-programs-save').stdin), ['acme-notify'])
+  const empty = []
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost(), { run: async (mode, stdin) => { empty.push({ mode, stdin }); return { ok: true } } })
+  assert.deepEqual(JSON.parse(empty.find((call) => call.mode === 'trusted-programs-save').stdin), [])
+})
+
+test('attendTrustedProgramRequest: an add is validated, kept, mirrored and published before its result', async () => {
+  const storageHost = fakeStorageHost({ trustedPrograms: ['acme-scope'], trustedProgramRequest: { id: 'tp-1', at: new Date().toISOString(), op: 'add', name: 'Acme-Notify' } })
+  const order = []
+  const set = storageHost.set
+  storageHost.set = async (key, value) => { order.push(key); return set(key, value) }
+  const calls = []
+  await attendTrustedProgramRequest(fakeOrca(), storageHost, { run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true } } })
+  assert.deepEqual(await storageHost.get('trustedPrograms'), ['acme-scope', 'acme-notify'])
+  assert.deepEqual(calls, [['trusted-programs-save', JSON.stringify(['acme-scope', 'acme-notify'])]])
+  assert.deepEqual((await storageHost.get(TRUSTED_PROGRAMS_STATUS_KEY)).programs, ['acme-scope', 'acme-notify'])
+  assert.ok(order.indexOf(TRUSTED_PROGRAMS_STATUS_KEY) < order.indexOf(TRUSTED_PROGRAM_RESULT_KEY), order.join(' > '))
+  const result = await storageHost.get(TRUSTED_PROGRAM_RESULT_KEY)
+  assert.deepEqual({ id: result.id, ok: result.ok, name: result.name }, { id: 'tp-1', ok: true, name: 'acme-notify' })
+  assert.equal(await storageHost.get('trustedProgramRequest'), null)
+})
+
+test('attendTrustedProgramRequest: a refused name says why and changes nothing', async () => {
+  const storageHost = fakeStorageHost({ trustedPrograms: ['acme-scope'], trustedProgramRequest: { id: 'tp-2', at: new Date().toISOString(), op: 'add', name: 'python3' } })
+  const calls = []
+  await attendTrustedProgramRequest(fakeOrca(), storageHost, { run: async (mode) => { calls.push(mode); return { ok: true } } })
+  const result = await storageHost.get(TRUSTED_PROGRAM_RESULT_KEY)
+  assert.deepEqual({ ok: result.ok, reason: result.reason }, { ok: false, reason: 'refused' })
+  assert.deepEqual(await storageHost.get('trustedPrograms'), ['acme-scope'])
+  assert.deepEqual(calls, [])
+})
+
+test('attendTrustedProgramRequest: a remove keeps the rest; an expired or malformed request is refused', async () => {
+  const removing = fakeStorageHost({ trustedPrograms: ['acme-scope', 'acme-notify'], trustedProgramRequest: { id: 'tp-3', at: new Date().toISOString(), op: 'remove', name: 'acme-scope' } })
+  await attendTrustedProgramRequest(fakeOrca(), removing, { run: async () => ({ ok: true }) })
+  assert.deepEqual(await removing.get('trustedPrograms'), ['acme-notify'])
+  assert.equal((await removing.get(TRUSTED_PROGRAM_RESULT_KEY)).ok, true)
+
+  const expired = fakeStorageHost({ trustedProgramRequest: { id: 'tp-4', at: TEN_MINUTES_AGO, op: 'add', name: 'acme-notify' } })
+  await attendTrustedProgramRequest(fakeOrca(), expired, { run: async () => ({ ok: true }) })
+  assert.equal((await expired.get(TRUSTED_PROGRAM_RESULT_KEY)).reason, 'expired')
+
+  const malformed = fakeStorageHost({ trustedProgramRequest: { id: 'tp-5', at: new Date().toISOString(), op: 'rename', name: 'acme-notify' } })
+  await attendTrustedProgramRequest(fakeOrca(), malformed, { run: async () => ({ ok: true }) })
+  assert.equal((await malformed.get(TRUSTED_PROGRAM_RESULT_KEY)).reason, 'invalid-request')
+})
+
+test('attendTrustedProgramRequest: a failed mirror is reported, and the list stays as stored', async () => {
+  const storageHost = fakeStorageHost({ trustedProgramRequest: { id: 'tp-6', at: new Date().toISOString(), op: 'add', name: 'acme-notify' } })
+  await attendTrustedProgramRequest(fakeOrca(), storageHost, { run: async () => ({ ok: false, reason: 'exception', detail: 'disk full' }) })
+  const result = await storageHost.get(TRUSTED_PROGRAM_RESULT_KEY)
+  assert.deepEqual({ ok: result.ok, reason: result.reason }, { ok: false, reason: 'mirror-failed' })
+})
+
+test('publishTrustedPrograms publishes the stored list, validated', async () => {
+  const storageHost = fakeStorageHost({ trustedPrograms: ['acme-notify', 'rm'] })
+  await publishTrustedPrograms(fakeOrca(), storageHost)
+  assert.deepEqual((await storageHost.get(TRUSTED_PROGRAMS_STATUS_KEY)).programs, ['acme-notify'])
 })

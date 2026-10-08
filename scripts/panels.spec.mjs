@@ -199,6 +199,12 @@ function hostBridge (storage) {
         if (storage.__routerRefreshDelayMs && Date.now() - window.__routerRefreshAt < storage.__routerRefreshDelayMs) value = storage.modelRouterStatus
         else if (storage.__routerRefreshWithoutId) value = { ...fresh, checkedAt: new Date(Date.now() + 1000).toISOString() }
         else value = { ...fresh, refreshId: window.__written.modelRouterStatusRefreshRequest.id, checkedAt: new Date().toISOString() }
+      } else if (key === 'trustedProgramResult' && window.__written.trustedProgramRequest) {
+        // 0.6.28 T7: the worker validates the name; `storage.__trustedProgramResult`
+        // overrides ok/reason, and `storage.__trustedProgramsAfter` is the list it publishes.
+        value = { ok: true, reason: null, name: String(window.__written.trustedProgramRequest.name).trim().toLowerCase(), ...storage.__trustedProgramResult, id: window.__written.trustedProgramRequest.id }
+      } else if (key === 'trustedProgramsStatus' && window.__written.trustedProgramRequest && storage.__trustedProgramsAfter) {
+        value = { programs: storage.__trustedProgramsAfter, checkedAt: new Date().toISOString() }
       } else if (key === 'modelsSeedResult' && window.__written.modelsSeedRequest) {
         // odd/tasks/model-reclassification.md T7: models-worker.mjs answers
         // one request/result channel for both apply and dismiss (unlike the
@@ -4206,6 +4212,112 @@ test('remembered authorizations: the list still arrives when the rest of the pan
     await page.click('#tab-rules')
     await page.waitForSelector('#gate-authorizations-section[data-state="ready"]', { timeout: 15000 })
     assert.equal(await page.locator('#gate-auth-rows .gate-auth-repo').count(), 2)
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T7: the trusted programs list, in the Rules tab. The worker
+// publishes `trustedProgramsStatus` ({ programs }); an add or a remove is a
+// `trustedProgramRequest` ({ id, at, op, name }) answered by
+// `trustedProgramResult` ({ id, ok, reason, name }). Synthetic names only.
+// ---------------------------------------------------------------------------
+
+const TRUSTED_STATUS = { programs: ['acme-notify', 'acme-<b>scope</b>'], checkedAt: AUTH_AT }
+
+test('trusted programs: the list shows each name as text with a remove button, and no empty line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ trustedProgramsStatus: TRUSTED_STATUS })
+  try {
+    await page.click('#tab-rules')
+    await page.waitForSelector('#trusted-programs-section[data-state="ready"]', { timeout: 15000 })
+    assert.equal(await page.locator('#trusted-rows .trusted-row').count(), 2)
+    const text = await page.innerText('#trusted-rows')
+    assert.match(text, /acme-notify/)
+    assert.match(text, /acme-<b>scope<\/b>/, 'a name is shown as text, never as markup')
+    assert.equal(await page.isVisible('#trusted-empty'), false)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('trusted programs: adding sends the typed name and shows the list the worker publishes', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ trustedProgramsStatus: { programs: [] }, __trustedProgramsAfter: ['acme-notify'] })
+  try {
+    await page.click('#tab-rules')
+    await page.fill('#trusted-name', 'Acme-Notify')
+    await page.click('#trusted-add')
+    await page.waitForFunction(() => !!window.__written.trustedProgramRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.trustedProgramRequest)
+    assert.equal(request.op, 'add')
+    assert.equal(request.name, 'Acme-Notify')
+    assert.equal(typeof request.id, 'string')
+    await page.waitForSelector('#trusted-rows .trusted-row', { timeout: 25000 })
+    assert.match(await page.innerText('#trusted-rows'), /acme-notify/)
+    assert.match(await page.innerText('#trusted-said'), /Added/)
+    assert.equal(await page.inputValue('#trusted-name'), '')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('trusted programs: removing sends exactly that name', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ trustedProgramsStatus: TRUSTED_STATUS, __trustedProgramsAfter: ['acme-<b>scope</b>'] })
+  try {
+    await page.click('#tab-rules')
+    await page.click('#trusted-rows .trusted-row:first-child .trusted-remove')
+    await page.waitForFunction(() => !!window.__written.trustedProgramRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.trustedProgramRequest)
+    assert.deepEqual({ op: request.op, name: request.name }, { op: 'remove', name: 'acme-notify' })
+    await page.waitForFunction(() => document.querySelectorAll('#trusted-rows .trusted-row').length === 1, undefined, { timeout: 25000 })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const [locale, why] of [['en', /shell, an interpreter or a general tool/i], ['es', /shell, un intérprete o una herramienta general/i]]) {
+  test(`trusted programs: a refused name says why (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel({ trustedProgramsStatus: { programs: [] }, __trustedProgramResult: { ok: false, reason: 'refused' } }, locale)
+    try {
+      await page.click('#tab-rules')
+      await page.fill('#trusted-name', 'python3')
+      await page.click('#trusted-add')
+      await page.waitForFunction((source) => new RegExp(source, 'i').test(document.getElementById('trusted-said').innerText), why.source, { timeout: 25000 })
+      assert.equal(await page.inputValue('#trusted-name'), 'python3', 'a refused name stays in the field to correct')
+      assert.equal(await page.locator('#trusted-rows .trusted-row').count(), 0)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+for (const [locale, meaning] of [['en', /without asking Jev/i], ['es', /sin preguntar a Jev/i]]) {
+  test(`trusted programs: with none, one line says what trusting a program means (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel({}, locale)
+    try {
+      await page.click('#tab-rules')
+      await page.waitForFunction((source) => new RegExp(source, 'i').test(document.getElementById('trusted-empty').innerText), meaning.source, { timeout: 15000 })
+      assert.equal(await page.isVisible('#trusted-empty'), true)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('every trusted.* key in one language catalog exists in the other', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page } = await openPanel({})
+  try {
+    const catalog = await page.evaluate(() => window.CATALOG)
+    const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('trusted.') === 0)
+    const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('trusted.') === 0)
+    assert.ok(enKeys.length > 0, 'no trusted.* keys at all')
+    assert.deepEqual(esKeys.filter((key) => enKeys.indexOf(key) === -1), [])
+    assert.deepEqual(enKeys.filter((key) => esKeys.indexOf(key) === -1), [])
   } finally {
     await browser.close()
   }

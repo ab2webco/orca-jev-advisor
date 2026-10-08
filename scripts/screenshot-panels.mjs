@@ -38,6 +38,7 @@ import { summarizeModelMeasurements } from '../src/core/model_measurement.ts'
 import { foldGateDecisions } from '../src/core/gate_stats.ts'
 import { foldAbResults } from '../src/core/ab_report.ts'
 import { EMPTY_AUTHORIZATIONS, authorizationRows, recordAuthorization } from '../src/core/gate_authorizations.ts'
+import { parseTrustedPrograms } from '../src/core/trusted_programs.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
@@ -314,6 +315,8 @@ const READY = {
   // the board's "Waiting for you" list depends on.
   queueMode: { enabled: true },
   gateAuthorizationsStatus: { ok: true, repos: authorizationRows(READY_AUTHORIZATIONS, Date.parse(iso)), checkedAt: iso },
+  // 0.6.28 T7: two trusted programs, through the real validator. Example names.
+  trustedProgramsStatus: { programs: parseTrustedPrograms(['acme-notify', 'acme-scope']), checkedAt: iso },
   // main.mjs's onAgentStatusChanged shape. One worktree resolved to its
   // project (the raw Orca projectId, plus the projectName the worker
   // resolves from it -- the same name "By project" shows below) and branch;
@@ -1177,6 +1180,8 @@ async function main() {
               // 0.6.28 T4: the remembered authorizations are read after the
               // panel's first batch of reads, a host quota window later.
               if (tabKey === 'rules') await page.waitForSelector('#gate-authorizations-section[data-state="ready"]', { timeout: 15000 })
+              // 0.6.28 T7: the trusted programs are read right after them.
+              if (tabKey === 'rules') await page.waitForSelector('#trusted-programs-section[data-state="ready"]', { timeout: 15000 })
 
               const overflow = await page.evaluate(() => ({
                 scrollWidth: document.documentElement.scrollWidth,

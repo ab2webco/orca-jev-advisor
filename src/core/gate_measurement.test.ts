@@ -370,6 +370,21 @@ test("an allow with stopReason 'own-tree' round-trips -- local work in the own w
   assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
 });
 
+test("an allow with stopReason 'trusted' round-trips -- a trusted program's line is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-trusted",
+    at: "2026-10-07T00:00:00.000Z",
+    project: null,
+    command: "acme-notify --to team hi",
+    source: "local-rule",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "trusted",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
 test("an 'advise' verdict round-trips and is never dropped as an unrecognised verdict", () => {
   const record = buildGateDecisionRecord({
     id: "sr-advise",

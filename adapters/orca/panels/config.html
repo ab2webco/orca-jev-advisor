@@ -258,6 +258,14 @@
       .gate-auth-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 14em; }
       .gate-auth-label { font-size: 12px; font-weight: 500; }
       .gate-auth-text .hint { margin-top: 0; overflow-wrap: anywhere; }
+      /* 0.6.28 T7: one line per trusted program; the add row keeps its button
+         beside the field until the panel is too narrow, then wraps under it. */
+      #trusted-rows { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+      .trusted-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+        border: 1px solid var(--border, var(--fb-border)); border-radius: var(--radius-md); padding: 6px 8px; }
+      .trusted-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; min-width: 0; flex: 1 1 10em; }
+      .trusted-add-row { display: flex; gap: 8px; flex-wrap: wrap; }
+      .trusted-add-row input { flex: 1 1 12em; width: auto; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
       .tabbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 12px 0; border-top: 1px solid var(--border, var(--fb-border)); }
       .tab {
         border: 1px solid transparent; border-bottom: none; border-radius: var(--radius-md) var(--radius-md) 0 0;
@@ -598,6 +606,28 @@
           <span class="said" id="gate-auth-said"></span>
         </div>
       </section>
+
+      <!--
+        0.6.28 T7. The trusted programs list (src/core/trusted_programs.ts):
+        names the person trusts, published by the worker as
+        `trustedProgramsStatus`. An add or a remove is a request the worker
+        validates and mirrors to trusted-programs.json for the gate; the
+        panel shows the reason when a name is refused. Empty by default.
+      -->
+      <section id="trusted-programs-section">
+        <h2 data-i18n="trusted.heading"></h2>
+        <p class="hint" data-i18n="trusted.hint"></p>
+        <p class="hint" id="trusted-empty" data-i18n="trusted.loading"></p>
+        <ul id="trusted-rows"></ul>
+        <label for="trusted-name" data-i18n="trusted.label"></label>
+        <div class="trusted-add-row">
+          <input id="trusted-name" type="text" spellcheck="false" autocomplete="off" autocapitalize="off" data-i18n-placeholder="trusted.placeholder" />
+          <button id="trusted-add" type="button" data-i18n="trusted.add"></button>
+        </div>
+        <div class="actions">
+          <span class="said" id="trusted-said" role="status"></span>
+        </div>
+      </section>
       </div>
 
       <section id="save-section">
@@ -854,6 +884,24 @@
           'gateAuth.class.pr-merge': 'Fusionar un pull request',
           'gateAuth.class.pr-update': 'Editar, comentar o revisar un pull request',
           'gateAuth.class.release-create': 'Crear un release',
+          'trusted.heading': 'Programas de confianza',
+          'trusted.hint': 'Programas tuyos que el gate deja pasar sin consultar a Jev: una línea que empieza con uno de ellos pasa si lo demás es solo lectura o trabajo local. Escribe solo el nombre del programa (por ejemplo, el de una herramienta tuya). Una política que pregunta o prohíbe, y el nivel de bloqueo de arriba, siempre siguen decidiendo. Nada se agrega solo.',
+          'trusted.empty': 'No confías en ningún programa todavía. Si agregas uno, los comandos que empiezan con él pasan sin preguntar a Jev, y ese programa puede enviar mensajes o cambiar cosas fuera de esta máquina. Agrega solo programas tuyos que conozcas.',
+          'trusted.loading': 'Leyendo los programas de confianza…',
+          'trusted.label': 'Nombre del programa',
+          'trusted.placeholder': 'mi-herramienta',
+          'trusted.add': 'Agregar',
+          'trusted.adding': 'Agregando…',
+          'trusted.added': 'Agregado.',
+          'trusted.remove': 'Quitar',
+          'trusted.removing': 'Quitando…',
+          'trusted.removed': 'Quitado.',
+          'trusted.reason.empty': 'Escribe el nombre de un programa.',
+          'trusted.reason.shape': 'Solo el nombre del programa: sin ruta, sin espacios y sin caracteres del shell.',
+          'trusted.reason.refused': 'Ese es un shell, un intérprete o una herramienta general: confiar en él dejaría pasar cualquier comando.',
+          'trusted.reason.duplicate': 'Ese programa ya está en la lista.',
+          'trusted.reason.full': 'La lista ya tiene el máximo de programas. Quita uno antes de agregar otro.',
+          'trusted.reason.mirror-failed': 'Se guardó, pero el gate todavía no lo ve. Vuelve a intentarlo en un momento.',
           'save.button': 'Guardar configuración',
           'save.saving': 'Guardando…',
           'save.saved': 'Guardado.',
@@ -1193,6 +1241,24 @@
           'gateAuth.class.pr-merge': 'Merge a pull request',
           'gateAuth.class.pr-update': 'Edit, comment on or review a pull request',
           'gateAuth.class.release-create': 'Create a release',
+          'trusted.heading': 'Trusted programs',
+          'trusted.hint': 'Programs of your own that the gate lets through without asking Jev: a line that starts with one passes when everything else in it only reads or does local work. Type only the program name (for example, one of your own tools). A policy that asks or forbids, and the deny tier above, still always decide. Nothing is ever added on its own.',
+          'trusted.empty': 'You trust no program yet. If you add one, commands that start with it pass without asking Jev, and that program can send messages or change things outside this machine. Add only programs of your own that you know.',
+          'trusted.loading': 'Reading the trusted programs…',
+          'trusted.label': 'Program name',
+          'trusted.placeholder': 'my-tool',
+          'trusted.add': 'Add',
+          'trusted.adding': 'Adding…',
+          'trusted.added': 'Added.',
+          'trusted.remove': 'Remove',
+          'trusted.removing': 'Removing…',
+          'trusted.removed': 'Removed.',
+          'trusted.reason.empty': 'Type a program name.',
+          'trusted.reason.shape': 'Only the program name: no path, no spaces and no shell characters.',
+          'trusted.reason.refused': 'That is a shell, an interpreter or a general tool: trusting it would let any command through.',
+          'trusted.reason.duplicate': 'That program is already on the list.',
+          'trusted.reason.full': 'The list already holds the most programs it can. Remove one before adding another.',
+          'trusted.reason.mirror-failed': 'Saved, but the gate does not see it yet. Try again in a moment.',
           'save.button': 'Save configuration',
           'save.saving': 'Saving…',
           'save.saved': 'Saved.',
@@ -3411,6 +3477,101 @@
         el('gate-authorizations-section').setAttribute('data-state', 'ready')
       }
 
+      // ---------- trusted programs (0.6.28 T7) ---------------------------------
+      // Same request/result pattern as the forget above: the worker validates
+      // the name with src/core/trusted_programs.ts and mirrors the list for
+      // the gate; a refusal comes back as a reason code, localized here.
+      var TRUSTED_STATUS_KEY = 'trustedProgramsStatus'
+      var TRUSTED_REQUEST_KEY = 'trustedProgramRequest'
+      var TRUSTED_RESULT_KEY = 'trustedProgramResult'
+      var TRUSTED_REASONS = ['empty', 'shape', 'refused', 'duplicate', 'full', 'mirror-failed']
+      var trustedSaidEl = el('trusted-said')
+
+      function trustedReasonText (result) {
+        var reason = result && typeof result.reason === 'string' ? result.reason : ''
+        return TRUSTED_REASONS.indexOf(reason) !== -1 ? t('trusted.reason.' + reason) : errorMessageFor(result)
+      }
+
+      function waitForTrustedResult (requestId, deadline) {
+        return read(TRUSTED_RESULT_KEY, false).then(function (result) {
+          if (result && result.id === requestId) {
+            if (result.ok) return result
+            throw shownError(trustedReasonText(result))
+          }
+          if (Date.now() >= deadline) throw shownError(t('common.workerSilent'))
+          return new Promise(function (resolve) { setTimeout(resolve, 700) })
+            .then(function () { return waitForTrustedResult(requestId, deadline) })
+        })
+      }
+
+      function sendTrustedRequest (op, name) {
+        var requestId = 'trusted-program-' + Date.now() + '-' + Math.random().toString(36).slice(2)
+        signalPanelOpen()
+        return write(TRUSTED_REQUEST_KEY, { id: requestId, at: new Date().toISOString(), op: op, name: name }).then(function (r) {
+          if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
+          return waitForTrustedResult(requestId, Date.now() + 20000)
+        }).then(function () {
+          return read(TRUSTED_STATUS_KEY, false).then(renderTrustedPrograms)
+        })
+      }
+
+      /** The worker's TRUSTED_STATUS_KEY as one line per name; the empty line says what trusting means. */
+      function renderTrustedPrograms (status) {
+        var host = el('trusted-rows')
+        host.innerHTML = ''
+        var programs = status && Array.isArray(status.programs) ? status.programs : []
+        programs.forEach(function (name) {
+          if (typeof name !== 'string' || name.length === 0) return
+          var row = elMake('li', 'trusted-row')
+          var code = elMake('code', 'trusted-name')
+          code.textContent = name
+          var remove = elMake('button', 'trusted-remove')
+          remove.type = 'button'
+          remove.textContent = t('trusted.remove')
+          remove.setAttribute('aria-label', t('trusted.remove') + ': ' + name)
+          remove.addEventListener('click', function () {
+            remove.disabled = true
+            said(trustedSaidEl, t('trusted.removing'))
+            sendTrustedRequest('remove', name).then(function () {
+              said(trustedSaidEl, t('trusted.removed'))
+            }).catch(function (error) {
+              remove.disabled = false
+              said(trustedSaidEl, errorText(error), true)
+            })
+          })
+          row.appendChild(code)
+          row.appendChild(remove)
+          host.appendChild(row)
+        })
+        var empty = el('trusted-empty')
+        empty.textContent = t('trusted.empty')
+        empty.style.display = host.childNodes.length > 0 ? 'none' : ''
+        el('trusted-programs-section').setAttribute('data-state', 'ready')
+      }
+
+      el('trusted-add').addEventListener('click', function () {
+        var input = el('trusted-name')
+        var button = el('trusted-add')
+        var name = input.value
+        if (name.trim().length === 0) {
+          said(trustedSaidEl, t('trusted.reason.empty'), true)
+          return
+        }
+        button.disabled = true
+        said(trustedSaidEl, t('trusted.adding'))
+        sendTrustedRequest('add', name.trim()).then(function () {
+          input.value = ''
+          said(trustedSaidEl, t('trusted.added'))
+        }).catch(function (error) {
+          said(trustedSaidEl, errorText(error), true)
+        }).then(function () {
+          button.disabled = false
+        })
+      })
+      el('trusted-name').addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') el('trusted-add').click()
+      })
+
       // ---------- umbrales --------------------------------------------------
 
       // Mirrors main.mjs's GATE_DEFAULTS_KEY (see that file's own module
@@ -3883,6 +4044,9 @@
           // the whole panel back a full window. Until it arrives the section
           // says it is reading.
           return read(GATE_AUTH_STATUS_KEY, false).then(renderGateAuthorizations).catch(function () { renderGateAuthorizations({ ok: false, repos: [] }) })
+        }).then(function () {
+          // 0.6.28 T7: read on its own after the authorizations, for the same reason.
+          return read(TRUSTED_STATUS_KEY, false).then(renderTrustedPrograms).catch(function () { renderTrustedPrograms({ programs: [] }) })
         })
       }
 

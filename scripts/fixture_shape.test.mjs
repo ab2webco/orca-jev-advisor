@@ -201,3 +201,22 @@ test('ready.gateAuthorizationsStatus has the keys the real gate-authorizations s
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// 0.6.28 T7: the Rules tab's trusted programs. The fixture is what the real
+// worker's publishTrustedPrograms stores, built from the same validated list.
+test('ready.trustedProgramsStatus has the keys the real worker publishes, and two programs', SKIP_NO_PLAYWRIGHT, async () => {
+  // main.mjs resolves its config and cache dirs at import; under the test
+  // runner they must be explicit test directories (src/core/paths.ts).
+  const paths = mkdtempSync(join(tmpdir(), 'orca-fixture-shape-trusted-'))
+  process.env.ORCA_SUPERVISOR_CONFIG_DIR ??= join(paths, 'config')
+  process.env.ORCA_SUPERVISOR_CACHE_DIR ??= join(paths, 'cache')
+  const { publishTrustedPrograms, TRUSTED_PROGRAMS_STATUS_KEY } = await import('../adapters/orca/main.mjs')
+  const store = { trustedPrograms: ['acme-notify'] }
+  const host = { get: async (key) => store[key] ?? null, set: async (key, value) => { store[key] = value }, delete: async (key) => { delete store[key] }, keys: async () => Object.keys(store) }
+  await publishTrustedPrograms({ log: () => {} }, host)
+  const real = store[TRUSTED_PROGRAMS_STATUS_KEY]
+  const fixture = READY.trustedProgramsStatus
+  assert.deepEqual(Object.keys(fixture).sort(), Object.keys(real).sort())
+  assert.equal(fixture.programs.length, 2)
+  rmSync(paths, { recursive: true, force: true })
+})

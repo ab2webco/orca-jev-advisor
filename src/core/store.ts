@@ -18,6 +18,7 @@ import { migratePolicyKind, withNormalizedPolicyScope } from "./decisions.ts";
 import type { PolicyKind, PolicyScope } from "./decisions.ts";
 import { parseTeamOwners } from "./team_owners.ts";
 import { parseQueueMode } from "./queue_mode.ts";
+import { TRUSTED_PROGRAMS_STORAGE_KEY, parseTrustedPrograms } from "./trusted_programs.ts";
 import { parseExplicitModels } from "./explicit_models.ts";
 import type { ExplicitModelsMode } from "./explicit_models.ts";
 
@@ -38,6 +39,7 @@ const STORAGE_KEY = {
   teamOwners: "teamOwners",
   queueMode: "queueMode",
   explicitModels: "explicitModels",
+  trustedPrograms: TRUSTED_PROGRAMS_STORAGE_KEY,
 } as const;
 
 async function readKey<T>(host: StorageHost, key: string, guard: (value: unknown) => value is T, fallback: T): Promise<T> {
@@ -243,6 +245,20 @@ export async function setPolicies(host: StorageHost, policies: readonly PolicyRo
 // gate use -- so an invalid line is dropped here exactly as it is there.
 // Empty (the default) changes no decision anywhere.
 // ---------------------------------------------------------------------------
+
+/** 0.6.28 T7: the trusted programs, validated; empty when unset or unreadable (nothing trusted). */
+export async function getTrustedPrograms(host: StorageHost): Promise<readonly string[]> {
+  try {
+    return parseTrustedPrograms(await host.get(STORAGE_KEY.trustedPrograms));
+  } catch {
+    return [];
+  }
+}
+
+/** 0.6.28 T7: stores the trusted programs, validated -- only the worker writes them, on a panel request. */
+export async function setTrustedPrograms(host: StorageHost, programs: readonly string[]): Promise<void> {
+  await host.set(STORAGE_KEY.trustedPrograms, [...parseTrustedPrograms(programs)]);
+}
 
 export async function getTeamOwners(host: StorageHost): Promise<readonly string[]> {
   try {

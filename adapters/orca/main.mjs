@@ -55,7 +55,8 @@ import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeed
 import { mergePolicySeeds, resolvePolicySeedImport } from '../../src/core/policy_seed_import.ts'
 import { decidePolicySeedNotice, parseOfferedVersion } from '../../src/core/policy_seed_notice.ts'
 import { resolveApiKey, SECRET_KEY_NAME } from '../../src/core/secrets.ts'
-import { getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getQueueMode, getTeamOwners, setBoard, setCatalog, setPolicies } from '../../src/core/store.ts'
+import { getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getQueueMode, getTeamOwners, getTrustedPrograms, setBoard, setCatalog, setPolicies, setTrustedPrograms } from '../../src/core/store.ts'
+import { addTrustedProgram, removeTrustedProgram } from '../../src/core/trusted_programs.ts'
 import { DEFAULT_DERIVED_AUTONOMY, deriveDestinations, parseWorktreeList } from '../../src/core/worktree_catalog.ts'
 import { recordDecision } from '../../src/core/log.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate } from '../../src/core/i18n.ts'
@@ -253,7 +254,7 @@ async function statSecretMirror () {
  *  reads. `options.run` is test-only; production spawns the real sidecar. */
 async function mirrorCatalogAndPolicies (orca, storageHost, options = {}) {
   const run = options.run ?? runSecretMirrorScript
-  const [catalog, policies, teamOwners, queueMode, explicitModels] = await Promise.all([getCatalog(storageHost), getPolicies(storageHost), getTeamOwners(storageHost), getQueueMode(storageHost), getExplicitModels(storageHost)])
+  const [catalog, policies, teamOwners, queueMode, explicitModels, trustedPrograms] = await Promise.all([getCatalog(storageHost), getPolicies(storageHost), getTeamOwners(storageHost), getQueueMode(storageHost), getExplicitModels(storageHost), getTrustedPrograms(storageHost)])
   const catalogResult = await run('catalog-save', JSON.stringify(catalog))
   if (!catalogResult.ok) {
     orca.log(`catalog mirror failed: ${String(catalogResult.reason ?? 'unknown')} -- ${String(catalogResult.detail ?? '').slice(0, 160)}`)
@@ -276,6 +277,12 @@ async function mirrorCatalogAndPolicies (orca, storageHost, options = {}) {
   const explicitModelsResult = await run('explicit-models-save', JSON.stringify({ mode: explicitModels }))
   if (!explicitModelsResult.ok) {
     orca.log(`explicit models mirror failed: ${String(explicitModelsResult.reason ?? 'unknown')} -- ${String(explicitModelsResult.detail ?? '').slice(0, 160)}`)
+  }
+  // 0.6.28 T7: the trusted programs, always written, the empty list
+  // included, so removing the last one never leaves it trusted on disk.
+  const trustedResult = await run('trusted-programs-save', JSON.stringify(trustedPrograms))
+  if (!trustedResult.ok) {
+    orca.log(`trusted programs mirror failed: ${String(trustedResult.reason ?? 'unknown')} -- ${String(trustedResult.detail ?? '').slice(0, 160)}`)
   }
 }
 
@@ -2279,6 +2286,70 @@ async function attendGateAuthorizationForgetRequest (orca, storageHost, options 
 }
 
 // ---------------------------------------------------------------------------
+// 0.6.28 T7: the trusted programs list ("Lista de confianza"). The config
+// panel asks to add or remove one name, through the same request/result/TTL
+// shape as the forget above; the worker validates it with
+// src/core/trusted_programs.ts (the panel shows the refusal reason), keeps
+// the list under `trustedPrograms`, mirrors it to trusted-programs.json
+// through write-secret-mirror.mjs, and publishes the list before the result.
+// ---------------------------------------------------------------------------
+
+const TRUSTED_PROGRAMS_STATUS_KEY = 'trustedProgramsStatus'
+const TRUSTED_PROGRAM_REQUEST_KEY = 'trustedProgramRequest'
+const TRUSTED_PROGRAM_RESULT_KEY = 'trustedProgramResult'
+
+/** Publishes the stored list for the panel. */
+async function publishTrustedPrograms (orca, storageHost) {
+  const programs = await getTrustedPrograms(storageHost)
+  await storageHost.set(TRUSTED_PROGRAMS_STATUS_KEY, { programs, checkedAt: new Date().toISOString() })
+    .catch((error) => orca.log(`trusted programs publish failed: ${error.message}`))
+}
+
+/** Attends one pending request from the panel: `{ id, at, op: 'add' | 'remove', name }`. `options.run` replaces the mirror sidecar in tests. */
+async function attendTrustedProgramRequest (orca, storageHost, options = {}) {
+  const request = await storageHost.get(TRUSTED_PROGRAM_REQUEST_KEY)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+
+  await storageHost.delete(TRUSTED_PROGRAM_REQUEST_KEY).catch((error) =>
+    orca.log(`trusted program request cleanup failed: ${error.message}`))
+
+  const publishResult = (fields) => storageHost.set(TRUSTED_PROGRAM_RESULT_KEY, { id: request.id, at: new Date().toISOString(), ...fields })
+    .catch((err) => orca.log(`trusted program result publish failed: ${err.message}`))
+
+  const age = Date.now() - Date.parse(request.at)
+  if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
+    await publishResult({ ok: false, reason: 'expired', name: null })
+    return
+  }
+  if ((request.op !== 'add' && request.op !== 'remove') || typeof request.name !== 'string') {
+    await publishResult({ ok: false, reason: 'invalid-request', name: null })
+    return
+  }
+
+  const current = await getTrustedPrograms(storageHost)
+  const name = request.name.trim().toLowerCase()
+  let next
+  if (request.op === 'add') {
+    const added = addTrustedProgram(current, request.name)
+    if (!added.ok) {
+      await publishResult({ ok: false, reason: added.reason, name })
+      return
+    }
+    next = added.programs
+  } else {
+    next = removeTrustedProgram(current, request.name)
+  }
+  await setTrustedPrograms(storageHost, next)
+  const run = options.run ?? runSecretMirrorScript
+  const mirrored = await run('trusted-programs-save', JSON.stringify(next))
+  if (!mirrored.ok) {
+    orca.log(`trusted programs mirror failed: ${String(mirrored.reason ?? 'unknown')} -- ${String(mirrored.detail ?? '').slice(0, 160)}`)
+  }
+  await publishTrustedPrograms(orca, storageHost)
+  await publishResult(mirrored.ok ? { ok: true, reason: null, name } : { ok: false, reason: 'mirror-failed', name })
+}
+
+// ---------------------------------------------------------------------------
 // Catalog/policies mirror trigger -- unlike the secret/Claude-integration/
 // locale channels above, nothing in the UI waits on this: the panel already
 // writes the catalog and policies straight to storage on save, so this is
@@ -2862,6 +2933,8 @@ export default function activate (orca) {
       .catch((error) => orca.log(`deny-tier config request handling failed: ${error.message}`))
       .then(() => attendGateAuthorizationForgetRequest(orca, storageHost))
       .catch((error) => orca.log(`gate authorization forget request handling failed: ${error.message}`))
+      .then(() => attendTrustedProgramRequest(orca, storageHost))
+      .catch((error) => orca.log(`trusted program request handling failed: ${error.message}`))
       .then(() => attendCatalogPolicyMirrorRequest(orca, storageHost, catalogPolicyMirrorSeen))
       .catch((error) => orca.log(`catalog/policies mirror handling failed: ${error.message}`))
       .then(() => attendCatalogRefreshRequest(orca, storageHost))
@@ -2977,6 +3050,8 @@ export default function activate (orca) {
     .catch((error) => orca.log(`initial deny-tier status failed: ${error.message}`))
   publishGateAuthorizations(orca, storageHost)
     .catch((error) => orca.log(`initial gate authorizations failed: ${error.message}`))
+  publishTrustedPrograms(orca, storageHost)
+    .catch((error) => orca.log(`initial trusted programs failed: ${error.message}`))
   publishWorkerHeartbeat(orca, storageHost)
   publishGateDefaults(orca, storageHost)
   runSecretPoll()
@@ -3082,6 +3157,10 @@ export {
   attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
   attendGateAuthorizationForgetRequest,
+  attendTrustedProgramRequest,
+  publishTrustedPrograms,
+  TRUSTED_PROGRAMS_STATUS_KEY,
+  TRUSTED_PROGRAM_RESULT_KEY,
   gateAuthorizationsArgv,
   GATE_AUTHORIZATIONS_STATUS_KEY,
   GATE_AUTHORIZATION_FORGET_RESULT_KEY,

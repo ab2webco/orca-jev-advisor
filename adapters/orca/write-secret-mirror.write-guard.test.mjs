@@ -207,6 +207,30 @@ test('team-owners-save writes an empty list for a payload that is not an array o
   }
 })
 
+// 0.6.28 T7: the trusted programs list reaches the gate through this same
+// script -- trusted-programs.json, normalized, never a raw echo.
+test('refuses trusted-programs-save against a real-looking, non-isolated HOME under the test runner', () => {
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'fixture must not pre-exist')
+  const result = runMirrorAgainst(FAKE_REAL_HOME, 'trusted-programs-save', JSON.stringify(['acme-notify']))
+  assert.equal(result.ok, false, `expected the paths guard to refuse trusted-programs-save, got: ${JSON.stringify(result)}`)
+  assert.equal(existsSync(FAKE_REAL_HOME), false, 'the guard must fire before even the directory is created')
+})
+
+test('trusted-programs-save writes the validated names, and anything malformed as nothing trusted', () => {
+  const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-trusted-'))
+  try {
+    const env = { ORCA_SUPERVISOR_CONFIG_DIR: join(tempHome, '.config', 'orca-supervisor') }
+    const path = join(tempHome, '.config', 'orca-supervisor', 'trusted-programs.json')
+    const result = runMirrorAgainst(tempHome, 'trusted-programs-save', JSON.stringify(['Acme-Notify', 'bash', 'a b', 'acme-notify', 'acme-scope']), env)
+    assert.equal(result.ok, true, `expected a normal trusted-programs-save to succeed, got: ${JSON.stringify(result)}`)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), ['acme-notify', 'acme-scope'])
+    assert.equal(runMirrorAgainst(tempHome, 'trusted-programs-save', '{not json', env).ok, true)
+    assert.deepEqual(JSON.parse(readFileSync(path, 'utf8')), [])
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})
+
 // 0.6.8 T4: queue mode reaches the gate through this same script.
 test('queue-mode-save writes the normalized setting, and anything malformed as "ask now"', () => {
   const tempHome = mkdtempSync(join(tmpdir(), 'orca-jev-write-guard-queue-mode-'))
