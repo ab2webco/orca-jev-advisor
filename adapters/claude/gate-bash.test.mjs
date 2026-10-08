@@ -3939,3 +3939,23 @@ test('T1 fix: on main, a write through a print verb (read as a mention) is still
   const payload = JSON.parse(run(home, 'echo x > notes.md', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
   assert.match(payload.systemMessage ?? '', /judged with never_write_to_main/)
 })
+
+// 0.6.28 T6 follow-up: every real install has command-scoped policies (the
+// shipped seed keeps eight on a working branch), so own-tree work goes on to
+// Jev with only its policy coverage deciding -- a cached policy verdict
+// still stands for it. (A cached risk advise is skipped for it, which
+// src/core/local_allow.test.ts pins: observing that here needs a real Jev
+// call.)
+test('T6 fix: with the shipped seed, a cached policy ask still stands for own-tree work', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  const seed = parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8')))
+  writePoliciesMirror(home, seed)
+  const command = 'git add -A && git commit -qm x'
+  const judged = seed.filter((p) => { const scope = p.scope ?? 'command'; return (scope === 'command' || scope === 'protected-branch') && p.id !== 'never_write_to_main' })
+  const key = computeCacheKey(command, repo, home, { repoContext: computeRepoContextForTest(repo), policies: judged, seedScopeById: SHIPPED_SEED_SCOPES })
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'a policy needs a person', policyId: 'others_pr', at: Date.now() })
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
+})
