@@ -4059,3 +4059,12 @@ test('T6 fix: a qualifying command keys its own cached verdicts, so it replays o
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
   assert.equal(lastGateRecord(home).source, 'cache')
 })
+
+test('pre-release C: writing Claude Code settings or hooks in the own tree is never allowed locally', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  for (const command of ["mkdir -p .claude && echo '{}' > .claude/settings.json", "echo '{}' > .mcp.json"]) {
+    run(home, command, { cwd: repo })
+    assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree' || r.stopReason === 'contained'), false, command)
+  }
+})

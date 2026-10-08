@@ -169,3 +169,19 @@ test("probe: more shapes, each read the way the rule says", () => {
   ];
   for (const [command, expected] of cases) assert.equal(own(command), expected, command);
 });
+
+// 0.6.28 pre-release C: the agent must never rewrite its own harness through
+// a local allow -- Claude Code's settings and hooks, its agents, the MCP list.
+test("must stop: Claude Code's own configuration, in the tree or anywhere else", () => {
+  for (const command of [
+    "echo '{}' > .claude/settings.json",
+    "sed -i 's/a/b/' .claude/settings.local.json",
+    "mkdir -p .claude/hooks && cat > .claude/hooks/pre.sh <<'EOF'\nexit 0\nEOF",
+    "cp /tmp/x/a .claude/agents/a.md",
+    "rm -f .claude/settings.json",
+    "echo '{}' > .mcp.json",
+    "echo '{}' > src/.claude/settings.json",
+  ]) {
+    assert.equal(own(command), false, command);
+  }
+});

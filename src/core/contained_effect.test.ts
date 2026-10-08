@@ -221,3 +221,17 @@ test("must stop: a group that can fall through to a delete outside", () => {
   assert.equal(contained("{ cd /tmp/x || true; }; rm -rf build"), false);
   assert.equal(contained("[ -d /tmp/x ] || { echo missing >&2; }; rm -rf ~/a"), false);
 });
+
+test("must stop: Claude Code's own configuration under a temp root", () => {
+  assert.equal(contained("mkdir -p /tmp/x/.claude/hooks"), false);
+  assert.equal(contained("echo '{}' > /tmp/x/.claude/settings.json"), false);
+  assert.equal(contained("echo '{}' > /tmp/x/.mcp.json"), false);
+  assert.equal(contained("rm -rf /tmp/x/.claude"), false);
+});
+
+test("must stop: anything under $CLAUDE_CONFIG_DIR, even when it sits in a temp root", () => {
+  const env = { HOME, TMPDIR: `${MAC_TMP}/`, CLAUDE_CONFIG_DIR: "/tmp/x/cfg" };
+  assert.equal(contained("echo '{}' > /tmp/x/cfg/settings.json", { env }), false);
+  assert.equal(contained("rm -rf /tmp/x/cfg/hooks", { env }), false);
+  assert.equal(contained("echo hi > /tmp/x/other.txt", { env }), true);
+});

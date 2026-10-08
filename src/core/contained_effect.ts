@@ -680,6 +680,8 @@ interface Places {
   readonly trusted: TrustedInput | null;
   /** The trusted programs the line runs, in order, once each. */
   readonly trustedRan: string[];
+  /** `$CLAUDE_CONFIG_DIR`, as written and realpath'd: never written by a local allow. */
+  readonly harnessDirs: readonly string[];
 }
 
 /** The real location of `path`: realpath of its deepest existing part, the rest appended. */
@@ -703,6 +705,19 @@ function isUnder(path: string, parent: string): boolean {
 function absolutePath(text: string, cwd: string): string | null {
   if (text.length === 0 || text.split("/").includes("..")) return null;
   return withoutTrailingSlash(posix.normalize(posix.isAbsolute(text) ? text : posix.join(cwd, text)));
+}
+
+/**
+ * 0.6.28: whether a path is part of the coding agent's own harness -- any
+ * `.claude` directory (settings, hooks, agents, commands), an `.mcp.json`,
+ * or anything under `$CLAUDE_CONFIG_DIR` (wherever it sits, a temp root too).
+ * Writing one could switch this gate off or add a hook that runs anything,
+ * so no local allow ever covers it, in a temp root or an own tree.
+ */
+function isHarnessConfig(path: string, places: Places): boolean {
+  const parts = path.split("/");
+  if (parts.includes(".claude") || parts[parts.length - 1] === ".mcp.json") return true;
+  return places.harnessDirs.some((dir) => path === dir || isUnder(path, dir));
 }
 
 /**
@@ -762,9 +777,9 @@ function madeEarlier(path: string, real: string, places: Places): boolean {
 /** Whether `text`, from `cwd`, is a path strictly inside a temp root and nothing this layer protects. */
 function isContainedPath(text: string, cwd: string, places: Places): boolean {
   const path = absolutePath(text, cwd);
-  if (path === null || namesTrustedProgram(path, places)) return false;
+  if (path === null || namesTrustedProgram(path, places) || isHarnessConfig(path, places)) return false;
   const real = realLocation(path, places.input.realpath);
-  if (real === null) return false;
+  if (real === null || isHarnessConfig(real, places)) return false;
   if (madeEarlier(path, real, places)) return false;
   if (!places.roots.some((root) => isUnder(real, root))) return false;
   // A root nested in another (TMPDIR in /var/folders) is never a target either.
@@ -813,9 +828,9 @@ function isOwnTreePath(text: string, cwd: string, places: Places): boolean {
   const own = places.ownTrees;
   if (own === null) return false;
   const path = absolutePath(text, cwd);
-  if (path === null || namesTrustedProgram(path, places)) return false;
+  if (path === null || namesTrustedProgram(path, places) || isHarnessConfig(path, places)) return false;
   const real = realLocation(path, places.input.realpath);
-  if (real === null || madeEarlier(path, real, places)) return false;
+  if (real === null || isHarnessConfig(real, places) || madeEarlier(path, real, places)) return false;
   const tree = writableTreeAt(real, cwd, places);
   if (tree === null || !isUnder(real, tree.root)) return false;
   const written = own.treeOf(path);
@@ -1399,7 +1414,11 @@ function effectStaysInside(command: string, input: ContainedEffectInput, ownTree
     .filter((root): root is string => root !== null && root !== "/" && root !== home && !isUnder(home, root));
   if (roots.length === 0 && ownTrees === null && trusted === null) return null;
   const sessionRepo = input.sessionRepoRoot === null ? null : realLocation(input.sessionRepoRoot, input.realpath);
-  const base: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [], ownTrees, sessionTree: null, trusted, trustedRan: [] };
+  const configText = input.env["CLAUDE_CONFIG_DIR"];
+  const configDir = configText === undefined || !posix.isAbsolute(configText) ? null : withoutTrailingSlash(posix.normalize(configText));
+  const configReal = configDir === null ? null : realLocation(configDir, input.realpath);
+  const harnessDirs = [configDir, configReal].filter((dir): dir is string => dir !== null && dir !== "/");
+  const base: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [], ownTrees, sessionTree: null, trusted, trustedRan: [], harnessDirs };
   const places: Places = { ...base, sessionTree: ownTrees === null ? null : ownBranchTree(ownTrees.treeOf(cwd), base) };
 
   return runItems(list, [{ cwd: input.cwd, status: "any", vars: new Map(), derived: new Set() }], places) === null ? null : places.trustedRan;
