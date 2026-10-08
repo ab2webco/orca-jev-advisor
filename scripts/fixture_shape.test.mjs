@@ -177,3 +177,46 @@ test('the empty fixture is exactly what read-measurements.mjs publishes for an e
     rmSync(home, { recursive: true, force: true })
   }
 })
+
+// 0.6.28 T4: the Rules tab's remembered authorizations. The fixture is
+// `{ ok, repos, checkedAt }` as publishGateAuthorizations stores it, its rows
+// in exactly the shape the real sidecar answers.
+test('ready.gateAuthorizationsStatus has the keys the real gate-authorizations sidecar publishes', SKIP_NO_PLAYWRIGHT, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'orca-fixture-shape-auth-'))
+  try {
+    const now = new Date().toISOString()
+    writeFileSync(join(dir, 'gate-authorizations.json'), JSON.stringify({ version: 1, repos: { 'github.com/acme/widgets': { 'pr-merge': { firstAt: now, lastAt: now, uses: 1 } } } }))
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ['--experimental-strip-types', '--no-warnings', join(ROOT, 'adapters', 'orca', 'gate-authorizations.mjs'), 'read'],
+      { env: { ...process.env, ORCA_SUPERVISOR_CACHE_DIR: dir }, cwd: ROOT }
+    )
+    const real = JSON.parse(stdout)
+    assert.equal(real.ok, true)
+    const fixture = READY.gateAuthorizationsStatus
+    assert.deepEqual(Object.keys(fixture).sort(), ['checkedAt', 'ok', 'repos'])
+    assert.deepEqual(keyPaths(fixture.repos).sort(), keyPaths(real.value.repos).sort())
+    assert.ok(fixture.repos.some((row) => row.classes.length >= 2), 'one repository holds two or more classes')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// 0.6.28 T7: the Rules tab's trusted programs. The fixture is what the real
+// worker's publishTrustedPrograms stores, built from the same validated list.
+test('ready.trustedProgramsStatus has the keys the real worker publishes, and two programs', SKIP_NO_PLAYWRIGHT, async () => {
+  // main.mjs resolves its config and cache dirs at import; under the test
+  // runner they must be explicit test directories (src/core/paths.ts).
+  const paths = mkdtempSync(join(tmpdir(), 'orca-fixture-shape-trusted-'))
+  process.env.ORCA_SUPERVISOR_CONFIG_DIR ??= join(paths, 'config')
+  process.env.ORCA_SUPERVISOR_CACHE_DIR ??= join(paths, 'cache')
+  const { publishTrustedPrograms, TRUSTED_PROGRAMS_STATUS_KEY } = await import('../adapters/orca/main.mjs')
+  const store = { trustedPrograms: ['acme-notify'] }
+  const host = { get: async (key) => store[key] ?? null, set: async (key, value) => { store[key] = value }, delete: async (key) => { delete store[key] }, keys: async () => Object.keys(store) }
+  await publishTrustedPrograms({ log: () => {} }, host)
+  const real = store[TRUSTED_PROGRAMS_STATUS_KEY]
+  const fixture = READY.trustedProgramsStatus
+  assert.deepEqual(Object.keys(fixture).sort(), Object.keys(real).sort())
+  assert.equal(fixture.programs.length, 2)
+  rmSync(paths, { recursive: true, force: true })
+})

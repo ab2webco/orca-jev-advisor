@@ -61,11 +61,11 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, writeFileSync, writeSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
@@ -82,7 +82,11 @@ import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
-import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { isContainedToTempRoots, isOwnTreeWork, tempRootsFromEnvironment, trustedProgramsRun } from '../../src/core/contained_effect.ts'
+import { localAllowReasonKey, localAllowStopReason } from '../../src/core/local_allow.ts'
+import type { LocalAllowKind } from '../../src/core/local_allow.ts'
+import type { ContainedEffectInput, OwnTreeInput } from '../../src/core/contained_effect.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
 import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
@@ -90,13 +94,19 @@ import type { RepoFacts, RepoLocation, TargetLocation } from '../../src/core/cro
 import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudonyms.ts'
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
 import { parseGitConfigRemotes } from '../../src/core/push_remote.ts'
-import { classifyClientReach } from '../../src/core/client_reach.ts'
+import { SHARED_BRANCH_NAMES, classifyClientReach } from '../../src/core/client_reach.ts'
+import { branchReachPlaces, namesProtectedBranch } from '../../src/core/branch_reach.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
 import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
 import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
+import { TRUSTED_PROGRAMS_MIRROR_FILE, parseTrustedPrograms } from '../../src/core/trusted_programs.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
+import { deliveryClassesOf } from '../../src/core/delivery_class.ts'
+import type { DeliveryClass } from '../../src/core/delivery_class.ts'
+import { AUTHORIZATIONS_FILE, EMPTY_AUTHORIZATIONS, isAuthorized, parseAuthorizations, pruneExpired, recordAuthorization, repoIdentity, repoSpecIdentity, touchAuthorization } from '../../src/core/gate_authorizations.ts'
+import type { AuthorizationStore } from '../../src/core/gate_authorizations.ts'
 import type { LocalGitAllowResult } from '../../src/core/push_own_branch.ts'
 import { fitJevState } from '../../src/core/jev_state_cap.ts'
 import { callJev, jevFailureOf, JevRequestError, type JevFailure } from '../../src/core/jev.ts'
@@ -176,6 +186,10 @@ const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // Never the real ~/.config or ~/.cache paths in a test -- same
 // ORCA_SUPERVISOR_CACHE_DIR override every other path in this file honors.
 const ADVICE_RETRY_PATH = join(CACHE_DIR, 'gate-advice-retry.json')
+// 0.6.28: the delivery classes each repository already confirmed -- see
+// src/core/gate_authorizations.ts. One of the gate's own files
+// (gate_own_paths.ts), so the model cannot write itself an authorization.
+const AUTHORIZATIONS_PATH = join(CACHE_DIR, AUTHORIZATIONS_FILE)
 // This file runs IN PLACE from `<pluginRoot>/adapters/claude/gate-bash.ts`
 // (see adapters/orca/install-claude-integration.mjs's hookSpecs, which
 // points Claude Code's hook entry straight at the installed copy rather
@@ -201,6 +215,9 @@ const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 // same sidecar on the same save. Fails open to an empty list, and an empty
 // list changes no decision -- see readTeamOwnersMirror below.
 const TEAM_OWNERS_MIRROR_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
+// 0.6.28 T7: the person's trusted programs, mirrored by the worker from the
+// config panel's Rules tab. See readTrustedProgramsMirror below.
+const TRUSTED_PROGRAMS_MIRROR_PATH = join(CONFIG_DIR, TRUSTED_PROGRAMS_MIRROR_FILE)
 // 0.6.8 T4: queue mode -- "when a person must approve: ask now | queue and
 // continue". Defaults to false (ask now). See readQueueModeMirror below.
 const QUEUE_MODE_MIRROR_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
@@ -804,11 +821,16 @@ type CacheEntry = GateCacheEntry
  * Spanish spelling to English) fingerprint identically, so this never
  * costs a hit it didn't have to.
  */
-function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null, policies: readonly Policy[], consequenceCeiling: number | undefined): string | null {
+function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null, policies: readonly Policy[], consequenceCeiling: number | undefined, localAllowKind: LocalAllowKind | null = null): string | null {
   const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
   if (shape === null) return null
   const fingerprint = gatePolicyFingerprint({ policies, seedScopeById: SEED_SCOPE_BY_ID, consequenceCeiling })
-  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}`).digest('hex').slice(0, 24)
+  // 0.6.28: a command that qualifies for a local allow (src/core/local_allow.ts)
+  // is judged by its policies alone, never by the risk axes, so its verdicts
+  // are its own: a command of the same shape that does not qualify must
+  // never replay them, nor they its. Every other key is byte-identical.
+  const qualified = localAllowKind === null ? '' : `:local-allow=${localAllowKind}`
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}${qualified}`).digest('hex').slice(0, 24)
 }
 
 /**
@@ -1041,10 +1063,107 @@ function emitAdvice(segment: string, effect: string, modelText: string): void {
  * 'jev' for the risk-stage/deploy-floor/cache-hit paths, 'local-rule' for a
  * local rule's own toggled-off/interpreter-code advice.
  */
-function tryAdviceRetryPass(command: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null, teamInternal = false): boolean {
+function tryAdviceRetryPass(command: string, sessionCwd: string, cwd: string, sessionId: string | null, source: GateSource, latencyMs: number | null = null, teamInternal = false): boolean {
   if (!checkAdviceRetryPass(sessionId, command)) return false
+  // 0.6.28: re-running an advised delivery line unchanged is the confirmation
+  // the gate remembers for the repository. Never a local rule's own advice:
+  // only the risk stage's advice may ever be relaxed later.
+  if (source !== 'local-rule') learnAuthorization(command, sessionCwd, cwd)
   appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal)
   emit('allow', 'Jev: identical retry within the advice window; proceeding.', t('advisedRetryLine', { segment: jevSegmentFor(command) }))
+  return true
+}
+
+// ---------------------------------------------------------------------------
+// 0.6.28: remembered delivery authorizations. The store is read and written
+// here; what a delivery line is (src/core/delivery_class.ts) and how the store
+// changes (src/core/gate_authorizations.ts) are pure. Every read fails open to
+// an empty store and every write is best effort: an authorization that cannot
+// be read only costs the ordinary advice, never a crash or a block.
+// ---------------------------------------------------------------------------
+
+function readAuthorizationStore(): AuthorizationStore {
+  try {
+    return parseAuthorizations(JSON.parse(readFileSync(AUTHORIZATIONS_PATH, 'utf8')))
+  } catch {
+    return EMPTY_AUTHORIZATIONS
+  }
+}
+
+/** Written to a temporary file and renamed over the store, so a reader never sees half a file. */
+function writeAuthorizationStore(store: AuthorizationStore): void {
+  const temporary = `${AUTHORIZATIONS_PATH}.${process.pid}.tmp`
+  try {
+    mkdirSync(dirname(AUTHORIZATIONS_PATH), { recursive: true })
+    writeFileSync(temporary, JSON.stringify(pruneExpired(store, Date.now())), 'utf8')
+    renameSync(temporary, AUTHORIZATIONS_PATH)
+  } catch {
+    // Not remembered this time; the next confirmation tries again.
+  }
+}
+
+/**
+ * The delivery classes of `command` for `repo`: a push naming no branch read
+ * where it runs (the leading `cd` target, else the session's cwd), and a pull
+ * request named by URL (or a `--repo`/`-R`) accepted only when it is `repo` itself, and a
+ * `git checkout <name>` only when `name` is a local branch there (otherwise
+ * git reads it as a path and discards its changes).
+ */
+function deliveryClassesForCommand(command: string, sessionCwd: string, repo: string): readonly DeliveryClass[] | null {
+  return deliveryClassesOf(command, {
+    implicitPushDestination: (cdDir, head) => resolveImplicitPushDestination({ cwd: cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir), head }),
+    prUrlInRepository: (url) => repoIdentity(url.replace(/\/pull\/.*$/, ''), null) === repo,
+    repoInRepository: (spec) => repoSpecIdentity(spec) === repo,
+    isLocalBranch: (name, cdDir) => gitOutput(['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], cdDir === null ? sessionCwd : resolve(sessionCwd, cdDir)) !== null,
+  })
+}
+
+/** The repository `actingCwd` belongs to: its normalized origin URL, shared by every worktree and clone, else its root. */
+function authorizationRepo(actingCwd: string): string | null {
+  return repoIdentity(gitOutput(['remote', 'get-url', 'origin'], actingCwd), getRepoRootForAdvice(actingCwd))
+}
+
+function learnAuthorization(command: string, sessionCwd: string, actingCwd: string): void {
+  const repo = authorizationRepo(actingCwd)
+  if (repo === null) return
+  const classes = deliveryClassesForCommand(command, sessionCwd, repo)
+  if (classes === null) return
+  writeAuthorizationStore(recordAuthorization(readAuthorizationStore(), repo, classes, new Date().toISOString()))
+}
+
+/**
+ * A risk advice on a delivery line whose every class this repository already
+ * confirmed: an allow, with Jev's advice handed to the model as non-blocking
+ * context, the person told in one line, and the log row `authorized`.
+ */
+function tryAuthorizedPass(input: {
+  readonly command: string
+  readonly cwd: string
+  readonly actingCwd: string
+  readonly reasonsEnglish: readonly string[]
+  readonly source: GateSource
+  readonly latencyMs: number | null
+  readonly teamInternal: boolean
+}): boolean {
+  const repo = authorizationRepo(input.actingCwd)
+  if (repo === null) return false
+  const classes = deliveryClassesForCommand(input.command, input.cwd, repo)
+  if (classes === null) return false
+  const store = readAuthorizationStore()
+  if (!isAuthorized(store, repo, classes, Date.now())) return false
+  writeAuthorizationStore(touchAuthorization(store, repo, classes, new Date().toISOString()))
+  appendGateRecord(input.actingCwd, input.command, input.source, 'allow', input.latencyMs, 'authorized', null, input.teamInternal)
+  const advice = input.reasonsEnglish.filter((reason) => reason.length > 0).join(' · ')
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      permissionDecisionReason: 'Jev: this delivery was already confirmed in this repository; proceeding.',
+      additionalContext: `Jev advice (not a block; this delivery was already confirmed in this repository, so it runs): ${advice.length > 0 ? advice : 'it may affect something worth a second look'}`,
+    },
+    systemMessage: t('authorizedLine', { segment: jevSegmentFor(input.command) }),
+  }
+  writeSync(1, JSON.stringify(payload))
   return true
 }
 
@@ -1081,10 +1200,13 @@ function resolveAdviceOutcome(input: {
   readonly latencyMs?: number | null
   /** 0.6.8 T3: the requires_human policies were set aside for this command. */
   readonly teamInternal?: boolean
+  /** 0.6.28: a risk advice with no policy behind it (fresh, floored or replayed from the cache), which a remembered authorization may turn into an allow. Never set for a local rule's advice. */
+  readonly authorizable?: boolean
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
   const teamInternal = input.teamInternal ?? false
-  if (tryAdviceRetryPass(command, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
+  if (tryAdviceRetryPass(command, cwd, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
+  if (input.authorizable === true && tryAuthorizedPass({ command, cwd, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
   appendGateRecord(input.actingCwd ?? cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
@@ -1210,6 +1332,56 @@ function readTeamOwnersMirror(): readonly string[] {
     return parseTeamOwners(JSON.parse(readFileSync(TEAM_OWNERS_MIRROR_PATH, 'utf8')))
   } catch {
     return []
+  }
+}
+
+/**
+ * 0.6.28 T7: the trusted programs, best-effort like the mirrors above, and
+ * failing closed: a missing, unreadable or malformed file trusts nothing.
+ */
+function readTrustedProgramsMirror(): readonly string[] {
+  try {
+    return parseTrustedPrograms(JSON.parse(readFileSync(TRUSTED_PROGRAMS_MIRROR_PATH, 'utf8')))
+  } catch {
+    return []
+  }
+}
+
+/** The most of a file a `$(cat f)` value is read from: a path, not a document. */
+const FIRST_LINE_MAX_BYTES = 4096
+
+/**
+ * The first line of a small regular file, for a `X="$(cat f)"` assignment
+ * (0.6.28 T7); null when it cannot be read. Never more than
+ * FIRST_LINE_MAX_BYTES, and never a device, a FIFO or a directory:
+ * `$(cat /dev/zero)` or a FIFO would otherwise stall or exhaust the hook,
+ * which fails open when it is killed.
+ */
+function readFirstLineOf(path: string): string | null {
+  let fd: number | null = null
+  try {
+    const stat = statSync(path)
+    if (!stat.isFile() || stat.size > FIRST_LINE_MAX_BYTES) return null
+    fd = openSync(path, 'r')
+    const buffer = Buffer.alloc(FIRST_LINE_MAX_BYTES)
+    const read = readSync(fd, buffer, 0, FIRST_LINE_MAX_BYTES, 0)
+    const line = buffer.subarray(0, read).toString('utf8').split('\n')[0]?.trim() ?? ''
+    return line.length > 0 ? line : null
+  } catch {
+    return null
+  } finally {
+    if (fd !== null) closeSync(fd)
+  }
+}
+
+/** Whether `path` is an executable regular file (0.6.28 T7). */
+function isExecutableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, fsConstants.X_OK)
+    return true
+  } catch {
+    return false
   }
 }
 
@@ -1647,7 +1819,7 @@ let stateCondensed = false
  * consequence-ceiling risk rule, substituting the matched destination's own
  * ceiling override when its catalog entry carries one.
  *
- * `localGitAllow` is Option D's own contribution (odd/tasks/
+ * `localAllow` is Option D's own contribution (0.6.28 T6: own-tree work too) (odd/tasks/
  * release-0.5.1-push-own-branch.md's follow-up): when the command already
  * structurally qualifies for the local-only allow AND at least one
  * command-scoped policy survives filtering (the ONLY reason this function
@@ -1663,7 +1835,7 @@ let stateCondensed = false
  * team-internal command (0.6.8 T3) -- the cache key and this question must
  * judge the very same policy set.
  */
-async function askJev(apiKey: string, command: string, jevContext: string, jevNames: JevNames, localGitAllow: LocalGitAllowResult, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[], cwd: string): Promise<JevOutcome> {
+async function askJev(apiKey: string, command: string, jevContext: string, jevNames: JevNames, localAllow: LocalAllow, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[], cwd: string): Promise<JevOutcome> {
   try {
     const questions = {
       ...buildActionGateQuestions(),
@@ -1696,14 +1868,14 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
       answers: response.answers,
       consequenceCeiling: matched?.autonomy?.consequenceCeiling,
       noDestinationMatched: matched === null,
-      localAllowQualifies: localGitAllow.qualifies,
+      localAllowQualifies: localAllow.qualifies,
     })
     // Option D: no policy stopped it (policyId null) and the command
     // already structurally qualified -- decideGateAction's own verdict is
     // unconditionally 'allow' here, and gate-bash.ts's own local reason
     // text is shown, never a risk-derived one (there may not even be one:
     // decideGateAction returns empty reasons for this case).
-    const viaLocalAllow = localGitAllow.qualifies && gate.verdict === 'allow' && gate.policyId === null
+    const viaLocalAllow = localAllow.qualifies && gate.verdict === 'allow' && gate.policyId === null
     // The advise-model release: a 'ask' that no policy resolved (policyId
     // null) IS the risk stage's own ask -- viaLocalAllow already implies
     // 'allow', so the two conditions never overlap.
@@ -1721,7 +1893,7 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // `gate.reasons`.
     const policyRule = gate.policyId !== null ? gate.reasons.find((r) => r.key === 'policy.forbidden' || r.key === 'policy.needsHuman')?.params?.rule ?? null : null
     const reason = viaLocalAllow
-      ? t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush')
+      ? (localAllow.qualifies ? localAllowReason(localAllow) : t('reason.ownBranchPush'))
       : isPolicyDeny
         ? policyDenyReasonEnglish(gate)
         : gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
@@ -1787,6 +1959,90 @@ function gateOwnFileWritten(command: string, cwd: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * 0.6.28 T2: whether `command`, run from `cwd`, only writes or deletes inside
+ * a temp root -- the roots named by this process's environment
+ * (tempRootsFromEnvironment), never a path hardcoded per machine. A
+ * Windows host is never read: the check speaks POSIX paths only.
+ */
+function commandIsContained(command: string, cwd: string): boolean {
+  if (PLATFORM === 'win32') return false
+  try {
+    return isContainedToTempRoots(command, containedEffectInput(cwd))
+  } catch {
+    return false
+  }
+}
+
+/** What contained_effect.ts reads from this process: its environment, the filesystem, the session's repository. */
+function containedEffectInput(cwd: string): ContainedEffectInput {
+  const env: Readonly<Record<string, string | undefined>> = process.env
+  return {
+    tempRoots: tempRootsFromEnvironment(env, tmpdir(), process.getuid?.() ?? null),
+    cwd,
+    env,
+    realpath: (path) => {
+      try {
+        return realpathSync(path)
+      } catch {
+        return null
+      }
+    },
+    sessionRepoRoot: resolveRepoRootForCwd(cwd),
+    isLinkedWorktree: (path) => resolveLinkedWorktreeMainCheckout(path) !== null,
+    readFirstLine: readFirstLineOf,
+  }
+}
+
+/** The own-tree reading of this process's filesystem (0.6.28 T6), shared with the trusted reading. */
+function ownTreeInput(): OwnTreeInput {
+  return {
+    treeOf: (path) => {
+      const root = resolveRepoRootForCwd(path)
+      return root === null ? null : { root, branch: resolveBranchForCwd(path), commonDir: resolveGitDirForConfig(path) }
+    },
+    protectedBranches: SHARED_BRANCH_NAMES,
+  }
+}
+
+/**
+ * 0.6.28 T7: the trusted programs `command` runs, when every segment is one
+ * of them, obviously safe, contained or own-tree work -- null otherwise, or
+ * when the list is empty.
+ */
+function trustedProgramsInCommand(command: string, cwd: string): readonly string[] | null {
+  if (PLATFORM === 'win32') return null
+  const names = readTrustedProgramsMirror()
+  if (names.length === 0) return null
+  try {
+    return trustedProgramsRun(command, containedEffectInput(cwd), ownTreeInput(), { names: new Set(names), pathDirs: (process.env['PATH'] ?? '').split(':').filter((dir) => dir.length > 0), isExecutable: isExecutableFile })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 0.6.28 T6: whether `command` is plain local work in an own working tree
+ * (contained_effect.ts's isOwnTreeWork): each tree's root, branch and shared
+ * git directory read from the filesystem the way T1 reads them.
+ */
+function commandIsOwnTreeWork(command: string, cwd: string): boolean {
+  if (PLATFORM === 'win32') return false
+  try {
+    return isOwnTreeWork(command, containedEffectInput(cwd), ownTreeInput())
+  } catch {
+    return false
+  }
+}
+
+/** A command that qualifies for a local allow, which kind, and the trusted programs it runs (T7) -- see src/core/local_allow.ts. */
+type LocalAllow = { readonly qualifies: true; readonly kind: LocalAllowKind; readonly programs: readonly string[] } | { readonly qualifies: false }
+
+/** The person-facing reason for a local allow, naming the trusted programs when there are any. */
+function localAllowReason(allow: Extract<LocalAllow, { qualifies: true }>): string {
+  return t(localAllowReasonKey(allow.kind), { programs: allow.programs.join(', ') })
 }
 
 async function main(): Promise<void> {
@@ -1921,6 +2177,18 @@ async function main(): Promise<void> {
     return
   }
 
+  // 0.6.28 T2: a command whose only effect is inside a temp root (Claude's
+  // scratchpad, /tmp, $TMPDIR) is allowed here, after the local deny rules
+  // above (`rm -rf ~` is still refused by them) and before any policy, cache
+  // or Jev call: Jev reads every path pseudonymised and cannot see that a
+  // scratchpad is temporary. src/core/contained_effect.ts fails closed on
+  // anything it cannot resolve from the text and the filesystem.
+  if (commandIsContained(command, cwd)) {
+    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'contained', null)
+    emit('allow', t('reason.contained'))
+    return
+  }
+
   // Part 4 (0.5.2): policy coverage must know WHERE the command acts, not
   // only the session's own cwd -- the real miss this closes: two `rm` of a
   // temp file in a DIFFERENT repository, on a feature branch, were
@@ -1967,7 +2235,22 @@ async function main(): Promise<void> {
       : null
   const matchedDestination = catalogMatch?.destination ?? null
   const policiesMirror = readPoliciesMirror()
-  const scopedPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+  // 0.6.28 T1: a `protected-branch` policy (never_write_to_main) is judged
+  // only when the command can reach a protected branch -- see
+  // filterPoliciesForBranchReach. The branch is read at every place the
+  // command writes in (after `cd`, `git -C`, a write's own target) and at
+  // every push destination, implicit ones included; a place whose branch
+  // cannot be known keeps the policy, a place outside any repository has
+  // no branch to protect. Read even for a command whose verbs only print
+  // (mentionOnly): `echo x > notes.md` on main still writes main.
+  const pushes = !/\bpush\b/.test(inspected) ? [] : pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
+  const namesProtected = namesProtectedBranch(inspected, SHARED_BRANCH_NAMES)
+  const reachBranches = branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) === null ? [] : [resolveBranchForCwd(place)]))
+  const scopedPolicies = filterPoliciesForBranchReach(
+    filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID),
+    SEED_SCOPE_BY_ID,
+    { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected, protectedBranches: SHARED_BRANCH_NAMES },
+  )
 
   // 0.6.8 T3: a requires_human policy protects work that reaches a client,
   // and Jev, asked from the sentence alone, also asked about work that never
@@ -2009,10 +2292,23 @@ async function main(): Promise<void> {
   //     askJev: the risk axes never decide for a qualifying command, but the
   //     policy coverage question still does (see decisions.ts's
   //     decideGateAction and its own `localAllowQualifies` option).
+  // 0.6.28 T6: plain file writes and local git in the session's own working
+  // tree on a working branch -- the effect of Claude Code's own Edit and
+  // Write tools, which never reach this gate -- qualify the same way, when
+  // nothing in the text names a shared branch (src/core/local_allow.ts).
   const localGitAllow: LocalGitAllowResult = mentionOnly ? { qualifies: false } : qualifiesForLocalGitAllow({ command, cwd })
-  if (localGitAllow.qualifies && commandScopedPolicies.length === 0) {
-    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, 'local-allow', null, teamInternal)
-    emit('allow', t(localGitAllow.reasonKind === 'guardedGitDelete' ? 'reason.guardedGitDelete' : 'reason.ownBranchPush'))
+  // 0.6.28 T7: so does a line of programs the person trusted in the panel.
+  const trustedRun = localGitAllow.qualifies || namesProtected ? null : trustedProgramsInCommand(command, cwd)
+  const localAllow: LocalAllow = localGitAllow.qualifies
+    ? { qualifies: true, kind: localGitAllow.reasonKind ?? 'ownBranchPush', programs: [] }
+    : !namesProtected && commandIsOwnTreeWork(command, cwd)
+      ? { qualifies: true, kind: 'ownTree', programs: [] }
+      : trustedRun !== null
+        ? { qualifies: true, kind: 'trusted', programs: trustedRun }
+        : { qualifies: false }
+  if (localAllow.qualifies && commandScopedPolicies.length === 0) {
+    appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, localAllowStopReason(localAllow.kind), null, teamInternal)
+    emit('allow', localAllowReason(localAllow))
     return
   }
 
@@ -2027,7 +2323,7 @@ async function main(): Promise<void> {
   // costs neither a wasted network round trip nor even the no-key notice
   // machinery below -- true for an uncacheable command shape exactly as much
   // as a cacheable one.
-  if (tryAdviceRetryPass(command, actingCwd, sessionId, 'jev', null, teamInternal)) return
+  if (tryAdviceRetryPass(command, cwd, actingCwd, sessionId, 'jev', null, teamInternal)) return
 
   const apiKey = await resolveApiKey()
   const previouslyWarnedNoKey = readNoKeyWarned()
@@ -2059,7 +2355,7 @@ async function main(): Promise<void> {
   const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
   const jevNames = createJevPseudonyms()
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
-  const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head })), jevNames)
+  const pushSentence = mentionOnly || !/\bpush\b/.test(inspected) ? null : buildPushDestinationSentence(pushes, jevNames)
   // 0.6.17 T1 (JEVADV-93): a `gh` merge says what it goes through -- a pull
   // request's review, or none for an API branch merge -- so a reviewed merge
   // is not judged by the checkout's branch. Jev's copy only, like the push.
@@ -2085,7 +2381,7 @@ async function main(): Promise<void> {
   // filtering askJev's own path applies) and the matched destination's own
   // ceiling override are what JEVADV-48 folds into the key -- see cacheKey's
   // own doc.
-  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null, commandScopedPolicies, matchedDestination?.autonomy?.consequenceCeiling)
+  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null, commandScopedPolicies, matchedDestination?.autonomy?.consequenceCeiling, localAllow.qualifies ? localAllow.kind : null)
   const cache = key === null ? {} : readCache()
   const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
@@ -2113,7 +2409,7 @@ async function main(): Promise<void> {
       // empty status line.
       const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
         hit.deployPublishKind !== undefined ? { deployPublishKind: hit.deployPublishKind } : { riskReasonKeys: cachedRiskReasonKeys(hit) }
-      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal })
+      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal, authorizable: true })
       return
     }
     // 0.6.8 T4: a cached requires_human ask is queued the same way a fresh
@@ -2157,7 +2453,7 @@ async function main(): Promise<void> {
   }
 
   const jevStartedAt = Date.now()
-  const outcome = await askJev(apiKey, command, jevContext, jevNames, localGitAllow, matchedDestination, commandScopedPolicies, cwd)
+  const outcome = await askJev(apiKey, command, jevContext, jevNames, localAllow, matchedDestination, commandScopedPolicies, cwd)
   const jevLatencyMs = Date.now() - jevStartedAt
 
   if (outcome.kind === 'none') {
@@ -2207,7 +2503,7 @@ async function main(): Promise<void> {
   // (askJev's own viaLocalAllow -- the risk axes never ran this verdict);
   // otherwise the consequence-ceiling risk rule decided it, including a
   // clean 'allow'.
-  const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : resolved.viaLocalAllow ? 'local-allow' : 'risk'
+  const jevStopReason: GateStopReason = resolved.policyId !== null ? 'policy' : resolved.viaLocalAllow && localAllow.qualifies ? localAllowStopReason(localAllow.kind) : 'risk'
   // AB benchmark: 'deny' never reaches here -- decideGateAction can now
   // return it (a `prohibits` policy's own hard stop), but the AB benchmark
   // never samples that case: its own BigModelVerdict/GateLikeVerdict
@@ -2245,7 +2541,7 @@ async function main(): Promise<void> {
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
       effectSource: { riskReasonKeys: resolved.riskAdviceReasonKeys },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal, authorizable: true,
     })
     return
   }
@@ -2269,7 +2565,7 @@ async function main(): Promise<void> {
       reasonsEnglish: [resolved.deployPublishAdvice],
       effectSource: { deployPublishKind: resolved.deployPublishKind },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal, authorizable: true,
     })
     return
   }

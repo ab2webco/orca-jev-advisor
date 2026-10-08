@@ -348,3 +348,59 @@ test("awk and sed -n that only read and print stay safe and stay mentions", () =
     assert.equal(mentionsRatherThanRuns(command), true, command);
   }
 });
+
+// 0.6.28 T3: daily read-only commands that used to reach Jev. A command that
+// writes nothing never reaches policy coverage.
+test("0.6.28 T3: shell options, sleep, true, false and test are safe", () => {
+  for (const command of ["set -e", "set -euo pipefail", "set -o pipefail", "set -eux", "set +x", "sleep 2", "sleep 0.5", "true", "false", "test -f package.json", "[ -d src ]", "set -e && sleep 1 && true"]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+});
+
+test("0.6.28 T3: read-only text and file tools are safe", () => {
+  for (const command of ["printf '%s\\n' a b", "sort -u names.txt", "sort -k2 -t: f | uniq -c", "uniq -c names.txt", "diff a.txt b.txt", "du -sh dist", "df -h", "basename /a/b.txt", "dirname /a/b.txt", "realpath src", "stat package.json", "file dist/app.js", "tr a-z A-Z", "cut -d: -f1 f"]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+});
+
+test("0.6.28 T3: git -C <dir> with a read-only verb is safe, like plain git", () => {
+  for (const command of ["git -C /p status", "git -C ../wt log --oneline -3", 'git -C "/p q" diff --stat', "git -C /p branch --show-current", "git -C /p rev-parse HEAD"]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+});
+
+test("0.6.28 T3: graft's read subcommands are safe", () => {
+  for (const command of ["graft ask 'how does the gate decide'", "graft grep isSafeSegment", "graft skeleton src/core/decisions.ts", "graft callers isSafeSegment", "graft map"]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+});
+
+test("0.6.28 T3: writing forms of the same tools stay unsafe", () => {
+  for (const command of [
+    "git -C d push",
+    "git -C d push origin feat/x",
+    "git -C d reset --hard",
+    "git -C d commit -m x",
+    "git -c core.pager=less -C d log",
+    "git -C d -c core.pager=less log",
+    "git --git-dir=/p/.git status",
+    "git -C d --work-tree=/x status",
+    "graft index",
+    "graft build",
+    "sort -o out.txt in.txt",
+    "sort --output=out.txt in.txt",
+    "sort -uo out.txt in.txt",
+    "sort --compress-program=sh in.txt",
+    "uniq in.txt out.txt",
+    "file -C -m magic",
+    "printf x > f",
+    "printf x >> f",
+    "set -e; rm -rf dist",
+    "sleep 1 && rm x",
+    "xargs rm",
+    "mkdir -p dist",
+    "test -f x && rm x",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), false, command);
+  }
+});

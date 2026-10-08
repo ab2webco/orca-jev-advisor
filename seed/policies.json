@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "policies": [
     {
       "id": "read_and_test",
@@ -14,6 +14,7 @@
     {
       "id": "never_write_to_main",
       "kind": "prohibits",
+      "scope": "protected-branch",
       "rule": "Never write directly on main, master or develop, not even a one-line fix: no editing their files, committing, cherry-picking or merging your own work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch."
     },
     {

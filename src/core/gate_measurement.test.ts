@@ -325,6 +325,66 @@ test("an advise verdict with stopReason 'advice-retry' round-trips -- an identic
   assert.deepEqual(parseGateDecisionRecords(raw), [record]);
 });
 
+test("an allow with stopReason 'authorized' round-trips -- a remembered delivery authorization is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-authorized",
+    at: "2026-10-06T00:00:00.000Z",
+    project: null,
+    command: "gh pr merge 46 --squash",
+    source: "cache",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "authorized",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
+test("an allow with stopReason 'contained' round-trips -- a temp-root-only command is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-contained",
+    at: "2026-10-07T00:00:00.000Z",
+    project: null,
+    command: "rm -rf /tmp/scratch/out",
+    source: "local-rule",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "contained",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
+test("an allow with stopReason 'own-tree' round-trips -- local work in the own working tree is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-own-tree",
+    at: "2026-10-07T00:00:00.000Z",
+    project: null,
+    command: "git add -A && git commit -qm x",
+    source: "local-rule",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "own-tree",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
+test("an allow with stopReason 'trusted' round-trips -- a trusted program's line is never dropped by the parser", () => {
+  const record = buildGateDecisionRecord({
+    id: "sr-trusted",
+    at: "2026-10-07T00:00:00.000Z",
+    project: null,
+    command: "acme-notify --to team hi",
+    source: "local-rule",
+    verdict: "allow",
+    latencyMs: null,
+    pluginVersion: "0.6.28",
+    stopReason: "trusted",
+  });
+  assert.deepEqual(parseGateDecisionRecords(serializeGateRecord(record)), [record]);
+});
+
 test("an 'advise' verdict round-trips and is never dropped as an unrecognised verdict", () => {
   const record = buildGateDecisionRecord({
     id: "sr-advise",

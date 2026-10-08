@@ -84,7 +84,8 @@ export interface ClientReachResult {
 }
 
 /** Shared branches: never the target of an `internal` push, on any repository. */
-const SHARED_BRANCHES: ReadonlySet<string> = new Set([...PROTECTED_BRANCH_NAMES, "develop", "staging"]);
+/** Exported for 0.6.28 T1 (gate-bash.ts): the branches never_write_to_main protects are these same ones. */
+export const SHARED_BRANCH_NAMES: ReadonlySet<string> = new Set([...PROTECTED_BRANCH_NAMES, "develop", "staging"]);
 
 const OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
@@ -245,7 +246,7 @@ function isInternalPush(tokens: readonly string[], facts: ClientReachFacts, stal
   let branch: string | null;
   if (refspec === undefined || refspec === "HEAD") branch = stale.branch ? null : facts.currentBranch;
   else branch = isPlainBranchRefspec(refspec) ? refspec : null;
-  if (branch === null || SHARED_BRANCHES.has(branch.toLowerCase())) return false;
+  if (branch === null || SHARED_BRANCH_NAMES.has(branch.toLowerCase())) return false;
 
   // No remote named: git picks one (pushRemote, pushDefault, the upstream,
   // origin) -- internal only when every candidate is the team's.

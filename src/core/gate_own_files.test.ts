@@ -16,7 +16,7 @@ test("gateOwnFiles: the decision inputs the gate and the router read, and nothin
     assert.ok(GATE_OWN_CONFIG_FILES.includes(name), name);
     assert.equal(gateOwnFileAt(`${CONFIG}/${name}`, OWN), `${CONFIG}/${name}`, name);
   }
-  for (const name of ["gate-bash.json", "gate-advice-retry.json", "gate-enablement.json", "agent-model-enablement.json", "human-queue.jsonl"]) {
+  for (const name of ["gate-bash.json", "gate-advice-retry.json", "gate-authorizations.json", "gate-enablement.json", "agent-model-enablement.json", "human-queue.jsonl"]) {
     assert.ok(GATE_OWN_CACHE_FILES.includes(name), name);
     assert.equal(gateOwnFileAt(`${CACHE}/${name}`, OWN), `${CACHE}/${name}`, name);
   }

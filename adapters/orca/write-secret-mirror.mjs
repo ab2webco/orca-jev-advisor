@@ -18,7 +18,7 @@
  * works the same way on Windows, unlike the wrapper this project used
  * before), where the sandbox does not apply.
  *
- * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|team-owners-save|queue-mode-save|explicit-models-save|models-save|quota-save|orca-ui-language-read>
+ * Usage: node write-secret-mirror.mjs <save|clear|read|catalog-save|policies-save|team-owners-save|trusted-programs-save|queue-mode-save|explicit-models-save|models-save|quota-save|orca-ui-language-read>
  *   save   reads the new key from stdin (never argv, never logged), and
  *          atomically (temp file + rename) writes or replaces its
  *          TYPESAFE_API_KEY= line in the mirror file, mode 0600. Other
@@ -41,6 +41,12 @@
  *          (src/core/team_owners.ts's parseTeamOwners -- an invalid line is
  *          dropped, and a payload that is not an array writes `[]`, which
  *          changes no decision), to team-owners.json. Not secret.
+ *   trusted-programs-save  reads the trusted programs list (0.6.28 T7) as
+ *          a JSON array from stdin and atomically writes it, normalized
+ *          through src/core/trusted_programs.ts's parseTrustedPrograms (a
+ *          refused or malformed name is dropped; anything but an array
+ *          writes `[]`, nothing trusted), to trusted-programs.json. Not
+ *          secret.
  *   queue-mode-save  reads the queue mode setting (0.6.8 T4: "when a person
  *          must approve: ask now | queue and continue") as `{ enabled }`
  *          JSON from stdin and atomically writes it, normalized through
@@ -117,6 +123,7 @@ import { parseModSkillsConfig } from '../../src/core/mod_skills_config.ts'
 import { parseDenyTierConfig } from '../../src/core/deny_tier_config.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
+import { TRUSTED_PROGRAMS_MIRROR_FILE, parseTrustedPrograms } from '../../src/core/trusted_programs.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../src/core/explicit_models.ts'
 import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
 import { parseOrcaUiLanguage } from '../../src/core/orca_ui_language.ts'
@@ -152,6 +159,7 @@ let LOCALE_PATH = ''
 let CATALOG_PATH = ''
 let POLICIES_PATH = ''
 let TEAM_OWNERS_PATH = ''
+let TRUSTED_PROGRAMS_PATH = ''
 let QUEUE_MODE_PATH = ''
 let EXPLICIT_MODELS_PATH = ''
 let MOD_SKILLS_CONFIG_PATH = ''
@@ -179,6 +187,7 @@ try {
   // The team repositories setting (0.6.8 T1) -- same channel, same ordinary
   // permissions, and the same filename constant gate-bash.ts reads.
   TEAM_OWNERS_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
+  TRUSTED_PROGRAMS_PATH = join(CONFIG_DIR, TRUSTED_PROGRAMS_MIRROR_FILE)
   QUEUE_MODE_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
   EXPLICIT_MODELS_PATH = join(CONFIG_DIR, EXPLICIT_MODELS_MIRROR_FILE)
   // mod-skills' `active`/`activeTools` switches -- see
@@ -391,6 +400,15 @@ async function teamOwnersSave (raw) {
   return { ok: true }
 }
 
+/** 0.6.28 T7: same as teamOwnersSave, for the trusted programs: only valid
+ *  names land on disk, and anything malformed writes `[]`. */
+async function trustedProgramsSave (raw) {
+  const parsed = parseJsonPayload(raw)
+  const programs = parseTrustedPrograms(parsed.ok ? parsed.value : null)
+  await writeAtomic(`${JSON.stringify(programs, null, 2)}\n`, TRUSTED_PROGRAMS_PATH, null)
+  return { ok: true }
+}
+
 /** Same as teamOwnersSave, for the queue mode: what lands on disk is
  *  always `{ enabled: <boolean> }`, false for anything malformed. */
 async function queueModeSave (raw) {
@@ -555,6 +573,8 @@ async function main () {
       result = await policiesSave((await readStdin()).trim())
     } else if (mode === 'team-owners-save') {
       result = await teamOwnersSave((await readStdin()).trim())
+    } else if (mode === 'trusted-programs-save') {
+      result = await trustedProgramsSave((await readStdin()).trim())
     } else if (mode === 'queue-mode-save') {
       result = await queueModeSave((await readStdin()).trim())
     } else if (mode === 'explicit-models-save') {

@@ -26,6 +26,7 @@ export type GateKey =
   | "policyDeny"
   | "advisedLine"
   | "advisedRetryLine"
+  | "authorizedLine"
   | "blockedLine"
   | "policyBlockedLine"
   | "policyAskLine"
@@ -48,6 +49,9 @@ export type GateKey =
   | "reason.noDestinationMatched"
   | "reason.ownBranchPush"
   | "reason.guardedGitDelete"
+  | "reason.contained"
+  | "reason.ownTree"
+  | "reason.trusted"
   | "effect.namedFiles"
   | "effect.deploy"
   | "effect.publish"
@@ -98,6 +102,8 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // silent success is indistinguishable from the model quietly doing
     // something else instead, so it is now its own visible line.
     advisedRetryLine: "jev · el modelo lo confirmó y se ejecutó: `{{segment}}`",
+    // 0.6.28: a delivery already confirmed in this repository ran without a new advice.
+    authorizedLine: "jev · ya lo confirmaste en este repositorio, se ejecutó: `{{segment}}`",
     // A LOCAL NEVER_SILENTLY rule's hard stop -- names the command and the
     // rule in plain words, never the model-facing REFUSED text
     // (localRuleDeny stays English and keeps talking to the model; this
@@ -153,6 +159,9 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.noDestinationMatched": "este directorio no corresponde a ningún destino del catálogo, así que se usaron los umbrales globales",
     "reason.ownBranchPush": "sube tu propia rama, sin force y sin tocar ramas compartidas",
     "reason.guardedGitDelete": "solo usa borrados que git mismo protege: se niega si hay trabajo sin guardar o sin integrar",
+    "reason.contained": "solo escribe o borra dentro de un directorio temporal",
+    "reason.ownTree": "solo edita archivos o hace git local en tu propio árbol de trabajo, en una rama de trabajo",
+    "reason.trusted": "ejecuta un programa de tu lista de confianza: {{programs}}",
     // 0.5.2's own concrete-effect line (gate_person_effect.ts), in priority
     // order: named files first, then deploy/publish, then leaves-this-
     // machine, then cannot-undo, then the always-available others-notice
@@ -202,6 +211,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     advisedLine: "jev · advised the model before `{{segment}}`: {{effect}}",
     advisedRetryLine: "jev · the model confirmed it and it ran: `{{segment}}`",
+    authorizedLine: "jev · already confirmed in this repository, it ran: `{{segment}}`",
     blockedLine: "jev · blocked `{{segment}}`: {{rule}}",
     policyBlockedLine: "jev · blocked `{{segment}}`: forbidden by the policy {{policyId}}",
     policyAskLine: "jev · {{policyId}} asks you to decide: `{{segment}}`",
@@ -224,6 +234,9 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.noDestinationMatched": "this directory doesn't match any catalog destination, so the global thresholds were used",
     "reason.ownBranchPush": "pushes your own branch, with no force and no shared branch",
     "reason.guardedGitDelete": "only uses deletes git itself guards: it refuses when there is unsaved or unmerged work",
+    "reason.contained": "only writes or deletes inside a temporary directory",
+    "reason.ownTree": "only edits files or runs local git in your own working tree, on a working branch",
+    "reason.trusted": "runs a program on your trusted list: {{programs}}",
     "effect.namedFiles": "deletes unsaved work: {{files}}",
     "effect.deploy": "triggers a deploy",
     "effect.publish": "publishes a package",

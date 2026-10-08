@@ -101,9 +101,10 @@ export function isPlainBranchRefspec(ref: string): boolean {
 /**
  * `cd`'s own segment: exactly two shell words, `cd` and a plain (non-flag)
  * directory argument -- that argument itself, or `null` when the segment is
- * not this exact shape.
+ * not this exact shape. Exported for delivery_class.ts, which accepts the
+ * same leading `cd <dir> &&` prefix.
  */
-function parseCdSegment(segmentText: string): string | null {
+export function parseCdSegment(segmentText: string): string | null {
   const tokens = tokenize(segmentText);
   if (tokens.length !== 2 || tokens[0] !== "cd") return null;
   const dir = tokens[1] ?? "";
@@ -145,7 +146,10 @@ function resolveCdTargetDir(cwd: string, dirArg: string): string {
  * catch an obfuscated destructive command), a local ALLOW has no such
  * obligation: anything even slightly unusual simply does not qualify and
  * falls through to the ordinary Jev path. Exported for client_reach.ts
- * (0.6.8 T2): a push it may call `internal` is exactly this shape, no wider.
+ * (0.6.8 T2): a push it may call `internal` is exactly this shape, no wider
+ * -- which is why `git -C <dir> push` is read by classifyDashCPushSegment
+ * below and never here: client_reach.ts reads the session's own remotes,
+ * not the `-C` directory's.
  */
 export function parsePushSegment(segmentText: string): readonly string[] | null {
   const tokens = tokenize(segmentText);
@@ -200,6 +204,37 @@ function classifyPushSegment(segmentText: string, branchResolutionCwd: string, r
   }
 
   return PROTECTED_BRANCH_NAMES.includes(branch) ? null : branch;
+}
+
+/**
+ * 0.6.28 T4: `git -C <dir> push [options] <remote> <refspec>` -- the same
+ * options and refspec rules as a plain push, one `-C` with a plain directory
+ * and no other global option (`-c`, `--git-dir`, `--work-tree` change what
+ * git runs or where it writes). `-C` used to be excluded outright because a
+ * push's destination was read from the current branch, and the branch of a
+ * `-C` directory was not resolved here. With an explicit, non-`HEAD`
+ * refspec the destination is the refspec itself, whatever the directory's
+ * branch or upstream, so only that shape qualifies; an omitted or `HEAD`
+ * refspec never does. Whether a branch policy can reach that directory's
+ * branch is judged separately, with the `-C` directory's own branch
+ * (branch_reach.ts, 0.6.28 T1). Reads the segment's shell words with its
+ * safe redirections already dropped, so a quoted directory stays one word.
+ * Returns the destination branch, or null.
+ */
+function classifyDashCPushSegment(tokens: readonly string[]): string | null {
+  if (tokens[0] !== "git" || tokens[1] !== "-C" || !isPlainArgument(tokens[2] ?? "") || tokens[3] !== "push") return null;
+  const positionals: string[] = [];
+  for (const token of tokens.slice(4)) {
+    if (token.startsWith("-")) {
+      if (!ALLOWED_PUSH_OPTIONS.has(token)) return null;
+      continue;
+    }
+    positionals.push(token);
+  }
+  const [remote, refspec] = positionals;
+  if (positionals.length !== 2 || remote === undefined || refspec === undefined) return null;
+  if (!isBareRemoteName(remote) || refspec === "HEAD" || !isPlainBranchRefspec(refspec)) return null;
+  return PROTECTED_BRANCH_NAMES.includes(refspec) ? null : refspec;
 }
 
 // ===========================================================================
@@ -492,7 +527,7 @@ export function qualifiesForLocalGitAllow(input: OwnBranchPushInput): LocalGitAl
       continue;
     }
 
-    if (classifyPushSegment(cleaned, branchResolutionCwd, readFile) !== null) {
+    if (classifyPushSegment(cleaned, branchResolutionCwd, readFile) !== null || classifyDashCPushSegment(tokensWithoutQualifyingRedirections(segments[i] ?? "") ?? []) !== null) {
       sawPush = true;
       continue;
     }

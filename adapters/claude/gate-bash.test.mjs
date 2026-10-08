@@ -13,14 +13,15 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { after, test } from 'node:test'
 
 import { commandShape } from '../../src/core/command_shape.ts'
-import { GATE_DECISION_RULES_VERSION } from '../../src/core/decisions.ts'
+import { GATE_DECISION_RULES_VERSION, buildSeedScopeIndex } from '../../src/core/decisions.ts'
+import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey } from '../../src/core/gate_advice_retry.ts'
 import { gateDecisionFileName, gateDecisionFilesToRead } from '../../src/core/measurement_files.ts'
@@ -51,10 +52,14 @@ const MIDDLE_TIER_COMMAND = 'some-unmeasured-tool --flag'
  *  lets a test reach past the no-key path into the cache; GIT_CEILING_
  *  DIRECTORIES keeps `git` from walking up past the throwaway home even if
  *  the OS temp dir ever ends up nested under a real repository. */
-function run (home, command, { cwd, apiKey, sessionId } = {}) {
+function run (home, command, { cwd, apiKey, sessionId, extraEnv = {} } = {}) {
   const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home }
   delete env.XDG_CACHE_HOME
   delete env.XDG_CONFIG_HOME
+  // 0.6.28 T2: the developer's own Claude temp root is never one of the
+  // hook's temp roots under test; a test that needs one passes it.
+  delete env.CLAUDE_CODE_TMPDIR
+  Object.assign(env, extraEnv)
   // src/core/paths.ts's resolveConfigDir/resolveCacheDir refuse to compute
   // a real path at all under node's test runner (see its module doc) --
   // this points them at exactly the directories they would have computed
@@ -101,11 +106,13 @@ function verdictCachePath (home) {
  *  every pre-JEVADV-48 test in this file exercises: no policies mirror file
  *  present at all, so gate-bash.ts's own readPoliciesMirror() (and, after
  *  destination/scope filtering, commandScopedPolicies) resolves to `[]`. */
-function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean', policies = [], seedScopeById = new Map(), consequenceCeiling } = {}) {
+function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean', policies = [], seedScopeById = new Map(), consequenceCeiling, localAllowKind = null } = {}) {
   const shape = commandShape(command, { cwd, home, destinationId, treeRoot, repoContext })
   if (shape === null) throw new Error('test command must have a non-null shape to exercise the cache path')
   const fingerprint = gatePolicyFingerprint({ policies, seedScopeById, consequenceCeiling })
-  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}`).digest('hex').slice(0, 24)
+  // 0.6.28: a command that qualifies for a local allow keys its own verdicts.
+  const qualified = localAllowKind === null ? '' : `:local-allow=${localAllowKind}`
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}${qualified}`).digest('hex').slice(0, 24)
 }
 
 /** No catalog mirror present (destinationId/treeRoot null), no policies
@@ -2069,7 +2076,8 @@ test('own-branch push: a requires_human policy still "asks" -- observed literall
   // -- this policy is command-scoped and global, so it survives and must be
   // passed here too, or this pre-populated entry would sit under a key the
   // real hook never looks up (a cache MISS reaching for the real network).
-  const key = computeCacheKey('git push -u origin feature/x', cwd, home, { policies: [policy] })
+  // 0.6.28: a qualifying push keys its verdicts by its kind (cacheKey).
+  const key = computeCacheKey('git push -u origin feature/x', cwd, home, { policies: [policy], localAllowKind: 'ownBranchPush' })
   const cachePath = verdictCachePath(home)
   mkdirSync(dirname(cachePath), { recursive: true })
   writeFileSync(cachePath, JSON.stringify({
@@ -3085,15 +3093,19 @@ function homeForClientReach (command, repo, owners) {
   writePoliciesMirror(home, [CLIENT_ASKS])
   if (owners !== null) writeTeamOwnersMirror(home, owners)
   const repoContext = `repository app, branch ${branchNameOf(repo)}, this is a working branch, clean`
-  const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [CLIENT_ASKS] })
-  const withoutPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [] })
-  assert.notEqual(withPolicy, withoutPolicy, 'the two keys must differ, or this proves nothing')
+  // 0.6.28: a command that qualifies for a local allow keys its verdicts by
+  // its kind (cacheKey), so both verdicts are cached under every kind.
+  const entries = {}
+  for (const localAllowKind of [null, 'ownBranchPush', 'guardedGitDelete', 'ownTree']) {
+    const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [CLIENT_ASKS], localAllowKind })
+    const withoutPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [], localAllowKind })
+    assert.notEqual(withPolicy, withoutPolicy, 'the two keys must differ, or this proves nothing')
+    entries[withPolicy] = { decision: 'ask', reason: ASKED_REASON, policyId: CLIENT_ASKS.id, policyRule: CLIENT_ASKS.rule, at: Date.now() - 1000 }
+    entries[withoutPolicy] = { decision: 'allow', reason: SET_ASIDE_REASON, at: Date.now() - 1000 }
+  }
   const cachePath = verdictCachePath(home)
   mkdirSync(dirname(cachePath), { recursive: true })
-  writeFileSync(cachePath, JSON.stringify({
-    [withPolicy]: { decision: 'ask', reason: ASKED_REASON, policyId: CLIENT_ASKS.id, policyRule: CLIENT_ASKS.rule, at: Date.now() - 1000 },
-    [withoutPolicy]: { decision: 'allow', reason: SET_ASIDE_REASON, at: Date.now() - 1000 },
-  }))
+  writeFileSync(cachePath, JSON.stringify(entries))
   return home
 }
 
@@ -3518,4 +3530,633 @@ test('JEVADV-96: an oversized command is not put to Jev, says so, and records th
   assert.equal(records[0].verdict, 'allow')
   assert.equal(records[0].commandFamily, 'some-unmeasured-tool')
   assert.equal(JSON.stringify(records[0]).includes('word123'), false, 'the row never carries the command')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T3: remembered delivery authorizations. When the agent re-runs an
+// advised delivery line unchanged (the retry pass), its delivery classes are
+// remembered for the repository (its normalized origin URL); a later risk
+// advice on a line made only of authorized classes, in any worktree or clone
+// of that repository, becomes an allow. A policy, a local rule or a line with
+// anything else in it is never relaxed. Every judged command has its advice
+// seeded in the verdict cache, so no run reaches the network.
+// ---------------------------------------------------------------------------
+
+function authorizationsPath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-authorizations.json')
+}
+
+function readAuthorizations (home) {
+  return existsSync(authorizationsPath(home)) ? JSON.parse(readFileSync(authorizationsPath(home), 'utf8')) : null
+}
+
+function writeAuthorizations (home, repos) {
+  mkdirSync(dirname(authorizationsPath(home)), { recursive: true })
+  writeFileSync(authorizationsPath(home), JSON.stringify({ version: 1, repos }))
+}
+
+function writeVerdictCacheEntries (home, entries) {
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(entries))
+}
+
+/** A repository with `origin` set to `url`, outside the throwaway home. */
+function repoWithOrigin (url) {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-authorized-')))
+  tempDirs.push(dir)
+  initRepo(dir)
+  git(['remote', 'add', 'origin', url], dir)
+  return dir
+}
+
+/** Seeds a risk advice for each command, keyed exactly as the hook keys it from `cwd`. */
+function seedAdvice (home, cwd, commands, { policies = [], entry = { decision: 'advise', reason: 'it publishes to the shared remote', at: Date.now() } } = {}) {
+  const existing = existsSync(verdictCachePath(home)) ? JSON.parse(readFileSync(verdictCachePath(home), 'utf8')) : {}
+  const repoContext = computeRepoContextForTest(cwd)
+  for (const command of commands) existing[computeCacheKey(command, cwd, home, { repoContext, policies })] = entry
+  writeVerdictCacheEntries(home, existing)
+}
+
+const WIDGETS = 'github.com/acme/widgets'
+const MERGE_45 = 'gh pr merge 45 --squash --delete-branch'
+const MERGE_46 = 'gh pr merge 46 --squash --delete-branch'
+
+function lastGateRecord (home) {
+  const records = gateLogText(home).trim().split('\n').map((line) => JSON.parse(line))
+  return records[records.length - 1]
+}
+
+test('T3: the retry pass of an advised merge remembers pr-merge for the repository, and a merge of another PR then passes in a new session', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/Acme/widgets.git')
+  seedAdvice(home, repo, [MERGE_45, MERGE_46])
+
+  const first = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-s1' }))
+  assert.equal(first.hookSpecificOutput.permissionDecision, 'deny', 'the first merge is advised')
+  assert.equal(readAuthorizations(home), null, 'an advice alone remembers nothing')
+
+  const retry = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-s1' }))
+  assert.equal(retry.hookSpecificOutput.permissionDecision, 'allow')
+  const store = readAuthorizations(home)
+  assert.deepEqual(Object.keys(store.repos), [WIDGETS])
+  assert.equal(store.repos[WIDGETS]['pr-merge'].uses, 1)
+
+  const other = JSON.parse(run(home, MERGE_46, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-s2' }))
+  assert.equal(other.hookSpecificOutput.permissionDecision, 'allow', 'another PR number, another session: no block')
+  assert.match(other.hookSpecificOutput.additionalContext, /it publishes to the shared remote/, "Jev's advice still reaches the model, without blocking")
+  assert.match(other.systemMessage, /gh pr merge 46/)
+  const record = lastGateRecord(home)
+  assert.equal(record.verdict, 'allow')
+  assert.equal(record.stopReason, 'authorized')
+  assert.equal(readAuthorizations(home).repos[WIDGETS]['pr-merge'].uses, 2, 'a use refreshes the authorization')
+})
+
+test('T3: a second clone with the same origin in another URL spelling shares the authorization', () => {
+  const home = makeHome()
+  const clone = repoWithOrigin('git@github.com:acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const command = 'cd ' + clone + ' && gh pr merge 47 --squash'
+  seedAdvice(home, clone, [command])
+  const payload = JSON.parse(run(home, command, { cwd: clone, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-clone' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'authorized')
+})
+
+test('T3: an authorization of one repository never passes a merge in another', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/other.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  seedAdvice(home, repo, [MERGE_45])
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-other' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'still advised')
+  assert.equal(lastGateRecord(home).stopReason, 'risk')
+})
+
+test('T3: an expired authorization no longer passes', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  const old = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString()
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: old, lastAt: old, uses: 3 } } })
+  seedAdvice(home, repo, [MERGE_45])
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-expired' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('T3: a policy ask for a merge still asks, even with pr-merge authorized', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  writePoliciesMirror(home, [QUEUE_POLICY])
+  seedAdvice(home, repo, [MERGE_45], { policies: [QUEUE_POLICY], entry: { decision: 'ask', reason: 'covered by the client_always_asks policy', policyId: 'client_always_asks', at: Date.now() } })
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-policy' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+test('T3: a line that also runs rm never learns, and never passes on an authorization', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  const command = 'gh pr merge 45 --squash && rm -rf dist'
+  seedAdvice(home, repo, [command])
+  run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-rm' })
+  const retry = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-rm' }))
+  assert.equal(retry.hookSpecificOutput.permissionDecision, 'allow', 'the ordinary retry pass is unchanged')
+  assert.equal(readAuthorizations(home), null, 'but nothing is remembered')
+
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const fresh = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-rm-2' }))
+  assert.equal(fresh.hookSpecificOutput.permissionDecision, 'deny', 'still advised in a new session')
+})
+
+test('T3: a release floored into an advice passes once release-create is authorized', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'release-create': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const command = 'gh release create v1.2.3 --notes x'
+  seedAdvice(home, repo, [command], { entry: { decision: 'advise', reason: 'creates a GitHub release', deployPublishKind: 'publish', at: Date.now() } })
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-release' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.match(payload.hookSpecificOutput.additionalContext, /creates a GitHub release/)
+})
+
+test('T3: a local-rule advice is never relaxed by an authorization', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'push-branch': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  writeDenyTierConfig(home, { denyPushProtected: false })
+  const payload = JSON.parse(run(home, 'git push origin main', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-local' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'local-rule')
+})
+
+test('T3: a merge of a PR named by URL in another repository never passes on this repository\'s authorization', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const elsewhere = 'gh pr merge https://github.com/acme/other/pull/9 --squash'
+  const here = 'gh pr merge https://github.com/acme/widgets/pull/9 --squash'
+  seedAdvice(home, repo, [elsewhere, here])
+  const payload = JSON.parse(run(home, elsewhere, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-url-other' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'risk')
+  const same = JSON.parse(run(home, here, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-url-same' }))
+  assert.equal(same.hookSpecificOutput.permissionDecision, 'allow')
+})
+
+test('T1b: a checkout of an existing name passes on an authorization only when it is a local branch, never a path', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  git(['branch', 'feat/x'], repo)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  writeAuthorizations(home, { [WIDGETS]: { 'push-branch': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const branch = 'git checkout -q feat/x && git push origin feat/x'
+  const path = 'git checkout -q src && git push origin feat/x'
+  seedAdvice(home, repo, [branch, path])
+  const onBranch = JSON.parse(run(home, branch, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-checkout-branch' }))
+  assert.equal(onBranch.hookSpecificOutput.permissionDecision, 'allow')
+  const onPath = JSON.parse(run(home, path, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-checkout-path' }))
+  assert.equal(onPath.hookSpecificOutput.permissionDecision, 'deny')
+})
+
+test('T1c: a merge with -R naming this repository passes on its authorization; -R naming another never does', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('git@github.com:acme/widgets.git')
+  writeAuthorizations(home, { [WIDGETS]: { 'pr-merge': { firstAt: new Date().toISOString(), lastAt: new Date().toISOString(), uses: 1 } } })
+  const here = 'gh pr merge 45 -R Acme/widgets --squash'
+  const elsewhere = 'gh pr merge 45 -R acme/other --squash'
+  seedAdvice(home, repo, [here, elsewhere])
+  assert.equal(JSON.parse(run(home, here, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-repo-here' })).hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(JSON.parse(run(home, elsewhere, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'auth-repo-else' })).hookSpecificOutput.permissionDecision, 'deny')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T1: never_write_to_main is a `protected-branch` policy. It is offered
+// to Jev only when the command can reach a protected branch: the branch it
+// acts on is protected, unknown or detached, or the text names one. The
+// owner, 2026-10-07: `git add` on a working branch was refused under it.
+// Observed through the verdict cache: one entry under the key with no
+// policies, one under the key with the policy, and the hook serves the one
+// whose policy set it really judged against.
+// ---------------------------------------------------------------------------
+
+const SHIPPED_SEED_SCOPES = buildSeedScopeIndex(parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8'))))
+const NEVER_WRITE_TO_MAIN = { id: 'never_write_to_main', kind: 'prohibits', rule: 'Never write directly on main, master or develop.' }
+
+/** A real repository whose only branch is `branch`, whatever git's own default name is. */
+function repoNamedBranch (branch) {
+  const root = join(realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-branch-reach-'))), 'repo')
+  initRepo(root)
+  git(['branch', '-M', branch], root)
+  return root
+}
+
+function seedBothPolicySets (home, command, repo) {
+  const repoContext = computeRepoContextForTest(repo)
+  const without = computeCacheKey(command, repo, home, { repoContext })
+  const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [NEVER_WRITE_TO_MAIN], seedScopeById: SHIPPED_SEED_SCOPES })
+  assert.notEqual(without, withPolicy)
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({
+    [without]: { decision: 'ask', reason: 'judged with no branch policy', at: Date.now() - 1000 },
+    [withPolicy]: { decision: 'ask', reason: 'judged with never_write_to_main', at: Date.now() - 1000 },
+  }))
+}
+
+test('T1: a write on a working branch is never judged against never_write_to_main', () => {
+  // (`git add x` itself is now allowed before this stage by T6's own-tree layer.)
+  const home = makeHome()
+  const repo = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  seedBothPolicySets(home, 'some-unmeasured-tool --write x', repo)
+  const payload = JSON.parse(run(home, 'some-unmeasured-tool --write x', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.match(payload.systemMessage ?? '', /judged with no branch policy/)
+})
+
+test('T1: git add on main is still judged against never_write_to_main', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  seedBothPolicySets(home, 'git add x', repo)
+  const payload = JSON.parse(run(home, 'git add x', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.match(payload.systemMessage ?? '', /judged with never_write_to_main/)
+})
+
+test('T1: a guarded delete on a working branch is allowed locally once never_write_to_main no longer applies', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertAllowedByOwnBranchPush(home, 'git branch -d feat/old', repo, GUARDED_GIT_DELETE_REASON_TEXT)
+})
+
+test('T1: the same guarded delete on main still goes to the policy stage', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertNotAllowedByOwnBranchPush(home, 'git branch -d feat/old', repo)
+})
+
+test('T1: a push naming develop from a working branch is never allowed locally', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertNotAllowedByOwnBranchPush(home, 'git push origin develop', repo)
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T2: a command whose only effect is inside a temp root is allowed
+// locally (stopReason `contained`), after the local deny rules and before
+// any policy or Jev. The test's Claude temp root is its own directory, never
+// the developer's; the throwaway HOME sits in the OS temp directory, so that
+// root holds home and is never a temp root here.
+// ---------------------------------------------------------------------------
+
+const CONTAINED_REASON_TEXT = 'only writes or deletes inside a temporary directory'
+
+function claudeScratchpad () {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-contained-')))
+  const scratchpad = join(base, `claude-${process.getuid()}`, 'project', 'session', 'scratchpad')
+  mkdirSync(scratchpad, { recursive: true })
+  return { base, scratchpad }
+}
+
+test('T2: rm -rf inside the Claude scratchpad is allowed locally, with no Jev call', () => {
+  const home = makeHome()
+  const { base, scratchpad } = claudeScratchpad()
+  const payload = JSON.parse(run(home, `rm -rf ${scratchpad}/out`, { extraEnv: { CLAUDE_CODE_TMPDIR: base } }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, CONTAINED_REASON_TEXT)
+  const records = gateLogRecords(home)
+  assert.equal(records.length, 1)
+  assert.equal(records[0].source, 'local-rule')
+  assert.equal(records[0].stopReason, 'contained')
+})
+
+test('T2: a scratch repository rebuilt through one assignment is allowed locally', () => {
+  const home = makeHome()
+  const { base, scratchpad } = claudeScratchpad()
+  const command = `S=${scratchpad}/repo; rm -rf $S && mkdir -p $S && cd $S && git init -q`
+  const payload = JSON.parse(run(home, command, { extraEnv: { CLAUDE_CODE_TMPDIR: base } }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'contained')
+})
+
+test('T2: rm -rf of home is still refused by the local deny rule, never allowed as contained', () => {
+  const home = makeHome()
+  const { base } = claudeScratchpad()
+  const payload = JSON.parse(run(home, 'rm -rf ~', { extraEnv: { CLAUDE_CODE_TMPDIR: base } }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'contained'), false)
+})
+
+test('T2: a delete outside the temp roots, or through a symlink that leaves them, is never contained', () => {
+  const home = makeHome()
+  const { base, scratchpad } = claudeScratchpad()
+  mkdirSync(join(home, 'project'), { recursive: true })
+  symlinkSync(home, join(scratchpad, 'home-link'))
+  for (const command of [`rm -rf ${join(home, 'project')}`, `rm -rf ${scratchpad}/home-link/project`, `rm -rf ${scratchpad}/../../x`, 'rm -rf $UNSET/x']) {
+    run(home, command, { extraEnv: { CLAUDE_CODE_TMPDIR: base } })
+    assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'contained'), false, command)
+  }
+  assert.ok(existsSync(join(home, 'project')), 'the hook only judges; nothing is deleted')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T4: `git -C <dir> push origin <own branch>` qualifies like `cd <dir>
+// && git push`; with T1, the branch policy is read at the -C directory, so a
+// session sitting on main does not keep never_write_to_main for it.
+// ---------------------------------------------------------------------------
+
+test('T4: git -C <feature checkout> push origin feat/x from a session on main is allowed locally', () => {
+  const home = makeHome()
+  const session = repoNamedBranch('main')
+  const feature = repoNamedBranch('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertAllowedByOwnBranchPush(home, `git -C ${feature} push origin feat/x 2>&1 | tail -3`, session)
+})
+
+test('T4: git -C <dir> push origin main is never allowed locally', () => {
+  const home = makeHome()
+  const feature = repoNamedBranch('feat/x')
+  assertNotAllowedByOwnBranchPush(home, `git -C ${feature} push origin main`, feature)
+})
+
+test('T1 fix: on main, a guarded delete that also discards its output still goes to the policy stage', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  assertNotAllowedByOwnBranchPush(home, 'git branch -d feat/old 2>/dev/null', repo)
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T6: plain local work in the session's own working tree, on a working
+// branch, is allowed locally (stopReason `own-tree`) when no command-scoped
+// policy survives -- the same effect as Claude Code's Edit and Write tools.
+// ---------------------------------------------------------------------------
+
+const OWN_TREE_REASON_TEXT = 'only edits files or runs local git in your own working tree, on a working branch'
+
+function ownTreeRepo (branch) {
+  const repo = repoNamedBranch(branch)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  return repo
+}
+
+test('T6: a heredoc into a source file on a working branch is allowed locally', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  const payload = JSON.parse(run(home, "cat > src/a.ts <<'EOF'\nexport const a = 1\nEOF", { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, OWN_TREE_REASON_TEXT)
+  assert.equal(lastGateRecord(home).stopReason, 'own-tree')
+  assert.equal(lastGateRecord(home).source, 'local-rule')
+})
+
+test('T6: add and commit on a working branch under never_write_to_main are allowed locally', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  const payload = JSON.parse(run(home, 'git add -A && git commit -qm "chore: x"', { cwd: repo }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'own-tree')
+})
+
+test('T6: the same work on main is never allowed as own-tree work', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, 'git add -A && git commit -qm "chore: x"', { cwd: repo })
+  run(home, "cat > src/a.ts <<'EOF'\nx\nEOF", { cwd: repo })
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
+})
+
+test('T6: a command-scoped policy that survives sends own-tree work on to the policy stage', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  writePoliciesMirror(home, [{ id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }])
+  run(home, 'git add -A && git commit -qm "chore: x"', { cwd: repo })
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
+})
+
+test('T1 fix: on main, a write through a print verb (read as a mention) is still judged against never_write_to_main', () => {
+  const home = makeHome()
+  const repo = repoNamedBranch('main')
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  seedBothPolicySets(home, 'echo x > notes.md', repo)
+  const payload = JSON.parse(run(home, 'echo x > notes.md', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.match(payload.systemMessage ?? '', /judged with never_write_to_main/)
+})
+
+// 0.6.28 T6 follow-up: every real install has command-scoped policies (the
+// shipped seed keeps eight on a working branch), so own-tree work goes on to
+// Jev with only its policy coverage deciding -- a cached policy verdict
+// still stands for it, under the key of its own kind (cacheKey).
+test('T6 fix: with the shipped seed, a cached policy ask still stands for own-tree work', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  const seed = parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8')))
+  writePoliciesMirror(home, seed)
+  const command = 'git add -A && git commit -qm x'
+  const judged = seed.filter((p) => { const scope = p.scope ?? 'command'; return (scope === 'command' || scope === 'protected-branch') && p.id !== 'never_write_to_main' })
+  const key = computeCacheKey(command, repo, home, { repoContext: computeRepoContextForTest(repo), policies: judged, seedScopeById: SHIPPED_SEED_SCOPES, localAllowKind: 'ownTree' })
+  writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'a policy needs a person', policyId: 'others_pr', at: Date.now() })
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T7: the trusted programs list. A program the person named in the
+// panel (mirrored to <configDir>/trusted-programs.json) runs with no Jev call
+// when no command-scoped policy survives; its real path must be the name and
+// sit outside every temp root and own tree. Synthetic program: acme-notify.
+// ---------------------------------------------------------------------------
+
+function writeTrustedPrograms (home, names) {
+  const path = join(home, '.config', 'orca-supervisor', 'trusted-programs.json')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(names))
+}
+
+/** A real executable named `name`, outside the temp roots the hook uses here (its HOME's own temp dir is dropped as a root). */
+function installProgram (home, name) {
+  const dir = join(home, 'tools', 'bin')
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, name)
+  writeFileSync(path, '#!/bin/sh\nexit 0\n')
+  chmodSync(path, 0o755)
+  return path
+}
+
+test('T7: a trusted program, named by path or through a variable read from a file, is allowed locally', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-notify'])
+  writeFileSync(join(home, '.acme-path'), `${dirname(program)}\n`)
+  for (const command of [`${program} --to team "build is green"`, `A="$(cat ${join(home, '.acme-path')})"; [ -x "$A/acme-notify" ] || { echo "missing" >&2; exit 1; }; "$A/acme-notify" --to team hi`]) {
+    const payload = JSON.parse(run(home, command))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', command)
+    assert.match(payload.hookSpecificOutput.permissionDecisionReason, /acme-notify/)
+    assert.equal(lastGateRecord(home).stopReason, 'trusted')
+  }
+})
+
+test('T7: the same line with an untrusted extra segment, or an untrusted program, is never allowed as trusted', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  installProgram(home, 'acme-other')
+  writeTrustedPrograms(home, ['acme-notify'])
+  for (const command of [`${program} hi && ssh build-host uptime`, `${program} hi; rm -rf ~`, `${join(dirname(program), 'acme-other')} hi`]) {
+    run(home, command)
+    assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false, command)
+  }
+})
+
+test('T7: with no list, nothing is trusted', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  run(home, `${program} hi`)
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false)
+})
+
+test('T7 fix: a value read from an endless file never stalls the hook', () => {
+  const home = makeHome()
+  const started = Date.now()
+  const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home, ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor'), ORCA_SUPERVISOR_CACHE_DIR: join(home, '.cache', 'orca-supervisor'), ORCA_USER_DATA_PATH: join(home, 'orca-userdata-does-not-exist') }
+  delete env.TYPESAFE_API_KEY
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', SCRIPT_PATH], { env, input: JSON.stringify({ tool_input: { command: 'X="$(cat /dev/zero)"; some-unmeasured-tool --flag' }, cwd: home, tool_use_id: 't7-zero' }), encoding: 'utf8', timeout: 20000 })
+  assert.equal(result.signal, null, 'the hook must not be killed by the timeout')
+  assert.ok(Date.now() - started < 20000)
+})
+
+test('T7 fix: with the shipped seed and no key, a trusted line is never allowed locally', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-notify'])
+  writePoliciesMirror(home, parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8'))))
+  run(home, `${program} hi`)
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false)
+})
+
+test('T6 fix: a qualifying command keys its own cached verdicts, so it replays one without a Jev call', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  const seed = parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8')))
+  writePoliciesMirror(home, seed)
+  const command = 'git add -A && git commit -qm x'
+  const judged = seed.filter((p) => { const scope = p.scope ?? 'command'; return (scope === 'command' || scope === 'protected-branch') && p.id !== 'never_write_to_main' })
+  const base = { repoContext: computeRepoContextForTest(repo), policies: judged, seedScopeById: SHIPPED_SEED_SCOPES }
+  const plainKey = computeCacheKey(command, repo, home, base)
+  const ownTreeKey = computeCacheKey(command, repo, home, { ...base, localAllowKind: 'ownTree' })
+  assert.notEqual(plainKey, ownTreeKey)
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({
+    [plainKey]: { decision: 'ask', reason: 'cached for a command that did not qualify', policyId: 'others_pr', at: Date.now() - 1000 },
+    [ownTreeKey]: { decision: 'allow', reason: 'cached for own-tree work', at: Date.now() - 1000 },
+  }))
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).source, 'cache')
+})
+
+test('pre-release C: writing Claude Code settings or hooks in the own tree is never allowed locally', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  for (const command of ["mkdir -p .claude && echo '{}' > .claude/settings.json", "echo '{}' > .mcp.json"]) {
+    run(home, command, { cwd: repo })
+    assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree' || r.stopReason === 'contained'), false, command)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 pre-release B: the owner's literal case. The session sits in a
+// checkout on main; the work happens in a linked worktree on feat/x whose
+// upstream is origin/main. With only never_write_to_main mirrored, a command
+// it is not offered for is allowed locally (own-tree or Option D); one it is
+// offered for never is.
+// ---------------------------------------------------------------------------
+
+function mainCheckoutWithFeatureWorktree () {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-owner-case-')))
+  const origin = join(base, 'origin.git')
+  execFileSync('git', ['init', '-q', '--bare', origin], { stdio: 'ignore' })
+  const main = join(base, 'app')
+  initRepo(main)
+  git(['branch', '-M', 'main'], main)
+  git(['remote', 'add', 'origin', origin], main)
+  git(['push', '-q', 'origin', 'main'], main)
+  git(['fetch', '-q', 'origin'], main)
+  const worktree = join(base, 'app-feat-x')
+  git(['worktree', 'add', '-q', '-b', 'feat/x', worktree, 'origin/main'], main)
+  const upstream = execFileSync('git', ['rev-parse', '--abbrev-ref', 'feat/x@{upstream}'], { cwd: worktree, encoding: 'utf8' }).trim()
+  assert.equal(upstream, 'origin/main', 'the fixture must reproduce the upstream on main')
+  return { main, worktree }
+}
+
+function localAllowRecorded (home) {
+  return gateLogRecords(home).some((r) => r.stopReason === 'own-tree' || r.stopReason === 'local-allow')
+}
+
+test('pre-release B: from a session on main, add and commit in the feature worktree are not judged against never_write_to_main', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `cd ${worktree} && git add "apps/web/src/app/(site)/x.test.ts" && git commit -qm x`, { cwd: main })
+  assert.equal(lastGateRecord(home)?.stopReason, 'own-tree')
+})
+
+test('pre-release B: git -C <feature worktree> push -u origin feat/x is not judged against it either: the refspec beats the upstream', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `git -C ${worktree} push -u origin feat/x`, { cwd: main })
+  assert.equal(lastGateRecord(home)?.stopReason, 'local-allow')
+})
+
+test('pre-release B: a bare push that goes to main (push.default=upstream) and a commit in the main checkout are never allowed locally', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  git(['config', 'push.default', 'upstream'], main)
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `cd ${worktree} && git push`, { cwd: main })
+  assert.equal(localAllowRecorded(home), false, 'cd <wt> && git push')
+  run(home, 'git commit -qm x', { cwd: main })
+  assert.equal(localAllowRecorded(home), false, 'git commit on main')
+})
+
+test('pre-release B (characterization): under the default push.default=simple, the same bare push is read as feat/x and allowed locally -- git itself refuses an upstream of another name, so nothing reaches main', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  git(['config', 'push.default', 'simple'], main)
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `cd ${worktree} && git push`, { cwd: main })
+  assert.equal(lastGateRecord(home)?.stopReason, 'local-allow')
+})
+
+test("pre-release A: the owner's notify line, with both programs trusted, is allowed locally as trusted", () => {
+  const home = makeHome()
+  const scope = installProgram(home, 'acme-scope')
+  installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-scope', 'acme-notify'])
+  mkdirSync(join(home, '.acme'), { recursive: true })
+  writeFileSync(join(home, '.acme', 'bin-path'), `${dirname(scope)}\n`)
+  const command = 'WA="$(cat "$HOME/.acme/bin-path" 2>/dev/null)"; [ -x "$WA/acme-scope" ] || { echo "not installed" >&2; exit 1; }; OWNER="$("$WA/acme-scope" owner)" || exit $?; "$WA/acme-notify" "$OWNER" "Report ready: https://example.test/a/x"'
+  const payload = JSON.parse(run(home, command))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'trusted')
+})
+
+test("T7 fix: a session in a plugin workspace reads the tools' directory from a file named relative to it", () => {
+  const home = makeHome()
+  const scope = installProgram(home, 'acme-scope')
+  installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-scope', 'acme-notify'])
+  const workspace = join(home, 'workspace')
+  mkdirSync(workspace, { recursive: true })
+  writeFileSync(join(workspace, '.acme-bin'), `${dirname(scope)}\n`)
+  const command = 'WA="$(cat .acme-bin)"; "$WA/acme-scope" lock --note triage; echo "lock=$?"; echo; "$WA/acme-notify" hi 2>&1 | head -c 6000'
+  const payload = JSON.parse(run(home, command, { cwd: workspace }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).stopReason, 'trusted')
 })

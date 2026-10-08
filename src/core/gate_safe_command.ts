@@ -23,6 +23,7 @@
 // existing NEVER_SILENTLY/Jev path), it never causes a wrong "safe".
 import { commandFamily, splitSegments } from './gate_measurement.ts'
 import { hasCommandSubstitution } from './command_shape.ts'
+import { tokenize } from './git_discard.ts'
 
 /**
  * The one command family gate_measurement.ts already judges by looking at
@@ -58,7 +59,55 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
   /^node\s+(--version|-v)\s*$/,
   /^npx\s+(--version|-v)\s*$/,
   /^gh\s+(pr|issue|run|repo)\s+(list|view|status|checks)\b/,
+  // 0.6.28 T3: daily commands that write nothing, measured reaching Jev
+  // (odd/tasks/gate-harmless-daily-work.md). Shell options, waiting and
+  // conditions change nothing outside the shell running them.
+  /^(true|false)\s*$/,
+  /^sleep(\s+\d+(\.\d+)?[smhd]?)+\s*$/,
+  /^set(\s+([-+][eux]*o\s+pipefail|[-+][eux]+))+\s*$/,
+  /^test(\s|$)/,
+  /^\[\s.*\s\]\s*$/,
+  /^(printf|diff|du|df|basename|dirname|realpath|stat|tr|cut)\b/,
+  // graft's read subcommands only: `index` and `build` write its graph.
+  /^graft\s+(ask|grep|skeleton|callers|map)\b/,
 ]
+
+/**
+ * 0.6.28 T3: `sort` writes a file with `-o`/`--output` (also folded into a
+ * short cluster, `-uo out`) and runs a program with `--compress-program`;
+ * `uniq` writes its second operand; `file -C` compiles a magic file. Each is
+ * safe only without those. Option values that look like operands
+ * (`uniq -f 2 in`) only send the command on to the ordinary path.
+ */
+function isSafeTextToolSegment(segment: string): boolean {
+  const tokens = tokenize(segment)
+  const args = tokens.slice(1)
+  switch (tokens[0]) {
+    case 'sort':
+      return !args.some((arg) => /^-[^-]*o/.test(arg) || arg.startsWith('--output') || arg.startsWith('--compress-program'))
+    case 'uniq':
+      return args.filter((arg) => !arg.startsWith('-')).length <= 1
+    case 'file':
+      return !args.some((arg) => /^-[^-]*C/.test(arg) || arg === '--compile')
+    default:
+      return false
+  }
+}
+
+/**
+ * 0.6.28 T3: `git -C <dir> <verb>` reads exactly like `git <verb>` run in
+ * `<dir>` -- the same as `cd <dir> && git <verb>`, already safe. Only one
+ * `-C` and no other global option: `-c core.pager=...` runs a program,
+ * `--git-dir`/`--work-tree` point git elsewhere.
+ */
+const GIT_DASH_C = /^git\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s'"-][^\s'"]*)\s+(\S.*)$/s
+
+/** `git -C <dir> <rest>` as `git <rest>`, or null when it is not exactly that shape. */
+function withoutGitDashC(segment: string): string | null {
+  const rest = GIT_DASH_C.exec(segment)?.[1]
+  if (rest === undefined || rest.startsWith('-')) return null
+  return `git ${rest}`
+}
 
 /** `find`'s destructive flags -- everything else is a plain search/list. */
 const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprintf?\b|-fprint0?\b/
@@ -214,6 +263,9 @@ export function isSafeSegment(segment: string): boolean {
   if (isSafeFindSegment(segment)) return true
   if (isSafeEnvSegment(segment)) return true
   if (isReadOnlySedOrAwkSegment(segment)) return true
+  if (isSafeTextToolSegment(segment)) return true
+  const plainGit = withoutGitDashC(segment)
+  if (plainGit !== null) return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.source.startsWith('^git') && pattern.test(plainGit))
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
 }
 

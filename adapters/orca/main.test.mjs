@@ -39,6 +39,15 @@ const {
   attendClaudeIntegrationRequest,
   attendClaudeIntegrationRescan,
   attendDenyTierConfigRequest,
+  attendGateAuthorizationForgetRequest,
+  attendTrustedProgramRequest,
+  publishTrustedPrograms,
+  TRUSTED_PROGRAMS_STATUS_KEY,
+  TRUSTED_PROGRAM_RESULT_KEY,
+  gateAuthorizationsArgv,
+  GATE_AUTHORIZATIONS_STATUS_KEY,
+  GATE_AUTHORIZATION_FORGET_RESULT_KEY,
+  publishGateAuthorizations,
   attendLocaleRequest,
   attendModelRouterConfigRequest,
   attendModelRouterStatusRefresh,
@@ -2270,7 +2279,7 @@ test('mirrorCatalogAndPolicies also mirrors the team owners, normalized, through
   const calls = []
   const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
   await mirrorCatalogAndPolicies(orca, storageHost, { run })
-  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save', 'queue-mode-save', 'explicit-models-save'])
+  assert.deepEqual(calls.map((call) => call.mode), ['catalog-save', 'policies-save', 'team-owners-save', 'queue-mode-save', 'explicit-models-save', 'trusted-programs-save'])
   assert.deepEqual(JSON.parse(calls[2].stdin), ['acme-team', 'acme-tools'])
 })
 
@@ -2332,4 +2341,175 @@ test('mirrorCatalogAndPolicies logs a failed explicit models mirror by reason, n
   const run = async (mode) => (mode === 'explicit-models-save' ? { ok: false, reason: 'exception', detail: 'disk full' } : { ok: true })
   await mirrorCatalogAndPolicies(orca, fakeStorageHost(), { run })
   assert.ok(orca._logs.some((line) => /explicit models mirror failed: exception/.test(line)), JSON.stringify(orca._logs))
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T4: the remembered delivery authorizations -- listed for the config
+// panel and forgotten from it, through adapters/orca/gate-authorizations.mjs
+// (its own subprocess tests are in gate-authorizations.test.mjs).
+// ---------------------------------------------------------------------------
+
+const AUTH_ROWS = [{ repo: 'github.com/acme/widgets', classes: [{ cls: 'pr-merge', firstAt: 'a', lastAt: 'b', uses: 2, expiresAt: 'c' }] }]
+
+test('gateAuthorizationsArgv: reads the cache dir, and only forget may write it', () => {
+  const read = gateAuthorizationsArgv('read')
+  const forget = gateAuthorizationsArgv('forget')
+  assert.ok(read.includes('--permission'))
+  assert.ok(read.some((arg) => arg.startsWith('--allow-fs-read=') && arg.endsWith('cache')), 'the cache dir is readable')
+  assert.equal(read.some((arg) => arg.startsWith('--allow-fs-write=')), false, 'read never writes')
+  assert.ok(forget.some((arg) => arg.startsWith('--allow-fs-write=') && arg.endsWith('cache')))
+  assert.ok(read.at(-2).endsWith('gate-authorizations.mjs'))
+  assert.equal(read.at(-1), 'read')
+})
+
+test('publishGateAuthorizations: publishes the sidecar rows for the panel', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  await publishGateAuthorizations(orca, storageHost, { run: async (mode) => (mode === 'read' ? { ok: true, value: { repos: AUTH_ROWS } } : { ok: false }) })
+  const status = await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)
+  assert.equal(status.ok, true)
+  assert.deepEqual(status.repos, AUTH_ROWS)
+  assert.equal(typeof status.checkedAt, 'string')
+})
+
+test('publishGateAuthorizations: a failed read publishes an empty list marked not ok, never stale rows', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [GATE_AUTHORIZATIONS_STATUS_KEY]: { ok: true, repos: AUTH_ROWS } })
+  await publishGateAuthorizations(orca, storageHost, { run: async () => ({ ok: false, reason: 'no-json' }) })
+  const status = await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)
+  assert.equal(status.ok, false)
+  assert.deepEqual(status.repos, [])
+})
+
+test('attendGateAuthorizationForgetRequest: an expired request is never forwarded', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-1', at: TEN_MINUTES_AGO, repo: 'github.com/acme/widgets', cls: 'pr-merge' } })
+  const calls = []
+  await attendGateAuthorizationForgetRequest(orca, storageHost, { run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: [] } } } })
+  const result = await storageHost.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)
+  assert.equal(result.id, 'ga-1')
+  assert.equal(result.reason, 'expired')
+  assert.deepEqual(calls, [])
+})
+
+test('attendGateAuthorizationForgetRequest: publishes the rows the forget left BEFORE the result, so the panel never reads the old list after "Forgotten."', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-2', at: new Date().toISOString(), repo: 'github.com/acme/widgets', cls: 'pr-merge' } })
+  const order = []
+  const set = storageHost.set
+  storageHost.set = async (key, value) => { order.push(key); return set(key, value) }
+  const left = [{ repo: 'github.com/acme/widgets', classes: [{ cls: 'push-branch', firstAt: 'a', lastAt: 'b', uses: 1, expiresAt: 'c' }] }]
+  const calls = []
+  await attendGateAuthorizationForgetRequest(orca, storageHost, {
+    run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: mode === 'forget' ? left : AUTH_ROWS } } }
+  })
+  assert.deepEqual(calls, [['forget', JSON.stringify({ repo: 'github.com/acme/widgets', cls: 'pr-merge' })]], 'no second read: the forget already answers what is left')
+  const result = await storageHost.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)
+  assert.equal(result.id, 'ga-2')
+  assert.equal(result.ok, true)
+  assert.deepEqual((await storageHost.get(GATE_AUTHORIZATIONS_STATUS_KEY)).repos, left)
+  assert.ok(order.indexOf(GATE_AUTHORIZATIONS_STATUS_KEY) < order.indexOf(GATE_AUTHORIZATION_FORGET_RESULT_KEY), `status before result, got ${order.join(', ')}`)
+  assert.equal(await storageHost.get('gateAuthorizationForgetRequest'), null, 'the request is consumed')
+})
+
+test('attendGateAuthorizationForgetRequest: forget-all sends a null class; a request with no repository is refused', async () => {
+  const orca = fakeOrca()
+  const calls = []
+  const run = async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true, value: { repos: [] } } }
+  const all = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-3', at: new Date().toISOString(), repo: 'github.com/acme/widgets', cls: null } })
+  await attendGateAuthorizationForgetRequest(orca, all, { run })
+  assert.deepEqual(calls[0], ['forget', JSON.stringify({ repo: 'github.com/acme/widgets', cls: null })])
+  calls.length = 0
+  const bad = fakeStorageHost({ gateAuthorizationForgetRequest: { id: 'ga-4', at: new Date().toISOString(), repo: '' } })
+  await attendGateAuthorizationForgetRequest(orca, bad, { run })
+  assert.equal((await bad.get(GATE_AUTHORIZATION_FORGET_RESULT_KEY)).reason, 'invalid-request')
+  assert.deepEqual(calls, [])
+})
+
+test('the real gate-authorizations sidecar reads and forgets under exactly the grants gateAuthorizationsArgv gives it', async () => {
+  const cache = join(PATHS_OVERRIDE_DIR, 'cache')
+  const { mkdirSync } = await import('node:fs')
+  mkdirSync(cache, { recursive: true })
+  const now = new Date().toISOString()
+  writeFileSync(join(cache, 'gate-authorizations.json'), JSON.stringify({ version: 1, repos: { 'github.com/acme/widgets': { 'pr-merge': { firstAt: now, lastAt: now, uses: 1 }, 'push-branch': { firstAt: now, lastAt: now, uses: 4 } } } }))
+  const env = { ...process.env }
+  const read = await spawnSidecar(gateAuthorizationsArgv('read'), { env, timeout: 20000 })
+  assert.equal(read.ok, true, JSON.stringify(read))
+  assert.deepEqual(read.value.repos[0].classes.map((row) => row.cls), ['push-branch', 'pr-merge'])
+  const forget = await spawnSidecar(gateAuthorizationsArgv('forget'), { env, timeout: 20000 }, JSON.stringify({ repo: 'github.com/acme/widgets', cls: 'pr-merge' }))
+  assert.equal(forget.ok, true, JSON.stringify(forget))
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(join(cache, 'gate-authorizations.json'), 'utf8')).repos['github.com/acme/widgets']), ['push-branch'])
+  const readOnlyForget = await spawnSidecar(gateAuthorizationsArgv('read').slice(0, -1).concat('forget'), { env, timeout: 20000 }, JSON.stringify({ repo: 'github.com/acme/widgets', cls: null }))
+  assert.equal(readOnlyForget.ok, false, 'without the write grant a forget cannot write')
+})
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T7: the trusted programs list. The panel asks to add or remove a
+// name; the worker validates it (src/core/trusted_programs.ts), keeps the
+// list under `trustedPrograms`, mirrors it through trusted-programs-save and
+// publishes the list before the result, so the panel never shows the old one.
+// ---------------------------------------------------------------------------
+
+test('mirrorCatalogAndPolicies always mirrors the trusted programs, the empty list included', async () => {
+  const calls = []
+  const run = async (mode, stdin) => { calls.push({ mode, stdin }); return { ok: true } }
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost({ trustedPrograms: ['Acme-Notify', 'bash'] }), { run })
+  assert.deepEqual(JSON.parse(calls.find((call) => call.mode === 'trusted-programs-save').stdin), ['acme-notify'])
+  const empty = []
+  await mirrorCatalogAndPolicies(fakeOrca(), fakeStorageHost(), { run: async (mode, stdin) => { empty.push({ mode, stdin }); return { ok: true } } })
+  assert.deepEqual(JSON.parse(empty.find((call) => call.mode === 'trusted-programs-save').stdin), [])
+})
+
+test('attendTrustedProgramRequest: an add is validated, kept, mirrored and published before its result', async () => {
+  const storageHost = fakeStorageHost({ trustedPrograms: ['acme-scope'], trustedProgramRequest: { id: 'tp-1', at: new Date().toISOString(), op: 'add', name: 'Acme-Notify' } })
+  const order = []
+  const set = storageHost.set
+  storageHost.set = async (key, value) => { order.push(key); return set(key, value) }
+  const calls = []
+  await attendTrustedProgramRequest(fakeOrca(), storageHost, { run: async (mode, stdin) => { calls.push([mode, stdin]); return { ok: true } } })
+  assert.deepEqual(await storageHost.get('trustedPrograms'), ['acme-scope', 'acme-notify'])
+  assert.deepEqual(calls, [['trusted-programs-save', JSON.stringify(['acme-scope', 'acme-notify'])]])
+  assert.deepEqual((await storageHost.get(TRUSTED_PROGRAMS_STATUS_KEY)).programs, ['acme-scope', 'acme-notify'])
+  assert.ok(order.indexOf(TRUSTED_PROGRAMS_STATUS_KEY) < order.indexOf(TRUSTED_PROGRAM_RESULT_KEY), order.join(' > '))
+  const result = await storageHost.get(TRUSTED_PROGRAM_RESULT_KEY)
+  assert.deepEqual({ id: result.id, ok: result.ok, name: result.name }, { id: 'tp-1', ok: true, name: 'acme-notify' })
+  assert.equal(await storageHost.get('trustedProgramRequest'), null)
+})
+
+test('attendTrustedProgramRequest: a refused name says why and changes nothing', async () => {
+  const storageHost = fakeStorageHost({ trustedPrograms: ['acme-scope'], trustedProgramRequest: { id: 'tp-2', at: new Date().toISOString(), op: 'add', name: 'python3' } })
+  const calls = []
+  await attendTrustedProgramRequest(fakeOrca(), storageHost, { run: async (mode) => { calls.push(mode); return { ok: true } } })
+  const result = await storageHost.get(TRUSTED_PROGRAM_RESULT_KEY)
+  assert.deepEqual({ ok: result.ok, reason: result.reason }, { ok: false, reason: 'refused' })
+  assert.deepEqual(await storageHost.get('trustedPrograms'), ['acme-scope'])
+  assert.deepEqual(calls, [])
+})
+
+test('attendTrustedProgramRequest: a remove keeps the rest; an expired or malformed request is refused', async () => {
+  const removing = fakeStorageHost({ trustedPrograms: ['acme-scope', 'acme-notify'], trustedProgramRequest: { id: 'tp-3', at: new Date().toISOString(), op: 'remove', name: 'acme-scope' } })
+  await attendTrustedProgramRequest(fakeOrca(), removing, { run: async () => ({ ok: true }) })
+  assert.deepEqual(await removing.get('trustedPrograms'), ['acme-notify'])
+  assert.equal((await removing.get(TRUSTED_PROGRAM_RESULT_KEY)).ok, true)
+
+  const expired = fakeStorageHost({ trustedProgramRequest: { id: 'tp-4', at: TEN_MINUTES_AGO, op: 'add', name: 'acme-notify' } })
+  await attendTrustedProgramRequest(fakeOrca(), expired, { run: async () => ({ ok: true }) })
+  assert.equal((await expired.get(TRUSTED_PROGRAM_RESULT_KEY)).reason, 'expired')
+
+  const malformed = fakeStorageHost({ trustedProgramRequest: { id: 'tp-5', at: new Date().toISOString(), op: 'rename', name: 'acme-notify' } })
+  await attendTrustedProgramRequest(fakeOrca(), malformed, { run: async () => ({ ok: true }) })
+  assert.equal((await malformed.get(TRUSTED_PROGRAM_RESULT_KEY)).reason, 'invalid-request')
+})
+
+test('attendTrustedProgramRequest: a failed mirror is reported, and the list stays as stored', async () => {
+  const storageHost = fakeStorageHost({ trustedProgramRequest: { id: 'tp-6', at: new Date().toISOString(), op: 'add', name: 'acme-notify' } })
+  await attendTrustedProgramRequest(fakeOrca(), storageHost, { run: async () => ({ ok: false, reason: 'exception', detail: 'disk full' }) })
+  const result = await storageHost.get(TRUSTED_PROGRAM_RESULT_KEY)
+  assert.deepEqual({ ok: result.ok, reason: result.reason }, { ok: false, reason: 'mirror-failed' })
+})
+
+test('publishTrustedPrograms publishes the stored list, validated', async () => {
+  const storageHost = fakeStorageHost({ trustedPrograms: ['acme-notify', 'rm'] })
+  await publishTrustedPrograms(fakeOrca(), storageHost)
+  assert.deepEqual((await storageHost.get(TRUSTED_PROGRAMS_STATUS_KEY)).programs, ['acme-notify'])
 })
