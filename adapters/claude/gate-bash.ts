@@ -84,7 +84,7 @@ import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { isContainedToTempRoots, isOwnTreeWork, tempRootsFromEnvironment, trustedProgramsRun } from '../../src/core/contained_effect.ts'
-import { localAllowReasonKey, localAllowStopReason, replaysCachedDecision, storesVerdict } from '../../src/core/local_allow.ts'
+import { localAllowReasonKey, localAllowStopReason } from '../../src/core/local_allow.ts'
 import type { LocalAllowKind } from '../../src/core/local_allow.ts'
 import type { ContainedEffectInput, OwnTreeInput } from '../../src/core/contained_effect.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
@@ -821,11 +821,16 @@ type CacheEntry = GateCacheEntry
  * Spanish spelling to English) fingerprint identically, so this never
  * costs a hit it didn't have to.
  */
-function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null, policies: readonly Policy[], consequenceCeiling: number | undefined): string | null {
+function cacheKey(command: string, context: string, cwd: string, destinationId: string | null, treeRoot: string | null, policies: readonly Policy[], consequenceCeiling: number | undefined, localAllowKind: LocalAllowKind | null = null): string | null {
   const shape = commandShape(command, { cwd, home: HOME_PATHS.home, destinationId, treeRoot: treeRoot ?? undefined, repoContext: context })
   if (shape === null) return null
   const fingerprint = gatePolicyFingerprint({ policies, seedScopeById: SEED_SCOPE_BY_ID, consequenceCeiling })
-  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}`).digest('hex').slice(0, 24)
+  // 0.6.28: a command that qualifies for a local allow (src/core/local_allow.ts)
+  // is judged by its policies alone, never by the risk axes, so its verdicts
+  // are its own: a command of the same shape that does not qualify must
+  // never replay them, nor they its. Every other key is byte-identical.
+  const qualified = localAllowKind === null ? '' : `:local-allow=${localAllowKind}`
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}${qualified}`).digest('hex').slice(0, 24)
 }
 
 /**
@@ -2376,12 +2381,9 @@ async function main(): Promise<void> {
   // filtering askJev's own path applies) and the matched destination's own
   // ceiling override are what JEVADV-48 folds into the key -- see cacheKey's
   // own doc.
-  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null, commandScopedPolicies, matchedDestination?.autonomy?.consequenceCeiling)
+  const key = cacheKey(command, context, cwd, matchedDestination?.id ?? null, catalogMatch?.treeRoot ?? null, commandScopedPolicies, matchedDestination?.autonomy?.consequenceCeiling, localAllow.qualifies ? localAllow.kind : null)
   const cache = key === null ? {} : readCache()
-  // A cached advise is a risk verdict, which never decides for a command
-  // that qualifies for a local allow: only a policy may stop it (local_allow.ts).
-  const cachedHit = key === null ? undefined : cache[key]
-  const hit = cachedHit !== undefined && replaysCachedDecision(cachedHit.decision, localAllow.qualifies) ? cachedHit : undefined
+  const hit = key === null ? undefined : cache[key]
   if (hit !== undefined) {
     // An 'advise' hit is never replayed as a canned line: recoverability
     // depends on the CURRENT git status, which the shape-only cache key
@@ -2568,7 +2570,7 @@ async function main(): Promise<void> {
     return
   }
 
-  if (key !== null && storesVerdict(resolved.viaLocalAllow)) {
+  if (key !== null) {
     cache[key] = {
       decision: resolved.decision,
       reason: resolved.reason,

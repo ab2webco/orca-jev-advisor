@@ -7,8 +7,9 @@
 // decide for it. Every real install has command-scoped policies (the seed
 // ships eight that survive T1), so this second path is the one that matters.
 //
-// Pure: which stop reason and reason text each kind records, and how the
-// verdict cache treats a qualifying command.
+// Pure: which stop reason and reason text each kind records. The verdict
+// cache keys a qualifying command's verdicts by its kind (gate-bash.ts's
+// cacheKey), so the same shape that does not qualify never shares them.
 import type { GateStopReason } from "./gate_measurement.ts";
 import type { GateKey } from "./i18n_gate.ts";
 
@@ -31,22 +32,4 @@ export function localAllowReasonKey(kind: LocalAllowKind): GateKey {
     case "trusted":
       return "reason.trusted";
   }
-}
-
-/**
- * Whether a cached verdict is replayed. A cached `advise` only ever comes
- * from the risk stage, which never decides for a qualifying command; a
- * cached `deny` or `ask` is a policy verdict and still stands.
- */
-export function replaysCachedDecision(decision: "allow" | "ask" | "deny" | "advise", localAllowQualifies: boolean): boolean {
-  return !(localAllowQualifies && decision === "advise");
-}
-
-/**
- * Whether a fresh verdict is cached for the command's shape. An allow that
- * the structural qualification produced says nothing about the shape: a
- * command of the same shape that does not qualify must not replay it.
- */
-export function storesVerdict(viaLocalAllow: boolean): boolean {
-  return !viaLocalAllow;
 }

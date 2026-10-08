@@ -106,11 +106,13 @@ function verdictCachePath (home) {
  *  every pre-JEVADV-48 test in this file exercises: no policies mirror file
  *  present at all, so gate-bash.ts's own readPoliciesMirror() (and, after
  *  destination/scope filtering, commandScopedPolicies) resolves to `[]`. */
-function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean', policies = [], seedScopeById = new Map(), consequenceCeiling } = {}) {
+function computeCacheKey (command, cwd, home, { destinationId = null, treeRoot, repoContext = 'no remote, unknown branch, this is a working branch, clean', policies = [], seedScopeById = new Map(), consequenceCeiling, localAllowKind = null } = {}) {
   const shape = commandShape(command, { cwd, home, destinationId, treeRoot, repoContext })
   if (shape === null) throw new Error('test command must have a non-null shape to exercise the cache path')
   const fingerprint = gatePolicyFingerprint({ policies, seedScopeById, consequenceCeiling })
-  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}`).digest('hex').slice(0, 24)
+  // 0.6.28: a command that qualifies for a local allow keys its own verdicts.
+  const qualified = localAllowKind === null ? '' : `:local-allow=${localAllowKind}`
+  return createHash('sha256').update(`v${GATE_DECISION_RULES_VERSION}:${shape}:${fingerprint}${qualified}`).digest('hex').slice(0, 24)
 }
 
 /** No catalog mirror present (destinationId/treeRoot null), no policies
@@ -2074,7 +2076,8 @@ test('own-branch push: a requires_human policy still "asks" -- observed literall
   // -- this policy is command-scoped and global, so it survives and must be
   // passed here too, or this pre-populated entry would sit under a key the
   // real hook never looks up (a cache MISS reaching for the real network).
-  const key = computeCacheKey('git push -u origin feature/x', cwd, home, { policies: [policy] })
+  // 0.6.28: a qualifying push keys its verdicts by its kind (cacheKey).
+  const key = computeCacheKey('git push -u origin feature/x', cwd, home, { policies: [policy], localAllowKind: 'ownBranchPush' })
   const cachePath = verdictCachePath(home)
   mkdirSync(dirname(cachePath), { recursive: true })
   writeFileSync(cachePath, JSON.stringify({
@@ -3090,15 +3093,19 @@ function homeForClientReach (command, repo, owners) {
   writePoliciesMirror(home, [CLIENT_ASKS])
   if (owners !== null) writeTeamOwnersMirror(home, owners)
   const repoContext = `repository app, branch ${branchNameOf(repo)}, this is a working branch, clean`
-  const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [CLIENT_ASKS] })
-  const withoutPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [] })
-  assert.notEqual(withPolicy, withoutPolicy, 'the two keys must differ, or this proves nothing')
+  // 0.6.28: a command that qualifies for a local allow keys its verdicts by
+  // its kind (cacheKey), so both verdicts are cached under every kind.
+  const entries = {}
+  for (const localAllowKind of [null, 'ownBranchPush', 'guardedGitDelete', 'ownTree']) {
+    const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [CLIENT_ASKS], localAllowKind })
+    const withoutPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [], localAllowKind })
+    assert.notEqual(withPolicy, withoutPolicy, 'the two keys must differ, or this proves nothing')
+    entries[withPolicy] = { decision: 'ask', reason: ASKED_REASON, policyId: CLIENT_ASKS.id, policyRule: CLIENT_ASKS.rule, at: Date.now() - 1000 }
+    entries[withoutPolicy] = { decision: 'allow', reason: SET_ASIDE_REASON, at: Date.now() - 1000 }
+  }
   const cachePath = verdictCachePath(home)
   mkdirSync(dirname(cachePath), { recursive: true })
-  writeFileSync(cachePath, JSON.stringify({
-    [withPolicy]: { decision: 'ask', reason: ASKED_REASON, policyId: CLIENT_ASKS.id, policyRule: CLIENT_ASKS.rule, at: Date.now() - 1000 },
-    [withoutPolicy]: { decision: 'allow', reason: SET_ASIDE_REASON, at: Date.now() - 1000 },
-  }))
+  writeFileSync(cachePath, JSON.stringify(entries))
   return home
 }
 
@@ -3943,9 +3950,7 @@ test('T1 fix: on main, a write through a print verb (read as a mention) is still
 // 0.6.28 T6 follow-up: every real install has command-scoped policies (the
 // shipped seed keeps eight on a working branch), so own-tree work goes on to
 // Jev with only its policy coverage deciding -- a cached policy verdict
-// still stands for it. (A cached risk advise is skipped for it, which
-// src/core/local_allow.test.ts pins: observing that here needs a real Jev
-// call.)
+// still stands for it, under the key of its own kind (cacheKey).
 test('T6 fix: with the shipped seed, a cached policy ask still stands for own-tree work', () => {
   const home = makeHome()
   const repo = ownTreeRepo('feat/x')
@@ -3953,7 +3958,7 @@ test('T6 fix: with the shipped seed, a cached policy ask still stands for own-tr
   writePoliciesMirror(home, seed)
   const command = 'git add -A && git commit -qm x'
   const judged = seed.filter((p) => { const scope = p.scope ?? 'command'; return (scope === 'command' || scope === 'protected-branch') && p.id !== 'never_write_to_main' })
-  const key = computeCacheKey(command, repo, home, { repoContext: computeRepoContextForTest(repo), policies: judged, seedScopeById: SHIPPED_SEED_SCOPES })
+  const key = computeCacheKey(command, repo, home, { repoContext: computeRepoContextForTest(repo), policies: judged, seedScopeById: SHIPPED_SEED_SCOPES, localAllowKind: 'ownTree' })
   writeVerdictCacheEntry(home, key, { decision: 'ask', reason: 'a policy needs a person', policyId: 'others_pr', at: Date.now() })
   const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
@@ -4031,4 +4036,26 @@ test('T7 fix: with the shipped seed and no key, a trusted line is never allowed 
   writePoliciesMirror(home, parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8'))))
   run(home, `${program} hi`)
   assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false)
+})
+
+test('T6 fix: a qualifying command keys its own cached verdicts, so it replays one without a Jev call', () => {
+  const home = makeHome()
+  const repo = ownTreeRepo('feat/x')
+  const seed = parseSeedPolicies(JSON.parse(readFileSync(join(__dirname, '..', '..', 'seed', 'policies.json'), 'utf8')))
+  writePoliciesMirror(home, seed)
+  const command = 'git add -A && git commit -qm x'
+  const judged = seed.filter((p) => { const scope = p.scope ?? 'command'; return (scope === 'command' || scope === 'protected-branch') && p.id !== 'never_write_to_main' })
+  const base = { repoContext: computeRepoContextForTest(repo), policies: judged, seedScopeById: SHIPPED_SEED_SCOPES }
+  const plainKey = computeCacheKey(command, repo, home, base)
+  const ownTreeKey = computeCacheKey(command, repo, home, { ...base, localAllowKind: 'ownTree' })
+  assert.notEqual(plainKey, ownTreeKey)
+  const path = verdictCachePath(home)
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify({
+    [plainKey]: { decision: 'ask', reason: 'cached for a command that did not qualify', policyId: 'others_pr', at: Date.now() - 1000 },
+    [ownTreeKey]: { decision: 'allow', reason: 'cached for own-tree work', at: Date.now() - 1000 },
+  }))
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow')
+  assert.equal(lastGateRecord(home).source, 'cache')
 })
