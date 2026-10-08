@@ -14,8 +14,8 @@ The owner, 2026-10-07: "quiero una solucion para que esto funcione y que atrape 
 | `npm test` | see scenario 1 |
 | `npm run test:panels` (after T7) | 207/207 |
 | Rules tab shots, 1440/768/390/320, light and dark, ready and fresh | 16 read; no overflow (`screens-0.6.28/`) |
-| Offline replay, 834 real advised commands | 132 pass without Jev (was 0) |
-| Must-stop set, 29 commands | 29/29 still stopped |
+| Offline replay, 834 real advised commands | 135 no longer advised (was 0): 54 skip Jev, 57 skip the risk score, 24 after one confirmation |
+| Must-stop set, 31 commands | 31/31 still stopped |
 
 ## Scenarios
 
@@ -31,26 +31,33 @@ The owner, 2026-10-07: "quiero una solucion para que esto funcione y que atrape 
 | 8 | Trusted program with a planted twin | `ln -s /bin/sh /tmp/x/acme-notify && /tmp/x/acme-notify -c '…'` (0cc4765) | Not trusted | RED 4 of 14, then GREEN 51/51 | PASS |
 | 9 | `$(cat /dev/zero)` in a trusted line | fbc9e50 | Returns promptly, not trusted | Hung past 20 s before, prompt after | PASS |
 | 10 | Panel: add, remove, refused name with reason | `panels.spec.mjs` (723f66c) | All three behave | 8 of 8 RED, then GREEN | PASS |
-| 11 | Offline replay of real advice | see below | Many harmless classes pass, must-stop set stays at zero | 132 / 834; 29 / 29 stopped | PASS |
+| 11 | Offline replay of real advice | see below | Many harmless classes pass, must-stop set stays at zero | 135 / 834; 31 / 31 stopped | PASS |
 | 12 | Live: marketplace install at 0.6.28; a scratchpad `rm -rf` and a `git add` on a working branch pass without advice; the log shows `contained` / `own-tree` | Orca → Check for update, then real commands; `gate-decisions-*.jsonl` | Lock 0.6.28; rows with the new stop reasons | filled in at the live check | |
 
 ## Offline replay
 
-The corpus is the owner's advice blocks from three days, taken from transcripts. It stays in the session scratchpad and never enters the repository, because it contains private data. The replay calls the pure layers only (`isObviouslySafeCommand`, `isContainedToTempRoots`, `isOwnTreeWork`, `qualifiesForLocalGitAllow`, `deliveryClassesOf`, `isTrustedProgramLine`) and never Jev. A delivery line counts as passing when its classes are remembered, which happens after one confirmation in that repository. The trusted list is `wa-send`, `wa-scope`. Worktrees from those days are gone, so their branches are simulated: a suffixed directory such as `repo-xxx` was on a working branch, and the main checkout was on main.
+The corpus is the owner's advice blocks from three days, taken from transcripts. It stays in the session scratchpad and never enters the repository, because it contains private data. The replay calls the pure layers only (`isObviouslySafeCommand`, `isContainedToTempRoots`, `isOwnTreeWork`, `qualifiesForLocalGitAllow`, `deliveryClassesOf`, `isTrustedProgramLine`) and never Jev. A delivery line counts as passing when its classes are remembered, which happens after one confirmation in that repository. The trusted list is `wa-send`, `wa-scope`. Linked worktrees are detected with a real `.git`-file check on paths that still exist. Worktrees from those days are gone, so their branches are simulated: a suffixed directory such as `repo-xxx` was on a working branch, and the main checkout was on main.
 
 | Class (regex over the text) | Passed / advised | Layer |
 |---|---|---|
-| Mentions a scratchpad or `/tmp` | 57 / 349 | contained 55, delivery 2 |
-| `wa-send` / `wa-scope` | 40 / 151 | trusted 40 |
+| Mentions a scratchpad or `/tmp` | 57 / 349 | contained 54, delivery 2, trusted 1 |
+| `wa-send` / `wa-scope` | 43 / 151 | trusted 43 |
 | `gh` delivery | 22 / 113 | delivery (once remembered) |
 | Other | 13 / 64 | local git 11, own tree 2 |
 | Interpreter heredoc, `sed -i` | 0 / 56 | stays with Jev |
 | Worktree and branch cleanup | 0 / 42 | stays with Jev |
 | `git push` (plain) | 0 / 30 | stays with Jev |
 | `ssh` / `scp` | 0 / 29 | stays with Jev |
-| **All** | **132 / 834** | |
+| **All** | **135 / 834** | |
 
-Reading the remaining 702 by hand (a sample of 60, plus targeted samples):
+Not every one of the 135 skips Jev:
+- 54 `contained` skip it entirely;
+- 57 (`trusted`, `own-tree`, `local-git`) skip the risk score, but where a command-scoped policy applies, each new command shape costs one policy-coverage call, which is then cached;
+- 24 delivery lines pass only after one confirmation per repository.
+
+The replay runs from `~/Projects`. Run from the plugin's workspace, which is where the owner's notify and triage lines really run (`WA="$(cat .wa-bin)"`), 66 of the 148 lines that run the trusted programs pass, up from 44. Most of the rest name plugin content-hash directories that are no longer on disk, and those fail closed.
+
+Reading the remaining 699 by hand (a sample of 60, plus targeted samples):
 - **Most have a real outward effect,** so stopping them is the correct call:
   - releases that write notes to the scratchpad and then run `gh release create`;
   - messages to people other than the owner;
@@ -59,7 +66,7 @@ Reading the remaining 702 by hand (a sample of 60, plus targeted samples):
   - Jira comments, `curl -X PUT` and `git reset --hard`.
 - **Interpreter code (`python3 - <<EOF`) stays with Jev.** It is opaque, and it may write anywhere.
 - **Not covered here:** writes to `~/.cache/...` (outside the repository and the temp roots), `rm` with a glob, `git rm`, and `git worktree remove --force` together with `git branch -D`.
-- **Lines that run the owner's tool through `OWNER="$("$WA/wa-scope" owner)"` fail closed.** This is a candidate for a next step.
+- `OWNER="$("$WA/wa-scope" owner)"` and a relative `$(cat .wa-bin)` were gaps found by this replay. Both are fixed: 8db59c6 and dad6ed8.
 
 Must-stop set: none passes.
 - force push, `-f`;
@@ -73,6 +80,7 @@ Must-stop set: none passes.
 - `cp ~/.ssh/id_rsa <scratch>/x`;
 - interpreter code, from a heredoc or `-c`;
 - `gh release create` and `gh pr merge --admin` (not remembered);
+- an untrusted program in a `$(…)` handed to a trusted one, and a trusted value handed to `curl`;
 - `git reset --hard`;
 - `IFS=/`, `PATH=` prefix, `$(…)`, `$S:h:h`;
 - a planted `wa-send` symlink to `/bin/sh`;

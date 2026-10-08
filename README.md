@@ -36,7 +36,12 @@ The command gate now stops what can really affect something, not everyday projec
 - **Remembered delivery authorizations.** When the agent confirms a pushed branch, a pull request, a merge or a release once in a repository, the gate remembers it for 30 days, for every worktree of that repository. The panel's Rules tab lists them and can forget each one. A policy still decides when one applies.
 - **Trusted programs.** In Rules, you can list programs of your own that you trust, such as a notifier. Lines made only of them, plus read-only, temp or own-tree work, skip the risk score. A shell, an interpreter or a general tool cannot be added. A program that the same line could have planted or redirected is never trusted. Nothing is learned automatically.
 
-Measured offline on 834 real advised commands from three days: 132 now pass these layers without Jev. The rest mostly have a real effect outside the machine, such as messages to other people, ssh, `gh` delivery (which passes once remembered) or interpreter code. A set of 29 commands that must still stop all still stop: force push, push to main, `rm -rf ~`, a `..` escape, symlinks out of tmp, a planted program, and secrets in arguments.
+Measured offline on 834 real advised commands from three days, 135 are no longer advised:
+- 54 skip Jev entirely (temp folders);
+- 57 skip the risk score and get at most one policy check per command shape, which is then cached (trusted programs, your own working tree, local git);
+- 24 pass after one confirmation per repository (`gh` delivery).
+
+Run from the plugin's own workspace, 66 of the 148 lines that run the trusted programs pass. Most of the rest point at plugin versions that are no longer on disk, and those fail closed. What is still advised mostly has a real effect outside the machine: ssh, releases, messages to other people, or interpreter code. The 31 commands that must still stop all still stop. They include force push, push to main, `rm -rf ~`, a `..` escape, symlinks out of tmp, a planted program, secrets in arguments, and a trusted value sent to an untrusted program.
 
 To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
 
