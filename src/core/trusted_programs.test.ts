@@ -48,7 +48,8 @@ const FS: TrustedLineFs = {
   cwd: `${HOME}/project`,
   env: { HOME },
   tempRoots: ["/tmp", "/private/tmp"],
-  which: (name) => (name === "acme-notify" || name === "acme-scope" ? `/opt/acme/bin/${name}` : name === "other-tool" ? "/opt/other/bin/other-tool" : null),
+  pathDirs: ["/opt/acme/bin", "/opt/other/bin"],
+  isExecutable: (path) => ["/opt/acme/bin/acme-notify", "/opt/acme/bin/acme-scope", "/opt/other/bin/other-tool"].includes(path),
   realpath: (path) => {
     const links: Readonly<Record<string, string>> = { "/tmp": "/private/tmp", "/opt/fake/bin/acme-notify": "/bin/bash", "/tmp/x/acme-notify": "/bin/sh" };
     if (links[path] !== undefined) return links[path] ?? null;
@@ -108,4 +109,22 @@ test("must stop: a program named like a trusted one that is really a shell, or s
 test("must stop: nothing resolves without a filesystem", () => {
   assert.equal(isTrustedProgramLine("acme-notify hi", NAMES), null);
   assert.equal(isTrustedProgramLine("acme-notify hi", [], FS), null);
+});
+
+test("must stop: a file read for a value that an earlier part of the line could have written", () => {
+  // The gate reads /tmp/x/p before the line runs; the line rewrites it first.
+  const command = "mkdir -p /tmp/x/e && ln -s /bin/sh /tmp/x/e/acme-notify && echo /tmp/x/e > /tmp/x/p && A=\"$(cat /tmp/x/p)\" && \"$A/acme-notify\" -c 'rm -rf ~'";
+  const fs: TrustedLineFs = { ...FS, readFirstLine: (path) => (path === "/tmp/x/p" ? "/opt/acme/bin" : FS.readFirstLine?.(path) ?? null) };
+  assert.equal(trusted(command, fs), null);
+  assert.equal(trusted('A="$(cat /tmp/x/p)"; "$A/acme-notify" hi', fs), null);
+});
+
+test("must stop: a program planted under a trusted name in the same line, or a PATH that could find one first", () => {
+  assert.equal(trusted("ln -s /bin/sh /tmp/x/own/bin/acme-notify && acme-notify -c 'rm -rf ~'"), null);
+  assert.equal(trusted("cp /bin/sh /tmp/x/acme-notify && acme-notify hi"), null);
+  assert.equal(trusted("echo x > /tmp/x/acme-notify; acme-notify hi"), null);
+  assert.equal(trusted("ln -s /tmp/x/acme-notify /tmp/x/bin/ && acme-notify hi"), null);
+  assert.equal(trusted("acme-notify hi", { ...FS, pathDirs: ["node_modules/.bin", "/opt/acme/bin"] }), null);
+  assert.equal(trusted("acme-notify hi", { ...FS, pathDirs: ["/tmp/x", "/opt/acme/bin"] }), null);
+  assert.deepEqual(trusted("acme-notify hi", { ...FS, pathDirs: ["/opt/other/bin", "/opt/acme/bin"] }), ["acme-notify"]);
 });

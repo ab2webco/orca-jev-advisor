@@ -63,7 +63,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { accessSync, appendFileSync, closeSync, constants as fsConstants, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
@@ -1369,19 +1369,15 @@ function readFirstLineOf(path: string): string | null {
   }
 }
 
-/** Where a bare program name resolves on this process's PATH, or null (0.6.28 T7). */
-function whichOnPath(name: string): string | null {
-  for (const dir of (process.env['PATH'] ?? '').split(':')) {
-    if (!isAbsolute(dir)) continue
-    const candidate = join(dir, name)
-    try {
-      accessSync(candidate, fsConstants.X_OK)
-      return candidate
-    } catch {
-      // Not here; keep looking.
-    }
+/** Whether `path` is an executable regular file (0.6.28 T7). */
+function isExecutableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, fsConstants.X_OK)
+    return true
+  } catch {
+    return false
   }
-  return null
 }
 
 function readQueueModeMirror(): boolean {
@@ -2016,7 +2012,7 @@ function trustedProgramsInCommand(command: string, cwd: string): readonly string
   const names = readTrustedProgramsMirror()
   if (names.length === 0) return null
   try {
-    return trustedProgramsRun(command, containedEffectInput(cwd), ownTreeInput(), { names: new Set(names), which: whichOnPath })
+    return trustedProgramsRun(command, containedEffectInput(cwd), ownTreeInput(), { names: new Set(names), pathDirs: (process.env['PATH'] ?? '').split(':').filter((dir) => dir.length > 0), isExecutable: isExecutableFile })
   } catch {
     return null
   }

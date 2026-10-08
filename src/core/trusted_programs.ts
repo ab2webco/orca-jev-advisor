@@ -105,7 +105,10 @@ export interface TrustedLineFs {
   readonly cwd?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
   readonly tempRoots?: readonly string[];
-  readonly which?: (name: string) => string | null;
+  /** The PATH directories, in order, for a bare name. */
+  readonly pathDirs?: readonly string[];
+  /** Whether a path is an executable file. */
+  readonly isExecutable?: (path: string) => boolean;
   readonly realpath?: (path: string) => string | null;
   readonly readFirstLine?: (path: string) => string | null;
 }
@@ -114,7 +117,7 @@ export interface TrustedLineFs {
  * The trusted programs `command` runs when every segment is one of `names`,
  * obviously safe or contained to a temp root; null otherwise. With no
  * filesystem nothing resolves, so nothing is trusted: a replay passes its
- * own `which`/`realpath`/`readFirstLine` (the hook passes the real ones,
+ * own `pathDirs`/`isExecutable`/`realpath`/`readFirstLine`/`tempRoots` (the hook passes the real ones,
  * plus the own-tree reading, through contained_effect.ts directly).
  */
 export function isTrustedProgramLine(command: string, names: readonly string[], fs: TrustedLineFs = {}): readonly string[] | null {
@@ -131,6 +134,6 @@ export function isTrustedProgramLine(command: string, names: readonly string[], 
       readFirstLine: fs.readFirstLine,
     },
     null,
-    { names: new Set(parseTrustedPrograms(names)), which: fs.which ?? (() => null) },
+    { names: new Set(parseTrustedPrograms(names)), pathDirs: fs.pathDirs ?? [], isExecutable: fs.isExecutable ?? (() => false) },
   );
 }

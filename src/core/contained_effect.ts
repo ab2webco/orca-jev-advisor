@@ -66,11 +66,13 @@ export interface ContainedEffectInput {
   readonly readFirstLine?: (path: string) => string | null;
 }
 
-/** 0.6.28 T7: what the trusted reading needs: the names a person trusted, lower case, and a PATH lookup. */
+/** 0.6.28 T7: what the trusted reading needs: the names a person trusted, lower case, and the PATH to look a bare name up on. */
 export interface TrustedInput {
   readonly names: ReadonlySet<string>;
-  /** Where a bare program name resolves on PATH, or null. */
-  readonly which: (name: string) => string | null;
+  /** The PATH directories, in order. */
+  readonly pathDirs: readonly string[];
+  /** Whether a path is an executable file. */
+  readonly isExecutable: (path: string) => boolean;
 }
 
 /**
@@ -573,6 +575,8 @@ interface ExpandOptions {
   readonly allowDerived?: boolean;
   /** Resolves `$(cat f)`; only an assignment's value passes it. */
   readonly readFirstLine?: (path: string) => string | null;
+  /** Whether a file may be read for a value: nothing earlier in the line can have written it. */
+  readonly readableFile?: (path: string) => boolean;
 }
 
 function variableValue(name: string, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>): string | null {
@@ -598,7 +602,7 @@ function expandWordDerived(word: Word, vars: ReadonlyMap<string, string>, env: R
       const read = options.readFirstLine;
       if (read === undefined) return null;
       const file = expandWord(part.file, vars, env, false, { derived: options.derived });
-      if (file === null || !posix.isAbsolute(file.text)) return null;
+      if (file === null || !posix.isAbsolute(file.text) || options.readableFile?.(file.text) !== true) return null;
       const line = read(file.text);
       if (line === null) return null;
       text += line;
@@ -633,14 +637,14 @@ function isAssignment(word: Word): boolean {
 }
 
 /** `NAME=value` as the shell assigns it: no splitting, no globbing. A value read from a file marks the name as derived. */
-function assign(word: Word, vars: Map<string, string>, derived: Set<string>, env: Readonly<Record<string, string | undefined>>, readFirstLine: ((path: string) => string | null) | undefined): boolean {
+function assign(word: Word, vars: Map<string, string>, derived: Set<string>, env: Readonly<Record<string, string | undefined>>, readFirstLine: ((path: string) => string | null) | undefined, readableFile: (path: string) => boolean): boolean {
   const first = word[0];
   if (first === undefined || first.kind !== "text") return false;
   const equals = first.text.indexOf("=");
   const name = first.text.slice(0, equals);
   if (STEERING_NAMES.has(name) || STEERING_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
   const rest: WordPart[] = [{ kind: "text", text: first.text.slice(equals + 1), quote: "none" }, ...word.slice(1)];
-  const value = expandWordDerived(rest, vars, env, false, { derived, allowDerived: true, readFirstLine });
+  const value = expandWordDerived(rest, vars, env, false, { derived, allowDerived: true, readFirstLine, readableFile });
   if (value === null) return false;
   vars.set(name, value.expanded.text);
   if (value.derived) derived.add(name);
@@ -701,6 +705,53 @@ function absolutePath(text: string, cwd: string): string | null {
   return withoutTrailingSlash(posix.normalize(posix.isAbsolute(text) ? text : posix.join(cwd, text)));
 }
 
+/**
+ * 0.6.28 T7: whether a path a segment writes, copies or links is named like
+ * a trusted program. Such a file could be found, by PATH or by path, in
+ * place of the real program later in the same line; the trusted reading
+ * refuses the whole line instead.
+ */
+function namesTrustedProgram(path: string, places: Places): boolean {
+  return places.trusted !== null && places.trusted.names.has(posix.basename(path).toLowerCase());
+}
+
+/**
+ * 0.6.28 T7: whether a file may be read for a `$(cat f)` value. The gate
+ * reads it before the line runs, so a file an allowed segment could write
+ * first -- inside a temp root or a writable tree, or under a link or copy
+ * made earlier -- would show the gate one value and the shell another.
+ */
+function isStableFile(text: string, cwd: string, places: Places): boolean {
+  const path = absolutePath(text, cwd);
+  if (path === null) return false;
+  const real = realLocation(path, places.input.realpath);
+  if (real === null || madeEarlier(path, real, places)) return false;
+  if (places.roots.some((root) => root === real || isUnder(real, root))) return false;
+  return places.ownTrees === null || writableTreeAt(real, cwd, places) === null;
+}
+
+/**
+ * 0.6.28 T7: where a bare trusted name resolves on PATH, or null. Every
+ * directory searched before it must be absolute (the shell also searches a
+ * relative one, against a cwd the line may change) and outside the temp
+ * roots and the writable trees, where an earlier command could have put a
+ * program of the same name.
+ */
+function whichTrusted(name: string, cwd: string, places: Places): string | null {
+  const trusted = places.trusted;
+  if (trusted === null) return null;
+  for (const dir of trusted.pathDirs) {
+    if (!posix.isAbsolute(dir)) return null;
+    const real = realLocation(withoutTrailingSlash(posix.normalize(dir)), places.input.realpath);
+    if (real === null) continue;
+    if (places.roots.some((root) => root === real || isUnder(real, root))) return null;
+    if (places.ownTrees !== null && writableTreeAt(real, cwd, places) !== null) return null;
+    const candidate = posix.join(dir, name);
+    if (trusted.isExecutable(candidate)) return candidate;
+  }
+  return null;
+}
+
 /** Whether `path` (or its real location) sits at or under a symlink, or under a copy, made earlier in this command. */
 function madeEarlier(path: string, real: string, places: Places): boolean {
   for (const link of places.links) if (link === path || link === real || isUnder(path, link) || isUnder(real, link)) return true;
@@ -711,7 +762,7 @@ function madeEarlier(path: string, real: string, places: Places): boolean {
 /** Whether `text`, from `cwd`, is a path strictly inside a temp root and nothing this layer protects. */
 function isContainedPath(text: string, cwd: string, places: Places): boolean {
   const path = absolutePath(text, cwd);
-  if (path === null) return false;
+  if (path === null || namesTrustedProgram(path, places)) return false;
   const real = realLocation(path, places.input.realpath);
   if (real === null) return false;
   if (madeEarlier(path, real, places)) return false;
@@ -762,7 +813,7 @@ function isOwnTreePath(text: string, cwd: string, places: Places): boolean {
   const own = places.ownTrees;
   if (own === null) return false;
   const path = absolutePath(text, cwd);
-  if (path === null) return false;
+  if (path === null || namesTrustedProgram(path, places)) return false;
   const real = realLocation(path, places.input.realpath);
   if (real === null || madeEarlier(path, real, places)) return false;
   const tree = writableTreeAt(real, cwd, places);
@@ -871,6 +922,9 @@ function writerContained(program: string, args: readonly Expanded[], cwd: string
       const link = operands[1];
       if (operands.length !== 2 || link === undefined || link.glob !== "none" || operands[0]?.glob !== "none") return false;
       if (!isWritablePath(link.text, cwd, places)) return false;
+      // A link into a directory takes its target's name.
+      const target = operands[0]?.text ?? "";
+      if (places.trusted !== null && places.trusted.names.has(posix.basename(target).toLowerCase())) return false;
       rememberPath(link.text, cwd, places, places.links);
       return true;
     }
@@ -1089,7 +1143,7 @@ function trustedSegment(segment: Segment, words: readonly Word[], state: State, 
   if (name === null) return null;
   const word = expandWord(commandWord, state.vars, places.input.env, true, { derived: state.derived, allowDerived: true });
   if (word === null || word.glob !== "none") return null;
-  const located = word.text.includes("/") ? absolutePath(word.text, state.cwd) : trusted.which(word.text);
+  const located = word.text.includes("/") ? absolutePath(word.text, state.cwd) : whichTrusted(word.text, state.cwd, places);
   if (located === null) return null;
   const real = places.input.realpath(located);
   if (real === null || posix.basename(real).toLowerCase() !== name) return null;
@@ -1143,7 +1197,7 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
         if (exported && word.length === 1 && word[0]?.kind === "text" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word[0].text)) continue;
         return null;
       }
-      if (!assign(word, vars, derived, env, places.input.readFirstLine)) return null;
+      if (!assign(word, vars, derived, env, places.input.readFirstLine, (path) => isStableFile(path, state.cwd, places))) return null;
     }
     return [{ cwd: state.cwd, status: "ok", vars, derived }];
   }
