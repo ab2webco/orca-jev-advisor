@@ -35,6 +35,9 @@ Every release of Jev Advisor, newest first.
   - The command word must resolve to a real file of that name, outside temp roots and writable trees.
   - It is never trusted when the same line could plant or redirect it.
   - `$(cat f)` is read up to 4 KB from regular files only, and never as an argument.
+  - `VAR="$(<trusted> <args>)"` is accepted, and its value may only be an argument of a later trusted program.
+  - A relative `$(cat <file>)` is read from the folder the shell is in at that point.
+- No temp or own-tree write is allowed locally on a path with a `.claude` component, a `.mcp.json`, or anything under `$CLAUDE_CONFIG_DIR`.
 - Qualifying own-tree and trusted lines cache their policy verdict under their own key.
 
 ## 0.6.27
