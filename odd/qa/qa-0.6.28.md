@@ -32,7 +32,15 @@ The owner, 2026-10-07: "quiero una solucion para que esto funcione y que atrape 
 | 9 | `$(cat /dev/zero)` in a trusted line | fbc9e50 | Returns promptly, not trusted | Hung past 20 s before, prompt after | PASS |
 | 10 | Panel: add, remove, refused name with reason | `panels.spec.mjs` (723f66c) | All three behave | 8 of 8 RED, then GREEN | PASS |
 | 11 | Offline replay of real advice | see below | Many harmless classes pass, must-stop set stays at zero | 135 / 834; 31 / 31 stopped | PASS |
-| 12 | Live: marketplace install at 0.6.28; a scratchpad `rm -rf` and a `git add` on a working branch pass without advice; the log shows `contained` / `own-tree` | Orca → Check for update, then real commands; `gate-decisions-*.jsonl` | Lock 0.6.28; rows with the new stop reasons | filled in at the live check | |
+| 12 | Live: marketplace install at 0.6.28 (owner updated, 2026-10-08) | `plugins/plugins.lock.json`, `current`, hooks in the 5 settings files, mod markers | Everything names the same 0.6.28 root | Lock ref `v0.6.28`; `current` = `e4ed4e79de85`, `package.json` 0.6.28; 8 hook entries in each of the 5 settings files point at `e4ed4e79de85`; the 5 mod markers name that root, mod `plugin.json` 0.6.28 | PASS |
+| 13 | Live: scratchpad work skips Jev | `rm -rf $S && mkdir -p $S && cd $S && git init -q && printf … > $S/a.txt` in the session scratchpad | `contained`, no Jev call | `02:51:54 allow contained local-rule` | PASS |
+| 14 | Live: own-tree work on a working branch | `printf … > odd/live-check.txt && git add … && git restore --staged … && rm …` on `chore/live-check-0628` | `own-tree`; Jev asked only for policy coverage | `02:52:29 allow own-tree` (source jev, 394 ms: the seed's command-scoped policies are asked once per shape) | PASS |
+| 15 | Live: same work started from a detached HEAD, creating the branch in the same line | `git switch -q -c … && printf … && git add …` | Not own-tree (branch unknown at hook time, fails closed) | `02:51:57 allow risk jev` | PASS |
+| 16 | Live: `git add` on main still reaches the main policy | `git -C <main checkout> add <file>` | Refused under `never_write_to_main` | `02:52:00 deny policy never_write_to_main` | PASS |
+| 17 | Live: `git -C <dir> push -u origin <own branch>` | push of `chore/live-check-0628` | Local git allow | `02:52:32 allow local-allow` (policy coverage asked, 404 ms) | PASS |
+| 18 | Live: deleting a branch still gets advice | `git branch -D …`, `git push origin --delete …` | Advised (not in the harmless set) | `02:52:07` and `02:52:39 advise risk`, then `advice-retry` | PASS |
+| 19 | Live: trusted programs | Rules → Trusted programs | The owner adds `wa-send`, `wa-scope`; rows show `trusted` | Pending: `trusted-programs.json` is `[]` at 02:53, nothing added yet | PENDING |
+| 20 | Live: advice share over real work vs the ~9% baseline | `gate-decisions-*.jsonl`, `pluginVersion 0.6.28` rows | Clearly lower | Pending: 18 rows in the first few minutes are too few to measure | PENDING |
 
 ## Offline replay
 
