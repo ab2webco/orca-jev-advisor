@@ -4,7 +4,7 @@
 The owner, 2026-10-07:
 - "quiero una solucion para que esto funcione y que atrape comandos que realmente van a afectar algo no los de uso diario de los proyectos que hago";
 - "Esto te lo he pedido varias veces y lo mismo siempre nueva version y lo mismo";
-- "Y esto no para" — `git add` on `feat/cin-1236-link-previews` (a working branch) was refused under `never_write_to_main`.
+- "Y esto no para" — `git add` on a feature branch in a client project was refused under `never_write_to_main`.
 
 This release also carries the unreleased remembered delivery authorizations (`odd/tasks/remembered-gate-authorizations.md`), whose T5 never ran: the owner stayed on 0.6.27.
 

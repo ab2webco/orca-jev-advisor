@@ -4,7 +4,7 @@ Run on 2026-10-07 against `fix/gate-harmless-daily-work`. That branch carries th
 
 ## Why
 
-The owner, 2026-10-07: "quiero una solucion para que esto funcione y que atrape comandos que realmente van a afectar algo no los de uso diario de los proyectos que hago", and "Esto te lo he pedido varias veces y lo mismo siempre nueva version y lo mismo". During this run, an agent in another project was refused `git add` on `feat/cin-1236-link-previews` under `never_write_to_main`.
+The owner, 2026-10-07: "quiero una solucion para que esto funcione y que atrape comandos que realmente van a afectar algo no los de uso diario de los proyectos que hago", and "Esto te lo he pedido varias veces y lo mismo siempre nueva version y lo mismo". During this run, an agent in another project was refused `git add` on a feature branch in a client project under `never_write_to_main`.
 
 ## Summary
 
