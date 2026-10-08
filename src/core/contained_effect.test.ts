@@ -194,3 +194,30 @@ test("must stop: zsh modifiers, subscripts, =cmd and the clobber redirect", () =
 test("must stop: a relative cd, which CDPATH or zsh's cdpath can send anywhere", () => {
   assert.equal(contained("cd /tmp/x && cd sub && rm -rf build"), false);
 });
+
+// 0.6.28 T7 reader extensions: `$(cat f)` values, groups, `exit` and `$?`
+// must not loosen the temp reading.
+test("must stop: a value read from a file is never a path, a cd target or a redirect", () => {
+  assert.equal(contained("X=$(cat /tmp/x/p); rm -rf \"$X\""), false);
+  assert.equal(contained("X=\"$(cat /tmp/x/p)\"; cd \"$X\" && rm -rf b"), false);
+  assert.equal(contained("X=$(cat /tmp/x/p); echo x > \"$X\""), false);
+  assert.equal(contained("rm -rf \"$(cat /tmp/x/p)\""), false);
+});
+
+test("must stop: brace expansion stays unread; a group is read only as a whole word", () => {
+  assert.equal(contained("echo {a,b} > /tmp/x/f"), false);
+  assert.equal(contained("rm -rf /tmp/x/{a,b}"), false);
+  assert.equal(contained("{rm -rf ~; }"), false);
+});
+
+test("contained: exit ends its branch, a cd inside a group carries out of it, $? is a number", () => {
+  assert.equal(contained("cd /tmp/x || exit 1; rm -rf build"), true);
+  assert.equal(contained("{ cd /tmp/x; } && rm -rf build"), true);
+  assert.equal(contained("echo \"code=$?\" > /tmp/x/status"), true);
+  assert.equal(contained("[ -d /tmp/x ] || { echo missing >&2; exit 1; }; rm -rf /tmp/x/a"), true);
+});
+
+test("must stop: a group that can fall through to a delete outside", () => {
+  assert.equal(contained("{ cd /tmp/x || true; }; rm -rf build"), false);
+  assert.equal(contained("[ -d /tmp/x ] || { echo missing >&2; }; rm -rf ~/a"), false);
+});

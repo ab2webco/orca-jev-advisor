@@ -3959,3 +3959,57 @@ test('T6 fix: with the shipped seed, a cached policy ask still stands for own-tr
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
   assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree'), false)
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.28 T7: the trusted programs list. A program the person named in the
+// panel (mirrored to <configDir>/trusted-programs.json) runs with no Jev call
+// when no command-scoped policy survives; its real path must be the name and
+// sit outside every temp root and own tree. Synthetic program: acme-notify.
+// ---------------------------------------------------------------------------
+
+function writeTrustedPrograms (home, names) {
+  const path = join(home, '.config', 'orca-supervisor', 'trusted-programs.json')
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, JSON.stringify(names))
+}
+
+/** A real executable named `name`, outside the temp roots the hook uses here (its HOME's own temp dir is dropped as a root). */
+function installProgram (home, name) {
+  const dir = join(home, 'tools', 'bin')
+  mkdirSync(dir, { recursive: true })
+  const path = join(dir, name)
+  writeFileSync(path, '#!/bin/sh\nexit 0\n')
+  chmodSync(path, 0o755)
+  return path
+}
+
+test('T7: a trusted program, named by path or through a variable read from a file, is allowed locally', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  writeTrustedPrograms(home, ['acme-notify'])
+  writeFileSync(join(home, '.acme-path'), `${dirname(program)}\n`)
+  for (const command of [`${program} --to team "build is green"`, `A="$(cat ${join(home, '.acme-path')})"; [ -x "$A/acme-notify" ] || { echo "missing" >&2; exit 1; }; "$A/acme-notify" --to team hi`]) {
+    const payload = JSON.parse(run(home, command))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'allow', command)
+    assert.match(payload.hookSpecificOutput.permissionDecisionReason, /acme-notify/)
+    assert.equal(lastGateRecord(home).stopReason, 'trusted')
+  }
+})
+
+test('T7: the same line with an untrusted extra segment, or an untrusted program, is never allowed as trusted', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  installProgram(home, 'acme-other')
+  writeTrustedPrograms(home, ['acme-notify'])
+  for (const command of [`${program} hi && ssh build-host uptime`, `${program} hi; rm -rf ~`, `${join(dirname(program), 'acme-other')} hi`]) {
+    run(home, command)
+    assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false, command)
+  }
+})
+
+test('T7: with no list, nothing is trusted', () => {
+  const home = makeHome()
+  const program = installProgram(home, 'acme-notify')
+  run(home, `${program} hi`)
+  assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'trusted'), false)
+})

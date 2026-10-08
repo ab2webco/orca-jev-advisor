@@ -51,6 +51,7 @@ export type GateKey =
   | "reason.guardedGitDelete"
   | "reason.contained"
   | "reason.ownTree"
+  | "reason.trusted"
   | "effect.namedFiles"
   | "effect.deploy"
   | "effect.publish"
@@ -160,6 +161,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.guardedGitDelete": "solo usa borrados que git mismo protege: se niega si hay trabajo sin guardar o sin integrar",
     "reason.contained": "solo escribe o borra dentro de un directorio temporal",
     "reason.ownTree": "solo edita archivos o hace git local en tu propio árbol de trabajo, en una rama de trabajo",
+    "reason.trusted": "ejecuta un programa de tu lista de confianza: {{programs}}",
     // 0.5.2's own concrete-effect line (gate_person_effect.ts), in priority
     // order: named files first, then deploy/publish, then leaves-this-
     // machine, then cannot-undo, then the always-available others-notice
@@ -234,6 +236,7 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "reason.guardedGitDelete": "only uses deletes git itself guards: it refuses when there is unsaved or unmerged work",
     "reason.contained": "only writes or deletes inside a temporary directory",
     "reason.ownTree": "only edits files or runs local git in your own working tree, on a working branch",
+    "reason.trusted": "runs a program on your trusted list: {{programs}}",
     "effect.namedFiles": "deletes unsaved work: {{files}}",
     "effect.deploy": "triggers a deploy",
     "effect.publish": "publishes a package",

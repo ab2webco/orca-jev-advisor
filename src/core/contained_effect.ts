@@ -57,6 +57,20 @@ export interface ContainedEffectInput {
   readonly sessionRepoRoot: string | null;
   /** Whether a real path sits in a linked worktree: real work, never contained. */
   readonly isLinkedWorktree: (path: string) => boolean;
+  /**
+   * 0.6.28 T7: the first line of a file, for an assignment `X="$(cat f)"`;
+   * absent or null, such an assignment is not read. A value read this way
+   * is never a path, a `cd` target, a redirect or an argument -- only the
+   * directory of a trusted program's command word.
+   */
+  readonly readFirstLine?: (path: string) => string | null;
+}
+
+/** 0.6.28 T7: what the trusted reading needs: the names a person trusted, lower case, and a PATH lookup. */
+export interface TrustedInput {
+  readonly names: ReadonlySet<string>;
+  /** Where a bare program name resolves on PATH, or null. */
+  readonly which: (name: string) => string | null;
 }
 
 /**
@@ -123,7 +137,12 @@ type Quote = "none" | "single" | "double";
 type WordPart =
   | { readonly kind: "text"; readonly text: string; readonly quote: Quote }
   | { readonly kind: "var"; readonly name: string; readonly quote: Quote }
-  | { readonly kind: "tilde" };
+  | { readonly kind: "tilde" }
+  // 0.6.28 T7: `$?`, always a number from 0 to 255.
+  | { readonly kind: "status" }
+  // 0.6.28 T7: `$(cat <file>)`, the one substitution read: only ever an
+  // assignment's value, resolved through ContainedEffectInput.readFirstLine.
+  | { readonly kind: "cat"; readonly file: Word };
 
 type Word = readonly WordPart[];
 
@@ -142,6 +161,8 @@ interface Heredoc {
 }
 
 interface Segment {
+  /** 0.6.28 T7: `{` or `}` of a group, a word alone in command position; such a segment has no words. */
+  readonly group?: "open" | "close";
   /** What joins it to the previous segment; null for the first. */
   readonly joiner: Joiner | null;
   /** Its own text, without any heredoc body. */
@@ -172,6 +193,9 @@ class Reader {
   private heredoc: Heredoc | null = null;
   private start = -1;
   private end = -1;
+  private depth = 0;
+  /** A `}` was just read: the next joiner joins the whole group. */
+  private closedGroup = false;
 
   private readonly text: string;
 
@@ -212,6 +236,7 @@ class Reader {
         }
       } else if (char === "(" || char === ")") unreadable();
       else if (char === "<" || char === ">") this.readRedirect();
+      else if ((char === "{" || char === "}") && this.words.length === 0 && this.redirects.length === 0 && /^(?:[\s;]|$)/.test(next)) this.readGroupWord(char);
       else {
         const begin = this.index;
         const word = this.readWord();
@@ -228,8 +253,27 @@ class Reader {
       }
     }
     this.endSegment(null, false);
-    if (this.pendingHeredocs.length > 0) unreadable();
+    if (this.pendingHeredocs.length > 0 || this.depth !== 0) unreadable();
     return this.segments;
+  }
+
+  /**
+   * 0.6.28 T7: `{` opens a group and `}` closes one, each a word alone in
+   * command position (`a || { b; exit 1; }`). Anywhere else a brace is brace
+   * expansion and stays unread.
+   */
+  private readGroupWord(char: string): void {
+    if (char === "{") {
+      this.segments.push({ group: "open", joiner: this.segments.length === 0 ? null : this.joiner ?? ";", raw: "{", words: [], redirects: [], heredoc: null });
+      this.depth += 1;
+      this.joiner = null;
+    } else {
+      if (this.depth === 0) unreadable();
+      this.segments.push({ group: "close", joiner: ";", raw: "}", words: [], redirects: [], heredoc: null });
+      this.depth -= 1;
+      this.closedGroup = true;
+    }
+    this.index += 1;
   }
 
   private mark(position: number): void {
@@ -244,6 +288,13 @@ class Reader {
   /** Closes the segment being read; `joinerAfter` joins it to the next one. */
   private endSegment(joinerAfter: Joiner | null, fromNewline: boolean): void {
     const empty = this.words.length === 0 && this.redirects.length === 0;
+    if (empty && this.closedGroup) {
+      this.closedGroup = false;
+      if (joinerAfter !== null) this.joiner = joinerAfter;
+      return;
+    }
+    // Anything right after `}` other than a joiner (`} > f`) is not read.
+    if (this.closedGroup) unreadable();
     if (empty) {
       // A newline after `&&`, `||` or `|` continues the list; any other
       // empty segment between two joiners is not a command.
@@ -445,6 +496,11 @@ class Reader {
   private readVariable(quote: Quote): WordPart {
     const { text } = this;
     const next = text[this.index + 1] ?? "";
+    if (next === "?") {
+      this.index += 2;
+      return { kind: "status" };
+    }
+    if (next === "(") return this.readCatSubstitution();
     if (next === "{") {
       const close = text.indexOf("}", this.index + 2);
       if (close === -1) unreadable();
@@ -462,6 +518,22 @@ class Reader {
     if (text[end] === ":" || text[end] === "[") unreadable();
     this.index = end;
     return { kind: "var", name, quote };
+  }
+
+  /** 0.6.28 T7: `$(cat <one word>)`, spaces allowed inside the parentheses; any other substitution is not read. */
+  private readCatSubstitution(): WordPart {
+    const { text } = this;
+    this.index += 2;
+    while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
+    if (text.slice(this.index, this.index + 3) !== "cat" || !/[ \t]/.test(text[this.index + 3] ?? "")) unreadable();
+    this.index += 3;
+    while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
+    const file = this.readWord();
+    if (file.length === 0) unreadable();
+    while (text[this.index] === " " || text[this.index] === "\t") this.index += 1;
+    if (text[this.index] !== ")") unreadable();
+    this.index += 1;
+    return { kind: "cat", file };
   }
 }
 
@@ -489,6 +561,18 @@ interface State {
   readonly cwd: string;
   readonly status: "ok" | "fail" | "any";
   readonly vars: ReadonlyMap<string, string>;
+  /** 0.6.28 T7: variables whose value was read from a file (`$(cat f)`). */
+  readonly derived: ReadonlySet<string>;
+}
+
+/** How a word may be expanded (0.6.28 T7). */
+interface ExpandOptions {
+  /** Variables read from a file; a word using one is not read unless `allowDerived`. */
+  readonly derived?: ReadonlySet<string>;
+  /** The trusted command word's directory only. */
+  readonly allowDerived?: boolean;
+  /** Resolves `$(cat f)`; only an assignment's value passes it. */
+  readonly readFirstLine?: (path: string) => string | null;
 }
 
 function variableValue(name: string, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>): string | null {
@@ -498,15 +582,36 @@ function variableValue(name: string, vars: ReadonlyMap<string, string>, env: Rea
 }
 
 /** A word as the shell would hand it to the program, or null when that cannot be known from the text. */
-function expandWord(word: Word, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>, splits: boolean): Expanded | null {
+function expandWord(word: Word, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>, splits: boolean, options: ExpandOptions = {}): Expanded | null {
+  return expandWordDerived(word, vars, env, splits, options)?.expanded ?? null;
+}
+
+/** expandWord, and whether the result came from a file (a `$(cat f)` or a variable read from one). */
+function expandWordDerived(word: Word, vars: ReadonlyMap<string, string>, env: Readonly<Record<string, string | undefined>>, splits: boolean, options: ExpandOptions): { readonly expanded: Expanded; readonly derived: boolean } | null {
   let text = "";
   let glob: Glob = "none";
+  let derived = false;
   for (const part of word) {
-    if (part.kind === "tilde") {
+    if (part.kind === "status") {
+      text += "0";
+    } else if (part.kind === "cat") {
+      const read = options.readFirstLine;
+      if (read === undefined) return null;
+      const file = expandWord(part.file, vars, env, false, { derived: options.derived });
+      if (file === null || !posix.isAbsolute(file.text)) return null;
+      const line = read(file.text);
+      if (line === null) return null;
+      text += line;
+      derived = true;
+    } else if (part.kind === "tilde") {
       const home = env["HOME"];
       if (home === undefined || !posix.isAbsolute(home)) return null;
       text += home;
     } else if (part.kind === "var") {
+      if (options.derived?.has(part.name) === true) {
+        if (options.allowDerived !== true) return null;
+        derived = true;
+      }
       const value = variableValue(part.name, vars, env);
       if (value === null) return null;
       if (splits && part.quote === "none" && (value.length === 0 || /[\s*?[\]]/.test(value))) return null;
@@ -519,7 +624,7 @@ function expandWord(word: Word, vars: ReadonlyMap<string, string>, env: Readonly
       text += part.text;
     }
   }
-  return { text, glob };
+  return { expanded: { text, glob }, derived };
 }
 
 function isAssignment(word: Word): boolean {
@@ -527,18 +632,25 @@ function isAssignment(word: Word): boolean {
   return first !== undefined && first.kind === "text" && first.quote === "none" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(first.text);
 }
 
-/** `NAME=value` as the shell assigns it: no splitting, no globbing. */
-function assign(word: Word, vars: Map<string, string>, env: Readonly<Record<string, string | undefined>>): boolean {
+/** `NAME=value` as the shell assigns it: no splitting, no globbing. A value read from a file marks the name as derived. */
+function assign(word: Word, vars: Map<string, string>, derived: Set<string>, env: Readonly<Record<string, string | undefined>>, readFirstLine: ((path: string) => string | null) | undefined): boolean {
   const first = word[0];
   if (first === undefined || first.kind !== "text") return false;
   const equals = first.text.indexOf("=");
   const name = first.text.slice(0, equals);
   if (STEERING_NAMES.has(name) || STEERING_PREFIXES.some((prefix) => name.startsWith(prefix))) return false;
   const rest: WordPart[] = [{ kind: "text", text: first.text.slice(equals + 1), quote: "none" }, ...word.slice(1)];
-  const value = expandWord(rest, vars, env, false);
+  const value = expandWordDerived(rest, vars, env, false, { derived, allowDerived: true, readFirstLine });
   if (value === null) return false;
-  vars.set(name, value.text);
+  vars.set(name, value.expanded.text);
+  if (value.derived) derived.add(name);
+  else derived.delete(name);
   return true;
+}
+
+/** Whether a word holds a `$(cat f)` or uses a variable read from a file. */
+function usesFileValue(word: Word, derived: ReadonlySet<string>): boolean {
+  return word.some((part) => part.kind === "cat" || (part.kind === "var" && derived.has(part.name)));
 }
 
 // ---------------------------------------------------------------------------
@@ -560,6 +672,10 @@ interface Places {
   readonly ownTrees: OwnTreeInput | null;
   /** The session's own tree, its root and common directory realpath'd, when its branch is an own one. */
   readonly sessionTree: OwnTree | null;
+  /** 0.6.28 T7: set only by trustedProgramsRun; null trusts no program. */
+  readonly trusted: TrustedInput | null;
+  /** The trusted programs the line runs, in order, once each. */
+  readonly trustedRan: string[];
 }
 
 /** The real location of `path`: realpath of its deepest existing part, the rest appended. */
@@ -923,7 +1039,7 @@ function localGitContained(args: readonly Expanded[], cwd: string, places: Place
 function redirectsContained(segment: Segment, state: State, places: Places): boolean {
   for (const redirect of segment.redirects) {
     if (redirect.kind === "dup") continue;
-    const target = expandWord(redirect.target, state.vars, places.input.env, true);
+    const target = expandWord(redirect.target, state.vars, places.input.env, true, { derived: state.derived });
     if (target === null || target.glob !== "none") return false;
     if (redirect.kind === "out" && target.text === "/dev/null") continue;
     if (!isWritablePath(target.text, state.cwd, places)) return false;
@@ -937,6 +1053,63 @@ function heredocIsData(heredoc: Heredoc): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Trusted programs (0.6.28 T7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefix assignments a trusted program may carry: they only change how a
+ * program prints or encodes, never what runs or where it writes.
+ */
+const BENIGN_PREFIX_NAMES: ReadonlySet<string> = new Set(["PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED", "PYTHONIOENCODING", "NO_COLOR", "FORCE_COLOR", "TERM", "TZ", "LANG", "LC_ALL", "CI"]);
+
+/** The trusted name a command word's last literal part ends with, or null; deciding is trustedSegment's. */
+function trustedCandidate(word: Word | undefined, names: ReadonlySet<string>): string | null {
+  const last = word?.[word.length - 1];
+  if (last === undefined || last.kind !== "text") return null;
+  const name = last.text.slice(last.text.lastIndexOf("/") + 1).toLowerCase();
+  return names.has(name) ? name : null;
+}
+
+/**
+ * One segment that runs a trusted program, or null. The command word is a
+ * bare name (resolved on PATH), a path, or `"$VAR/name"` with `$VAR`
+ * assigned earlier, read from a file included. Its REAL path must end in the
+ * same name -- `ln -s /bin/sh /tmp/x/name` would otherwise pass by its name --
+ * and sit outside every temp root and every tree the agent may write here,
+ * where it could have been put by an earlier command. The arguments never
+ * carry a `$(cat f)` or a value read from a file, and stdin only comes from
+ * data (a pipe from echo/printf/cat/tee, a quoted heredoc, a temp file):
+ * trusting a program that sends messages must not ship `~/.ssh/id_rsa`.
+ */
+function trustedSegment(segment: Segment, words: readonly Word[], state: State, places: Places, piped: boolean, upstreamIsData: boolean): readonly State[] | null {
+  const trusted = places.trusted;
+  const commandWord = words[0];
+  if (trusted === null || commandWord === undefined) return null;
+  const name = trustedCandidate(commandWord, trusted.names);
+  if (name === null) return null;
+  const word = expandWord(commandWord, state.vars, places.input.env, true, { derived: state.derived, allowDerived: true });
+  if (word === null || word.glob !== "none") return null;
+  const located = word.text.includes("/") ? absolutePath(word.text, state.cwd) : trusted.which(word.text);
+  if (located === null) return null;
+  const real = places.input.realpath(located);
+  if (real === null || posix.basename(real).toLowerCase() !== name) return null;
+  if (madeEarlier(located, real, places)) return null;
+  if (places.roots.some((root) => root === real || isUnder(real, root))) return null;
+  if (places.ownTrees !== null && writableTreeAt(real, state.cwd, places) !== null) return null;
+  if (words.slice(1).some((arg) => usesFileValue(arg, state.derived))) return null;
+  if (segment.heredoc !== null && !heredocIsData(segment.heredoc)) return null;
+  if (piped && !upstreamIsData) return null;
+  for (const redirect of segment.redirects) {
+    if (redirect.kind === "dup") continue;
+    const target = expandWord(redirect.target, state.vars, places.input.env, true, { derived: state.derived });
+    if (target === null || target.glob !== "none") return null;
+    if (redirect.kind === "out" ? target.text !== "/dev/null" && !isWritablePath(target.text, state.cwd, places) : !isContainedPath(target.text, state.cwd, places)) return null;
+  }
+  if (!places.trustedRan.includes(name)) places.trustedRan.push(name);
+  return [{ ...state, status: "any" }];
+}
+
+// ---------------------------------------------------------------------------
 // Running the segments
 // ---------------------------------------------------------------------------
 
@@ -947,56 +1120,89 @@ function runSegment(segment: Segment, state: State, places: Places, piped: boole
   const first = words[0];
 
   if (first !== undefined && (isAssignment(first) || isLiteral(first, "export"))) {
+    const exported = isLiteral(first, "export");
+    const assignments = exported ? words.slice(1) : words;
+    const commandAt = exported ? -1 : assignments.findIndex((word) => !isAssignment(word));
+    if (commandAt > 0) {
+      // `NAME=value program ...`: only a trusted program, only benign names.
+      const prefix = assignments.slice(0, commandAt);
+      const benign = prefix.every((word) => {
+        const head = word[0];
+        const name = head?.kind === "text" ? head.text.slice(0, head.text.indexOf("=")) : "";
+        return BENIGN_PREFIX_NAMES.has(name) && !usesFileValue(word, state.derived) && expandWord(word, state.vars, env, false, { derived: state.derived }) !== null;
+      });
+      return benign ? trustedSegment(segment, assignments.slice(commandAt), state, places, piped, upstreamIsData) : null;
+    }
     if (piped || segment.redirects.length > 0 || segment.heredoc !== null) return null;
     const vars = new Map(state.vars);
-    const assignments = isLiteral(first, "export") ? words.slice(1) : words;
+    const derived = new Set(state.derived);
     for (const word of assignments) {
       if (!isAssignment(word)) {
         // `export NAME` exports what is already set; a bare command after
         // an assignment (`HOME=/tmp/x rm $HOME`) is not read.
-        if (isLiteral(first, "export") && word.length === 1 && word[0]?.kind === "text" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word[0].text)) continue;
+        if (exported && word.length === 1 && word[0]?.kind === "text" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(word[0].text)) continue;
         return null;
       }
-      if (!assign(word, vars, env)) return null;
+      if (!assign(word, vars, derived, env, places.input.readFirstLine)) return null;
     }
-    return [{ cwd: state.cwd, status: "ok", vars }];
+    return [{ cwd: state.cwd, status: "ok", vars, derived }];
   }
 
-  const any: State = { cwd: state.cwd, status: "any", vars: state.vars };
+  const any: State = { ...state, status: "any" };
   if (first === undefined) {
     // A redirection alone (`> file`) creates or truncates its target.
     return segment.heredoc === null && redirectsContained(segment, state, places) ? [any] : null;
   }
-  if (!first.every((part) => part.kind === "text")) return null;
-  const argv: Expanded[] = [];
-  for (const word of words) {
-    const expanded = expandWord(word, state.vars, env, true);
-    if (expanded === null) return null;
-    argv.push(expanded);
+  if (places.trusted !== null && trustedCandidate(first, places.trusted.names) !== null) {
+    return trustedSegment(segment, words, state, places, piped, upstreamIsData);
   }
-  const program = argv[0]?.text ?? "";
-  const args = argv.slice(1);
+  if (!first.every((part) => part.kind === "text")) return null;
+  const program = first.map((part) => (part.kind === "text" ? part.text : "")).join("");
+
+  if (program === "exit") {
+    // The shell stops here: nothing after it runs on this branch.
+    if (piped || words.length > 2 || segment.redirects.length > 0 || segment.heredoc !== null) return null;
+    const code = words[1];
+    const numeric = code === undefined || (code.length === 1 && (code[0]?.kind === "status" || (code[0]?.kind === "text" && /^\d+$/.test(code[0].text))));
+    return numeric ? [] : null;
+  }
 
   if (program === "cd") {
-    if (piped || segment.redirects.length > 0 || segment.heredoc !== null || args.length > 1) return null;
+    if (piped || segment.redirects.length > 0 || segment.heredoc !== null || words.length > 2) return null;
+    const arg = words[1] === undefined ? null : expandWord(words[1], state.vars, env, true, { derived: state.derived });
+    if (words[1] !== undefined && arg === null) return null;
     // Only an absolute target: CDPATH, or zsh's cdpath from the profile, can
     // send `cd sub` anywhere, and the hook's environment does not show it.
-    const target = args.length === 0 ? env["HOME"] ?? null : args[0]?.glob === "none" && posix.isAbsolute(args[0]?.text ?? "") ? absolutePath(args[0]?.text ?? "", state.cwd) : null;
+    const target = arg === null ? env["HOME"] ?? null : arg.glob === "none" && posix.isAbsolute(arg.text) ? absolutePath(arg.text, state.cwd) : null;
     if (target === null || !posix.isAbsolute(target)) return null;
     return [
-      { cwd: target, status: "ok", vars: state.vars },
-      { cwd: state.cwd, status: "fail", vars: state.vars },
+      { ...state, cwd: target, status: "ok" },
+      { ...state, status: "fail" },
     ];
   }
 
-  const readOnlyGit = program === "git" && args[0]?.text !== "init" && places.ownTrees === null;
-  const readOnlySed = program === "sed" && !args.some((arg) => arg.text === "-i" || arg.text.startsWith("-i") || arg.text.startsWith("--in-place"));
+  const argWords = words.slice(1);
+  const firstArg = argWords[0]?.[0];
+  const firstArgText = firstArg?.kind === "text" ? firstArg.text : "";
+  const readOnlyGit = program === "git" && firstArgText !== "init" && places.ownTrees === null;
+  const readOnlySed = program === "sed" && !argWords.some((word) => word[0]?.kind === "text" && (word[0].text.startsWith("-i") || word[0].text.startsWith("--in-place")));
   if (!WRITERS.has(program) || readOnlyGit || readOnlySed) {
     return segment.heredoc === null && isSafeSegment(segment.raw) ? [any] : null;
   }
   if (segment.heredoc !== null && (!STDIN_WRITERS.has(program) || !heredocIsData(segment.heredoc))) return null;
+  if (argWords.some((word) => usesFileValue(word, state.derived))) return null;
   // `cat`/`tee` with no file to read write their stdin: from a pipe, that
   // must itself be data, or `cat ~/.ssh/id_rsa | tee /tmp/k` is a copy.
+  if (program === "echo" || program === "printf") {
+    // Their arguments are only data: an unknown variable or `$?` is fine.
+    return redirectsContained(segment, state, places) ? [any] : null;
+  }
+  const args: Expanded[] = [];
+  for (const word of argWords) {
+    const expanded = expandWord(word, state.vars, env, true, { derived: state.derived });
+    if (expanded === null) return null;
+    args.push(expanded);
+  }
   const readsPipe = piped && segment.heredoc === null && (program === "tee" || (program === "cat" && splitOptions(args).operands.length === 0));
   if (readsPipe && !upstreamIsData) return null;
   if (!redirectsContained(segment, state, places)) return null;
@@ -1010,7 +1216,7 @@ function isLiteral(word: Word, text: string): boolean {
 }
 
 function stateKey(state: State): string {
-  return JSON.stringify([state.cwd, state.status, [...state.vars].sort()]);
+  return JSON.stringify([state.cwd, state.status, [...state.vars].sort(), [...state.derived].sort()]);
 }
 
 function dedupe(states: readonly State[]): State[] {
@@ -1019,15 +1225,37 @@ function dedupe(states: readonly State[]): State[] {
   return [...seen.values()];
 }
 
-/** The segments grouped into pipelines; each pipeline carries the joiner before its first stage. */
-function pipelines(segments: readonly Segment[]): readonly (readonly Segment[])[] {
-  const out: Segment[][] = [];
-  for (const segment of segments) {
-    const last = out[out.length - 1];
-    if (segment.joiner === "|" && last !== undefined) last.push(segment);
-    else out.push([segment]);
-  }
-  return out;
+/** A pipeline, or a `{ ...; }` group (0.6.28 T7), with the joiner before it. */
+type Item = { readonly kind: "pipeline"; readonly joiner: Joiner | null; readonly stages: readonly Segment[] } | { readonly kind: "group"; readonly joiner: Joiner | null; readonly body: readonly Item[] };
+
+/** The segments as pipelines and groups, or null for a group piped to or from anything. */
+function items(segments: readonly Segment[]): readonly Item[] | null {
+  let index = 0;
+  const readList = (): Item[] | null => {
+    const out: Item[] = [];
+    while (index < segments.length) {
+      const segment = segments[index];
+      if (segment === undefined || segment.group === "close") return out;
+      index += 1;
+      if (segment.group === "open") {
+        if (segment.joiner === "|") return null;
+        const body = readList();
+        if (body === null || segments[index]?.group !== "close") return null;
+        index += 1;
+        if (segments[index]?.joiner === "|") return null;
+        out.push({ kind: "group", joiner: segment.joiner, body });
+        continue;
+      }
+      const last = out[out.length - 1];
+      if (segment.joiner === "|") {
+        if (last === undefined || last.kind !== "pipeline") return null;
+        out[out.length - 1] = { ...last, stages: [...last.stages, segment] };
+      } else out.push({ kind: "pipeline", joiner: segment.joiner, stages: [segment] });
+    }
+    return out;
+  };
+  const list = readList();
+  return list === null || index !== segments.length ? null : list;
 }
 
 /** Runs one pipeline from `state`: the states after it, or null when a stage is not contained. */
@@ -1042,7 +1270,28 @@ function runPipeline(stages: readonly Segment[], state: State, places: Places): 
     const program = stage.words[0]?.[0];
     upstreamIsData = upstreamIsData && program !== undefined && program.kind === "text" && DATA_PRODUCERS.has(program.text);
   }
-  return [{ cwd: state.cwd, status: "any", vars: state.vars }];
+  return [{ ...state, status: "any" }];
+}
+
+/** Runs a list of items from `states` the way the shell runs `&&`, `||` and `;`; null when anything is not contained. */
+function runItems(list: readonly Item[], start: readonly State[], places: Places): State[] | null {
+  let states: State[] = [...start];
+  for (const item of list) {
+    const joiner = item.joiner;
+    const next: State[] = [];
+    for (const state of states) {
+      const runs = joiner === "&&" ? state.status !== "fail" : joiner === "||" ? state.status !== "ok" : true;
+      if (joiner === "&&" && state.status !== "ok") next.push({ ...state, status: "fail" });
+      if (joiner === "||" && state.status !== "fail") next.push({ ...state, status: "ok" });
+      if (!runs) continue;
+      const after = item.kind === "pipeline" ? runPipeline(item.stages, state, places) : runItems(item.body, [{ ...state, status: "any" }], places);
+      if (after === null) return null;
+      next.push(...after);
+    }
+    states = dedupe(next);
+    if (states.length > MAX_STATES) return null;
+  }
+  return states;
 }
 
 /**
@@ -1051,7 +1300,7 @@ function runPipeline(stages: readonly Segment[], state: State, places: Places): 
  * shell could run it -- see the module note for what fails closed.
  */
 export function isContainedToTempRoots(command: string, input: ContainedEffectInput): boolean {
-  return effectStaysInside(command, input, null);
+  return effectStaysInside(command, input, null, null) !== null;
 }
 
 /**
@@ -1064,42 +1313,40 @@ export function isContainedToTempRoots(command: string, input: ContainedEffectIn
  * Claude Code's own Edit and Write tools, which the gate never sees.
  */
 export function isOwnTreeWork(command: string, input: ContainedEffectInput, ownTrees: OwnTreeInput): boolean {
-  return effectStaysInside(command, input, ownTrees);
+  return effectStaysInside(command, input, ownTrees, null) !== null;
 }
 
-function effectStaysInside(command: string, input: ContainedEffectInput, ownTrees: OwnTreeInput | null): boolean {
+/**
+ * 0.6.28 T7: the trusted programs `command` runs, when every segment is one
+ * of them (trustedSegment), obviously safe, contained, or own-tree work
+ * (`ownTrees` null reads no own tree); null when anything else runs, or no
+ * trusted program does.
+ */
+export function trustedProgramsRun(command: string, input: ContainedEffectInput, ownTrees: OwnTreeInput | null, trusted: TrustedInput): readonly string[] | null {
+  if (trusted.names.size === 0) return null;
+  const ran = effectStaysInside(command, input, ownTrees, trusted);
+  return ran === null || ran.length === 0 ? null : ran;
+}
+
+/** The trusted programs run (empty outside the trusted reading) when everything stays inside; null otherwise. */
+function effectStaysInside(command: string, input: ContainedEffectInput, ownTrees: OwnTreeInput | null, trusted: TrustedInput | null): readonly string[] | null {
   const segments = readSegments(command);
-  if (segments === null || segments.length === 0) return false;
+  if (segments === null || segments.length === 0) return null;
+  const list = items(segments);
+  if (list === null) return null;
 
   const homeText = input.env["HOME"];
-  if (homeText === undefined || !posix.isAbsolute(homeText)) return false;
+  if (homeText === undefined || !posix.isAbsolute(homeText)) return null;
   const home = realLocation(withoutTrailingSlash(posix.normalize(homeText)), input.realpath);
   const cwd = realLocation(input.cwd, input.realpath);
-  if (home === null || cwd === null) return false;
+  if (home === null || cwd === null) return null;
   const roots = input.tempRoots
     .map((root) => input.realpath(root))
     .filter((root): root is string => root !== null && root !== "/" && root !== home && !isUnder(home, root));
-  if (roots.length === 0 && ownTrees === null) return false;
+  if (roots.length === 0 && ownTrees === null && trusted === null) return null;
   const sessionRepo = input.sessionRepoRoot === null ? null : realLocation(input.sessionRepoRoot, input.realpath);
-  const places: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [], ownTrees, sessionTree: null };
-  const sessionTree = ownTrees === null ? null : ownBranchTree(ownTrees.treeOf(cwd), places);
-  const evaluated: Places = { ...places, sessionTree };
+  const base: Places = { input, roots, guards: [home, cwd, ...(sessionRepo === null ? [] : [sessionRepo])], sessionRepo, links: [], copies: [], ownTrees, sessionTree: null, trusted, trustedRan: [] };
+  const places: Places = { ...base, sessionTree: ownTrees === null ? null : ownBranchTree(ownTrees.treeOf(cwd), base) };
 
-  let states: State[] = [{ cwd: input.cwd, status: "any", vars: new Map() }];
-  for (const stages of pipelines(segments)) {
-    const joiner = stages[0]?.joiner ?? null;
-    const next: State[] = [];
-    for (const state of states) {
-      const runs = joiner === "&&" ? state.status !== "fail" : joiner === "||" ? state.status !== "ok" : true;
-      if (joiner === "&&" && state.status !== "ok") next.push({ ...state, status: "fail" });
-      if (joiner === "||" && state.status !== "fail") next.push({ ...state, status: "ok" });
-      if (!runs) continue;
-      const after = runPipeline(stages, state, evaluated);
-      if (after === null) return false;
-      next.push(...after);
-    }
-    states = dedupe(next);
-    if (states.length > MAX_STATES) return false;
-  }
-  return true;
+  return runItems(list, [{ cwd: input.cwd, status: "any", vars: new Map(), derived: new Set() }], places) === null ? null : places.trustedRan;
 }

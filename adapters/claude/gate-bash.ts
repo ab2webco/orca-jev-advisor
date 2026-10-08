@@ -61,9 +61,9 @@
  */
 import { execFileSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs'
+import { accessSync, appendFileSync, constants as fsConstants, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
@@ -83,10 +83,10 @@ import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/c
 import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
 import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
-import { isContainedToTempRoots, isOwnTreeWork, tempRootsFromEnvironment } from '../../src/core/contained_effect.ts'
+import { isContainedToTempRoots, isOwnTreeWork, tempRootsFromEnvironment, trustedProgramsRun } from '../../src/core/contained_effect.ts'
 import { localAllowReasonKey, localAllowStopReason, replaysCachedDecision, storesVerdict } from '../../src/core/local_allow.ts'
 import type { LocalAllowKind } from '../../src/core/local_allow.ts'
-import type { ContainedEffectInput } from '../../src/core/contained_effect.ts'
+import type { ContainedEffectInput, OwnTreeInput } from '../../src/core/contained_effect.ts'
 import { resolveCommandTargetDirs } from '../../src/core/command_targets.ts'
 import { resolveActingDirectory } from '../../src/core/acting_location.ts'
 import { buildCrossRepoSentence, buildGhMergeSentence, buildPushDestinationSentence, pickStricterDestination, renderRepoContext } from '../../src/core/cross_repo_context.ts'
@@ -101,6 +101,7 @@ import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mod
 import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
 import type { HumanQueueEntry } from '../../src/core/human_queue.ts'
 import { TEAM_OWNERS_MIRROR_FILE, parseTeamOwners } from '../../src/core/team_owners.ts'
+import { TRUSTED_PROGRAMS_MIRROR_FILE, parseTrustedPrograms } from '../../src/core/trusted_programs.ts'
 import { qualifiesForLocalGitAllow } from '../../src/core/push_own_branch.ts'
 import { deliveryClassesOf } from '../../src/core/delivery_class.ts'
 import type { DeliveryClass } from '../../src/core/delivery_class.ts'
@@ -214,6 +215,9 @@ const POLICIES_MIRROR_PATH = join(CONFIG_DIR, 'policies.json')
 // same sidecar on the same save. Fails open to an empty list, and an empty
 // list changes no decision -- see readTeamOwnersMirror below.
 const TEAM_OWNERS_MIRROR_PATH = join(CONFIG_DIR, TEAM_OWNERS_MIRROR_FILE)
+// 0.6.28 T7: the person's trusted programs, mirrored by the worker from the
+// config panel's Rules tab. See readTrustedProgramsMirror below.
+const TRUSTED_PROGRAMS_MIRROR_PATH = join(CONFIG_DIR, TRUSTED_PROGRAMS_MIRROR_FILE)
 // 0.6.8 T4: queue mode -- "when a person must approve: ask now | queue and
 // continue". Defaults to false (ask now). See readQueueModeMirror below.
 const QUEUE_MODE_MIRROR_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
@@ -1326,6 +1330,43 @@ function readTeamOwnersMirror(): readonly string[] {
   }
 }
 
+/**
+ * 0.6.28 T7: the trusted programs, best-effort like the mirrors above, and
+ * failing closed: a missing, unreadable or malformed file trusts nothing.
+ */
+function readTrustedProgramsMirror(): readonly string[] {
+  try {
+    return parseTrustedPrograms(JSON.parse(readFileSync(TRUSTED_PROGRAMS_MIRROR_PATH, 'utf8')))
+  } catch {
+    return []
+  }
+}
+
+/** The first line of a small file, for a `X="$(cat f)"` assignment (0.6.28 T7); null when it cannot be read. */
+function readFirstLineOf(path: string): string | null {
+  try {
+    const line = readFileSync(path, 'utf8').slice(0, 4096).split('\n')[0]?.trim() ?? ''
+    return line.length > 0 ? line : null
+  } catch {
+    return null
+  }
+}
+
+/** Where a bare program name resolves on this process's PATH, or null (0.6.28 T7). */
+function whichOnPath(name: string): string | null {
+  for (const dir of (process.env['PATH'] ?? '').split(':')) {
+    if (!isAbsolute(dir)) continue
+    const candidate = join(dir, name)
+    try {
+      accessSync(candidate, fsConstants.X_OK)
+      return candidate
+    } catch {
+      // Not here; keep looking.
+    }
+  }
+  return null
+}
+
 function readQueueModeMirror(): boolean {
   try {
     return parseQueueMode(JSON.parse(readFileSync(QUEUE_MODE_MIRROR_PATH, 'utf8')))
@@ -1834,7 +1875,7 @@ async function askJev(apiKey: string, command: string, jevContext: string, jevNa
     // `gate.reasons`.
     const policyRule = gate.policyId !== null ? gate.reasons.find((r) => r.key === 'policy.forbidden' || r.key === 'policy.needsHuman')?.params?.rule ?? null : null
     const reason = viaLocalAllow
-      ? t(localAllow.qualifies ? localAllowReasonKey(localAllow.kind) : 'reason.ownBranchPush')
+      ? (localAllow.qualifies ? localAllowReason(localAllow) : t('reason.ownBranchPush'))
       : isPolicyDeny
         ? policyDenyReasonEnglish(gate)
         : gate.reasons.length > 0 ? gate.reasons.map(resolveGateActionReason).join(' · ') : t('reason.allowClear')
@@ -1933,6 +1974,34 @@ function containedEffectInput(cwd: string): ContainedEffectInput {
     },
     sessionRepoRoot: resolveRepoRootForCwd(cwd),
     isLinkedWorktree: (path) => resolveLinkedWorktreeMainCheckout(path) !== null,
+    readFirstLine: readFirstLineOf,
+  }
+}
+
+/** The own-tree reading of this process's filesystem (0.6.28 T6), shared with the trusted reading. */
+function ownTreeInput(): OwnTreeInput {
+  return {
+    treeOf: (path) => {
+      const root = resolveRepoRootForCwd(path)
+      return root === null ? null : { root, branch: resolveBranchForCwd(path), commonDir: resolveGitDirForConfig(path) }
+    },
+    protectedBranches: SHARED_BRANCH_NAMES,
+  }
+}
+
+/**
+ * 0.6.28 T7: the trusted programs `command` runs, when every segment is one
+ * of them, obviously safe, contained or own-tree work -- null otherwise, or
+ * when the list is empty.
+ */
+function trustedProgramsInCommand(command: string, cwd: string): readonly string[] | null {
+  if (PLATFORM === 'win32') return null
+  const names = readTrustedProgramsMirror()
+  if (names.length === 0) return null
+  try {
+    return trustedProgramsRun(command, containedEffectInput(cwd), ownTreeInput(), { names: new Set(names), which: whichOnPath })
+  } catch {
+    return null
   }
 }
 
@@ -1944,20 +2013,19 @@ function containedEffectInput(cwd: string): ContainedEffectInput {
 function commandIsOwnTreeWork(command: string, cwd: string): boolean {
   if (PLATFORM === 'win32') return false
   try {
-    return isOwnTreeWork(command, containedEffectInput(cwd), {
-      treeOf: (path) => {
-        const root = resolveRepoRootForCwd(path)
-        return root === null ? null : { root, branch: resolveBranchForCwd(path), commonDir: resolveGitDirForConfig(path) }
-      },
-      protectedBranches: SHARED_BRANCH_NAMES,
-    })
+    return isOwnTreeWork(command, containedEffectInput(cwd), ownTreeInput())
   } catch {
     return false
   }
 }
 
-/** A command that qualifies for a local allow, and which kind -- see src/core/local_allow.ts. */
-type LocalAllow = { readonly qualifies: true; readonly kind: LocalAllowKind } | { readonly qualifies: false }
+/** A command that qualifies for a local allow, which kind, and the trusted programs it runs (T7) -- see src/core/local_allow.ts. */
+type LocalAllow = { readonly qualifies: true; readonly kind: LocalAllowKind; readonly programs: readonly string[] } | { readonly qualifies: false }
+
+/** The person-facing reason for a local allow, naming the trusted programs when there are any. */
+function localAllowReason(allow: Extract<LocalAllow, { qualifies: true }>): string {
+  return t(localAllowReasonKey(allow.kind), { programs: allow.programs.join(', ') })
+}
 
 async function main(): Promise<void> {
   const input = readHookInput()
@@ -2211,14 +2279,18 @@ async function main(): Promise<void> {
   // Write tools, which never reach this gate -- qualify the same way, when
   // nothing in the text names a shared branch (src/core/local_allow.ts).
   const localGitAllow: LocalGitAllowResult = mentionOnly ? { qualifies: false } : qualifiesForLocalGitAllow({ command, cwd })
+  // 0.6.28 T7: so does a line of programs the person trusted in the panel.
+  const trustedRun = localGitAllow.qualifies || namesProtected ? null : trustedProgramsInCommand(command, cwd)
   const localAllow: LocalAllow = localGitAllow.qualifies
-    ? { qualifies: true, kind: localGitAllow.reasonKind ?? 'ownBranchPush' }
+    ? { qualifies: true, kind: localGitAllow.reasonKind ?? 'ownBranchPush', programs: [] }
     : !namesProtected && commandIsOwnTreeWork(command, cwd)
-      ? { qualifies: true, kind: 'ownTree' }
-      : { qualifies: false }
+      ? { qualifies: true, kind: 'ownTree', programs: [] }
+      : trustedRun !== null
+        ? { qualifies: true, kind: 'trusted', programs: trustedRun }
+        : { qualifies: false }
   if (localAllow.qualifies && commandScopedPolicies.length === 0) {
     appendGateRecord(actingCwd, command, 'local-rule', 'allow', null, localAllowStopReason(localAllow.kind), null, teamInternal)
-    emit('allow', t(localAllowReasonKey(localAllow.kind)))
+    emit('allow', localAllowReason(localAllow))
     return
   }
 

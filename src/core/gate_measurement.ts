@@ -91,6 +91,10 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    session's own working tree on a working branch
  *                    (contained_effect.ts's isOwnTreeWork), allowed locally
  *                    only when no command-scoped policy survives.
+ *   "trusted"     -- 0.6.28 T7: a line of programs on the person's trusted
+ *                    list (src/core/trusted_programs.ts), with only safe,
+ *                    contained or own-tree segments beside them; same
+ *                    policy rule as "own-tree".
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -108,7 +112,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
 export type GateFailure = JevFailure | { readonly kind: "oversized" };
 export type GateFailureClass = GateFailure["kind"];
 
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained" | "own-tree";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained" | "own-tree" | "trusted";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -417,7 +421,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "queue" ||
     value === "authorized" ||
     value === "contained" ||
-    value === "own-tree"
+    value === "own-tree" ||
+    value === "trusted"
   );
 }
 
