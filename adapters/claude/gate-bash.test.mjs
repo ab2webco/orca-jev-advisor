@@ -4068,3 +4068,68 @@ test('pre-release C: writing Claude Code settings or hooks in the own tree is ne
     assert.equal(gateLogRecords(home).some((r) => r.stopReason === 'own-tree' || r.stopReason === 'contained'), false, command)
   }
 })
+
+// ---------------------------------------------------------------------------
+// 0.6.28 pre-release B: the owner's literal case. The session sits in a
+// checkout on main; the work happens in a linked worktree on feat/x whose
+// upstream is origin/main. With only never_write_to_main mirrored, a command
+// it is not offered for is allowed locally (own-tree or Option D); one it is
+// offered for never is.
+// ---------------------------------------------------------------------------
+
+function mainCheckoutWithFeatureWorktree () {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-owner-case-')))
+  const origin = join(base, 'origin.git')
+  execFileSync('git', ['init', '-q', '--bare', origin], { stdio: 'ignore' })
+  const main = join(base, 'app')
+  initRepo(main)
+  git(['branch', '-M', 'main'], main)
+  git(['remote', 'add', 'origin', origin], main)
+  git(['push', '-q', 'origin', 'main'], main)
+  git(['fetch', '-q', 'origin'], main)
+  const worktree = join(base, 'app-feat-x')
+  git(['worktree', 'add', '-q', '-b', 'feat/x', worktree, 'origin/main'], main)
+  const upstream = execFileSync('git', ['rev-parse', '--abbrev-ref', 'feat/x@{upstream}'], { cwd: worktree, encoding: 'utf8' }).trim()
+  assert.equal(upstream, 'origin/main', 'the fixture must reproduce the upstream on main')
+  return { main, worktree }
+}
+
+function localAllowRecorded (home) {
+  return gateLogRecords(home).some((r) => r.stopReason === 'own-tree' || r.stopReason === 'local-allow')
+}
+
+test('pre-release B: from a session on main, add and commit in the feature worktree are not judged against never_write_to_main', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `cd ${worktree} && git add "apps/web/src/app/(site)/x.test.ts" && git commit -qm x`, { cwd: main })
+  assert.equal(lastGateRecord(home)?.stopReason, 'own-tree')
+})
+
+test('pre-release B: git -C <feature worktree> push -u origin feat/x is not judged against it either: the refspec beats the upstream', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `git -C ${worktree} push -u origin feat/x`, { cwd: main })
+  assert.equal(lastGateRecord(home)?.stopReason, 'local-allow')
+})
+
+test('pre-release B: a bare push that goes to main (push.default=upstream) and a commit in the main checkout are never allowed locally', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  git(['config', 'push.default', 'upstream'], main)
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `cd ${worktree} && git push`, { cwd: main })
+  assert.equal(localAllowRecorded(home), false, 'cd <wt> && git push')
+  run(home, 'git commit -qm x', { cwd: main })
+  assert.equal(localAllowRecorded(home), false, 'git commit on main')
+})
+
+test('pre-release B (characterization): under the default push.default=simple, the same bare push is read as feat/x and allowed locally -- git itself refuses an upstream of another name, so nothing reaches main', () => {
+  const { main, worktree } = mainCheckoutWithFeatureWorktree()
+  git(['config', 'push.default', 'simple'], main)
+  const home = makeHome()
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  run(home, `cd ${worktree} && git push`, { cwd: main })
+  assert.equal(lastGateRecord(home)?.stopReason, 'local-allow')
+})
