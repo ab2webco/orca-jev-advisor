@@ -14,7 +14,7 @@ The failure Rule 7 exists for: "it said it was done and it was not". This releas
 | `npm test` | 3799/3799 |
 | `npm run test:panels` (output to a file) | 222/222 |
 | `npm run measure-module-cost` (last 7 days, before release) | 130 of 1,252 person turns are candidates: about 0.1 Jev calls per prompt; 0 verify-done rows (the module is not live yet) |
-| Shots of the Modules section, 1440/768/390/320, light and dark | On the `qa-evidence` branch under `odd/qa/screens-0.8.0/`; to be filled in by the lead (V7) |
+| Shots of the Modules section, 1440/768/390/320, light and dark | 24 on the `qa-evidence` branch under `odd/qa/screens-0.8.0/` (3 scenarios, 8 each); harness: no horizontal overflow, no script errors |
 | Live marketplace install | Pending |
 
 ## Scenarios
@@ -33,7 +33,7 @@ The failure Rule 7 exists for: "it said it was done and it was not". This releas
 | 10 | The real panel's six-module map is accepted by the real writer | `write-secret-mirror.feature-modules.test.mjs`, `panels.spec.mjs` (V4, 5d76a82) | The panel offers a card per registered module with the registry's states; every map it builds is saved by the real `feature-modules-save` sidecar | RED 2 of 15: the real sidecar refused the panel's map (`verify-done needs one of: off, shadow.`); GREEN 15/15 | PASS |
 | 11 | The Verify done card | `panels.spec.mjs` Modules tests in `ready`, `modules-mixed` (verify-done off) and `modules-skipped` (V4, 5d76a82) | Off and Shadow only, Shadow pressed by default; what it measures, that it blocks nothing, what it sends Jev, 0.1 Jev calls per prompt, in English and Spanish | RED 5 of 13 Modules tests (no card); GREEN 13/13 | PASS |
 | 12 | One version everywhere | `scripts/release-docs.test.mjs` (V6) | package.json, orca-plugin.json, newest CHANGELOG entry and newest README section all 0.8.0 | RED 1 of 2 after the bump (CHANGELOG `0.7.1`, expected `0.8.0`); GREEN 2/2 | PASS |
-| 13 | Shots of the Modules section | `npm run shots` scenarios `ready`, `modules-mixed`, `modules-skipped`, 1440/768/390/320, light and dark | Card readable, no overflow | On the `qa-evidence` branch; filled in by the lead (V7) | PENDING |
+| 13 | Shots of the Modules section | `npm run shots` scenarios `ready`, `modules-mixed`, `modules-skipped`, 1440/768/390/320, light and dark | Card readable, no overflow | 24 images on `qa-evidence`. Read: `ready` General light 1440 and dark 320, `modules-mixed` General dark 768, `modules-skipped` General light 390. The Verify done card shows Off and Shadow only; Shadow selected in `ready` and `modules-skipped`, Off in `modules-mixed`; text wraps, no overflow. The other 20 were not read | PASS |
 | 14 | Live: marketplace install at 0.8.0 | `plugins/plugins.lock.json`, `current`, mod markers | Everything names the same 0.8.0 root | Pending the release | PENDING |
 | 15 | Live: the Verify done card in the real Orca panel | Settings → General → Modules | Six cards; Verify done in Shadow with Off and Shadow only | Pending on 14 | PENDING |
 | 16 | Live: a candidate turn writes one row | a new Claude session: edit a file, run no test, end the turn | One row in `verify-done-decisions-<hour>.jsonl`, one Jev call | Pending on 14 | PENDING |

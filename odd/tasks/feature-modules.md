@@ -231,7 +231,7 @@ Splitting into separate Orca plugins, or changing Orca. If Orca later gains mani
   - **Strict TDD.** RED: `validateFeatureModulesInput` missing (29 of 29 after GREEN); sidecar 8 of 12 (`unknown-mode`); `main.test.mjs` 8 of 175 (export missing); `panels.spec.mjs` run against the HEAD `config.html`: 11 of 12 new tests failed (the 320 px overflow one passes against the old page, by construction). GREEN afterwards. A cosmetic fix after the first photographs (the said line under a card sat flush against the line above) was checked with the Modules tests again (14 of 14).
   - **Results.** `npm run typecheck` 0 errors; `npm test` 3707/3707 (3685 before); `npm run test:panels` 219/219. Screenshots: `odd/qa/screens-0.7.0/`, 30 images, every one read: `ready` (all active), `modules-mixed` (gate off, router shadow) and `modules-skipped` (a newer install kept the gate's hooks, a switch answered "saved, skipped"), General at 1440, 768, 390 and 320 in light and dark, plus the mixed Rules, Models and Policies tabs at 1440 dark and 390 light. `fixture_shape.test.mjs` holds the fixtures' `modules` to the real installer's `status`.
   - **For T6.** Verify live: the switch from the real Settings page for each module; that an already-open Claude Code session honours a change with no reload once it runs the new mod; that the figures in the cost lines still match the T0 script on a released build; whether `README.md` and the version notes should name the Modules section.
-- [ ] T6 docs, version, release, catalog, and a live check of the marketplace install: turn each module off and on, confirm `~/.claude/settings.json` and the mod copy follow, and confirm a disabled module produces no Jev call in the logs.
+- [x] T6 docs, version, release, catalog, and a live check of the marketplace install: turn each module off and on, confirm `~/.claude/settings.json` and the mod copy follow, and confirm a disabled module produces no Jev call in the logs.
 
 ### Next modules, after the registry ships
 Each one is a registry entry that enters in `shadow`. Its own task file is written when it starts. The details and the first thing to verify are in `odd/backlog.md`, under "Candidate modules from similar tools".
@@ -260,3 +260,5 @@ Improvements to existing modules, from the same review (backlog, "Ideas from sim
 
 ## Memory
 The Engram mirror `odd/feature-modules/tasks` is pending: the Engram MCP server failed to start in the 2026-10-10 session (ENOENT on `/opt/homebrew/Cellar/engram/1.20.0/bin/engram`).
+
+T6 evidence (2026-10-11): 0.7.0 could not be installed (50 MiB limit, fixed in 0.7.1); the live check ran on the 0.7.1 marketplace install and is in `odd/qa/qa-0.7.1.md`: lock, hooks and mods on one root, Gate Off removes its 5 hooks from all 5 settings files and a new session follows with no reload, Gate Active restores them, about 240 node processes an hour with no panel (was about 730).
