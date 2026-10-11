@@ -271,6 +271,21 @@ test("0.6.16 T2: a subagent row carries the work kind, its source, the keywords'
   assert.deepEqual(record.workKind, workKind);
 });
 
+test("0.6.29 T8: a row says when the engine kept it off a model, or did not know the engine's version -- and carries neither field otherwise", () => {
+  const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  const base = { at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal" } as const;
+  const tooOld = routerDecisionRecord({ ...base, engine: { fallbackReason: "engine-too-old" } });
+  assert.equal(tooOld.fallbackReason, "engine-too-old");
+  assert.equal("engineVersionUnknown" in tooOld, false);
+  const unknown = routerDecisionRecord({ ...base, engine: { engineVersionUnknown: true } });
+  assert.equal(unknown.engineVersionUnknown, true);
+  assert.equal("fallbackReason" in unknown, false);
+  for (const record of [routerDecisionRecord(base), routerDecisionRecord({ ...base, engine: {} })]) {
+    assert.equal("fallbackReason" in record, false);
+    assert.equal("engineVersionUnknown" in record, false);
+  }
+});
+
 test("decision log record: project is carried through verbatim (JEVADV-63)", () => {
   const decision = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.9 }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
   const record = routerDecisionRecord({ at: "2026-09-26T14:05:00.000Z", account: "acct", point: "start", decision, applied: true, quotaBand: "normal", project: "orca-supervisor" });

@@ -9,6 +9,7 @@ import {
   ANTHROPIC_PRICES,
   collapseTier,
   contextWindowOfModel,
+  engineNotesOf,
   isGatewayEnv,
   modelRank,
   parseVaultEnv,
@@ -246,4 +247,72 @@ test("contextWindowOfModel: the models priced for past usage have the 1M window 
   for (const id of ["claude-haiku-5-5", "claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6"]) {
     assert.equal(contextWindowOfModel(id), 1_000_000, id);
   }
+});
+
+// ---------------------------------------------------------------------------
+// 0.6.29 T8: never a model the running engine cannot run
+// ---------------------------------------------------------------------------
+
+test("engine too old for Haiku 5.5: the simple tier keeps Haiku 4.5, says why, and the other tiers do not move", () => {
+  const tiers = resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: null, engineVersion: "2.1.292" });
+  assert.equal(tiers.simple.modelId, "claude-haiku-4-5-20251001");
+  assert.equal(tiers.simple.label, "Haiku 4.5");
+  assert.equal(tiers.simple.supportsEffort, false, "Haiku 4.5 takes no effort");
+  assert.equal(tiers.simple.contextWindow, 200_000);
+  assert.deepEqual(tiers.simple.prices, ANTHROPIC_PRICES["claude-haiku-4-5-20251001"]);
+  assert.equal(tiers.simple.fallbackReason, "engine-too-old");
+  for (const tier of ["standard", "complex", "frontier"] as const) assert.equal(tiers[tier].fallbackReason, undefined, tier);
+  assert.equal(tiers.standard.modelId, "claude-sonnet-5-5");
+});
+
+test("engine at or past the floor, or a dev build of it: Haiku 5.5 as usual and no note", () => {
+  for (const engineVersion of ["2.1.293", "2.1.296", "2.1.293-dev.20260920.t101500.sha1a2b3c4"]) {
+    const tiers = resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: null, engineVersion });
+    assert.equal(tiers.simple.modelId, "claude-haiku-5-5", engineVersion);
+    assert.equal(tiers.simple.fallbackReason, undefined);
+    assert.equal(tiers.simple.engineVersionUnknown, undefined);
+  }
+});
+
+test("engine version unknown: Haiku 5.5 as usual, with a note that the version was not known (never a silent downgrade)", () => {
+  for (const engineVersion of [null, undefined, "garbage"]) {
+    const tiers = resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: null, ...(engineVersion === undefined ? {} : { engineVersion }) });
+    assert.equal(tiers.simple.modelId, "claude-haiku-5-5");
+    assert.equal(tiers.simple.fallbackReason, undefined);
+    assert.equal(tiers.simple.engineVersionUnknown, true, String(engineVersion));
+    assert.equal(tiers.standard.engineVersionUnknown, undefined, "a model with no floor has nothing to say");
+  }
+});
+
+test("engine too old and the kept Haiku 4.5 row marked unavailable: the next model the catalog allows, and the reason still says why", () => {
+  const kept: ModelEntry = { ...entry("claude-haiku-4-5-20251001", 9, false), rank: null };
+  const tiers = resolveAccountTiers({ env: {}, catalog: [...SEED_CATALOG, kept], quota: null, engineVersion: "2.1.292" });
+  assert.equal(tiers.simple.modelId, "claude-sonnet-5-5");
+  assert.equal(tiers.simple.fallbackReason, "engine-too-old");
+});
+
+test("engine too old with the migrated catalog (Haiku 4.5 kept unranked, Haiku 5.5 added): the unranked row serves as the fallback", () => {
+  const migrated: readonly ModelEntry[] = [
+    ...SEED_CATALOG.filter((row) => row.tier !== "simple"),
+    { ...entry("claude-haiku-4-5-20251001", 0, true), rank: null, supportsEffort: false, contextWindow: 200_000 },
+    ...SEED_CATALOG.filter((row) => row.tier === "simple"),
+  ];
+  const tiers = resolveAccountTiers({ env: {}, catalog: migrated, quota: null, engineVersion: "2.1.100" });
+  assert.equal(tiers.simple.modelId, "claude-haiku-4-5-20251001");
+  assert.equal(tiers.simple.supportsEffort, false);
+});
+
+test("a gateway names its own models: the engine version never replaces them", () => {
+  const tiers = resolveAccountTiers({ env: GATEWAY_ENV, catalog: SEED_CATALOG, quota: null, engineVersion: "2.1.100" });
+  assert.equal(tiers.simple.modelId, "glm-4.5-air");
+  assert.equal(tiers.simple.fallbackReason, undefined);
+});
+
+test("engineNotesOf: the note of the tier that resolves to a model id, empty for a model with none", () => {
+  const old = resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: null, engineVersion: "2.1.292" });
+  assert.deepEqual(engineNotesOf(old, "claude-haiku-4-5-20251001"), { fallbackReason: "engine-too-old" });
+  assert.deepEqual(engineNotesOf(old, "claude-sonnet-5-5"), {});
+  assert.deepEqual(engineNotesOf(old, null), {});
+  const unknown = resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: null });
+  assert.deepEqual(engineNotesOf(unknown, "claude-haiku-5-5"), { engineVersionUnknown: true });
 });

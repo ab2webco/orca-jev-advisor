@@ -25,12 +25,22 @@ import { isRecord } from "../guards.ts";
 import type { QuotaAccount } from "./consumption.ts";
 import { ROUTER_TIERS } from "./model_catalog.ts";
 import type { ModelEntry, ModelPrices, RouterTier } from "./model_catalog.ts";
+import { engineFallbackFor, engineSupports, hasEngineRequirement, parseEngineVersion } from "./engine_support.ts";
 import { LONG_PROMPT_TOKENS } from "./model_cost.ts";
 
 export { ROUTER_TIERS };
 export type { ModelPrices, RouterTier };
 
-export interface ResolvedTierModel {
+/** Why a tier is not on the model the ladder names: the engine running the session is older than that model's floor (engine_support.ts). */
+export type EngineFallbackReason = "engine-too-old";
+
+/** What a decision row says about the engine behind the model it names; both absent when there is nothing to say. */
+export interface EngineNotes {
+  readonly fallbackReason?: EngineFallbackReason;
+  readonly engineVersionUnknown?: true;
+}
+
+export interface ResolvedTierModel extends EngineNotes {
   readonly modelId: string;
   /** Short display name for the status line ("Sonnet 5.5"); the id itself on a gateway. */
   readonly label: string;
@@ -229,6 +239,8 @@ export interface ResolveAccountTiersInput {
   readonly env: Readonly<Record<string, string>>;
   readonly catalog: readonly ModelEntry[];
   readonly quota: QuotaAccount | null;
+  /** The running engine's version (`$.session.version()`); null or absent = unknown, which supports every model (engine_support.ts). */
+  readonly engineVersion?: string | null;
 }
 
 export function resolveAccountTiers(input: ResolveAccountTiersInput): ResolvedTiers {
@@ -245,7 +257,10 @@ export function resolveAccountTiers(input: ResolveAccountTiersInput): ResolvedTi
     const weak = haiku ?? sonnet ?? opus ?? fallback ?? strong;
     return { simple: gatewayModel(weak), standard: gatewayModel(middle), complex: gatewayModel(strong), frontier: gatewayModel(strong) };
   }
-  const served = (id: string): boolean => anthropicServes(id, input.catalog, input.quota);
+  const engineVersion = input.engineVersion ?? null;
+  const engineKnown = engineVersion !== null && parseEngineVersion(engineVersion) !== null;
+  // A model the engine cannot run is never served, whatever the catalog says.
+  const served = (id: string): boolean => anthropicServes(id, input.catalog, input.quota) && engineSupports(id, engineVersion);
   // Weakest to strongest: the ladder a tier falls along when its own model is unavailable.
   const ladder = ROUTER_TIERS.map((tier) => tierModelId(tier, input.catalog, served));
   const frontierAt = ROUTER_TIERS.indexOf("frontier");
@@ -253,9 +268,26 @@ export function resolveAccountTiers(input: ResolveAccountTiersInput): ResolvedTi
     const at = ROUTER_TIERS.indexOf(tier);
     // Frontier without its model is complex (§5), not "the next stronger" (there is none).
     const from = at === frontierAt && !served(ladder[at] as string) ? at - 1 : at;
-    return anthropicModel(pickServed(ladder, from, served), input.catalog);
+    const wanted = ladder[from] as string;
+    if (!engineSupports(wanted, engineVersion)) {
+      // The model this engine keeps in its place first (Haiku 4.5), else the next one the catalog allows.
+      const kept = engineFallbackFor(wanted);
+      const id = kept !== null && served(kept) ? kept : pickServed(ladder, from, served);
+      return { ...anthropicModel(id, input.catalog), fallbackReason: "engine-too-old" };
+    }
+    const model = anthropicModel(pickServed(ladder, from, served), input.catalog);
+    // An unreadable engine version supports the model; the row says it was not known.
+    return !engineKnown && hasEngineRequirement(model.modelId) ? { ...model, engineVersionUnknown: true } : model;
   };
   return { simple: resolve("simple"), standard: resolve("standard"), complex: resolve("complex"), frontier: resolve("frontier") };
+}
+
+/** The engine note of the tier that resolves to `modelId`, for a decision row; empty when `modelId` is null, resolves nowhere or has nothing to say. */
+export function engineNotesOf(tiers: ResolvedTiers, modelId: string | null): EngineNotes {
+  const tier = modelId === null ? undefined : ROUTER_TIERS.find((candidate) => tiers[candidate].modelId === baseModelId(modelId));
+  if (tier === undefined) return {};
+  const { fallbackReason, engineVersionUnknown } = tiers[tier];
+  return { ...(fallbackReason === undefined ? {} : { fallbackReason }), ...(engineVersionUnknown === undefined ? {} : { engineVersionUnknown }) };
 }
 
 /** §5 collapse: a tier is the lowest tier resolving to the same model id. */

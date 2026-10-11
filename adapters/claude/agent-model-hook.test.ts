@@ -319,3 +319,30 @@ test("JEV-060 slice 2: with the function-hook model router active, this classic 
   assert.equal(result.stdout, null);
   assert.equal(decisionRecord(result).mode, "measurement");
 });
+
+// 0.6.29 T8: a model the running engine cannot run is never on the ladder Jev chooses from.
+test("engine too old for a model on the ladder: that model is left off it, so Jev is never asked to pick it", async () => {
+  const haiku55 = entry({ id: "claude-haiku-5-5", rank: 4, label: "Haiku 5.5" });
+  const mirror = { active: false, ready: false, models: [...LADDER, haiku55] };
+  const sizeAt = async (engineVersion: string | null | undefined): Promise<number> => {
+    const result = await handleAgentModelHook(preToolUsePayload(), baseDeps({ mirror, apiKey: null, ...(engineVersion === undefined ? {} : { engineVersion }) }));
+    return decisionRecord(result).ladderSize;
+  };
+  assert.equal(await sizeAt("2.1.292"), 3, "older than Haiku 5.5's floor");
+  assert.equal(await sizeAt("2.1.293"), 4, "at the floor");
+  assert.equal(await sizeAt("2.1.296"), 4);
+  assert.equal(await sizeAt("2.1.292-dev.20260920.t101500.sha1a2b3c4"), 3, "a dev build is read on its semantic core");
+  assert.equal(await sizeAt(null), 4, "an unknown engine version supports it");
+  assert.equal(await sizeAt(undefined), 4, "no version given at all supports it");
+  assert.equal(await sizeAt("garbage"), 4);
+});
+
+test("engine too old: Jev recommends from the models the engine can run", async () => {
+  const haiku55 = entry({ id: "claude-haiku-5-5", rank: 4, label: "Haiku 5.5" });
+  const mirror = { active: false, ready: false, models: [...LADDER, haiku55] };
+  // The smallest model of the ladder Jev sees scores 0.
+  const result = await handleAgentModelHook(preToolUsePayload(), baseDeps({ mirror, engineVersion: "2.1.292", askJev: async () => jevResponse(0) }));
+  assert.equal(decisionRecord(result).recommended?.id, "haiku");
+  const modern = await handleAgentModelHook(preToolUsePayload(), baseDeps({ mirror, engineVersion: "2.1.296", askJev: async () => jevResponse(0) }));
+  assert.equal(decisionRecord(modern).recommended?.id, "claude-haiku-5-5");
+});

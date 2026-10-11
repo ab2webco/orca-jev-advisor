@@ -209,3 +209,38 @@ test('a record lands in its own hour\'s file, not in the legacy single file', ()
   assert.equal(names.length, 1, JSON.stringify(names))
   assert.ok([`model-reclassifications-${before}.jsonl`, `model-reclassifications-${after}.jsonl`].includes(names[0]), names[0])
 })
+
+// 0.6.29 T8: the mod leaves the engine's version in the cache directory
+// (src/core/engine_support.ts); the hook, which gets none in its input, reads
+// it and keeps a model the engine cannot run off the ladder.
+
+const HAIKU_55_MIRROR = {
+  active: false,
+  ready: false,
+  models: [{ id: 'claude-haiku-5-5', provider: 'anthropic', label: 'Haiku 5.5', rank: 1, agentModel: 'haiku', source: '', available: true }]
+}
+
+function writeEngineVersion (home, content) {
+  mkdirSync(cacheDir(home), { recursive: true })
+  writeFileSync(join(cacheDir(home), 'engine-version.json'), typeof content === 'string' ? content : JSON.stringify(content))
+}
+
+function ladderOf (home, engineFile) {
+  mkdirSync(join(home, '.config', 'orca-supervisor'), { recursive: true })
+  writeFileSync(join(home, '.config', 'orca-supervisor', 'models-catalog.json'), JSON.stringify(HAIKU_55_MIRROR))
+  if (engineFile !== undefined) writeEngineVersion(home, engineFile)
+  assert.equal(run(home, PRE_TOOL_USE_AGENT_PAYLOAD), '')
+  const [record] = readLogRecords(home)
+  return { ladderSize: record.ladderSize, failOpen: record.failOpen }
+}
+
+test('the engine version the mod recorded keeps a model that engine cannot run off the ladder', () => {
+  assert.deepEqual(ladderOf(makeHome(), { version: '2.1.292', base: '2.1.292', at: '2026-10-11T12:00:00.000Z' }), { ladderSize: 0, failOpen: 'empty-ladder' })
+  assert.deepEqual(ladderOf(makeHome(), { version: '2.1.293', at: '2026-10-11T12:00:00.000Z' }), { ladderSize: 1, failOpen: 'no-key' })
+})
+
+test('no engine version file, or one that cannot be read, leaves the ladder whole: unknown supports the model', () => {
+  assert.deepEqual(ladderOf(makeHome()), { ladderSize: 1, failOpen: 'no-key' })
+  assert.deepEqual(ladderOf(makeHome(), '{not json'), { ladderSize: 1, failOpen: 'no-key' })
+  assert.deepEqual(ladderOf(makeHome(), { version: 5 }), { ladderSize: 1, failOpen: 'no-key' })
+})

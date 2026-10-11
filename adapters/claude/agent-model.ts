@@ -38,6 +38,7 @@ import { resolveApiKey } from '../../src/core/secrets.ts'
 import { serializeModelRecord } from '../../src/core/model_measurement.ts'
 import { modelMeasurementFileName } from '../../src/core/measurement_files.ts'
 import type { ModelMeasurementRecord } from '../../src/core/model_measurement.ts'
+import { ENGINE_VERSION_FILE, parseEngineVersionRecord } from '../../src/core/engine_support.ts'
 import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
 import { routerModeFromSettings } from '../../src/core/model_router_mode.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
@@ -123,6 +124,18 @@ function readMirror(): unknown {
   }
 }
 
+/** 0.6.29 T8: the engine version the mod last recorded in the cache directory
+ *  (the hook's own input carries none). Missing or unreadable reads as null,
+ *  "unknown", which supports every model -- never a spawn of `claude --version`
+ *  here: this runs in front of every Agent call. */
+function readEngineVersion(): string | null {
+  try {
+    return parseEngineVersionRecord(JSON.parse(readFileSync(join(CACHE_DIR, ENGINE_VERSION_FILE), 'utf8')))
+  } catch {
+    return null
+  }
+}
+
 /**
  * True when Orca has this plugin switched off -- see gate-bash.ts's own
  * `pluginDisabledInOrca` for the full rationale (this is the same check,
@@ -199,6 +212,7 @@ async function main(): Promise<void> {
     now: () => new Date(),
     clockMs: () => Date.now(),
     routerActive,
+    engineVersion: readEngineVersion(),
   })
 
   if (result.record !== null) appendRecord(result.record)

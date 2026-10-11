@@ -51,6 +51,7 @@ import {
   type ComplexityReading,
 } from "../../src/core/model_decisions.ts";
 import { buildModelOutcomeRecord, type ModelDecisionRecord, type ModelFailOpenReason, type ModelMeasurementRecord } from "../../src/core/model_measurement.ts";
+import { engineSupports } from "../../src/core/engine_support.ts";
 import { parseModelsMirror } from "../../src/core/model_mirror.ts";
 import { JevRequestError, type JevResponse, type JsonValue, type Question } from "../../src/core/jev.ts";
 
@@ -67,6 +68,12 @@ export interface AgentModelHookDeps {
    * both rewrite one spawn.
    */
   readonly routerActive?: boolean;
+  /**
+   * 0.6.29 T8: the version of the engine running the session, as the mod
+   * recorded it (src/core/engine_support.ts); null or absent = unknown, which
+   * supports every model. A model it cannot run is left off the ladder.
+   */
+  readonly engineVersion?: string | null;
 }
 
 export interface AgentModelHookResult {
@@ -132,7 +139,7 @@ async function handlePreToolUse(payload: Record<string, unknown>, id: string, de
   }
 
   const mirror = parseModelsMirror(deps.mirror);
-  const ladder: readonly ModelEntry[] = availableLadder(mirror.models);
+  const ladder: readonly ModelEntry[] = availableLadder(mirror.models).filter((row) => engineSupports(row.id, deps.engineVersion));
   const mode: "measurement" | "active" = mirror.active && deps.routerActive !== true ? "active" : "measurement";
   const promptChars = input.prompt.length;
 

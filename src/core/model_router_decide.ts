@@ -17,7 +17,7 @@
 import { answerMargin, getChoiceAnswer } from "./jev.ts";
 import type { Answer, JsonValue, Question } from "./jev.ts";
 import { baseModelId, collapseTier, modelRank, ROUTER_TIERS, tierOfModel } from "./model_router_accounts.ts";
-import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
+import type { EngineFallbackReason, EngineNotes, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
 import type { WorkKindRecord } from "./work_kind.ts";
 
@@ -456,6 +456,10 @@ export interface RouterDecisionRecord {
   readonly margin?: number;
   /** 0.6.22 T1: the same for the work-kind answer, on a row that logs one. */
   readonly workKindMargin?: number;
+  /** 0.6.29 T8: the engine running the session is older than the model the ladder names for this tier, so the row names the model it keeps instead. */
+  readonly fallbackReason?: EngineFallbackReason;
+  /** 0.6.29 T8: the model named has a minimum engine version and the engine's own could not be read (it is then taken to support it). */
+  readonly engineVersionUnknown?: true;
 }
 
 export interface RouterDecisionRecordInput {
@@ -480,6 +484,8 @@ export interface RouterDecisionRecordInput {
   readonly teammateTask?: TeammateTaskSeen;
   readonly margin?: number;
   readonly workKindMargin?: number;
+  /** 0.6.29 T8: `engineNotesOf(tiers, decision.proposed)`. */
+  readonly engine?: EngineNotes;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -511,5 +517,7 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     ...(input.teammateTask === undefined ? {} : { teammateTask: input.teammateTask }),
     ...(input.margin === undefined ? {} : { margin: input.margin }),
     ...(input.workKindMargin === undefined ? {} : { workKindMargin: input.workKindMargin }),
+    ...(input.engine?.fallbackReason === undefined ? {} : { fallbackReason: input.engine.fallbackReason }),
+    ...(input.engine?.engineVersionUnknown === undefined ? {} : { engineVersionUnknown: input.engine.engineVersionUnknown }),
   };
 }

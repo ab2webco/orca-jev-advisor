@@ -76,6 +76,8 @@ interface FakeHost {
   readonly gitRepos: Map<string, { toplevel: string; branch: string }>;
   /** 0.6.23 T1: every `$.process.run` argv, joined with spaces. */
   readonly processCalls: string[];
+  /** 0.6.29 T8: what `$.session.version()` answers; null makes it reject, like an engine that cannot say. */
+  engineVersion: { version: string; base?: string } | null;
 }
 
 function makeFakeHost(): FakeHost {
@@ -97,6 +99,7 @@ function makeFakeHost(): FakeHost {
     root: null,
     gitRepos: new Map<string, { toplevel: string; branch: string }>(),
     processCalls: [],
+    engineVersion: null,
   };
 }
 
@@ -136,6 +139,10 @@ function makeFakeEngine(host: FakeHost): unknown {
       messages: async () => {
         if (host.failMessages) throw new Error("fake host: session.messages failed");
         return host.messages;
+      },
+      version: async () => {
+        if (host.engineVersion === null) throw new Error("fake host: session.version failed");
+        return host.engineVersion;
       },
     },
     env: { get: async (name: string) => (name === "HOME" ? HOME : host.env.get(name)) },
@@ -1225,6 +1232,103 @@ test("router, active: on the default ladder a simple first prompt runs on Haiku 
   const second = await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, index: 1 }));
   assert.equal(second.model, "claude-haiku-5-5");
   assert.equal(second.effort, "medium");
+});
+
+const ENGINE_VERSION_PATH = `${CACHE_DIR}/engine-version.json`;
+
+test("0.6.29 T8, active: an engine older than Haiku 5.5's floor keeps the simple tier on Haiku 4.5, with no effort, and the row says why", async () => {
+  const host = makeFakeHost();
+  host.engineVersion = { version: "2.1.292", base: "2.1.292" };
+  seedRouterAccount(host, {}, DEFAULT_MODELS);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+
+  const first = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  assert.equal("effort" in first, false, "Haiku 4.5 takes no effort");
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.proposed, "claude-haiku-4-5-20251001");
+  assert.equal(decision?.fallbackReason, "engine-too-old");
+  assert.equal("engineVersionUnknown" in (decision ?? {}), false);
+  assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5");
+});
+
+test("0.6.29 T8, active: an engine at or past the floor, a dev build of it included, runs Haiku 5.5 with no note", async () => {
+  for (const version of ["2.1.293", "2.1.296", "2.1.293-dev.20260920.t101500.sha1a2b3c4"]) {
+    const host = makeFakeHost();
+    host.engineVersion = { version };
+    seedRouterAccount(host, {}, DEFAULT_MODELS);
+    host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+    host.fetchQueue.push(tierAnswer("simple"));
+    const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+    const first = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+    assert.equal(first.model, "claude-haiku-5-5", version);
+    const [decision] = routerDecisionLines(host);
+    assert.equal("fallbackReason" in (decision ?? {}), false);
+    assert.equal("engineVersionUnknown" in (decision ?? {}), false);
+  }
+});
+
+test("0.6.29 T8, active: an engine that cannot say its version is taken to run Haiku 5.5, and the row says the version was unknown", async () => {
+  const host = makeFakeHost();
+  host.engineVersion = null;
+  seedRouterAccount(host, {}, DEFAULT_MODELS);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  assert.equal(first.model, "claude-haiku-5-5");
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.engineVersionUnknown, true);
+  assert.equal("fallbackReason" in (decision ?? {}), false);
+  assert.equal(host.files.has(ENGINE_VERSION_PATH), false, "nothing is recorded for the Agent hook when the version is unknown");
+});
+
+test("0.6.29 T8, measure: the decision names the model the engine can run, and nothing is sent", async () => {
+  const host = makeFakeHost();
+  host.engineVersion = { version: "2.1.100" };
+  seedRouterAccount(host, {}, DEFAULT_MODELS);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooks(host);
+  const event = turnStepEvent(FRESH_START);
+  assert.deepEqual(await stepThrough(handlers, engine, event), event);
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.proposed, "claude-haiku-4-5-20251001");
+  assert.equal(decision?.fallbackReason, "engine-too-old");
+});
+
+test("0.6.29 T8, subagent: a spawn on an old engine gets Haiku 4.5's full id, and its row says why", async () => {
+  const host = makeFakeHost();
+  host.engineVersion = { version: "2.1.292" };
+  seedRouterAccount(host, {}, DEFAULT_MODELS);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent());
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-haiku-4-5-20251001", effort: undefined }));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.point, "subagent");
+  assert.equal(decision?.fallbackReason, "engine-too-old");
+});
+
+test("0.6.29 T8: the mod leaves the engine's version where the Agent hook reads it, once per session and without prompt text", async () => {
+  const host = makeFakeHost();
+  host.engineVersion = { version: "2.1.296", base: "2.1.296" };
+  seedRouterAccount(host, {}, DEFAULT_MODELS);
+  host.messages = [{ role: "user", text: "hi", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  const written = JSON.parse(host.files.get(ENGINE_VERSION_PATH) ?? "null") as Record<string, unknown> | null;
+  assert.equal(written?.version, "2.1.296");
+  assert.equal(written?.base, "2.1.296");
+  assert.equal(typeof written?.at, "string");
+  host.files.set(ENGINE_VERSION_PATH, "marker");
+  host.messages = [...host.messages, { role: "assistant", text: "", toolUses: [] }];
+  await stepThrough(handlers, engine, turnStepEvent({ ...FRESH_START, index: 1 }));
+  assert.equal(host.files.get(ENGINE_VERSION_PATH), "marker", "a later step does not rewrite it");
 });
 
 test("router, active: a standard prompt runs on Sonnet at medium effort", async () => {
