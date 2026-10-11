@@ -46,8 +46,11 @@ export function effortRank(effort: SessionEffort | null | undefined): number | n
  * the person's per-tier setting overrides (0.6.2 E3). 0.6.16 T1: simple is
  * medium, not low -- half the turns that edited were rated simple
  * (odd/research/phase-effort.md §2) and low has never been measured on work
- * that edits. Since no default is low, a `low` in the per-tier map is always
- * the person's own, and it is sent as they set it.
+ * that edits. It is also Haiku 5.5's own default (0.6.29), so the simple tier
+ * sends what the model would run at anyway; no Haiku 5.5 step has been
+ * measured yet, so nothing here goes lower. Since no default is low, a `low`
+ * in the per-tier map is always the person's own, and it is sent as they set
+ * it.
  */
 export const TIER_EFFORT: Readonly<Record<RouterTier, RouterEffort>> = {
   simple: "medium",

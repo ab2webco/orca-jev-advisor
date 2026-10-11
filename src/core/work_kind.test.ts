@@ -77,6 +77,8 @@ test("T2 kindStepEffort: Opus 5.5 and Sonnet 5.5 run read or execute work at med
   assert.deepEqual(kindStepEffort({ ...READ, model: "claude-opus-5-5[1m]", effort: "xhigh" }), { effort: "medium", hold: null });
   assert.deepEqual(kindStepEffort({ ...READ, model: "claude-sonnet-5-5", effort: "high" }), { effort: "medium", hold: null });
   assert.deepEqual(kindStepEffort({ ...READ, model: "claude-opus-5", effort: "high" }), { effort: "high", hold: "other-model" });
+  // Haiku 5.5 defaults to medium too, but nothing has measured its read work yet: the rule does not guess.
+  assert.deepEqual(kindStepEffort({ ...READ, model: "claude-haiku-5-5", effort: "high" }), { effort: "high", hold: "other-model" });
 });
 
 test("T2 kindStepEffort: review, implement and design keep their effort", () => {

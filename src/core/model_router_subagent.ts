@@ -139,7 +139,7 @@ const EFFORT_RANK: Readonly<Record<TierEffort, number>> = { low: 0, medium: 1, h
 /**
  * What a subagent's step should actually send for `effort`, given the tier
  * the router chose for it at spawn (`target`; null when that tier's model
- * takes no effort at all, Haiku) and what the step already carries
+ * takes no effort at all: Haiku 4.5 or a gateway model) and what the step already carries
  * (`current`: the parent's own, inherited and clamped to what the
  * subagent's model supports).
  *

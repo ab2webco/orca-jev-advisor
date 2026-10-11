@@ -6,7 +6,10 @@ import test from "node:test";
 
 import { claudeCodeDefaultEffort, effortSourceOf, settingsEffortFor, uncachedShare } from "./effort_source.ts";
 
-test("claudeCodeDefaultEffort: medium on Opus 5.5 and Sonnet 5.5, high on the rest, none on Haiku", () => {
+test("claudeCodeDefaultEffort: medium on Opus 5.5, Sonnet 5.5 and Haiku 5.5, high on the rest, none on Haiku 4.5", () => {
+  assert.equal(claudeCodeDefaultEffort("claude-haiku-5-5"), "medium", "Claude Code's model-config page: Haiku 5.5 defaults to medium");
+  assert.equal(claudeCodeDefaultEffort("claude-haiku-5-5[1m]"), "medium");
+  assert.equal(claudeCodeDefaultEffort("claude-haiku-4-5"), null, "Haiku 4.5 takes no effort, by alias or by snapshot");
   assert.equal(claudeCodeDefaultEffort("claude-opus-5-5"), "medium");
   assert.equal(claudeCodeDefaultEffort("claude-opus-5-5[1m]"), "medium");
   assert.equal(claudeCodeDefaultEffort("claude-sonnet-5-5"), "medium");

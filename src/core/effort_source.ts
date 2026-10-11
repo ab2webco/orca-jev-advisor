@@ -4,7 +4,9 @@
 // (https://code.claude.com/docs/en/model-config): `CLAUDE_CODE_EFFORT_LEVEL`,
 // `--effort` or `/effort` first, then settings (`modelSettings` per model, or
 // a top-level `effortLevel`, which does not count for Opus 5.5), then the
-// model's default (medium on Opus 5.5 and Sonnet 5.5, high elsewhere); a
+// model's default (medium on Opus 5.5, Sonnet 5.5 and Haiku 5.5, high
+// elsewhere; none on Haiku 4.5, which takes no effort). This is Claude Code's
+// default, not the API's: the API's default on Sonnet 5.5 is high; a
 // subagent's frontmatter `effort` overrides the session's level, never the
 // environment's. A hook sees the step's effort, the environment and the
 // settings file, never `/effort` or `--effort`: a level none of those explain
@@ -18,7 +20,7 @@ import type { SessionEffort } from "./model_router_decide.ts";
 
 export type EffortSource = "plugin" | "env" | "frontmatter" | "settings" | "default" | "session" | "none";
 
-const MEDIUM_BY_DEFAULT: readonly string[] = ["claude-opus-5-5", "claude-sonnet-5-5"];
+const MEDIUM_BY_DEFAULT: readonly string[] = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
 const NO_EFFORT: readonly string[] = ["claude-haiku-4-5"];
 
 /** Claude Code's own default effort for a model, or null for one that takes none. */
