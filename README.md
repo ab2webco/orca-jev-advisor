@@ -16,6 +16,18 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.6.29
+
+The model router's cheapest tier now runs on Claude Haiku 5.5. Simple work (a greeting, a one-line question, reading a file) used to go to Haiku 4.5, at $1 / $5 per million tokens. Haiku 5.5 costs $0.10 / $0.50 when the prompt is up to 100,000 tokens: ten times less per token. Its tokenizer counts the same text as about 30% more tokens, so for the same text the saving is nearer 7 to 8 times. Above 100,000 tokens of prompt the whole request is priced at $0.50 / $2.50, which is only about half of Haiku 4.5 per token (about 1.5 times cheaper for the same text), so the saving is smaller on long contexts.
+
+- **Who moves.** A fresh install uses Haiku 5.5 for the simple tier. An install whose Haiku 4.5 row is still exactly the one every earlier release shipped moves to Haiku 5.5 when the plugin starts. Haiku 4.5 stays in your list, unranked and never chosen, and Haiku 5.5 inherits the row's "available" switch. Nothing you changed is touched: a Haiku 4.5 row you edited (rank, label, prices, anything), a catalog that already has Haiku 5.5, or another model on the simple tier stays as it is. Every other change to your model list is still an offer you accept.
+- **Effort.** Haiku 5.5 takes an effort level, unlike Haiku 4.5, and defaults to `medium`. The simple tier keeps asking for `medium`, so the model runs at what it would anyway. The Models tab shows the control for it; an account that kept Haiku 4.5 still shows no control. Nothing measured Haiku 5.5 yet, so no lower level is chosen for you. Sonnet 5.5 stays at `medium` here too: that is Claude Code's default, not the API's (`high`).
+- **Prices.** Haiku 5.5's two rate cards are both modelled. Each request is priced by its own prompt (fresh input plus cache reads plus cache writes): over 100,000 tokens it pays the higher card for every token, a cache hit included. The cost shown in the panel and the router's break-even both follow that rule. The prices of Opus 5, Opus 4.8, Fable 5 and Sonnet 4.6 were added, so past turns on them are no longer counted at zero. Sonnet 5.5 cache hits were costed at $0.20 per million tokens; the pricing page says $0.10, and the estimate now matches.
+- **Daily docs check.** It would have read Haiku 5.5's two pricing rows as one model and kept the second, offering Haiku 5.5 at the higher card. It now keeps both.
+- **Needs Claude Code 2.1.293 or later** to run Haiku 5.5.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.6.28
 
 The command gate now stops what can really affect something, not everyday project work. On the author's machine it advised about 9% of commands, roughly 250 a day. Many of those were Jev's risk score landing near its line on work that cannot hurt anyone, and some were refusals of `git add` on a working branch under *never write to main*. New layers decide before Jev is asked, and none of them can let through what the deny tier stops.

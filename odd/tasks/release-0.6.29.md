@@ -1,0 +1,42 @@
+# Release 0.6.29: the model router moves to Claude Haiku 5.5
+
+## Objective
+Bring the model router, the price table and the effort facts up to date with the new Claude models, optimized for cost. The `simple` tier moves from Haiku 4.5 ($1 / $5 per MTok) to Haiku 5.5 ($0.10 / $0.50 up to a 100K-token prompt, $0.50 / $2.50 above it).
+
+Facts were read on 2026-10-11 from the live pages, not from the cached brief:
+- https://platform.claude.com/docs/en/about-claude/pricing (Model pricing table, "Long context pricing" section);
+- https://platform.claude.com/docs/en/about-claude/models/overview (Compare models table);
+- https://code.claude.com/docs/en/model-config ("Adjust effort level").
+
+Where the live page and the brief disagree, the page wins:
+- Sonnet 5.5 cache hits are $0.10 / MTok (footnote 2: 0.05x of input), not $0.20. The code, `seed/models.json` and the docs fixture all carried 0.2.
+- Fable 5 (not 5.1) cache hits are $1 / MTok.
+
+## Design
+- **Ladder.** `simple` resolves to `claude-haiku-5-5`. The built-in fallback, the shipped seed (version 3) and the panel's shipped labels agree. Haiku 4.5 stays in the built-in price, label, context and no-effort tables, so old usage rows still cost correctly.
+- **Upgrade.** The stored catalog belongs to the person and is never overwritten; a newer baseline is only offered. One narrow exception: a stored Haiku 4.5 row that still equals, field by field, the row every earlier release shipped (and no Haiku 5.5 row exists) is the old default nobody chose. It is migrated at activation: Haiku 5.5 is appended carrying the row's `available`, and Haiku 4.5 is kept unranked with no tier. An edited row, a catalog that already has Haiku 5.5, or another model holding the simple tier is left alone.
+- **Rate cards.** `ModelPrices` gets an optional typed `longPrompt` card (threshold plus the four prices). A request is priced by its prompt length (input + cache reads + cache writes), per the pricing page. Usage rows are one request each, so cost is computed per row; the router's break-even uses the context it already has.
+- **Docs check.** The pricing parser reads the two Haiku 5.5 rows as one model with two cards; before, the over-100K row overwrote the base row.
+- **Effort.** Haiku 5.5 takes effort and defaults to `medium`. Haiku 4.5 takes none.
+
+## Out of scope
+Opus 4.7 and older, Sonnet 4.5 and older, Mythos: no usage in the logs and not on the ladder. Batch and US-only (`inference_geo`, 1.1x) pricing are not modelled.
+
+## Checklist
+- [x] T1 inventory. Source facts: `src/core/model_router_accounts.ts` (ids, `ANTHROPIC_PRICES`, labels, windows, no-effort set, tier fallback), `src/core/effort_source.ts` (Claude Code defaults), `src/core/work_kind.ts` and `src/core/step_phase.ts` (Sonnet 5 / 5.5 / Opus 5.5 rules, no Haiku), `seed/models.json` (v2 shipped Haiku 4.5 as the simple tier; Sonnet 5.5 cache read 0.2), `adapters/orca/panels/config.html` (`#models-shipped-labels`), `scripts/screenshot-panels.mjs` and `scripts/panels.spec.mjs` fixtures. The ladder lives in the person's stored catalog (`models` key, planted once, never overwritten, newer baselines only offered); per account only the per-tier effort is stored (`routerEffort` in the vault settings). Cost is applied per usage row (one request each) in `aggregateActivityByProject`, and the router's break-even has the context length: both can use a long-prompt card. Real usage logs (`~/.cache/orca-supervisor/turn-usage-*`): `claude-opus-5-5` 19105 rows, `claude-sonnet-5-5` 6668, `claude-opus-5` 303, `glm-5.3` 140 (gateway, no prices), `claude-haiku-4-5-20251001` 49; no Haiku 5.5 yet.
+- [x] T3 prices (commit 834a0d5). RED: `model_cost.test.ts` failed to load (module missing), then 2 old tests wrongly expecting Sonnet 5.5 cache hits at 0.2; `activity_by_project` Haiku 5.5 per-request test 1 failing; break-even and effort-break-even long-card tests 2 failing. GREEN: `model_cost` 9/9, `activity_by_project` 11/11, `model_router_stage` 71/71, `model_router_accounts` 22/22. Long-context decision: usage rows are one request each and carry input, cache reads and cache writes, so the long card is applied per request (page: "a request's prompt length counts all of its input tokens, including cache reads and cache writes"; each request is priced on its own), not on totals; a row with no token fields has a prompt of zero and takes the base card. The break-even reads each side on the card its context falls on. The docs parser fix (two Haiku 5.5 rows) is in the T2 commit with the refreshed fixtures: RED 2 new parser tests, GREEN 14/14. Corrected against the live page: Sonnet 5.5 cache hits 0.10 (footnote 2: 0.05x), Fable 5 cache hits 1.
+- [x] T2 ladder (commit 2ac0459). RED: `model_seed_notice.test.ts` failed to load (no `upgradeLegacySimpleDefault`); worker test 1 failing against a no-op body (observed by disabling the function, then restored); the shipped-labels test and 24 router tests failed after the seed change. GREEN: `model_seed_notice` 14/14 (untouched default migrates; edited rank, label, agentModel, prices or tier, an existing Haiku 5.5, another simple-tier model, an empty catalog, a missing successor and a second run all return null; `available` carries over), `models-worker` 27/27 (storage round trip, invalid-row catalog untouched, wiring order in `main.mjs`), `hooks.test.ts` 147/147. Existing router tests keep a catalog whose simple tier is an edited-and-kept Haiku 4.5 row (no effort), so the no-effort branch stays covered; new tests cover the default ladder (decide, hooks).
+- [x] T4 effort facts (commit 92b1b21). Sonnet 5.5 stays `medium`: Claude Code's model-config page says "Opus 5.5, Sonnet 5.5, and Haiku 5.5 default to medium" (the API default is `high`, which is why the seed's informational `defaultEffort` stays `high`). Local logs agree and are not circular: no `claude-sonnet-5-5` row has `effortSource: "session"` (a level neither settings nor the model default explains). RED: 1 (`claudeCodeDefaultEffort("claude-haiku-5-5")` gave `high`). GREEN: `effort_source` 4/4, `work_kind` 11/11 (Haiku 5.5 read work is left alone: unmeasured). `step_phase` needs no change (measure-only; Haiku 5.5 eligible).
+- [x] T5 simple-tier effort: kept `medium`. `TIER_EFFORT.simple` is medium because half of the edit turns are rated simple and low is unmeasured on edits (`odd/research/phase-effort.md` §2); medium is also Haiku 5.5's default. There are 0 Haiku 5.5 rows in the effort logs, and `effortOutputMedians` needs 20 steps per effort, so no saving is known and no lower level is chosen.
+- [x] T6 panel. The panel is data-driven, so the only source change is the shipped-labels block in `config.html` (in the T2 commit; RED was `panels-shipped-models.test.mjs`, 1 failing after the seed change). `scripts/panels.spec.mjs` and `scripts/screenshot-panels.mjs` fixtures now carry Haiku 5.5 (simple tier, takes effort); a new spec test keeps the legacy case (an account that kept Haiku 4.5 shows no effort buttons): characterization, it passed on first run, as the panel already branches on `supportsEffort`. `npm run test:panels` 208/208 (needed `npx playwright install chromium` for this worktree's Playwright 1.64). Shots in `odd/qa/screens-0.6.29/` (committed: `router-ready` per-account effort table with Haiku 5.5 on "Ask" at Medium, and `baseline` notice offering Haiku 5.5 as new), both themes at 1440/768/390/320, tab Models. Also photographed and read, not committed: `ready` (ladder lists Haiku 5.5 at rank 4) and `models-empty` (the unseeded hint names "Claude Haiku 5.5"). `screenshot-panels.mjs` reports no horizontal overflow and no script errors at any width.
+- [x] T7 release prep: 0.6.29 in `orca-plugin.json` and `package.json` (the only files the 0.6.28 release bumped; the other `0.6.28` strings are "since" comments), README section, CHANGELOG entry.
+
+## Acceptance criteria
+- Strict TDD: RED observed, then GREEN, per task. `npm run typecheck` 0, `npm test` green, `npm run test:panels` green.
+- A fresh install and an install holding the old default both route `simple` to `claude-haiku-5-5`; an install whose Haiku 4.5 row was edited does not.
+- A 150K-token Haiku 5.5 request costs the over-100K card; a 50K one the base card.
+- The daily docs check offers Haiku 5.5 at its base card, never at the over-100K one.
+- Every screen that changed is photographed at 1440/768/390/320 in both themes and read.
+
+## Checks
+`npm run typecheck`, `npm test`, `npm run test:panels`, `npm run shots`.

@@ -2,6 +2,21 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.6.29
+
+- **The simple tier is Haiku 5.5** (`claude-haiku-5-5`).
+  - Seed version 3 ships it as the simple-tier row and no longer ships Haiku 4.5, which the models overview now lists as legacy. The built-in fallback (`ANTHROPIC_TIER_MODEL`) follows.
+  - `upgradeLegacySimpleDefault` (`src/core/model_seed_notice.ts`), run at activation by `upgradeLegacySimpleDefaultIfUntouched` (`adapters/orca/models-worker.mjs`) before the first mirror, replaces the old default. It applies only when the stored Haiku 4.5 row equals `LEGACY_SIMPLE_DEFAULT` on every compared field (`available` aside), no Haiku 5.5 row exists and no other model holds the simple tier.
+  - Haiku 4.5 is kept unranked and without a tier; Haiku 5.5 is the shipped row with the old row's `available`. A catalog with a row that does not parse is left alone. Every other change to a stored catalog is still an offer the person accepts.
+- **Rate cards by prompt length** (`src/core/model_cost.ts`).
+  - `ModelPrices` has an optional `longPrompt` card (`overTokens` plus the four prices); `isModelPrices` validates it.
+  - A request is priced by `promptTokens` = input + cache reads + cache writes, strictly over `LONG_PROMPT_TOKENS` (100,000) for the long card, as the pricing page states. Usage rows are one request each, so `aggregateActivityByProject` now sums cost per row instead of pricing the per-model totals.
+  - `breakEven` and `effortBreakEven` read each side on the card its context falls on.
+- **Prices** (pricing page, read 2026-10-11): added Haiku 5.5 (0.10 / 0.20 / 0.01 / 0.50, then 0.50 / 1 / 0.05 / 2.50), Opus 5 and Opus 4.8 (5 / 10 / 0.5 / 25), Fable 5 (10 / 20 / 1 / 50) and Sonnet 4.6 (3 / 6 / 0.3 / 15), with labels and 1M windows. Haiku 4.5 keeps its entries. Sonnet 5.5 cache hits corrected from 0.2 to 0.1 in the built-in table, the seed and the docs fixture. `cacheWrite` stays the 1-hour column.
+- **Docs check:** `parseModelPricing` joins the "for prompts up to N tokens" and "over N tokens" rows into one entry with `longPrompt`; a lone row of either kind yields nothing. The fixtures are refreshed from the current pages (Haiku 5.5 replaces Haiku 4.5 in the overview).
+- **Effort facts:** Haiku 5.5 is medium by default in `claudeCodeDefaultEffort`; Haiku 4.5 (alias and snapshot) takes none. Sonnet 5.5 stays medium (Claude Code's model-config page). Work-kind caps and the phase hold rule do not cover Haiku 5.5 (unmeasured). `TIER_EFFORT.simple` stays medium.
+- **Panel:** the shipped labels name Haiku 5.5; a per-tier effort control shows for a simple tier on Haiku 5.5 and not for one that kept Haiku 4.5.
+
 ## 0.6.28
 
 - **`never_write_to_main` is judged only where a protected branch can be reached.**
