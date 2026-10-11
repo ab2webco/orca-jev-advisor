@@ -2622,7 +2622,7 @@ test('secretMirrorPermissionArgs: feature-modules-save may write the config dir 
   }
 })
 
-const MODULES_CHOSEN = { gate: 'off', 'model-router': 'shadow', steward: 'active', 'skill-selection': 'active', board: 'active' }
+const MODULES_CHOSEN = { gate: 'off', 'model-router': 'shadow', steward: 'active', 'skill-selection': 'active', board: 'active', 'verify-done': 'shadow' }
 
 function modulesRequest (overrides = {}) {
   return { id: 'fm-1', at: new Date().toISOString(), modules: MODULES_CHOSEN, ...overrides }

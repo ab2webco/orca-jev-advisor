@@ -18,7 +18,9 @@
 //   shadow  -- the module runs but only measures: its existing modes are
 //              capped at their measure value. Offered only by a module that
 //              already has a measure mode; that mode IS its shadow, so no
-//              second shadow switch exists anywhere.
+//              second shadow switch exists anywhere. A module that only
+//              measures (verify-done) offers off and shadow, no active, and
+//              has no existing mode: its shadow is its own one switch.
 //   active  -- the module's own existing modes decide, exactly as before
 //              this file existed.
 // `off` is a top state in front of the existing modes, never a parallel
@@ -26,16 +28,18 @@
 //
 // Upgrade keeps behaviour: a missing, unreadable or malformed file, and any
 // unknown or wrong-typed field, read as each module's default, and every
-// module that exists today defaults to `active`.
+// module that existed before 0.8.0 defaults to `active`. verify-done, new in
+// 0.8.0, has no earlier behaviour to keep and defaults to `shadow`: its week
+// of measurement is the point (odd/tasks/verify-done-module.md).
 //
 // Pure: no I/O and no node: import, so the mod sandbox can load it too.
 
 /** The module state file, in the plugin config directory (src/core/paths.ts resolveConfigDir). */
 export const FEATURE_MODULES_FILE = "feature-modules.json";
 
-export type ModuleId = "gate" | "model-router" | "steward" | "skill-selection" | "board";
+export type ModuleId = "gate" | "model-router" | "steward" | "skill-selection" | "board" | "verify-done";
 
-export const MODULE_IDS: readonly ModuleId[] = ["gate", "model-router", "steward", "skill-selection", "board"];
+export const MODULE_IDS: readonly ModuleId[] = ["gate", "model-router", "steward", "skill-selection", "board", "verify-done"];
 
 export type ModuleState = "off" | "shadow" | "active";
 
@@ -53,7 +57,7 @@ export interface HookEntry {
   readonly script: string;
 }
 
-export type ModFeatureId = "router-tier" | "router-subagent" | "subagent-status" | "turn-usage" | "steward" | "skill-selection" | "tool-selection";
+export type ModFeatureId = "router-tier" | "router-subagent" | "subagent-status" | "turn-usage" | "steward" | "skill-selection" | "tool-selection" | "verify-done";
 
 /** A feature of the shared mod copy (adapters/claude/mod-skills/hooks/index.ts) and the engine hooks it runs from. */
 export interface ModFeature {
@@ -267,6 +271,18 @@ export const FEATURE_MODULES: readonly FeatureModule[] = [
     ],
     modes: [],
   },
+  {
+    // odd/tasks/verify-done-module.md: only measures. turn.complete can only
+    // observe, so a blocking state would need a Stop hook this repo does not
+    // install; until the measurement decides one, there is no active.
+    id: "verify-done",
+    states: ["off", "shadow"],
+    defaultState: "shadow",
+    hooks: [],
+    modFeatures: [{ id: "verify-done", hooks: ["turn.complete"], jev: true }],
+    workerJobs: [],
+    modes: [],
+  },
 ];
 
 export type FeatureModules = { readonly [K in ModuleId]: ModuleState };
@@ -277,6 +293,7 @@ export const DEFAULT_FEATURE_MODULES: FeatureModules = {
   steward: "active",
   "skill-selection": "active",
   board: "active",
+  "verify-done": "shadow",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -317,6 +334,7 @@ export function parseFeatureModules(content: string): FeatureModules {
     steward: stateOf("steward", read("steward")),
     "skill-selection": stateOf("skill-selection", read("skill-selection")),
     board: stateOf("board", read("board")),
+    "verify-done": stateOf("verify-done", read("verify-done")),
   };
 }
 

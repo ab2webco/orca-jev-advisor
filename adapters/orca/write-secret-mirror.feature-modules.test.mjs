@@ -37,19 +37,20 @@ function readModules (content) {
   return JSON.parse(execFileSync(process.execPath, [SCRIPT_PATH, 'feature-modules-read'], { env, encoding: 'utf8' }))
 }
 
-const ALL_ACTIVE = { gate: 'active', 'model-router': 'active', steward: 'active', 'skill-selection': 'active', board: 'active' }
+// Every module that existed before 0.8.0 defaults to active; verify-done, new, to shadow.
+const DEFAULTS = { gate: 'active', 'model-router': 'active', steward: 'active', 'skill-selection': 'active', board: 'active', 'verify-done': 'shadow' }
 
-test('feature-modules-read: a missing file reads as every module active', () => {
-  assert.deepEqual(readModules(undefined), { ok: true, value: ALL_ACTIVE })
+test('feature-modules-read: a missing file reads as the defaults', () => {
+  assert.deepEqual(readModules(undefined), { ok: true, value: DEFAULTS })
 })
 
 test('feature-modules-read: the states in the file come back', () => {
   const result = readModules(JSON.stringify({ modules: { gate: 'off', 'model-router': 'shadow', board: 'off' } }))
-  assert.deepEqual(result, { ok: true, value: { ...ALL_ACTIVE, gate: 'off', 'model-router': 'shadow', board: 'off' } })
+  assert.deepEqual(result, { ok: true, value: { ...DEFAULTS, gate: 'off', 'model-router': 'shadow', board: 'off' } })
 })
 
-test('feature-modules-read: a corrupt file reads as every module active', () => {
-  assert.deepEqual(readModules('{ not json'), { ok: true, value: ALL_ACTIVE })
+test('feature-modules-read: a corrupt file reads as the defaults', () => {
+  assert.deepEqual(readModules('{ not json'), { ok: true, value: DEFAULTS })
 })
 
 // ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ function runMode (mode, { input, existing } = {}) {
   return { result, file, configDir, content: existsSync(file) ? readFileSync(file, 'utf8') : null }
 }
 
-const CHOSEN = { gate: 'off', 'model-router': 'shadow', steward: 'active', 'skill-selection': 'shadow', board: 'off' }
+const CHOSEN = { gate: 'off', 'model-router': 'shadow', steward: 'active', 'skill-selection': 'shadow', board: 'off', 'verify-done': 'off' }
 
 test('feature-modules-save: writes the chosen states, pretty-printed, and answers with them', () => {
   const { result, content, configDir } = runMode('feature-modules-save', { input: JSON.stringify({ modules: CHOSEN }) })
@@ -85,22 +86,23 @@ test('feature-modules-save: writes the chosen states, pretty-printed, and answer
 test('feature-modules-save: replaces a previous file whole, and feature-modules-read then agrees', () => {
   const { content } = runMode('feature-modules-save', {
     existing: JSON.stringify({ modules: { gate: 'off' } }),
-    input: JSON.stringify({ modules: { ...ALL_ACTIVE, steward: 'off' } })
+    input: JSON.stringify({ modules: { ...DEFAULTS, steward: 'off' } })
   })
-  assert.deepEqual(JSON.parse(content), { modules: { ...ALL_ACTIVE, steward: 'off' } })
-  assert.deepEqual(readModules(content), { ok: true, value: { ...ALL_ACTIVE, steward: 'off' } })
+  assert.deepEqual(JSON.parse(content), { modules: { ...DEFAULTS, steward: 'off' } })
+  assert.deepEqual(readModules(content), { ok: true, value: { ...DEFAULTS, steward: 'off' } })
 })
 
 for (const [name, input] of [
   ['input that is not JSON', '{ not json'],
   ['an empty request', ''],
   ['a map missing a module', JSON.stringify({ modules: { gate: 'off' } })],
-  ['a state the module does not offer', JSON.stringify({ modules: { ...ALL_ACTIVE, gate: 'shadow' } })],
-  ['an unknown module', JSON.stringify({ modules: { ...ALL_ACTIVE, unknown: 'off' } })],
+  ['a state the module does not offer', JSON.stringify({ modules: { ...DEFAULTS, gate: 'shadow' } })],
+  ['active for a module that only measures', JSON.stringify({ modules: { ...DEFAULTS, 'verify-done': 'active' } })],
+  ['an unknown module', JSON.stringify({ modules: { ...DEFAULTS, unknown: 'off' } })],
   ['modules of the wrong type', JSON.stringify({ modules: 'off' })]
 ]) {
   test(`feature-modules-save: refuses ${name} and leaves the file as it was`, () => {
-    const before = JSON.stringify({ modules: { ...ALL_ACTIVE, board: 'off' } })
+    const before = JSON.stringify({ modules: { ...DEFAULTS, board: 'off' } })
     const { result, content, configDir } = runMode('feature-modules-save', { existing: before, input })
     assert.equal(result.ok, false)
     assert.match(result.reason, /^invalid-(json|shape)$/)

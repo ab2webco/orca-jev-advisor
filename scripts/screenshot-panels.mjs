@@ -39,6 +39,7 @@ import { foldGateDecisions } from '../src/core/gate_stats.ts'
 import { foldAbResults } from '../src/core/ab_report.ts'
 import { EMPTY_AUTHORIZATIONS, authorizationRows, recordAuthorization } from '../src/core/gate_authorizations.ts'
 import { parseTrustedPrograms } from '../src/core/trusted_programs.ts'
+import { DEFAULT_FEATURE_MODULES } from '../src/core/feature_modules.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PANELS_DIR = join(ROOT, 'adapters/orca/panels')
@@ -229,14 +230,15 @@ function emptyWindow (key) {
 /**
  * install-claude-integration.mjs's status().modules (moduleHookSummary): per
  * module its state, how many hooks it owns, and whether the hooks on disk
- * match the state. `states` overrides a module's state; `unmatched` lists the
- * modules whose hooks did NOT follow (a newer install was left alone).
- * scripts/fixture_shape.test.mjs holds this to the real installer's output.
+ * match the state. `states` overrides a module's state (else the registry's
+ * default); `unmatched` lists the modules whose hooks did NOT follow (a newer
+ * install was left alone). scripts/fixture_shape.test.mjs holds this to the
+ * real installer's output.
  */
-const MODULE_HOOK_COUNTS = { gate: 5, 'model-router': 3, steward: 0, 'skill-selection': 0, board: 0 }
+const MODULE_HOOK_COUNTS = { gate: 5, 'model-router': 3, steward: 0, 'skill-selection': 0, board: 0, 'verify-done': 0 }
 function moduleStatus (states, unmatched = []) {
   return Object.fromEntries(Object.entries(MODULE_HOOK_COUNTS).map(([id, hookCount]) => {
-    const state = states[id] ?? 'active'
+    const state = states[id] ?? DEFAULT_FEATURE_MODULES[id]
     const hooksPresent = unmatched.includes(id) ? state === 'off' : state !== 'off'
     const installed = hookCount === 0 ? true : hooksPresent
     const removed = hookCount === 0 ? true : !hooksPresent

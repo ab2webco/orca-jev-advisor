@@ -372,8 +372,8 @@ test('every interval trigger of the registry has a period and every event trigge
 })
 
 test('modulesFromStatus: the installer status carries the state it followed; anything else is no news', () => {
-  const status = { ok: true, modules: { gate: { state: 'off' }, 'model-router': { state: 'shadow' }, steward: { state: 'active' }, 'skill-selection': { state: 'active' }, board: { state: 'off' } } }
-  assert.deepEqual(modulesFromStatus(status), { gate: 'off', 'model-router': 'shadow', steward: 'active', 'skill-selection': 'active', board: 'off' })
+  const status = { ok: true, modules: { gate: { state: 'off' }, 'model-router': { state: 'shadow' }, steward: { state: 'active' }, 'skill-selection': { state: 'active' }, board: { state: 'off' }, 'verify-done': { state: 'off' } } }
+  assert.deepEqual(modulesFromStatus(status), { gate: 'off', 'model-router': 'shadow', steward: 'active', 'skill-selection': 'active', board: 'off', 'verify-done': 'off' })
   for (const bad of [null, undefined, 'x', { ok: false }, { ok: true }, { ok: true, modules: 3 }]) assert.equal(modulesFromStatus(bad), null, JSON.stringify(bad))
 })
 
