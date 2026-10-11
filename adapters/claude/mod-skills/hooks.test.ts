@@ -3720,9 +3720,11 @@ test("V3 verify-done shadow (the default, no module file): a candidate turn asks
   assert.equal(claimCalls(host).length, 1);
   const rows = verifyDoneRows(host);
   assert.equal(rows.length, 1);
-  assert.deepEqual({ ...rows[0], at: "x", account: "x" }, {
+  assert.equal(typeof rows[0]?.latencyMs, "number", "the call's latency, for measure-module-cost's p50/p90");
+  assert.deepEqual({ ...rows[0], at: "x", account: "x", latencyMs: "x" }, {
     at: "x",
     account: "x",
+    latencyMs: "x",
     project: "sandbox",
     mode: "shadow",
     sessionId: "session-1",

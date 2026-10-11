@@ -11,6 +11,7 @@ import {
   boardCliRefreshes,
   buildModuleCostReport,
   derivedHookSpawns,
+  finishTranscriptTally,
   formatModuleCostReport,
   gateJevCalls,
   modelDecisionJevCalls,
@@ -22,6 +23,7 @@ import {
   stewardJevCalls,
   tallyTranscriptLine,
   toolJevCalls,
+  verifyDoneJevCalls,
   WORKER_TASKS,
 } from "./module_cost.ts";
 import { MAX_JEV_CHOICES } from "./jev.ts";
@@ -84,6 +86,13 @@ test("model reclassification: a decision row is one call, an outcome row none", 
 test("steward: a row is one call; a null verdict is a failure", () => {
   assert.deepEqual(stewardJevCalls({ at: AT, verdict: "mid-task", confidence: 0.8 }), { calls: 1, failures: 0, latencyMs: [] });
   assert.deepEqual(stewardJevCalls({ at: AT, verdict: null, confidence: null }), { calls: 1, failures: 1, latencyMs: [] });
+});
+
+test("verify-done: a row is one call with its latency; a jev-failed row is a failure", () => {
+  assert.deepEqual(verifyDoneJevCalls({ at: AT, decision: "would-block", claim: "claimed-done", latencyMs: 420 }), { calls: 1, failures: 0, latencyMs: [420] });
+  assert.deepEqual(verifyDoneJevCalls({ at: AT, decision: "jev-failed", claim: null, latencyMs: 3001 }), { calls: 1, failures: 1, latencyMs: [3001] });
+  assert.deepEqual(verifyDoneJevCalls({ at: AT, decision: "no-claim", claim: "no-claim" }), { calls: 1, failures: 0, latencyMs: [] });
+  assert.deepEqual(verifyDoneJevCalls("not a row"), { calls: 0, failures: 0, latencyMs: [] });
 });
 
 test("our hooks are read from settings.json by status message and script, other hooks ignored", () => {
@@ -152,7 +161,7 @@ test("derived hook spawns: Pre per call, Post per success, PostFailure per error
     { event: "PreToolUse", matcher: "Agent", script: "agent-model", module: "model-router" as const },
   ];
   const spawns = derivedHookSpawns(hooks, new Map([["Bash", 10], ["Edit", 3], ["Write", 1], ["Read", 50], ["Agent", 2]]), new Map([["Bash", 4]]));
-  assert.deepEqual(spawns, { gate: 24, "model-router": 2, steward: 0, "skill-selection": 0, board: 0 });
+  assert.deepEqual(spawns, { gate: 24, "model-router": 2, steward: 0, "skill-selection": 0, board: 0, "verify-done": 0 });
 });
 
 test("audit sets count ok outcomes of our plugin only, in the window", () => {
@@ -181,12 +190,56 @@ test("worker tasks: every timer names its cadence and the modules it serves", ()
   assert.ok(WORKER_TASKS.some((task) => task.owner === "base"));
 });
 
+// verify-done (0.8.0 V5): before any verify-done row exists, what shadow would
+// cost is the main-thread person turns its own rule (isVerifyDoneCandidate)
+// would ask Jev about, read from the transcripts.
+test("transcript tally: person turns that edited files with no passing test are the verify-done candidates", () => {
+  const tally = newTranscriptTally();
+  const ts = "2026-10-03T10:00:00.000Z";
+  const prompt = (uuid: string, session: string, extra: Record<string, unknown> = {}): string => line({ type: "user", uuid, sessionId: session, timestamp: ts, message: { content: `prompt ${uuid}` }, ...extra });
+  const uses = (uuid: string, session: string, parts: Record<string, unknown>[], extra: Record<string, unknown> = {}): string => line({ type: "assistant", uuid, sessionId: session, timestamp: ts, message: { content: parts }, ...extra });
+  const result = (uuid: string, session: string, id: string, content: unknown, isError = false): string => line({ type: "user", uuid, sessionId: session, timestamp: ts, message: { content: [{ type: "tool_result", tool_use_id: id, content, is_error: isError }] } });
+  for (const text of [
+    // s1 turn 1: an edit and no test -- a candidate.
+    prompt("p1", "s1"),
+    uses("a1", "s1", [{ type: "tool_use", id: "e1", name: "Edit", input: { file_path: "src/a.ts" } }]),
+    // s2 turn 1, interleaved: an edit and a passing test -- not one.
+    prompt("q1", "s2"),
+    uses("b1", "s2", [{ type: "tool_use", id: "e2", name: "Write", input: { file_path: "src/b.ts" } }, { type: "tool_use", id: "t2", name: "Bash", input: { command: "npm test" } }]),
+    result("r2", "s2", "t2", "ℹ pass 9\nℹ fail 0"),
+    // s1 turn 2: an edit and a failing test (text in content parts) -- a candidate.
+    prompt("p2", "s1"),
+    uses("a2", "s1", [{ type: "tool_use", id: "e3", name: "Edit", input: { file_path: "src/a.ts" } }, { type: "tool_use", id: "t3", name: "Bash", input: { command: "npm test" } }]),
+    result("r3", "s1", "t3", [{ type: "text", text: "ℹ pass 8\nℹ fail 1" }]),
+    // s1 turn 3: reading only -- not one. A subagent's edit on the side chain does not count.
+    prompt("p3", "s1"),
+    uses("a3", "s1", [{ type: "tool_use", id: "x3", name: "Read", input: { file_path: "src/a.ts" } }]),
+    uses("a4", "s1", [{ type: "tool_use", id: "x4", name: "Edit", input: { file_path: "src/c.ts" } }], { isSidechain: true }),
+    // s2 turn 2: an edit, its test errored -- a candidate (closed only by finishTranscriptTally).
+    prompt("q2", "s2"),
+    uses("b2", "s2", [{ type: "tool_use", id: "e5", name: "MultiEdit", input: { file_path: "src/d.ts" } }, { type: "tool_use", id: "t5", name: "Bash", input: { command: "node --test" } }]),
+    result("r5", "s2", "t5", "boom", true),
+    // Outside the window: never counted.
+    line({ type: "user", uuid: "old", sessionId: "s3", timestamp: "2026-09-01T00:00:00.000Z", message: { content: "old prompt" } }),
+  ]) {
+    tallyTranscriptLine(tally, text, WINDOW);
+  }
+  assert.equal(tally.verifyDoneCandidates, 2, "two turns closed by a later prompt are candidates so far");
+  finishTranscriptTally(tally);
+  assert.equal(tally.verifyDoneTurns, 5);
+  assert.equal(tally.verifyDoneCandidates, 3);
+  finishTranscriptTally(tally);
+  assert.equal(tally.verifyDoneTurns, 5, "finishing twice counts nothing twice");
+});
+
 test("report: per module totals, per prompt and per turn ratios, and a markdown table", () => {
   const tally = newTranscriptTally();
   tally.toolCalls.set("Bash", 100);
   tally.toolCalls.set("Agent", 2);
   tally.prompts = 10;
   tally.turns = 20;
+  tally.verifyDoneTurns = 10;
+  tally.verifyDoneCandidates = 4;
   tally.gateBashHookMs.push(100, 200, 300);
   const report = buildModuleCostReport({
     window: WINDOW,
@@ -202,6 +255,13 @@ test("report: per module totals, per prompt and per turn ratios, and a markdown 
       router: [{ at: AT, point: "start", confidence: 0.9, reason: "same" }],
       models: [{ type: "model-decision", at: AT, source: "jev", failOpen: null, latencyMs: 700 }],
       steward: [{ at: AT, verdict: "mid-task" }],
+      verifyDone: [
+        { at: AT, decision: "would-block", claim: "claimed-done", latencyMs: 300 },
+        { at: AT, decision: "would-block", claim: "claimed-done", latencyMs: 500 },
+        { at: AT, decision: "claimed-unverified-low-confidence", claim: "claimed-done", latencyMs: 400 },
+        { at: AT, decision: "jev-failed", claim: null, latencyMs: 3000 },
+        { at: "2026-09-01T00:00:00.000Z", decision: "would-block", claim: "claimed-done", latencyMs: 1 },
+      ],
     },
     audit: { times: new Map([["board", [Date.parse(AT), Date.parse(AT) + 3_600_000]], ["measurementsSummary", [Date.parse(AT)]]]), firstMs: Date.parse(AT), lastMs: Date.parse(AT) + 3_600_000 },
   });
@@ -226,7 +286,18 @@ test("report: per module totals, per prompt and per turn ratios, and a markdown 
   const board = report.worker.find((row) => row.auditKey === "board");
   assert.ok(board);
   assert.equal(board.observedPerHour, 2);
+  const verifyDone = report.modules.find((row) => row.module === "verify-done");
+  assert.ok(verifyDone);
+  assert.equal(verifyDone.jevCalls, 4);
+  assert.equal(verifyDone.jevFailures, 1);
+  assert.equal(verifyDone.jevPerPrompt, 0.4);
+  assert.equal(verifyDone.jevMsP50, 400);
+  assert.equal(verifyDone.jevMsP90, 3000);
+  assert.equal(verifyDone.hookSpawns, 0);
+  assert.deepEqual(report.verifyDone, { decisions: 4, claims: 3, wouldBlock: 2, jevFailed: 1, candidateTurns: 4, personTurns: 10, candidatesPerPrompt: 0.4 });
   const text = formatModuleCostReport(report).join("\n");
   assert.match(text, /\| gate \|/);
   assert.match(text, /\| skill-selection \|/);
+  assert.match(text, /\| verify-done \| 0 \| - \| - \| 4 \| 0\.4 \|/);
+  assert.match(text, /verify-done: 2 would-block turns \(claimed done, unverified\) of 4 logged; 3 claims of done, 1 Jev failures\. Transcripts: 4 of 10 person turns are candidates \(0\.4 per prompt\)\./);
 });

@@ -17,11 +17,14 @@
 // timings leave this module.
 
 import { isRecord } from "../guards.ts";
+import { summarizeStewardActivity } from "./context_steward.ts";
+import type { ActivityMessage } from "./model_router_stage.ts";
 import { wideBatches } from "./tool_decisions.ts";
+import { isVerifyDoneCandidate, summarizeVerifyDoneDecisions } from "./verify_done.ts";
 
-export type ModuleId = "gate" | "model-router" | "steward" | "skill-selection" | "board";
+export type ModuleId = "gate" | "model-router" | "steward" | "skill-selection" | "board" | "verify-done";
 
-export const MODULE_IDS: readonly ModuleId[] = ["gate", "model-router", "steward", "skill-selection", "board"];
+export const MODULE_IDS: readonly ModuleId[] = ["gate", "model-router", "steward", "skill-selection", "board", "verify-done"];
 
 export interface TimeWindow {
   readonly sinceMs: number;
@@ -129,6 +132,12 @@ export function stewardJevCalls(row: unknown): JevCallCount {
   return { calls: 1, failures: row["verdict"] === null || row["verdict"] === undefined ? 1 : 0, latencyMs: [] };
 }
 
+/** verify-done-decisions (0.8.0): one row per candidate turn, each one call; a `jev-failed` row is a failed call. The row logs the call's latency. */
+export function verifyDoneJevCalls(row: unknown): JevCallCount {
+  if (!isRecord(row)) return NONE;
+  return { calls: 1, failures: row["decision"] === "jev-failed" ? 1 : 0, latencyMs: latencies(row["latencyMs"]) };
+}
+
 // ---------------------------------------------------------------------------
 // Hooks
 // ---------------------------------------------------------------------------
@@ -191,7 +200,7 @@ function matches(matcher: string, tool: string): boolean {
 }
 
 function emptyByModule(): Record<ModuleId, number> {
-  return { gate: 0, "model-router": 0, steward: 0, "skill-selection": 0, board: 0 };
+  return { gate: 0, "model-router": 0, steward: 0, "skill-selection": 0, board: 0, "verify-done": 0 };
 }
 
 /**
@@ -239,6 +248,25 @@ export interface TranscriptTally {
   readonly seenErrors: Set<string>;
   readonly seenUuids: Set<string>;
   readonly seenHookRuns: Set<string>;
+  /** verify-done (0.8.0): main-thread person turns closed so far (by the next prompt, or finishTranscriptTally). */
+  verifyDoneTurns: number;
+  /** The closed turns verify-done's own rule (isVerifyDoneCandidate) would ask Jev about. */
+  verifyDoneCandidates: number;
+  /** Each session's open turn: its prompt and its tool calls, a result's text and error folded into its call. */
+  readonly openTurns: Map<string, OpenTurn>;
+}
+
+interface OpenToolUse {
+  readonly tool_use_id: string;
+  readonly tool: string;
+  readonly input: Readonly<Record<string, unknown>>;
+  text?: string;
+  isError?: true;
+}
+
+interface OpenTurn {
+  readonly prompt: string;
+  readonly toolUses: OpenToolUse[];
 }
 
 export function newTranscriptTally(): TranscriptTally {
@@ -253,6 +281,9 @@ export function newTranscriptTally(): TranscriptTally {
     seenErrors: new Set(),
     seenUuids: new Set(),
     seenHookRuns: new Set(),
+    verifyDoneTurns: 0,
+    verifyDoneCandidates: 0,
+    openTurns: new Map(),
   };
 }
 
@@ -298,6 +329,56 @@ function tallyContent(tally: TranscriptTally, entry: Record<string, unknown>): v
   }
 }
 
+function resultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => (isRecord(part) && typeof part["text"] === "string" ? part["text"] : "")).join("\n");
+}
+
+/** Closes a session's open turn: one person turn, and a candidate when verify-done's own rule says so. */
+function closeTurn(tally: TranscriptTally, session: string): void {
+  const turn = tally.openTurns.get(session);
+  if (turn === undefined) return;
+  tally.openTurns.delete(session);
+  const messages: ActivityMessage[] = [
+    { role: "user", text: turn.prompt, toolUses: [] },
+    { role: "assistant", text: "", toolUses: turn.toolUses },
+  ];
+  tally.verifyDoneTurns += 1;
+  if (isVerifyDoneCandidate(summarizeStewardActivity(messages))) tally.verifyDoneCandidates += 1;
+}
+
+/** Follows the main thread's turns for verify-done: a person prompt opens one, tool calls and their results fill it. */
+function tallyVerifyDoneTurn(tally: TranscriptTally, entry: Record<string, unknown>, personPrompt: boolean): void {
+  if (entry["isSidechain"] === true || typeof entry["sessionId"] !== "string") return;
+  const session = entry["sessionId"];
+  if (personPrompt) {
+    closeTurn(tally, session);
+    tally.openTurns.set(session, { prompt: "person prompt", toolUses: [] });
+    return;
+  }
+  const turn = tally.openTurns.get(session);
+  const message = entry["message"];
+  if (turn === undefined || !isRecord(message) || !Array.isArray(message["content"])) return;
+  for (const part of message["content"]) {
+    if (!isRecord(part)) continue;
+    if (part["type"] === "tool_use" && typeof part["id"] === "string" && typeof part["name"] === "string") {
+      if (turn.toolUses.some((use) => use.tool_use_id === part["id"])) continue;
+      turn.toolUses.push({ tool_use_id: part["id"], tool: part["name"], input: isRecord(part["input"]) ? part["input"] : {} });
+    } else if (part["type"] === "tool_result" && typeof part["tool_use_id"] === "string") {
+      const use = turn.toolUses.find((candidate) => candidate.tool_use_id === part["tool_use_id"]);
+      if (use === undefined) continue;
+      use.text = resultText(part["content"]);
+      if (part["is_error"] === true) use.isError = true;
+    }
+  }
+}
+
+/** Closes every turn still open once all transcript lines are read: the last turn of each session counts too. Idempotent. */
+export function finishTranscriptTally(tally: TranscriptTally): void {
+  for (const session of [...tally.openTurns.keys()]) closeTurn(tally, session);
+}
+
 function tallyHook(tally: TranscriptTally, attachment: Record<string, unknown>): void {
   const command = attachment["command"];
   if (typeof command !== "string" || !command.startsWith(OUR_STATUS_PREFIX)) return;
@@ -326,7 +407,9 @@ export function tallyTranscriptLine(tally: TranscriptTally, line: string, window
   const uuid = typeof entry["uuid"] === "string" ? entry["uuid"] : null;
   const type = entry["type"];
   if (type === "assistant" || type === "user") tallyContent(tally, entry);
-  if (type === "user" && uuid !== null && isPersonPrompt(entry) && !tally.seenUuids.has(uuid)) {
+  const newPrompt = type === "user" && uuid !== null && isPersonPrompt(entry) && !tally.seenUuids.has(uuid);
+  if (type === "assistant" || type === "user") tallyVerifyDoneTurn(tally, entry, newPrompt);
+  if (newPrompt) {
     tally.seenUuids.add(uuid);
     tally.prompts += 1;
   }
@@ -441,6 +524,7 @@ export interface ModuleRows {
   readonly router: readonly unknown[];
   readonly models: readonly unknown[];
   readonly steward: readonly unknown[];
+  readonly verifyDone: readonly unknown[];
 }
 
 export interface ModuleCostInput {
@@ -492,6 +576,20 @@ export interface ModuleCostReport {
   readonly agentSpawns: { readonly agentCalls: number; readonly reclassifications: number; readonly routerSubagentRows: number };
   readonly audit: { readonly firstMs: number | null; readonly lastMs: number | null; readonly spanHours: number | null; readonly boardCliRefreshesPerHour: number | null };
   readonly worker: readonly WorkerRow[];
+  /**
+   * verify-done (0.8.0): from its own log, the turns a blocking state would
+   * have stopped (would-block); from the transcripts, the person turns its
+   * rule makes candidates -- what shadow costs before any row exists.
+   */
+  readonly verifyDone: {
+    readonly decisions: number;
+    readonly claims: number;
+    readonly wouldBlock: number;
+    readonly jevFailed: number;
+    readonly candidateTurns: number;
+    readonly personTurns: number;
+    readonly candidatesPerPrompt: number | null;
+  };
 }
 
 function rowAt(row: unknown): number {
@@ -548,6 +646,7 @@ export function buildModuleCostReport(input: ModuleCostInput): ModuleCostReport 
     router: inWindowRows(input.rows.router, window),
     models: inWindowRows(input.rows.models, window),
     steward: inWindowRows(input.rows.steward, window),
+    verifyDone: inWindowRows(input.rows.verifyDone, window),
   };
   const spawns = derivedHookSpawns(hooks, tally.toolCalls, tally.toolErrors);
   const jev: Record<ModuleId, { calls: number; failures: number; latencyMs: number[] }> = {
@@ -556,6 +655,7 @@ export function buildModuleCostReport(input: ModuleCostInput): ModuleCostReport 
     steward: sumCalls([{ rows: rows.steward, count: stewardJevCalls }]),
     "skill-selection": sumCalls([{ rows: rows.skills, count: skillJevCalls }, { rows: rows.tools, count: toolJevCalls }]),
     board: { calls: 0, failures: 0, latencyMs: [] },
+    "verify-done": sumCalls([{ rows: rows.verifyDone, count: verifyDoneJevCalls }]),
   };
   const modules = MODULE_IDS.map((module): ModuleCostRow => {
     const hookMs = module === "gate" ? tally.gateBashHookMs : [];
@@ -617,6 +717,13 @@ export function buildModuleCostReport(input: ModuleCostInput): ModuleCostReport 
     },
     audit: { firstMs, lastMs, spanHours, boardCliRefreshesPerHour: spanHours === null ? null : boardCliRefreshes(boardTimes, 30_000) / spanHours },
     worker,
+    verifyDone: {
+      // The rows are already the window's: the whole span is the summary's window.
+      ...summarizeVerifyDoneDecisions(rows.verifyDone, window.untilMs, window.untilMs - window.sinceMs),
+      candidateTurns: tally.verifyDoneCandidates,
+      personTurns: tally.verifyDoneTurns,
+      candidatesPerPrompt: ratio(tally.verifyDoneCandidates, tally.prompts),
+    },
   };
 }
 
@@ -645,6 +752,8 @@ export function formatModuleCostReport(report: ModuleCostReport): string[] {
   lines.push("");
   const modes = (value: Record<string, number>): string => Object.entries(value).map(([mode, count]) => `${mode} ${count}`).join(", ") || "none";
   lines.push(`Mod modes in the window: skills ${modes(report.modes.skills)}; tools ${modes(report.modes.tools)}; steward ${modes(report.modes.steward)}.`);
+  const done = report.verifyDone;
+  lines.push(`verify-done: ${done.wouldBlock} would-block turns (claimed done, unverified) of ${done.decisions} logged; ${done.claims} claims of done, ${done.jevFailed} Jev failures. Transcripts: ${done.candidateTurns} of ${done.personTurns} person turns are candidates (${fixed(done.candidatesPerPrompt)} per prompt).`);
   lines.push(`Agent spawns: ${report.agentSpawns.agentCalls} Agent calls; ${report.agentSpawns.reclassifications} agent-model decisions; ${report.agentSpawns.routerSubagentRows} router subagent rows.`);
   lines.push("");
   lines.push(`Worker (audit log ${iso(report.audit.firstMs)} to ${iso(report.audit.lastMs)}, ${fixed(report.audit.spanHours, 1)} h; board CLI cache refreshes ${fixed(report.audit.boardCliRefreshesPerHour, 1)}/h):`);

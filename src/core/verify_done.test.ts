@@ -144,6 +144,7 @@ test("record: numbers and names only, never message text", () => {
     activity: EDITED,
     decision: { decision: "would-block", wouldBlock: true, confidence: 0.8 },
     claim: "claimed-done",
+    latencyMs: 412,
   });
   assert.deepEqual(record, {
     at: "2026-10-11T14:05:00.000Z",
@@ -158,16 +159,18 @@ test("record: numbers and names only, never message text", () => {
     filesEdited: 2,
     testsRun: 0,
     testsPassed: null,
+    latencyMs: 412,
   });
 });
 
 test("record: a failure names no claim, and a margin rides along when Jev gave one", () => {
-  const failed = verifyDoneRecord({ at: "2026-10-11T14:05:00.000Z", account: "a", project: "p", sessionId: null, activity: EDITED, decision: decideVerifyDone(null), claim: null });
+  const failed = verifyDoneRecord({ at: "2026-10-11T14:05:00.000Z", account: "a", project: "p", sessionId: null, activity: EDITED, decision: decideVerifyDone(null), claim: null, latencyMs: null });
   assert.equal(failed.decision, "jev-failed");
   assert.equal(failed.claim, null);
   assert.equal(failed.confidence, null);
   assert.equal("margin" in failed, false);
-  const withMargin = verifyDoneRecord({ at: "2026-10-11T14:05:00.000Z", account: "a", project: "p", sessionId: null, activity: EDITED, decision: decideVerifyDone({ claim: "no-claim", confidence: 0.6 }), claim: "no-claim", margin: 0.3 });
+  assert.equal(failed.latencyMs, null, "a latency the caller did not have stays null");
+  const withMargin = verifyDoneRecord({ at: "2026-10-11T14:05:00.000Z", account: "a", project: "p", sessionId: null, activity: EDITED, decision: decideVerifyDone({ claim: "no-claim", confidence: 0.6 }), claim: "no-claim", latencyMs: 380, margin: 0.3 });
   assert.equal(withMargin.margin, 0.3);
 });
 

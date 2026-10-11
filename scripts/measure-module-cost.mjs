@@ -12,8 +12,8 @@
 //
 // Sources:
 //   - the plugin's cache dir (src/core/paths.ts): gate decisions, mod-skills
-//     and mod-tools measurements, router and steward decisions, model
-//     reclassifications;
+//     and mod-tools measurements, router, steward and verify-done decisions,
+//     model reclassifications;
 //   - Claude Code transcripts (default `~/.claude/projects`, symlinks followed):
 //     tool calls, person prompts, completed turns, our hook timings;
 //   - every settings.json Claude Code reads (home and each Orca account): the
@@ -27,9 +27,10 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 import { STEWARD_DECISIONS_FILE_PATTERN } from '../src/core/context_steward.ts'
+import { VERIFY_DONE_DECISIONS_FILE_PATTERN } from '../src/core/verify_done.ts'
 import { ROUTER_DECISIONS_FILE_PATTERN } from '../src/core/jev_health_usage.ts'
 import { gateDecisionFilesToRead, measurementFilesToRead, modelMeasurementFilesToRead } from '../src/core/measurement_files.ts'
-import { auditSetsByKey, buildModuleCostReport, formatModuleCostReport, newTranscriptTally, ourHooksFromSettings, tallyTranscriptLine } from '../src/core/module_cost.ts'
+import { auditSetsByKey, buildModuleCostReport, finishTranscriptTally, formatModuleCostReport, newTranscriptTally, ourHooksFromSettings, tallyTranscriptLine } from '../src/core/module_cost.ts'
 import { claudeAccountsDir, resolveOrcaUserDataDir } from '../src/core/orca_accounts.ts'
 import { normalizePlatform, resolveCacheDir } from '../src/core/paths.ts'
 
@@ -129,7 +130,8 @@ function main () {
     tools: hoursFrom(measurementFilesToRead('mod-tools', names), sinceMs),
     router: hoursFrom(names.filter((name) => ROUTER_DECISIONS_FILE_PATTERN.test(name)).sort(), sinceMs),
     models: hoursFrom(modelMeasurementFilesToRead(names), sinceMs),
-    steward: hoursFrom(names.filter((name) => STEWARD_DECISIONS_FILE_PATTERN.test(name)).sort(), sinceMs)
+    steward: hoursFrom(names.filter((name) => STEWARD_DECISIONS_FILE_PATTERN.test(name)).sort(), sinceMs),
+    verifyDone: hoursFrom(names.filter((name) => VERIFY_DONE_DECISIONS_FILE_PATTERN.test(name)).sort(), sinceMs)
   }
   const rows = Object.fromEntries(Object.entries(files).map(([log, list]) => [log, readRows(cacheDir, list)]))
 
@@ -157,6 +159,8 @@ function main () {
       if (RELEVANT.some((marker) => line.includes(marker))) tallyTranscriptLine(tally, line, window)
     }
   }
+  // The last turn of each session has no later prompt to close it.
+  finishTranscriptTally(tally)
 
   const auditDir = args.auditDir ?? join(userData, 'plugins-data')
   const auditNames = listNames(auditDir).filter((name) => /^audit\.log(\.\d+)?$/.test(name)).sort().reverse()

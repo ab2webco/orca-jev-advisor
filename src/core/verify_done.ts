@@ -168,6 +168,8 @@ export interface VerifyDoneRecord {
   readonly filesEdited: number;
   readonly testsRun: number;
   readonly testsPassed: boolean | null;
+  /** How long the Jev call took, failure included, for measure-module-cost's p50/p90; null when no call was made. */
+  readonly latencyMs: number | null;
   /** The claim's top-two probability gap; absent when there is none. */
   readonly margin?: number;
 }
@@ -180,6 +182,7 @@ export interface VerifyDoneRecordInput {
   readonly activity: StewardActivity;
   readonly decision: VerifyDoneDecision;
   readonly claim: VerifyDoneClaim | null;
+  readonly latencyMs: number | null;
   readonly margin?: number;
 }
 
@@ -198,6 +201,7 @@ export function verifyDoneRecord(input: VerifyDoneRecordInput): VerifyDoneRecord
     filesEdited: input.activity.filesEdited,
     testsRun: input.activity.testsRun,
     testsPassed: input.activity.testsPassed,
+    latencyMs: input.latencyMs,
     ...(input.margin === undefined ? {} : { margin: input.margin }),
   };
 }

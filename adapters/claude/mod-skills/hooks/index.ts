@@ -2103,8 +2103,10 @@ async function verifyDoneAfterTurn($: EngineInterface, options: PluginOptions, m
     if (moduleState(await resolveFeatureModules($, modulesFile), 'verify-done') === 'off') return
     const activity = summarizeStewardActivity(await $.session.messages())
     if (!isVerifyDoneCandidate(activity)) return
+    const asked = await $.clock.now()
     const jev = await askVerifyDone($, options, finalMessage, activity)
-    const at = new Date(await $.clock.now()).toISOString()
+    const answered = await $.clock.now()
+    const at = new Date(answered).toISOString()
     const record = verifyDoneRecord({
       at,
       account: await resolveAccountId($),
@@ -2113,6 +2115,7 @@ async function verifyDoneAfterTurn($: EngineInterface, options: PluginOptions, m
       activity,
       decision: decideVerifyDone(jev),
       claim: jev?.claim ?? null,
+      latencyMs: answered - asked,
       ...(jev?.margin === undefined ? {} : { margin: jev.margin }),
     })
     await appendVerifyDoneDecision($, at, `${JSON.stringify(record)}\n`)
