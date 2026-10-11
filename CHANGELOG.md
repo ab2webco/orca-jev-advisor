@@ -2,6 +2,15 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.8.0
+
+- **Verify-done module** (`src/core/verify_done.ts`, odd/tasks/verify-done-module.md). A pure core: `isVerifyDoneCandidate` (files edited and not every test run passing, from `summarizeStewardActivity`), `buildVerifyDoneState` (the final message redacted with `redactSecretsForJev` and then cut to 1,200 characters, start and end kept, plus the turn's counts; never file contents nor the turn's commands or paths; names written in the message are not pseudonymized), one choice question `claim` (`claimed-done`, `not-claimed`, `no-claim`; unsure leans not-claimed), `interpretVerifyDone` (malformed is null), `decideVerifyDone` (`would-block` at confidence 0.7 or more, `claimed-unverified-low-confidence` below, `not-claimed`, `no-claim`, `jev-failed`), `verifyDoneRecord`, hourly `verify-done-decisions-<YYYY-MM-DDTHH>.jsonl`, `summarizeVerifyDoneDecisions`.
+- **Registry:** `verify-done` in `ModuleId`, `MODULE_IDS` and `ModFeatureId`; states `off` and `shadow` only, default `shadow` (the five earlier modules keep `active`); one mod feature on `turn.complete`, no settings hook, no worker job. A module offers shadow when an existing mode has a measure value or when it only measures (no active).
+- **Mod:** after a main-loop `turn.complete` with `reason === 'answer'`, a 250 ms timer (`verifyDoneAfterTurn`) re-reads the module state, summarizes the turn, and on a candidate turn makes one Jev call (3 s budget) and appends one row with the call's latency. Off schedules nothing; a subagent's turn and any other reason do nothing; any error is swallowed and `next(e)`'s result is returned unchanged.
+- **Panel:** a Verify done card in Modules (es/en) with Off and Shadow, what it measures, that it blocks nothing, what it sends Jev and its measured cost (0.1 Jev calls per prompt). The panel's map of six modules goes through the real `feature-modules-save` sidecar in tests, which the fake worker had hidden.
+- **Measurement:** `npm run measure-module-cost` adds a verify-done row (Jev calls, per prompt, p50/p90 latency, failures from its log), the would-block count in the window, and the candidate turns found in the transcripts with the module's own rule (`finishTranscriptTally` closes each session's last turn).
+- **Guard:** `scripts/release-docs.test.mjs` holds package.json, orca-plugin.json, the newest CHANGELOG entry and the newest README "What changed in" section to one version.
+
 ## 0.7.1
 
 - **Fix: 0.6.29 and 0.7.0 could not be installed or updated.** Orca refuses a plugin tree over 50 MiB; committed QA screenshots made 0.6.29 54.6 MiB and 0.7.0 69.7 MiB, so "Check for update" failed with "Could not prepare this plugin for review". The screenshots moved to the orphan `qa-evidence` branch, which a tag clone never fetches; the installed tree is about 7 MiB. No code change from 0.7.0.

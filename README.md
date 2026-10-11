@@ -16,6 +16,18 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.8.0
+
+A sixth module, **Verify done**, measures how often an agent ends a turn saying the work is done when the turn itself shows nothing verified it: it edited files and no test passed. It only measures. Nothing is blocked and no answer changes; what you get is a local log and a count, so that a week of data can decide whether a version that stops such a turn is worth building.
+
+- **When it asks Jev.** After a main-conversation turn that ended with an answer, and only when that turn edited files and no test passed (none ran, or one failed). Every other turn makes no Jev call and writes nothing; a subagent's turn and an interrupted turn are skipped. On a week of real use, 130 of 1,252 turns qualified: about 0.1 Jev calls per prompt.
+- **What it sends Jev.** The turn's final message, with credential values masked first (the same masking as the command gate) and then cut to 1,200 characters, keeping its start and its end (a repository or branch name written in the message is sent as written); and counts only: tool calls, files edited, tests run and whether they passed, whether it committed, pushed or opened a pull request. Never file contents, nor the commands or paths the turn used.
+- **What it keeps.** One row per turn it asked about, in `verify-done-decisions-<hour>.jsonl` in the plugin's cache directory (`~/.cache/orca-supervisor` on Linux): Jev's reading (claimed done, not claimed, no claim), its confidence, whether a blocking version would have stopped the turn, the counts and how long the call took. No message text. `npm run measure-module-cost` reports how many turns would have been stopped.
+- **On from the start, in Shadow.** The five modules from 0.7.0 start Active so an update keeps what they did before. Verify done did nothing before, so it starts in Shadow: the measurement is its whole purpose. It offers Off and Shadow only.
+- **To turn it off:** Settings → General → Modules → Verify done → Off. Off makes no Jev call and writes no row, from the next turn on.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.7.1
 
 0.6.29 and 0.7.0 could not be installed or updated from Orca: the repository had grown past the 50 MiB Orca accepts for a plugin, so "Check for update" stopped at "Could not prepare this plugin for review". 0.7.1 is 0.7.0 at about 7 MiB, with a test that keeps it well under the limit. If you are on 0.6.28 or earlier, update straight to 0.7.1.
@@ -26,7 +38,7 @@ Every feature is now a module you can switch off, so a part you do not use costs
 
 - **Five modules.** Gate (Bash and file-edit checks, deny tier, policies), Model router (model and effort per prompt and per subagent, the subagent band, turn usage), Context steward (compaction and `/clear` suggestions), Skill and tool selection, and Board. The API key, the Claude Code integration, the catalog and the commands are the base and always run.
 - **Three states.** Off, Shadow and Active. Shadow measures and logs what the module would do without changing your turns: it caps the module's own controls at measurement. Gate and Board have no measurement mode, so they offer Off and Active only. Each card shows what the module costs, from a week of measured real use.
-- **Nothing changes until you choose.** With no choice saved every module is Active: the same features and decisions as 0.6.29, with a lighter background refresh (below).
+- **Nothing changes until you choose.** With no choice saved every module is Active: the same features and decisions as 0.6.29, with a lighter background refresh (below). Since 0.8.0 one module is the exception: Verify done is new and starts in Shadow (see 0.8.0 above).
 - **Router and steward Off moved.** The per-account Off of the model router and of the context steward is no longer offered in the Models tab; the module's Off replaces it, for every account at once. An account that already had Off stored keeps it, and the control stays visible there so you can change it.
 - **No reload.** Turning a module off removes its hooks from every `settings.json` the plugin manages and stops its worker jobs at once; turning it on puts them back. The skills mod reads the choice on every hook call, so a running session follows it too. A session that was already open before the plugin updated keeps its old mod until you restart it.
 - **The agent cannot switch the gate off.** The module file (`~/.config/orca-supervisor/feature-modules.json`) is one of the gate's own files: an Edit, a Write, a heredoc, `sed -i`, `cp`, `mv` or `rm` on it is refused, like the policies.
@@ -341,6 +353,15 @@ weighs. Inside free text a repository name is replaced from four characters
 and a branch or path from three; measured on 1,275 recorded prompts, every
 replacement that hit an ordinary word came from a repository name shorter
 than four. The local cache key and logs keep the real names.
+
+**Verify done (0.8.0):** when the Verify done module asks Jev about a turn,
+it sends the turn's final message, masked as above and then cut to 1,200
+characters, and the turn's counts (tool calls, files edited, tests run and
+whether they passed, commit, push, pull request). It sends no file contents,
+no commands and no paths of its own. Unlike the gate, it does not replace
+repository, branch or path names written in the message with placeholders
+(the context steward's prompt excerpts do not either). Set the module to Off
+and nothing is sent.
 
 This masking runs only on the copy sent to Jev. The local rules that refuse
 a force push, a recursive delete or a dropped table always judge the real,
