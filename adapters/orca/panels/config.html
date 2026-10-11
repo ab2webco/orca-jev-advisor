@@ -707,16 +707,19 @@
           'modules.name.steward': 'Guardián de contexto',
           'modules.name.skill-selection': 'Selección de skill y herramienta',
           'modules.name.board': 'Tablero',
+          'modules.name.verify-done': 'Verificar «hecho»',
           'modules.desc.gate': 'Revisa cada comando de Bash y cada edición de archivos antes de que se ejecuten, te pregunta cuando una política lo pide y rechaza los comandos del nivel de bloqueo.',
           'modules.desc.model-router': 'Elige un modelo para cada prompt y cada subagente, muestra la banda de subagentes y registra el uso de cada turno.',
           'modules.desc.steward': 'Vigila cuánto ha crecido una sesión y la compacta, o sugiere /clear, cuando una tarea se cierra.',
           'modules.desc.skill-selection': 'Deja que Jev elija la skill y la herramienta de un turno, en vez de que el modelo vea la lista completa.',
           'modules.desc.board': 'Mantiene el tablero: el estado en vivo de tus agentes, por proyecto y rama.',
+          'modules.desc.verify-done': 'En los turnos que editaron archivos sin un test que pasara, pregunta a Jev si el mensaje final dice que el trabajo está hecho, y lo registra. Solo mide: no bloquea nada ni cambia ninguna respuesta. A Jev le envía el mensaje final, redactado y recortado, y los conteos del turno; nunca contenidos de archivos, comandos ni rutas.',
           'modules.cost.gate': 'En uso: unas {{jev}} llamadas a Jev por prompt y {{hooks}} procesos de hook por cada comando de Bash o edición de archivos (unos {{seconds}} s cada uno).',
           'modules.cost.model-router': 'En uso: unas {{jev}} llamadas a Jev por prompt y, por cada subagente que arranca, {{agentJev}} llamadas a Jev y {{agentHooks}} procesos de hook.',
           'modules.cost.steward': 'En uso: unas {{jev}} llamadas a Jev por prompt.',
           'modules.cost.skill-selection': 'En uso: unas {{jev}} llamadas a Jev por prompt.',
           'modules.cost.board': 'En uso: ninguna llamada a Jev ni hooks.',
+          'modules.cost.verify-done': 'En uso: una llamada a Jev por turno candidato, unas {{jev}} llamadas a Jev por prompt.',
           'modules.bg.none': 'Segundo plano: nada propio.',
           'modules.bg.processes': 'Segundo plano: unos {{n}} procesos de node por hora.',
           'modules.bg.cli': 'Segundo plano: unas {{n}} ejecuciones por hora del comando orca.',
@@ -1108,16 +1111,19 @@
           'modules.name.steward': 'Context steward',
           'modules.name.skill-selection': 'Skill and tool selection',
           'modules.name.board': 'Board',
+          'modules.name.verify-done': 'Verify done',
           'modules.desc.gate': 'Checks every Bash command and file edit before it runs, asks you when a policy says so, and refuses the commands in the deny tier.',
           'modules.desc.model-router': 'Chooses a model for each prompt and each subagent, shows the subagent band and logs the usage of every turn.',
           'modules.desc.steward': 'Watches how far a session has grown and compacts it, or suggests /clear, once a task closes.',
           'modules.desc.skill-selection': 'Lets Jev pick the skill and the tool for a turn, instead of the model seeing the full list.',
           'modules.desc.board': 'Keeps the board: the live status of your agents, by project and branch.',
+          'modules.desc.verify-done': 'On turns that edited files with no test passing, asks Jev whether its final message says the work is done, and logs it. It only measures: it blocks nothing and changes no answer. Jev gets the final message, redacted and cut, and the turn\'s counts; never file contents, commands or paths.',
           'modules.cost.gate': 'In use: about {{jev}} Jev calls per prompt, and {{hooks}} hook processes per Bash command or file edit (about {{seconds}} s each).',
           'modules.cost.model-router': 'In use: about {{jev}} Jev calls per prompt and, for every subagent started, {{agentJev}} Jev calls and {{agentHooks}} hook processes.',
           'modules.cost.steward': 'In use: about {{jev}} Jev calls per prompt.',
           'modules.cost.skill-selection': 'In use: about {{jev}} Jev calls per prompt.',
           'modules.cost.board': 'In use: no Jev calls and no hooks.',
+          'modules.cost.verify-done': 'In use: one Jev call per candidate turn, about {{jev}} Jev calls per prompt.',
           'modules.bg.none': 'Background: nothing of its own.',
           'modules.bg.processes': 'Background: about {{n}} node processes an hour.',
           'modules.bg.cli': 'Background: about {{n}} runs an hour of the orca command.',
@@ -4124,7 +4130,8 @@
       // whether the Claude Code hooks match the choice. The registry
       // (src/core/feature_modules.ts) decides which states a module offers: a
       // module with no measure mode of its own (the gate, the board) has no
-      // shadow. The figures are one week of measured use (odd/tasks/feature-modules.md,
+      // shadow, and one that only measures (verify-done) has no active.
+      // write-secret-mirror.feature-modules.test.mjs holds this list to it. The figures are one week of measured use (odd/tasks/feature-modules.md,
       // T0 and T4b); background counts the node processes only this module's
       // own jobs start, with a panel open and with none.
       var MODULE_ROWS = [
@@ -4132,7 +4139,10 @@
         { id: 'model-router', states: ['off', 'shadow', 'active'], cost: { jev: 1.1, agentJev: 2, agentHooks: 2 }, background: { open: 240, closed: 240, kind: 'processes' } },
         { id: 'steward', states: ['off', 'shadow', 'active'], cost: { jev: 0.5 }, background: { open: 0, closed: 0, kind: 'processes' } },
         { id: 'skill-selection', states: ['off', 'shadow', 'active'], cost: { jev: 7.4 }, background: { open: 0, closed: 0, kind: 'processes' } },
-        { id: 'board', states: ['off', 'active'], cost: {}, background: { open: 38, closed: 38, kind: 'cli' } }
+        { id: 'board', states: ['off', 'active'], cost: {}, background: { open: 38, closed: 38, kind: 'cli' } },
+        // 0.8.0 (odd/tasks/verify-done-module.md): it only measures, so no active. Its cost is one Jev call per
+        // candidate turn; scripts/measure-module-cost.mjs found 130 of 1252 person turns in a week (0.1 per prompt).
+        { id: 'verify-done', states: ['off', 'shadow'], cost: { jev: 0.1 }, background: { open: 0, closed: 0, kind: 'processes' } }
       ]
       var moduleStates = null
       var moduleRowsBuilt = false

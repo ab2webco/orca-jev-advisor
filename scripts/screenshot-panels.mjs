@@ -896,6 +896,7 @@ SCENARIOS['skills-ready'] = SKILLS_READY
  * (its hooks gone, the Rules tab reduced to a note) and the model router in
  * shadow (the Models tab keeps its settings under a note). The hook lines of
  * the integration status read like the installer reports them: removed.
+ * 0.8.0 V4: verify-done off, the one state other than its default shadow.
  */
 SCENARIOS['modules-mixed'] = {
   ...READY,
@@ -903,7 +904,7 @@ SCENARIOS['modules-mixed'] = {
     ...READY.claudeIntegrationStatus,
     hook: { installed: false, installedCount: 0, totalCount: 2, orcaPaneCount: 2 },
     fileGuardHook: { installed: false, installedCount: 0, totalCount: 2, orcaPaneCount: 2 },
-    modules: moduleStatus({ gate: 'off', 'model-router': 'shadow' }),
+    modules: moduleStatus({ gate: 'off', 'model-router': 'shadow', 'verify-done': 'off' }),
   },
 }
 

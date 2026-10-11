@@ -117,3 +117,35 @@ test('feature-modules-save: a refused request creates no file where there was no
   assert.equal(result.ok, false)
   assert.equal(content, null)
 })
+
+// ---------------------------------------------------------------------------
+// 0.8.0 V4: the real panel and the real writer agree. The panel keeps its own
+// module list (config.html MODULE_ROWS) and sends the whole map on every
+// switch; the sidecar refuses a map missing a module. A fake worker in
+// scripts/panels.spec.mjs cannot see that gap, so the map the panel builds,
+// for every state its cards offer, goes through this real sidecar here.
+// ---------------------------------------------------------------------------
+
+/** config.html's MODULE_ROWS, read from its source: each card's id and the states it offers. */
+function panelModuleRows () {
+  const html = readFileSync(join(__dirname, 'panels', 'config.html'), 'utf8')
+  return [...html.matchAll(/\{ id: '([\w-]+)', states: \[([^\]]*)\], cost:/g)].map((match) => ({ id: match[1], states: [...match[2].matchAll(/'([\w-]+)'/g)].map((state) => state[1]) }))
+}
+
+test('the panel offers a card for every registered module, with exactly the states the registry allows', async () => {
+  const { FEATURE_MODULES } = await import('../../src/core/feature_modules.ts')
+  assert.deepEqual(panelModuleRows(), FEATURE_MODULES.map((module) => ({ id: module.id, states: [...module.states] })))
+})
+
+test('feature-modules-save: the map the panel sends, for every state its cards offer, is accepted by the real sidecar', () => {
+  const rows = panelModuleRows()
+  // What the panel holds when nothing was chosen yet: each card at the state the status reports, the defaults.
+  const shown = Object.fromEntries(rows.map((row) => [row.id, DEFAULTS[row.id]]))
+  for (const row of rows) {
+    for (const state of row.states) {
+      const next = { ...shown, [row.id]: state }
+      const { result } = runMode('feature-modules-save', { input: JSON.stringify({ modules: next }) })
+      assert.deepEqual(result, { ok: true, value: next }, `${row.id} ${state}`)
+    }
+  }
+})

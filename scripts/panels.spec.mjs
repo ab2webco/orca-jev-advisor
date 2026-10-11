@@ -18,6 +18,7 @@
 // than fails. `npm run test:panels` is the command that runs this.
 
 import { strict as assert } from 'node:assert'
+import { execFileSync } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
 import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -4355,7 +4356,21 @@ test('every trusted.* key in one language catalog exists in the other', { skip: 
 // status().modules shape (fixture_shape.test.mjs).
 // ---------------------------------------------------------------------------
 
-const MODULE_IDS = ['gate', 'model-router', 'steward', 'skill-selection', 'board']
+const MODULE_IDS = ['gate', 'model-router', 'steward', 'skill-selection', 'board', 'verify-done']
+const SECRET_MIRROR_SCRIPT = join(ROOT, 'adapters', 'orca', 'write-secret-mirror.mjs')
+
+/**
+ * 0.8.0 V4: what the real worker's writer answers to the panel's request.
+ * The fake host here accepts any map, which once hid a map the real sidecar
+ * refuses; this runs the real `feature-modules-save` against a throwaway
+ * config dir, exactly as main.mjs spawns it.
+ */
+function realSave (modules) {
+  const home = mkdtempSync(join(ISOLATED_ROOT, 'feature-modules-save-'))
+  const env = { ...process.env, HOME: home, ORCA_SUPERVISOR_CONFIG_DIR: join(home, '.config', 'orca-supervisor') }
+  delete env.XDG_CONFIG_HOME
+  return JSON.parse(execFileSync(process.execPath, [SECRET_MIRROR_SCRIPT, 'feature-modules-save'], { env, encoding: 'utf8', input: JSON.stringify({ modules }) }))
+}
 const MODULES_SKIP = { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }
 
 /** The ready fixture with the installer's per-module state replaced for `states`. */
@@ -4384,17 +4399,26 @@ async function moduleCards (page) {
   }))
 }
 
-test('Modules: the first section of General lists the five modules with what they do and cost, all active by default', MODULES_SKIP, async () => {
+test('Modules: the first section of General lists the six modules with what they do and cost; the five earlier ones active by default, verify-done in shadow', MODULES_SKIP, async () => {
   const { browser, page, errors } = await openPanel(SCENARIOS.ready)
   try {
     const first = await page.evaluate(() => document.querySelector('#panel-general section').id)
     assert.equal(first, 'modules-section')
     const cards = await moduleCards(page)
     assert.deepEqual(cards.map((c) => c.id), MODULE_IDS)
-    assert.deepEqual(cards.map((c) => c.name), ['Gate', 'Model router', 'Context steward', 'Skill and tool selection', 'Board'])
-    // The registry decides the states: no shadow where the module has no measure mode of its own.
-    assert.deepEqual(cards.map((c) => c.states), [['off', 'active'], ['off', 'shadow', 'active'], ['off', 'shadow', 'active'], ['off', 'shadow', 'active'], ['off', 'active']])
-    assert.deepEqual(cards.map((c) => c.pressed), [['active'], ['active'], ['active'], ['active'], ['active']])
+    assert.deepEqual(cards.map((c) => c.name), ['Gate', 'Model router', 'Context steward', 'Skill and tool selection', 'Board', 'Verify done'])
+    // The registry decides the states: no shadow where the module has no measure mode of its own, no active where it only measures.
+    assert.deepEqual(cards.map((c) => c.states), [['off', 'active'], ['off', 'shadow', 'active'], ['off', 'shadow', 'active'], ['off', 'shadow', 'active'], ['off', 'active'], ['off', 'shadow']])
+    assert.deepEqual(cards.map((c) => c.pressed), [['active'], ['active'], ['active'], ['active'], ['active'], ['shadow']])
+    assert.deepEqual(cards[5].labels, ['Off', 'Shadow'])
+    const verify = cards[5].text
+    assert.match(verify, /turns that edited files with no test passing/)
+    assert.match(verify, /whether its final message says the work is done/)
+    assert.match(verify, /It only measures: it blocks nothing and changes no answer\./)
+    assert.match(verify, /final message, redacted and cut, and the turn's counts/)
+    assert.match(verify, /about 0\.1 Jev calls per prompt/)
+    assert.match(verify, /Background: nothing of its own\./)
+    assert.match(verify, /follows the switch directly/)
     assert.deepEqual(cards[1].labels, ['Off', 'Shadow', 'Active'])
     const gate = cards[0].text
     assert.match(gate, /Checks every Bash command and file edit/)
@@ -4418,9 +4442,40 @@ test('Modules: pressing a state sends the whole map to the worker, and the answe
     await page.waitForFunction(() => !!window.__written.featureModulesSaveRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.featureModulesSaveRequest)
     assert.equal(typeof request.id, 'string')
-    assert.deepEqual(request.modules, { gate: 'off', 'model-router': 'active', steward: 'active', 'skill-selection': 'active', board: 'active' })
+    assert.deepEqual(request.modules, { gate: 'off', 'model-router': 'active', steward: 'active', 'skill-selection': 'active', board: 'active', 'verify-done': 'shadow' })
+    assert.deepEqual(realSave(request.modules), { ok: true, value: request.modules }, 'the real writer takes the map the panel sent')
     await page.waitForFunction(() => /Saved\./.test(document.querySelector('[data-module-said="gate"]').textContent), undefined, { timeout: 25000 })
     assert.equal(await page.evaluate(() => document.querySelector('[data-module-said="steward"]').textContent), '', 'only the pressed card answers')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('Modules: verify-done offers Off and Shadow only, and switching it off sends a six-module map the real writer accepts', MODULES_SKIP, async () => {
+  const { browser, page, errors } = await openPanel(SCENARIOS.ready)
+  try {
+    await page.click('[data-module-states="verify-done"] button[data-value="off"]')
+    await page.waitForFunction(() => !!window.__written.featureModulesSaveRequest, undefined, { timeout: 25000 })
+    const request = await page.evaluate(() => window.__written.featureModulesSaveRequest)
+    assert.deepEqual(request.modules, { gate: 'active', 'model-router': 'active', steward: 'active', 'skill-selection': 'active', board: 'active', 'verify-done': 'off' })
+    assert.deepEqual(realSave(request.modules), { ok: true, value: request.modules })
+    await page.waitForFunction(() => /Saved\./.test(document.querySelector('[data-module-said="verify-done"]').textContent), undefined, { timeout: 25000 })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('Modules: the verify-done card in Spanish says what it measures, that it blocks nothing and what it sends Jev', MODULES_SKIP, async () => {
+  const { browser, page } = await openPanel(SCENARIOS.ready, 'es')
+  try {
+    const card = (await moduleCards(page))[5]
+    assert.equal(card.name, 'Verificar «hecho»')
+    assert.deepEqual(card.labels, ['Apagado', 'Sombra'])
+    assert.match(card.text, /turnos que editaron archivos sin un test que pasara/)
+    assert.match(card.text, /Solo mide: no bloquea nada ni cambia ninguna respuesta\./)
+    assert.match(card.text, /el mensaje final, redactado y recortado, y los conteos del turno/)
+    assert.match(card.text, /unas 0,1 llamadas a Jev por prompt/)
   } finally {
     await browser.close()
   }
@@ -4441,7 +4496,11 @@ test('Modules: an install left alone by a newer one is named on the card and in 
   const storage = { ...SCENARIOS['modules-skipped'], __featureModulesResult: { skipped: true, reason: 'newer-install-present' } }
   const { browser, page } = await openPanel(storage)
   try {
-    const gate = (await moduleCards(page))[0]
+    const cards = await moduleCards(page)
+    const gate = cards[0]
+    // verify-done has no hooks, so a newer install in the way changes nothing on its card.
+    assert.deepEqual(cards[5].pressed, ['shadow'])
+    assert.match(cards[5].text, /follows the switch directly/)
     assert.match(gate.text, /Skipped: a newer install \(version 0\.7\.1\) keeps its own hooks\. Press "Set up" to replace it\./)
     assert.deepEqual(gate.pressed, ['off'])
     await page.click('[data-module-states="skill-selection"] button[data-value="shadow"]')
@@ -4480,7 +4539,7 @@ test('Modules: with the gate off its settings are hidden, a note says why, and i
   const { browser, page, errors } = await openPanel(SCENARIOS['modules-mixed'])
   try {
     const cards = await moduleCards(page)
-    assert.deepEqual(cards.map((c) => c.pressed), [['off'], ['shadow'], ['active'], ['active'], ['active']])
+    assert.deepEqual(cards.map((c) => c.pressed), [['off'], ['shadow'], ['active'], ['active'], ['active'], ['off']])
     assert.match(cards[0].text, /Hooks removed from Claude Code, as you chose\./)
     assert.match(cards[0].text, /With the gate off, nothing checks Bash commands or file edits/)
     const lines = await page.evaluate(() => document.getElementById('claude-integration-status').innerText)
