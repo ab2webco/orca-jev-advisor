@@ -2,6 +2,11 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.7.1
+
+- **Fix: 0.6.29 and 0.7.0 could not be installed or updated.** Orca refuses a plugin tree over 50 MiB; committed QA screenshots made 0.6.29 54.6 MiB and 0.7.0 69.7 MiB, so "Check for update" failed with "Could not prepare this plugin for review". The screenshots moved to the orphan `qa-evidence` branch, which a tag clone never fetches; the installed tree is about 7 MiB. No code change from 0.7.0.
+- **Guard:** `scripts/install-size.test.mjs` fails when the tracked tree passes 40 MiB or 1,600 entries. `npm run shots:band` now writes to the ignored `.screenshots/band`. Where evidence goes: `odd/qa/README.md`.
+
 ## 0.7.0
 
 - **Feature modules** (`src/core/feature_modules.ts`). One typed registry of five modules (gate, model-router, steward, skill-selection, board), each with its settings.json hooks, mod features, worker jobs and the existing per-feature modes under its switch. State file `feature-modules.json` in the plugin config directory, `{ "modules": { id: "off" | "shadow" | "active" } }`; `parseFeatureModules` never throws and falls back per field; defaults are all `active` (0.6.29 behaviour). `effectiveMode`: off gives off, shadow caps active at measure, active leaves the own mode to decide.

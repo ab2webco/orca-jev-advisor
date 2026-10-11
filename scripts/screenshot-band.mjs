@@ -34,7 +34,7 @@ import { register } from '../adapters/claude/mod-skills/hooks/index.ts'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const outFlag = process.argv.indexOf('--out')
-const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, 'odd/qa/shots-0.6.23')
+const OUT_DIR = outFlag >= 0 && process.argv[outFlag + 1] ? process.argv[outFlag + 1] : join(ROOT, '.screenshots/band')
 const COLUMNS = [200, 120, 80, 40]
 const THEMES = {
   dark: { background: '#1e1e1e', foreground: '#d4d4d4', label: '#8a8a8a' },

@@ -16,6 +16,10 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.7.1
+
+0.6.29 and 0.7.0 could not be installed or updated from Orca: the repository had grown past the 50 MiB Orca accepts for a plugin, so "Check for update" stopped at "Could not prepare this plugin for review". 0.7.1 is 0.7.0 at about 7 MiB, with a test that keeps it well under the limit. If you are on 0.6.28 or earlier, update straight to 0.7.1.
+
 ## What changed in 0.7.0
 
 Every feature is now a module you can switch off, so a part you do not use costs nothing: no hook process, no Jev call and no background work. The switches are the new **Modules** section at the top of Settings → General.

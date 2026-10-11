@@ -13,7 +13,7 @@ The owner, 2026-10-10: "Me gustaria tener un plugin base que se encargue de la c
 | `npm run typecheck` | exit 0 |
 | `npm test` (merged tree) | 3761/3761 |
 | `npm run test:panels` (merged tree, before the integration-text change) | 220/220 |
-| Shots `odd/qa/screens-0.7.0/` | 30 committed, retaken after the merge; harness: no horizontal overflow, no script errors |
+| Shots `odd/qa/screens-0.7.0/` on the `qa-evidence` branch | 30 images, retaken after the merge; harness: no horizontal overflow, no script errors |
 | Live marketplace install | Pending |
 
 ## Scenarios
