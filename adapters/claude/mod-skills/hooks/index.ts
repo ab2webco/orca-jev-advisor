@@ -176,8 +176,10 @@ import type { SubagentDecision } from '../../../../src/core/model_router_subagen
 import { isPersonPromptOrigin } from '../../../../src/core/model_router_origin.ts'
 import type { RouterPromptOrigin, RouterSessionStats, RouterSticky, StewardState } from '../types/index.d.ts'
 import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, softTierFires, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
-import type { StewardDecision, StewardJudgment, StewardMode, StewardNotApplied, StewardTier } from '../../../../src/core/context_steward.ts'
+import type { StewardActivity, StewardDecision, StewardJudgment, StewardMode, StewardNotApplied, StewardTier } from '../../../../src/core/context_steward.ts'
 import { stewardFromSettings } from '../../../../src/core/model_router_mode.ts'
+import { buildVerifyDoneQuestions, buildVerifyDoneState, decideVerifyDone, interpretVerifyDone, isVerifyDoneCandidate, verifyDoneDecisionFileName, verifyDoneRecord } from '../../../../src/core/verify_done.ts'
+import type { VerifyDoneJudgment } from '../../../../src/core/verify_done.ts'
 
 const DEFAULT_BUDGET_MS = 800
 const DEFAULT_SHORTLIST = 3
@@ -278,8 +280,9 @@ export async function resolveModSkillsSwitches($: EngineInterface): Promise<ModS
 // The path is worked out once per `register` (the environment does not change
 // in a session); each call after that is one `$.fs.exists` and, when the file
 // is there, one `$.fs.read` of a few dozen bytes. Best-effort like the other
-// config reads: a missing, unreachable or malformed file is every module
-// `active`, which is exactly the behaviour before the file existed.
+// config reads: a missing, unreachable or malformed file is each module's
+// default -- `active` for every module that predates the file, which is
+// exactly the behaviour before it existed, and `shadow` for verify-done.
 // ---------------------------------------------------------------------------
 
 /** The module file's path, worked out on the first read of a `register` call: undefined until then, null when no home directory is known. */
@@ -2058,6 +2061,67 @@ async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boo
 }
 
 // ---------------------------------------------------------------------------
+// Verify the "done" (odd/tasks/verify-done-module.md). When a MAIN turn ends
+// with an answer, `turn.complete` schedules `verifyDoneAfterTurn` on a timer,
+// as it does the steward's, so nothing runs inside the turn. The timer reads
+// the turn's run facts (the steward's summary: counts, never text); only when
+// the turn edited files and no test passed does it ask Jev once whether the
+// final message claims the work is done, and write one row. Shadow only: it
+// never blocks, never changes the answer and shows nothing. Fails open.
+// ---------------------------------------------------------------------------
+
+const VERIFY_DONE_BUDGET_MS = 3000
+const VERIFY_DONE_DELAY_MS = 250
+
+/** Appends one decision line to the current hour's `verify-done-decisions-*.jsonl`, best-effort. */
+async function appendVerifyDoneDecision($: EngineInterface, atIso: string, line: string): Promise<void> {
+  try {
+    const paths = await resolveHomePaths($)
+    if (!paths) return
+    await appendToFile($, `${paths.cacheDir}/${verifyDoneDecisionFileName(atIso)}`, line)
+  } catch {
+    // Logging is best-effort and must never affect the session.
+  }
+}
+
+/** Jev's reading of the final message, or null on any failure. The state carries the redacted, cut message and counts, never file contents. */
+async function askVerifyDone($: EngineInterface, options: PluginOptions, finalMessage: string, activity: StewardActivity): Promise<VerifyDoneJudgment | null> {
+  try {
+    const apiKey = await resolveApiKey($, options)
+    if (apiKey === null) return null
+    const response = await callJev(apiKey, buildVerifyDoneState({ finalMessage, activity }), buildVerifyDoneQuestions(), { budgetMs: VERIFY_DONE_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
+    return interpretVerifyDone(response.answers)
+  } catch {
+    return null
+  }
+}
+
+/** The timer `turn.complete` schedules: candidate rule, Jev, decision, one row. Never throws. */
+async function verifyDoneAfterTurn($: EngineInterface, options: PluginOptions, modulesFile: FeatureModulesFile, finalMessage: string): Promise<void> {
+  try {
+    // Read again here: the switch may have moved in the delay since turn.complete scheduled this.
+    if (moduleState(await resolveFeatureModules($, modulesFile), 'verify-done') === 'off') return
+    const activity = summarizeStewardActivity(await $.session.messages())
+    if (!isVerifyDoneCandidate(activity)) return
+    const jev = await askVerifyDone($, options, finalMessage, activity)
+    const at = new Date(await $.clock.now()).toISOString()
+    const record = verifyDoneRecord({
+      at,
+      account: await resolveAccountId($),
+      project: baseName(await $.session.root()),
+      sessionId: await readSessionId($),
+      activity,
+      decision: decideVerifyDone(jev),
+      claim: jev?.claim ?? null,
+      ...(jev?.margin === undefined ? {} : { margin: jev.margin }),
+    })
+    await appendVerifyDoneDecision($, at, `${JSON.stringify(record)}\n`)
+  } catch {
+    // The measure never affects the session on a failure.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Active-mode switches -- hoisted out of `register` (JEVADV-43): the engine
 // refuses `$` passed into a closure declared INSIDE register, only a
 // top-level function. These take the option value already resolved from
@@ -2751,6 +2815,15 @@ export function register(on: On, options: PluginOptions): void {
           $.clock.after(STEWARD_DELAY_MS, () => stewardAfterTurn($, options, host, modulesFile))
         } catch {
           // No timer, no steward: the turn ends as it would have.
+        }
+      }
+      // Verify the "done" (verifyDoneAfterTurn): only measures, on its own timer.
+      if (e.reason === 'answer' && moduleState(modules, 'verify-done') !== 'off') {
+        const finalMessage = e.answer
+        try {
+          $.clock.after(VERIFY_DONE_DELAY_MS, () => verifyDoneAfterTurn($, options, modulesFile, finalMessage))
+        } catch {
+          // No timer, no measure: the turn ends as it would have.
         }
       }
     }

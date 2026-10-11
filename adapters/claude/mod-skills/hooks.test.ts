@@ -78,6 +78,8 @@ interface FakeHost {
   readonly processCalls: string[];
   /** 0.6.29 T8: what `$.session.version()` answers; null makes it reject, like an engine that cannot say. */
   engineVersion: { version: string; base?: string } | null;
+  /** 0.8.0 V3: what `$.clock.after` scheduled, in order; a test runs them with runTimers. */
+  timers: (() => unknown)[];
 }
 
 function makeFakeHost(): FakeHost {
@@ -100,6 +102,7 @@ function makeFakeHost(): FakeHost {
     gitRepos: new Map<string, { toplevel: string; branch: string }>(),
     processCalls: [],
     engineVersion: null,
+    timers: [],
   };
 }
 
@@ -188,6 +191,11 @@ function makeFakeEngine(host: FakeHost): unknown {
       // (a fake fetch/process.run that always settles on its own), so a
       // sleep that never resolves never wins and never introduces flakiness.
       sleep: async () => new Promise<void>(() => {}),
+      // Held, never run on its own: a test that wants a timer's work runs it (runTimers).
+      after: (_ms: number, fn: () => unknown) => {
+        host.timers.push(fn);
+        return { cancel: () => undefined };
+      },
     },
     http: {
       fetch: async (url: string, init?: { body?: string }) => {
@@ -3644,4 +3652,193 @@ test("T4 model-router: a switch in the file is picked up by the loaded hooks, in
   await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
   assert.equal(host.fetchCalls.length, 1);
   assert.equal(host.files.has(TURN_USAGE_PATH), true);
+});
+
+// ---------------------------------------------------------------------------
+// Verify the "done" (odd/tasks/verify-done-module.md, V3): after a main-loop
+// turn that ended with an answer, a timer asks Jev once whether the final
+// message claims the work is done, only when the turn edited files and no
+// test passed, and writes one row. Shadow only: the turn's result is never
+// touched. The pure rules are covered in src/core/verify_done.test.ts.
+// ---------------------------------------------------------------------------
+
+const VERIFY_DONE_PATH = `${CACHE_DIR}/verify-done-decisions-2026-09-25T10.jsonl`;
+/** What `next(e)` resolves to in these tests: the hook must hand back this very object. */
+const TURN_RESULT = { text: "Done: the parser is fixed." };
+
+
+const EDIT_ONLY: Row[] = [
+  { role: "user", text: "fix the parser", toolUses: [] },
+  { role: "assistant", text: "", toolUses: [{ tool_use_id: "e1", tool: "Edit", input: { file_path: "src/parser.ts", old_string: "a", new_string: "b" } }] },
+];
+const EDIT_AND_GREEN: Row[] = [...EDIT_ONLY, { role: "assistant", text: "", toolUses: [{ tool_use_id: "t1", tool: "Bash", input: { command: "npm test" }, text: "ℹ pass 12\nℹ fail 0" }] }];
+const EDIT_AND_RED: Row[] = [...EDIT_ONLY, { role: "assistant", text: "", toolUses: [{ tool_use_id: "t1", tool: "Bash", input: { command: "npm test" }, text: "ℹ pass 11\nℹ fail 1" }] }];
+const NO_EDIT: Row[] = [
+  { role: "user", text: "how does the parser work", toolUses: [] },
+  { role: "assistant", text: "", toolUses: [{ tool_use_id: "r1", tool: "Read", input: { file_path: "src/parser.ts" }, text: "export function parse() {}" }] },
+];
+
+function claimAnswer(choice: string, confidence: number): unknown {
+  return jevResponse({ claim: { type: "choice", choice, probabilities: {}, confidence } });
+}
+
+/** Fires turn.complete and returns what the hook handed back. */
+async function completeTurn(handlers: Map<string, Hook>, engine: unknown, extra: Record<string, unknown> = {}): Promise<unknown> {
+  const hook = handlers.get("turn.complete");
+  assert.ok(hook, "turn.complete was never registered");
+  return hook(engine, { answer: "Done: the parser is fixed.", durationMs: 10, isAborted: false, turnId: "turn-1", reason: "answer", ...extra }, async () => TURN_RESULT);
+}
+
+async function runTimers(host: FakeHost): Promise<void> {
+  while (host.timers.length > 0) {
+    const due = host.timers;
+    host.timers = [];
+    for (const fn of due) await fn();
+  }
+}
+
+function verifyDoneRows(host: FakeHost): Record<string, unknown>[] {
+  return (host.files.get(VERIFY_DONE_PATH) ?? "").split("\n").filter((line) => line.length > 0).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** The Jev calls verify-done made: the ones whose body asks the `claim` question. */
+function claimCalls(host: FakeHost): { url: string; body?: string }[] {
+  return host.fetchCalls.filter((call) => (call.body ?? "").includes('"claim"'));
+}
+
+test("V3 verify-done shadow (the default, no module file): a candidate turn asks Jev exactly once and writes one row; the turn's result is unchanged", async () => {
+  const host = makeFakeHost();
+  host.messages = EDIT_ONLY;
+  host.fetchQueue.push(claimAnswer("claimed-done", 0.9));
+  const { handlers, engine } = loadHooks(host);
+
+  const result = await completeTurn(handlers, engine);
+  assert.equal(result, TURN_RESULT, "next(e)'s result is handed back as it was");
+  await runTimers(host);
+
+  assert.equal(host.fetchCalls.length, 1, "one Jev call in all");
+  assert.equal(claimCalls(host).length, 1);
+  const rows = verifyDoneRows(host);
+  assert.equal(rows.length, 1);
+  assert.deepEqual({ ...rows[0], at: "x", account: "x" }, {
+    at: "x",
+    account: "x",
+    project: "sandbox",
+    mode: "shadow",
+    sessionId: "session-1",
+    decision: "would-block",
+    claim: "claimed-done",
+    confidence: 0.9,
+    wouldBlock: true,
+    filesEdited: 1,
+    testsRun: 0,
+    testsPassed: null,
+  });
+});
+
+test("V3 verify-done shadow: a failing test still makes the turn a candidate", async () => {
+  const host = makeFakeHost();
+  host.messages = EDIT_AND_RED;
+  host.fetchQueue.push(claimAnswer("not-claimed", 0.8));
+  const { handlers, engine } = loadHooks(host);
+  await completeTurn(handlers, engine);
+  await runTimers(host);
+  assert.equal(claimCalls(host).length, 1);
+  assert.equal(verifyDoneRows(host)[0]?.decision, "not-claimed");
+  assert.equal(verifyDoneRows(host)[0]?.testsPassed, false);
+});
+
+test("V3 verify-done shadow: a turn with no edit, or with its tests passing, makes no Jev call and writes no row", async () => {
+  for (const messages of [NO_EDIT, EDIT_AND_GREEN]) {
+    const host = makeFakeHost();
+    host.messages = messages;
+    // Queued so that a wrong call is counted instead of failing on an empty queue.
+    host.fetchQueue.push(claimAnswer("claimed-done", 0.9));
+    const { handlers, engine } = loadHooks(host);
+    const result = await completeTurn(handlers, engine);
+    await runTimers(host);
+    assert.equal(result, TURN_RESULT);
+    assert.equal(host.fetchCalls.length, 0, "no Jev call");
+    assert.equal(host.files.has(VERIFY_DONE_PATH), false, "no row");
+  }
+});
+
+test("V3 verify-done off: a candidate turn makes no Jev call and writes nothing; the turn's result is unchanged", async () => {
+  const host = makeFakeHost();
+  setModules(host, { "verify-done": "off" });
+  host.messages = EDIT_ONLY;
+  host.fetchQueue.push(claimAnswer("claimed-done", 0.9));
+  const seeded = new Set(host.files.keys());
+  const { handlers, engine } = loadHooks(host);
+
+  const result = await completeTurn(handlers, engine);
+  await runTimers(host);
+
+  assert.equal(result, TURN_RESULT);
+  assert.equal(host.fetchCalls.length, 0, "no Jev call");
+  assert.deepEqual(leftBehind(host, seeded).filter((entry) => entry.includes("verify-done")), [], "no row");
+});
+
+test("V3 verify-done: a timer already scheduled asks nothing once the module went off", async () => {
+  const host = makeFakeHost();
+  host.messages = EDIT_ONLY;
+  host.fetchQueue.push(claimAnswer("claimed-done", 0.9));
+  const { handlers, engine } = loadHooks(host);
+  await completeTurn(handlers, engine);
+  assert.ok(host.timers.length > 0, "scheduled while the module was on");
+
+  setModules(host, { "verify-done": "off" });
+  await runTimers(host);
+  assert.equal(host.fetchCalls.length, 0);
+  assert.equal(host.files.has(VERIFY_DONE_PATH), false);
+});
+
+test("V3 verify-done: a subagent's turn and a turn that did not end with an answer do nothing", async () => {
+  for (const extra of [{ agentId: "a-1" }, { reason: "aborted", isAborted: true }, { reason: "error" }, { reason: "refusal", refusal: { category: null, explanation: null } }]) {
+    const host = makeFakeHost();
+    host.messages = EDIT_ONLY;
+    host.fetchQueue.push(claimAnswer("claimed-done", 0.9));
+    const { handlers, engine } = loadHooks(host);
+    const result = await completeTurn(handlers, engine, extra);
+    await runTimers(host);
+    assert.equal(result, TURN_RESULT, JSON.stringify(extra));
+    assert.equal(host.fetchCalls.length, 0, JSON.stringify(extra));
+    assert.equal(host.files.has(VERIFY_DONE_PATH), false, JSON.stringify(extra));
+  }
+});
+
+test("V3 verify-done: a Jev failure writes a jev-failed row and the turn ends as it would have", async () => {
+  const host = makeFakeHost();
+  host.messages = EDIT_ONLY;
+  // A body that is not a Jev response: a failure, never a guess.
+  host.fetchQueue.push("not a jev response");
+  const { handlers, engine } = loadHooks(host);
+  const result = await completeTurn(handlers, engine);
+  await runTimers(host);
+  assert.equal(result, TURN_RESULT);
+  assert.equal(host.fetchCalls.length, 1);
+  const rows = verifyDoneRows(host);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.decision, "jev-failed");
+  assert.equal(rows[0]?.claim, null);
+  assert.equal(rows[0]?.confidence, null);
+  assert.equal(rows[0]?.wouldBlock, false);
+});
+
+test("V3 verify-done: what Jev reads is the redacted final message and counts; a secret, a path or file contents never reach the call", async () => {
+  const host = makeFakeHost();
+  const secret = "sk-ant-api03-" + "b".repeat(40);
+  host.messages = [
+    { role: "user", text: "fix the parser", toolUses: [] },
+    { role: "assistant", text: "", toolUses: [{ tool_use_id: "e1", tool: "Write", input: { file_path: "src/secret-module.ts", content: "const SECRET_CONTENTS = 1" } }] },
+  ];
+  host.fetchQueue.push(claimAnswer("claimed-done", 0.9));
+  const { handlers, engine } = loadHooks(host);
+  await completeTurn(handlers, engine, { answer: `Done, wired the key ${secret} into the parser.` });
+  await runTimers(host);
+  const body = claimCalls(host)[0]?.body ?? "";
+  assert.ok(body.includes("Done, wired the key"), "the message is sent");
+  assert.ok(!body.includes(secret), "the secret is redacted");
+  assert.ok(!body.includes("SECRET_CONTENTS"), "no file contents");
+  assert.ok(!body.includes("secret-module"), "no paths");
 });

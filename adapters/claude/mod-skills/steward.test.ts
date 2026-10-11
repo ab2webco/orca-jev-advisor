@@ -504,7 +504,8 @@ test("T4 steward off: a turn counts nothing, schedules no timer, asks Jev nothin
   const host = makeHost();
   const engine = load(host);
   setSteward(host, "active");
-  setModules(host, { steward: "off" });
+  // verify-done (0.8.0) schedules its own timer; off here so the count is the steward's alone.
+  setModules(host, { steward: "off", "verify-done": "off" });
   host.messages = WORK;
   host.fetchQueue.push(verdict("boundary", 0.95));
   const submit = host.handlers.get("prompt.submit");
@@ -525,6 +526,8 @@ test("T4 steward off: a timer already scheduled asks nothing once the module wen
   const host = makeHost();
   const engine = load(host);
   setSteward(host, "active");
+  // verify-done (0.8.0) schedules its own timer; off here so the count is the steward's alone.
+  setModules(host, { "verify-done": "off" });
   host.messages = WORK;
   await personPrompt(host, engine, "commit it");
   await turnStart(host, engine, "turn-1");
@@ -532,7 +535,7 @@ test("T4 steward off: a timer already scheduled asks nothing once the module wen
   await turnComplete(host, engine);
   assert.equal(host.timers.length, 1, "scheduled while the module was on");
 
-  setModules(host, { steward: "off" });
+  setModules(host, { steward: "off", "verify-done": "off" });
   await runTimers(host);
   assert.equal(host.fetchCalls.length, 0);
   assert.equal(host.compactCalls.length, 0);
