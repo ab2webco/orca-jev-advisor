@@ -125,7 +125,7 @@ const MODEL_MEASUREMENT_RECORDS = [
   {
     type: 'model-decision', id: 'tool-5', at: iso, mode: 'measurement', source: 'jev', failOpen: null,
     subagentType: 'general-purpose', promptChars: 150, requestedModel: 'haiku',
-    recommended: { id: 'claude-haiku-4-5-20251001', agentModel: 'haiku', rank: 4 },
+    recommended: { id: 'claude-haiku-5-5', agentModel: 'haiku', rank: 4 },
     score: 0.12, confidence: 0.88, applied: false, rewriteReason: 'measurement', ladderSize: 3,
     latencyMs: 210, permissionMode: 'default', complexity: { tier: 'trivial', tierIndex: 0, score: 0.05 },
   },
@@ -595,7 +595,7 @@ const BASELINE_NOTICE_DECISION = decidePolicySeedNotice({
 const BASELINE_DIFFERING_ITEMS = mergePolicySeeds(BASELINE_EXISTING_POLICIES, SHIPPED_POLICIES).differing
 
 // odd/tasks/model-reclassification.md T7's own baseline-notice fixture:
-// one shipped model this install never has (haiku, dropped below) and one
+// one shipped model this install never has (Haiku 5.5, dropped below) and one
 // shared id whose label the install's own copy differs on (opus) -- real
 // `diffModelSeed`/`decideModelSeedNotice` output over that list, in the
 // exact `{ due, added, differing, shippedVersion, items, checkedAt }` shape
@@ -603,7 +603,7 @@ const BASELINE_DIFFERING_ITEMS = mergePolicySeeds(BASELINE_EXISTING_POLICIES, SH
 // `noticeItems` helper is module-private, so the `added`/`changed` item
 // rows below are built the same way it builds them, from the real diff).
 const MODEL_BASELINE_EXISTING = SHIPPED_MODELS
-  .filter((row) => row.id !== 'claude-haiku-4-5-20251001')
+  .filter((row) => row.id !== 'claude-haiku-5-5')
   .map((row) => (row.id === 'claude-opus-5-5' ? { ...row, label: 'Claude Opus (previous label)' } : row))
 const MODEL_BASELINE_DIFF = diffModelSeed(MODEL_BASELINE_EXISTING, SHIPPED_MODELS)
 const MODEL_BASELINE_DECISION = decideModelSeedNotice({
@@ -718,14 +718,14 @@ const CONSUMPTION_READY = {
  * (one row per target, off/measure/active) and the board's Consumption
  * card's own "Model router" subsection, both populated at once: this
  * computer in `measure`, one Orca account in `active`, and a realistic
- * decision summary (real current model ids: Sonnet 5.5/Opus 5.5/Haiku 4.5,
+ * decision summary (real current model ids: Sonnet 5.5/Opus 5.5/Haiku 5.5,
  * same as CONSUMPTION_READY above) with decisions at all three points, an
  * applied switch, and a real dollar estimate -- so both new UI pieces show
  * their populated state, not the honest-but-uninteresting empty one.
  */
 const ROUTER_EFFORT_DEFAULTS = { simple: 'medium', standard: 'medium', complex: 'high', frontier: 'xhigh' }
 const ROUTER_TIERS_ANTHROPIC = {
-  simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
+  simple: { modelId: 'claude-haiku-5-5', label: 'Haiku 5.5', supportsEffort: true },
   standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },

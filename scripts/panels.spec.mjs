@@ -2761,7 +2761,7 @@ test('no two neighbouring controls touch on any board tab', { skip: chromium ? f
 // ---------------------------------------------------------------------------
 
 const TIERS_ANTHROPIC = {
-  simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false },
+  simple: { modelId: 'claude-haiku-5-5', label: 'Haiku 5.5', supportsEffort: true },
   standard: { modelId: 'claude-sonnet-5-5', label: 'Sonnet 5.5', supportsEffort: true },
   complex: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true },
   frontier: { modelId: 'claude-opus-5-5', label: 'Opus 5.5', supportsEffort: true }
@@ -2785,7 +2785,7 @@ test('0.6.2: each account shows tier → the model it resolves to → its effort
       return { cells: Array.from(tr.cells).slice(0, 2).map((cell) => cell.innerText.trim()), effort: pressed ? pressed.dataset.value : null }
     }))
     assert.deepEqual(table, [
-      { cells: ['Ask', 'Haiku 4.5'], effort: null },
+      { cells: ['Ask', 'Haiku 5.5'], effort: 'medium' },
       { cells: ['Implement', 'Sonnet 5.5'], effort: 'medium' },
       { cells: ['Analyse', 'Opus 5.5'], effort: 'xhigh' },
       { cells: ['Deep reasoning', 'Opus 5.5'], effort: 'xhigh' }
@@ -2798,6 +2798,23 @@ test('0.6.2: each account shows tier → the model it resolves to → its effort
     await page.click(group + ' button[data-value="max"]')
     assert.deepEqual(await pressedValues(page, group), ['max'])
     assert.equal(await page.locator('select[data-model-router-effort]').count(), 0, 'no native select is left')
+  } finally {
+    await browser.close()
+  }
+})
+
+test('0.6.29: an account that kept Haiku 4.5 on the simple tier shows its model with no effort control, since that model takes none', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const legacyTiers = { ...TIERS_ANTHROPIC, simple: { modelId: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5', supportsEffort: false } }
+  const status = { targets: [{ target: 'home', mode: 'measure', effort: EFFORT_DEFAULTS, tiers: legacyTiers, steward: { mode: 'measure', threshold: 120000 } }], checkedAt: new Date().toISOString() }
+  const { browser, page } = await openPanel({ modelRouterStatus: status })
+  try {
+    await page.click('#tab-models')
+    const ask = await page.evaluate(() => {
+      const tr = document.querySelector('[data-model-router-effort-table="home"] tbody tr')
+      return { cells: Array.from(tr.cells).slice(0, 2).map((cell) => cell.innerText.trim()), buttons: tr.querySelectorAll('.mode-buttons button').length }
+    })
+    assert.deepEqual(ask.cells, ['Ask', 'Haiku 4.5'])
+    assert.equal(ask.buttons, 0, 'no effort buttons for a model that takes none')
   } finally {
     await browser.close()
   }
