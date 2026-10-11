@@ -21,6 +21,7 @@
 
 import type { TurnUsageRecord } from "./consumption.ts";
 import type { RouterDecisionRecord } from "./model_router_decide.ts";
+import { requestCostUsd } from "./model_cost.ts";
 import { pricesForModel } from "./model_router_accounts.ts";
 import type { RouterDecisionSummary } from "./model_router_summary.ts";
 import { summarizeRouterDecisions } from "./model_router_summary.ts";
@@ -128,6 +129,8 @@ interface MutableTokens {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Summed request by request: a model priced by prompt length (Haiku 5.5) charges each request on its own prompt, which the totals above no longer show. */
+  costUsd: number;
 }
 
 interface MutableProject {
@@ -211,7 +214,9 @@ export function aggregateActivityByProject(
     }
     bumpLastActivity(project, atMs);
 
-    const tokens = project.tokensByModel.get(row.model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const tokens = project.tokensByModel.get(row.model) ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0 };
+    const prices = pricesForModel(row.model);
+    if (prices !== null) tokens.costUsd += requestCostUsd(prices, row);
     tokens.input += row.input ?? 0;
     tokens.output += row.output ?? 0;
     tokens.cacheRead += row.cacheRead ?? 0;
@@ -246,10 +251,7 @@ export function aggregateActivityByProject(
     });
 
     const tokensByModel: ModelTokenSummary[] = [...mutable.tokensByModel.entries()].map(([model, tokens]) => {
-      const prices = pricesForModel(model);
-      const estimatedCostUsd =
-        prices === null ? 0 : (tokens.input * prices.input + tokens.cacheWrite * prices.cacheWrite + tokens.cacheRead * prices.cacheRead + tokens.output * prices.output) / 1_000_000;
-      return { model, input: tokens.input, output: tokens.output, cacheRead: tokens.cacheRead, cacheWrite: tokens.cacheWrite, estimatedCostUsd };
+      return { model, input: tokens.input, output: tokens.output, cacheRead: tokens.cacheRead, cacheWrite: tokens.cacheWrite, estimatedCostUsd: tokens.costUsd };
     });
     const totalEstimatedCostUsd = tokensByModel.reduce((sum, entry) => sum + entry.estimatedCostUsd, 0);
 

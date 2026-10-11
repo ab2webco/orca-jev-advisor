@@ -215,6 +215,24 @@ test("tokens/cost: Sonnet, Opus and Fable ids total correctly and produce a plau
   assert.ok(project.totalEstimatedCostUsd > 0);
 });
 
+test("tokens/cost: Haiku 5.5 is priced per request by its own prompt, never by the total of many requests", () => {
+  const model = "claude-haiku-5-5";
+  // Two 60K-prompt requests: 120K together, but each is under 100K, so both pay the base card.
+  const shortOnes = aggregateActivityByProject([], [turnRow({ model, input: 20_000, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }), turnRow({ model, input: 20_000, cacheRead: 40_000, cacheWrite: 0, output: 1_000 })], [], NOW);
+  const baseCost = 2 * (20_000 * 0.1 + 40_000 * 0.01 + 1_000 * 0.5) / 1_000_000;
+  assert.ok(Math.abs(shortOnes.projects[0]!.tokensByModel[0]!.estimatedCostUsd - baseCost) < 1e-12);
+  // One 150K-prompt request (cache hits included in the length) pays the over-100K card on every token.
+  const longOne = aggregateActivityByProject([], [turnRow({ model, input: 2_000, cacheRead: 148_000, cacheWrite: 0, output: 1_000 })], [], NOW);
+  const longCost = (2_000 * 0.5 + 148_000 * 0.05 + 1_000 * 2.5) / 1_000_000;
+  assert.ok(Math.abs(longOne.projects[0]!.tokensByModel[0]!.estimatedCostUsd - longCost) < 1e-12);
+  // Mixed in one model's row: each request keeps the card it was billed at, and the tokens still total.
+  const both = aggregateActivityByProject([], [turnRow({ model, input: 20_000, cacheRead: 40_000, cacheWrite: 0, output: 1_000 }), turnRow({ model, input: 2_000, cacheRead: 148_000, cacheWrite: 0, output: 1_000 })], [], NOW);
+  const mixed = both.projects[0]!.tokensByModel[0]!;
+  assert.equal(mixed.input, 22_000);
+  assert.ok(Math.abs(mixed.estimatedCostUsd - (baseCost / 2 + longCost)) < 1e-12);
+  assert.ok(Math.abs(both.projects[0]!.totalEstimatedCostUsd - mixed.estimatedCostUsd) < 1e-12);
+});
+
 test("day bucketing: a row exactly at local midnight lands in that calendar day's bucket, not the day before", () => {
   const midnightSixDaysAgo = isoAtLocalMidnight(6);
   const summary = aggregateActivityByProject([gateRow({ at: midnightSixDaysAgo })], [], [], NOW);

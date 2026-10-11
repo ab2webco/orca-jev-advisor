@@ -8,6 +8,7 @@ import { activeGuards, buildTierState } from "./model_router_decide.ts";
 import type { GuardContext } from "./model_router_decide.ts";
 import {
   breakEven,
+  effortBreakEven,
   decideEngineTurn,
   isNewPrompt,
   lastPromptKey,
@@ -63,6 +64,32 @@ test("break-even, the worked example: 80k context Opus→Haiku; decide only with
   // 0.0185 × 12 = 0.222 > 0.192: worth it.
   assert.equal(breakEven({ contextTokens: 80_000, avgOutput: 700, current: OPUS, proposed: HAIKU, medianStepsPerTurn: 4 })?.worthIt, true);
   assert.equal(breakEven({ contextTokens: 80_000, avgOutput: 700, current: OPUS, proposed: HAIKU, medianStepsPerTurn: 3 })?.worthIt, false);
+});
+
+test("break-even: a model priced by prompt length is costed on the card its context falls on", () => {
+  const haiku55 = ANTHROPIC_PRICES["claude-haiku-5-5"] ?? null;
+  const short = breakEven({ contextTokens: 80_000, avgOutput: 700, current: OPUS, proposed: haiku55, medianStepsPerTurn: 4 });
+  assert.ok(short !== null);
+  assert.ok(Math.abs(short.switchCost - 80_000 * 0.2e-6) < 1e-12, "the rewrite is written at the base card's 1-hour write price");
+  assert.ok(Math.abs(short.stepSaving - (80_000 * (0.2 - 0.01) * 1e-6 + 700 * (20 - 0.5) * 1e-6)) < 1e-12);
+  const long = breakEven({ contextTokens: 150_000, avgOutput: 700, current: OPUS, proposed: haiku55, medianStepsPerTurn: 4 });
+  assert.ok(long !== null);
+  assert.ok(Math.abs(long.switchCost - 150_000 * 1e-6) < 1e-12, "over 100K the rewrite pays the long card");
+  assert.ok(Math.abs(long.stepSaving - (150_000 * (0.2 - 0.05) * 1e-6 + 700 * (20 - 2.5) * 1e-6)) < 1e-12);
+  const leaving = breakEven({ contextTokens: 150_000, avgOutput: 700, current: haiku55, proposed: OPUS, medianStepsPerTurn: 4 });
+  assert.ok(leaving !== null);
+  assert.ok(Math.abs(leaving.stepSaving - (150_000 * (0.05 - 0.2) * 1e-6 + 700 * (2.5 - 20) * 1e-6)) < 1e-12, "the model being left is read on its long card too");
+});
+
+test("effort break-even: the output saved and the rewrite are priced on the card the context falls on", () => {
+  const haiku55 = ANTHROPIC_PRICES["claude-haiku-5-5"];
+  assert.ok(haiku55 !== undefined);
+  const long = effortBreakEven({ contextTokens: 150_000, currentOutput: 1_200, targetOutput: 400, prices: haiku55, medianStepsPerTurn: 4 });
+  assert.ok(Math.abs(long.switchCost - 150_000 * 1e-6) < 1e-12);
+  assert.ok(Math.abs(long.stepSaving - 800 * 2.5e-6) < 1e-12);
+  const short = effortBreakEven({ contextTokens: 50_000, currentOutput: 1_200, targetOutput: 400, prices: haiku55, medianStepsPerTurn: 4 });
+  assert.ok(Math.abs(short.switchCost - 50_000 * 0.2e-6) < 1e-12);
+  assert.ok(Math.abs(short.stepSaving - 800 * 0.5e-6) < 1e-12);
 });
 
 test("break-even: unknown prices on either side is no answer (downgrades disabled)", () => {

@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import type { QuotaAccount } from "./consumption.ts";
+import { ratesForPrompt } from "./model_cost.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { CONFIDENCE_FLOOR, TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
@@ -152,9 +153,11 @@ export interface BreakEven {
 /** null when either side's prices are unknown: no break-even, so no downgrade. */
 export function breakEven(input: BreakEvenInput): BreakEven | null {
   if (input.current === null || input.proposed === null) return null;
-  const switchCost = input.contextTokens * input.proposed.cacheWrite * PER_TOKEN;
-  const stepSaving =
-    input.contextTokens * (input.current.cacheRead - input.proposed.cacheRead) * PER_TOKEN + input.avgOutput * (input.current.output - input.proposed.output) * PER_TOKEN;
+  // A model priced by prompt length is read on the card the context falls on.
+  const current = ratesForPrompt(input.current, input.contextTokens);
+  const proposed = ratesForPrompt(input.proposed, input.contextTokens);
+  const switchCost = input.contextTokens * proposed.cacheWrite * PER_TOKEN;
+  const stepSaving = input.contextTokens * (current.cacheRead - proposed.cacheRead) * PER_TOKEN + input.avgOutput * (current.output - proposed.output) * PER_TOKEN;
   const steps = expectedSteps(input.medianStepsPerTurn);
   return { contextTokens: input.contextTokens, switchCost, stepSaving, expectedSteps: steps, worthIt: stepSaving * steps > BREAK_EVEN_MARGIN * switchCost };
 }
@@ -176,8 +179,9 @@ export interface EffortBreakEvenInput {
  * margin and expected-steps estimate a model downgrade uses.
  */
 export function effortBreakEven(input: EffortBreakEvenInput): BreakEven {
-  const switchCost = input.contextTokens * input.prices.cacheWrite * PER_TOKEN;
-  const stepSaving = (input.currentOutput - input.targetOutput) * input.prices.output * PER_TOKEN;
+  const rates = ratesForPrompt(input.prices, input.contextTokens);
+  const switchCost = input.contextTokens * rates.cacheWrite * PER_TOKEN;
+  const stepSaving = (input.currentOutput - input.targetOutput) * rates.output * PER_TOKEN;
   const steps = expectedSteps(input.medianStepsPerTurn);
   return { contextTokens: input.contextTokens, switchCost, stepSaving, expectedSteps: steps, worthIt: stepSaving * steps > BREAK_EVEN_MARGIN * switchCost };
 }

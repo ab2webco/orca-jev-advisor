@@ -25,6 +25,7 @@ import { isRecord } from "../guards.ts";
 import type { QuotaAccount } from "./consumption.ts";
 import { ROUTER_TIERS } from "./model_catalog.ts";
 import type { ModelEntry, ModelPrices, RouterTier } from "./model_catalog.ts";
+import { LONG_PROMPT_TOKENS } from "./model_cost.ts";
 
 export { ROUTER_TIERS };
 export type { ModelPrices, RouterTier };
@@ -42,13 +43,20 @@ export interface ResolvedTierModel {
 
 export type ResolvedTiers = Readonly<Record<RouterTier, ResolvedTierModel>>;
 
-// The built-in facts (platform.claude.com models overview and pricing,
-// 2026-09-29): the fallback when the catalog has no usable row or field.
+// The built-in facts (platform.claude.com models overview and pricing, read
+// 2026-10-11): the fallback when the catalog has no usable row or field. The
+// ids after the tier models are not on the ladder; they stay so the usage
+// logs of past turns on them are still costed.
 export const FABLE_ID = "claude-fable-5-1";
 const OPUS_ID = "claude-opus-5-5";
 const SONNET_ID = "claude-sonnet-5-5";
 const HAIKU_ID = "claude-haiku-4-5-20251001";
+const HAIKU_5_5_ID = "claude-haiku-5-5";
 const LEGACY_SONNET_ID = "claude-sonnet-5";
+const LEGACY_FABLE_ID = "claude-fable-5";
+const OPUS_5_ID = "claude-opus-5";
+const OPUS_4_8_ID = "claude-opus-4-8";
+const SONNET_4_6_ID = "claude-sonnet-4-6";
 
 const ANTHROPIC_TIER_MODEL: Readonly<Record<RouterTier, string>> = {
   simple: HAIKU_ID,
@@ -58,27 +66,44 @@ const ANTHROPIC_TIER_MODEL: Readonly<Record<RouterTier, string>> = {
 };
 
 export const ANTHROPIC_PRICES: Readonly<Record<string, ModelPrices>> = {
+  // Haiku 5.5 is priced by prompt length: the base card up to 100K tokens, `longPrompt` above (model_cost.ts).
+  [HAIKU_5_5_ID]: { input: 0.1, cacheWrite: 0.2, cacheRead: 0.01, output: 0.5, longPrompt: { overTokens: LONG_PROMPT_TOKENS, input: 0.5, cacheWrite: 1, cacheRead: 0.05, output: 2.5 } },
   [HAIKU_ID]: { input: 1, cacheWrite: 2, cacheRead: 0.1, output: 5 },
-  [SONNET_ID]: { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 },
+  // Cache hits are 0.05x input on Sonnet 5.5, Opus 5.5 and Fable 5.1 (0.025x); 0.1x on every other model.
+  [SONNET_ID]: { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 },
   [LEGACY_SONNET_ID]: { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 },
+  [SONNET_4_6_ID]: { input: 3, cacheWrite: 6, cacheRead: 0.3, output: 15 },
   [OPUS_ID]: { input: 4, cacheWrite: 8, cacheRead: 0.2, output: 20 },
+  [OPUS_5_ID]: { input: 5, cacheWrite: 10, cacheRead: 0.5, output: 25 },
+  [OPUS_4_8_ID]: { input: 5, cacheWrite: 10, cacheRead: 0.5, output: 25 },
   [FABLE_ID]: { input: 10, cacheWrite: 20, cacheRead: 0.25, output: 50 },
+  [LEGACY_FABLE_ID]: { input: 10, cacheWrite: 20, cacheRead: 1, output: 50 },
 };
 
 const ANTHROPIC_LABELS: Readonly<Record<string, string>> = {
+  [HAIKU_5_5_ID]: "Haiku 5.5",
   [HAIKU_ID]: "Haiku 4.5",
   [SONNET_ID]: "Sonnet 5.5",
   [LEGACY_SONNET_ID]: "Sonnet 5",
+  [SONNET_4_6_ID]: "Sonnet 4.6",
   [OPUS_ID]: "Opus 5.5",
+  [OPUS_5_ID]: "Opus 5",
+  [OPUS_4_8_ID]: "Opus 4.8",
   [FABLE_ID]: "Fable 5.1",
+  [LEGACY_FABLE_ID]: "Fable 5",
 };
 
 const ANTHROPIC_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
+  [HAIKU_5_5_ID]: 1_000_000,
   [HAIKU_ID]: 200_000,
   [SONNET_ID]: 1_000_000,
   [LEGACY_SONNET_ID]: 1_000_000,
+  [SONNET_4_6_ID]: 1_000_000,
   [OPUS_ID]: 1_000_000,
+  [OPUS_5_ID]: 1_000_000,
+  [OPUS_4_8_ID]: 1_000_000,
   [FABLE_ID]: 1_000_000,
+  [LEGACY_FABLE_ID]: 1_000_000,
 };
 
 /** Haiku takes no effort parameter (§4). */

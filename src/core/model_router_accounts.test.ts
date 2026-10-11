@@ -106,7 +106,7 @@ test("fallback: a catalog without the docs fields still resolves the current lin
   const tiers = resolveAccountTiers({ env: {}, catalog: V1_CATALOG, quota: null });
   assert.equal(tiers.standard.modelId, "claude-sonnet-5-5");
   assert.equal(tiers.standard.label, "Sonnet 5.5");
-  assert.deepEqual(tiers.standard.prices, { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 });
+  assert.deepEqual(tiers.standard.prices, { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 });
   assert.equal(tiers.simple.supportsEffort, false);
   assert.equal(tiers.simple.contextWindow, 200_000);
   assert.equal(tiers.complex.contextWindow, 1_000_000);
@@ -203,7 +203,7 @@ test("tierOfModel / modelRank: a session's model maps back to its tier, ignoring
 });
 
 test("pricesForModel (JEVADV-63): a known Anthropic id resolves to ANTHROPIC_PRICES exactly", () => {
-  assert.deepEqual(pricesForModel("claude-sonnet-5-5"), { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 });
+  assert.deepEqual(pricesForModel("claude-sonnet-5-5"), { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 });
   assert.deepEqual(pricesForModel("claude-opus-5-5"), ANTHROPIC_PRICES["claude-opus-5-5"]);
   assert.deepEqual(pricesForModel("claude-haiku-4-5-20251001"), ANTHROPIC_PRICES["claude-haiku-4-5-20251001"]);
 });
@@ -237,4 +237,10 @@ test("contextWindowOfModel: the built-in windows, a [1m] suffix, and null for an
   assert.equal(contextWindowOfModel("claude-opus-5-5"), 1_000_000);
   assert.equal(contextWindowOfModel("claude-sonnet-4-5[1m]"), 1_000_000);
   assert.equal(contextWindowOfModel("gateway/some-model"), null);
+});
+
+test("contextWindowOfModel: the models priced for past usage have the 1M window the models overview states", () => {
+  for (const id of ["claude-haiku-5-5", "claude-opus-5", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-4-6"]) {
+    assert.equal(contextWindowOfModel(id), 1_000_000, id);
+  }
 });

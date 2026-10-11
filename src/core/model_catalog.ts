@@ -32,12 +32,26 @@ export type RouterTier = "simple" | "standard" | "complex" | "frontier";
 /** Weakest first: an index into this list is a tier's strength. */
 export const ROUTER_TIERS: readonly RouterTier[] = ["simple", "standard", "complex", "frontier"];
 
-/** List prices in $ per million tokens. `cacheWrite` is the 1-hour cache write price. */
-export interface ModelPrices {
+/** One rate card in $ per million tokens. `cacheWrite` is the 1-hour cache write price. */
+export interface RateCard {
   readonly input: number;
   readonly cacheWrite: number;
   readonly cacheRead: number;
   readonly output: number;
+}
+
+/** The rate card a request pays when its prompt is longer than `overTokens`. */
+export interface LongPromptRates extends RateCard {
+  readonly overTokens: number;
+}
+
+/**
+ * List prices. A model priced by prompt length (Haiku 5.5) states the card
+ * for a short prompt here and the card for a longer one in `longPrompt`; a
+ * model with one card has no `longPrompt`.
+ */
+export interface ModelPrices extends RateCard {
+  readonly longPrompt?: LongPromptRates;
 }
 
 export interface ModelEntry {
@@ -84,10 +98,18 @@ function isPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-export function isModelPrices(value: unknown): value is ModelPrices {
+function isRateCard(value: unknown): value is RateCard {
   return (
     isRecord(value) && isPrice(value.input) && isPrice(value.cacheWrite) && isPrice(value.cacheRead) && isPrice(value.output)
   );
+}
+
+function isLongPromptRates(value: unknown): value is LongPromptRates {
+  return isRateCard(value) && isRecord(value) && typeof value.overTokens === "number" && Number.isInteger(value.overTokens) && value.overTokens > 0;
+}
+
+export function isModelPrices(value: unknown): value is ModelPrices {
+  return isRateCard(value) && isRecord(value) && optional(value.longPrompt, isLongPromptRates);
 }
 
 function isContextWindow(value: unknown): value is number {
