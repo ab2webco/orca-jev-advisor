@@ -59,7 +59,7 @@ const OPUS_4_8_ID = "claude-opus-4-8";
 const SONNET_4_6_ID = "claude-sonnet-4-6";
 
 const ANTHROPIC_TIER_MODEL: Readonly<Record<RouterTier, string>> = {
-  simple: HAIKU_ID,
+  simple: HAIKU_5_5_ID,
   standard: SONNET_ID,
   complex: OPUS_ID,
   frontier: FABLE_ID,
@@ -106,7 +106,7 @@ const ANTHROPIC_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   [LEGACY_FABLE_ID]: 1_000_000,
 };
 
-/** Haiku takes no effort parameter (§4). */
+/** Haiku 4.5 takes no effort parameter (§4); Haiku 5.5 does, and defaults to medium. */
 const ANTHROPIC_NO_EFFORT: ReadonlySet<string> = new Set([HAIKU_ID]);
 
 /** The string values of a vault settings.json's `env` block (already JSON.parse'd); anything else reads as none. */

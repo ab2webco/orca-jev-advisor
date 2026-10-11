@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "models": [
     {
       "id": "claude-fable-5-1",
@@ -43,7 +43,7 @@
       "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
       "available": true,
       "tier": "standard",
-      "prices": { "input": 2, "cacheWrite": 4, "cacheRead": 0.2, "output": 10 },
+      "prices": { "input": 2, "cacheWrite": 4, "cacheRead": 0.1, "output": 10 },
       "supportsEffort": true,
       "contextWindow": 1000000,
       "thinkingReadsFrom": ["claude-sonnet-5", "claude-haiku-4-5-20251001"],
@@ -51,19 +51,26 @@
       "retiresNotBefore": "2027-09-28"
     },
     {
-      "id": "claude-haiku-4-5-20251001",
+      "id": "claude-haiku-5-5",
       "provider": "anthropic",
-      "label": "Claude Haiku 4.5",
+      "label": "Claude Haiku 5.5",
       "rank": 4,
       "agentModel": "haiku",
-      "summary": "The fastest model with near-frontier intelligence",
+      "summary": "For high-volume, latency-sensitive tasks such as classification, extraction, and routing",
       "source": "https://platform.claude.com/docs/en/about-claude/models/overview",
       "available": true,
       "tier": "simple",
-      "prices": { "input": 1, "cacheWrite": 2, "cacheRead": 0.1, "output": 5 },
-      "supportsEffort": false,
-      "contextWindow": 200000,
-      "retiresNotBefore": "2026-10-15"
+      "prices": {
+        "input": 0.1,
+        "cacheWrite": 0.2,
+        "cacheRead": 0.01,
+        "output": 0.5,
+        "longPrompt": { "overTokens": 100000, "input": 0.5, "cacheWrite": 1, "cacheRead": 0.05, "output": 2.5 }
+      },
+      "supportsEffort": true,
+      "contextWindow": 1000000,
+      "defaultEffort": "medium",
+      "retiresNotBefore": "2027-10-07"
     }
   ]
 }

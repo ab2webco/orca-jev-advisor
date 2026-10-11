@@ -57,6 +57,7 @@ import {
   MODEL_SEED_OFFERED_VERSION_KEY,
   parseModelOfferedVersion,
   shouldSeedModels,
+  upgradeLegacySimpleDefault,
 } from '../../src/core/model_seed_notice.ts'
 import {
   docsCheckDue,
@@ -230,6 +231,31 @@ export async function seedModelsIfEmpty (orca, storageHost, options = {}) {
     orca.log(`model catalog seed planted: ${entries.length} row(s)`)
   } catch (error) {
     orca.log(`initial model seeding failed: ${String(error?.message ?? error).slice(0, 160)}`)
+  }
+}
+
+/**
+ * 0.6.29: moves an install still holding the old default simple-tier model
+ * (Haiku 4.5, exactly as every earlier baseline shipped it) to its
+ * successor, Haiku 5.5. The one change to a stored catalog made without an
+ * offer, and only for a row nobody edited (upgradeLegacySimpleDefault,
+ * model_seed_notice.ts). It reads the SHIPPED baseline, not a docs-check
+ * one: what it applies is what this release was tested with. A catalog with
+ * a row that does not parse is left alone, so a malformed row of the
+ * person's is never dropped by a rewrite. Never throws: a failure is one
+ * log line and the next activation tries again.
+ */
+export async function upgradeLegacySimpleDefaultIfUntouched (orca, storageHost, options = {}) {
+  try {
+    const stored = await storageHost.get(MODELS_KEY)
+    const existing = parseModelCatalog(stored)
+    if (!Array.isArray(stored) || existing.length !== stored.length) return
+    const upgraded = upgradeLegacySimpleDefault(existing, parseModelSeedEntries(await readShippedPayload(options)))
+    if (upgraded === null) return
+    await storageHost.set(MODELS_KEY, upgraded)
+    orca.log('model catalog: the simple tier moved from Haiku 4.5 to Haiku 5.5 (the row had not been edited)')
+  } catch (error) {
+    orca.log(`legacy simple-tier upgrade failed: ${String(error?.message ?? error).slice(0, 160)}`)
   }
 }
 

@@ -9,9 +9,10 @@ import { decideSubagent, explicitModelRank, subagentStepEffort } from "./model_r
 function entry(id: string, rank: number, available: boolean): ModelEntry {
   return { id, provider: "anthropic", label: id, rank, agentModel: id, source: "", available };
 }
+// The simple tier is a Haiku 4.5 row an install chose to keep (an edited row is never migrated): it takes no effort.
 const TIERS = resolveAccountTiers({
   env: {},
-  catalog: [entry("claude-fable-5-1", 1, false), entry("claude-opus-5-5", 2, true), entry("claude-sonnet-5-5", 3, true), entry("claude-haiku-4-5-20251001", 4, true)],
+  catalog: [entry("claude-fable-5-1", 1, false), entry("claude-opus-5-5", 2, true), entry("claude-sonnet-5-5", 3, true), { ...entry("claude-haiku-4-5-20251001", 4, true), tier: "simple", supportsEffort: false }],
   quota: null,
 });
 const CALM: GuardContext = { text: "list the files under src/", activity: null, confidence: 0.9 };

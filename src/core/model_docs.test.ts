@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import { parseModelSeedEntries, type ModelEntry } from "./model_catalog.ts";
+import { diffModelSeed } from "./model_seed_notice.ts";
 import {
   MODEL_DOCS_CHECK_INTERVAL_MS,
   MODELS_OVERVIEW_URL,
@@ -23,7 +24,7 @@ const BUNDLED = parseModelSeedEntries(BUNDLED_PAYLOAD);
 
 test("overview: one model per column of the comparison table, with id, label, summary, effort, window and retirement", () => {
   const models = parseModelsOverview(OVERVIEW);
-  assert.deepEqual(models.map((row) => row.id), ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"]);
+  assert.deepEqual(models.map((row) => row.id), ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
   const sonnet = models.find((row) => row.id === "claude-sonnet-5-5");
   assert.deepEqual(sonnet, {
     id: "claude-sonnet-5-5",
@@ -34,24 +35,54 @@ test("overview: one model per column of the comparison table, with id, label, su
     contextWindow: 1_000_000,
     retiresNotBefore: "2027-09-28",
   });
-  const haiku = models.find((row) => row.id === "claude-haiku-4-5-20251001");
-  assert.equal(haiku?.supportsEffort, false);
-  assert.equal(haiku?.defaultEffort, undefined);
-  assert.equal(haiku?.contextWindow, 200_000);
-  assert.equal(haiku?.retiresNotBefore, "2026-10-15");
+  const haiku = models.find((row) => row.id === "claude-haiku-5-5");
+  assert.equal(haiku?.supportsEffort, true);
+  assert.equal(haiku?.defaultEffort, "medium");
+  assert.equal(haiku?.contextWindow, 1_000_000);
+  assert.equal(haiku?.retiresNotBefore, "2027-10-07");
 });
 
 test("pricing: the Model pricing table by model name; cacheWrite is the 1h write price", () => {
   const prices = parseModelPricing(PRICING);
   assert.deepEqual(prices.get("Claude Fable 5.1"), { input: 10, cacheWrite: 20, cacheRead: 0.25, output: 50 });
-  assert.deepEqual(prices.get("Claude Sonnet 5.5"), { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 });
+  assert.deepEqual(prices.get("Claude Sonnet 5.5"), { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 }, "cache hits are 0.05x input on Sonnet 5.5");
   assert.deepEqual(prices.get("Claude Opus 4.1"), { input: 15, cacheWrite: 30, cacheRead: 1.5, output: 75 }, "a parenthetical note after the name is not part of it");
   assert.deepEqual(prices.get("Claude Haiku 4.5"), { input: 1, cacheWrite: 2, cacheRead: 0.1, output: 5 });
+});
+
+test("pricing: Haiku 5.5's two rows are one model with two cards, the base card for prompts up to 100K and the other above", () => {
+  const prices = parseModelPricing(PRICING);
+  assert.deepEqual(prices.get("Claude Haiku 5.5"), {
+    input: 0.1,
+    cacheWrite: 0.2,
+    cacheRead: 0.01,
+    output: 0.5,
+    longPrompt: { overTokens: 100_000, input: 0.5, cacheWrite: 1, cacheRead: 0.05, output: 2.5 },
+  });
+});
+
+test("pricing: a lone row for prompts over a threshold has no base card to attach to, so it yields no price", () => {
+  const md = [
+    "| Model | Base input tokens | 5m cache writes | 1h cache writes | Cache hits and refreshes | Output tokens |",
+    "| :-- | :-- | :-- | :-- | :-- | :-- |",
+    "| Claude Haiku 9 (for prompts over 100,000 tokens) | $0.50 / MTok | $0.625 / MTok | $1 / MTok | $0.05 / MTok | $2.50 / MTok |",
+  ].join("\n");
+  assert.equal(parseModelPricing(md).size, 0, "never the long card passed off as the base one");
 });
 
 test("docs rows: the shipped seed's facts come back from the real pages, so today's docs offer nothing new", () => {
   const rows = docsSeedRows(parseModelsOverview(OVERVIEW), parseModelPricing(PRICING), BUNDLED);
   assert.deepEqual(rows, BUNDLED);
+  assert.deepEqual(diffModelSeed(BUNDLED, rows), { added: [], differing: [] });
+});
+
+test("docs rows: Haiku 5.5 comes back with its base card and its over-100K card, never the long card alone", () => {
+  const haiku = docsSeedRows(parseModelsOverview(OVERVIEW), parseModelPricing(PRICING), BUNDLED).find((row) => row.id === "claude-haiku-5-5");
+  assert.equal(haiku?.tier, "simple");
+  assert.equal(haiku?.prices?.input, 0.1);
+  assert.equal(haiku?.prices?.longPrompt?.input, 0.5);
+  assert.equal(haiku?.supportsEffort, true);
+  assert.equal(haiku?.defaultEffort, "medium");
 });
 
 test("docs rows: a new model of a known family takes that family's tier and alias; the newest of a family wins", () => {
@@ -111,21 +142,21 @@ test("docs check: at most once a day, counted from the last attempt, successful 
 
 test("docs seed version: rows equal to what is already offered keep its version; a change is one newer", () => {
   const at = "2026-09-29T12:00:00.000Z";
-  const same = nextDocsSeed(null, BUNDLED, { version: 2, models: BUNDLED }, at);
-  assert.equal(same.version, 2, "docs that match the shipped seed are not a newer offer");
+  const same = nextDocsSeed(null, BUNDLED, { version: 3, models: BUNDLED }, at);
+  assert.equal(same.version, 3, "docs that match the shipped seed are not a newer offer");
   const repriced: ModelEntry[] = BUNDLED.map((row) => (row.id === "claude-opus-5-5" ? { ...row, prices: { input: 3, cacheWrite: 6, cacheRead: 0.15, output: 15 } } : row));
-  const changed = nextDocsSeed(same, repriced, { version: 2, models: BUNDLED }, at);
-  assert.equal(changed.version, 3);
+  const changed = nextDocsSeed(same, repriced, { version: 3, models: BUNDLED }, at);
+  assert.equal(changed.version, 4);
   assert.equal(changed.fetchedAt, at);
-  assert.equal(nextDocsSeed(changed, repriced, { version: 2, models: BUNDLED }, at).version, 3, "the same change twice is the same offer");
+  assert.equal(nextDocsSeed(changed, repriced, { version: 3, models: BUNDLED }, at).version, 4, "the same change twice is the same offer");
   assert.deepEqual(parseDocsSeed(JSON.parse(JSON.stringify(changed))), changed);
   assert.equal(parseDocsSeed({ version: "3", models: [] }), null);
 });
 
 test("the effective seed is the docs seed only when it is newer than the shipped one", () => {
-  const docs = { version: 3, fetchedAt: "2026-09-29T12:00:00.000Z", models: BUNDLED.slice(0, 1) };
-  assert.deepEqual(effectiveModelSeed(BUNDLED_PAYLOAD, docs), { version: 3, models: docs.models });
-  assert.equal(effectiveModelSeed(BUNDLED_PAYLOAD, { ...docs, version: 2 }), BUNDLED_PAYLOAD);
+  const docs = { version: 4, fetchedAt: "2026-09-29T12:00:00.000Z", models: BUNDLED.slice(0, 1) };
+  assert.deepEqual(effectiveModelSeed(BUNDLED_PAYLOAD, docs), { version: 4, models: docs.models });
+  assert.equal(effectiveModelSeed(BUNDLED_PAYLOAD, { ...docs, version: 3 }), BUNDLED_PAYLOAD);
   assert.equal(effectiveModelSeed(BUNDLED_PAYLOAD, null), BUNDLED_PAYLOAD);
 });
 

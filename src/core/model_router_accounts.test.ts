@@ -70,15 +70,17 @@ test("isGatewayEnv: only a non-Anthropic ANTHROPIC_BASE_URL is a gateway", () =>
 
 test("Anthropic direct: the four tiers map to Haiku, Sonnet, Opus and (without Fable) Opus again", () => {
   const tiers = resolveAccountTiers({ env: {}, catalog: SEED_CATALOG, quota: null });
-  assert.equal(tiers.simple.modelId, "claude-haiku-4-5-20251001");
+  assert.equal(tiers.simple.modelId, "claude-haiku-5-5");
   assert.equal(tiers.standard.modelId, "claude-sonnet-5-5");
   assert.equal(tiers.complex.modelId, "claude-opus-5-5");
   assert.equal(tiers.frontier.modelId, "claude-opus-5-5");
-  assert.equal(tiers.simple.supportsEffort, false);
+  assert.equal(tiers.simple.supportsEffort, true, "Haiku 5.5 takes effort, unlike Haiku 4.5");
   assert.equal(tiers.standard.supportsEffort, true);
-  assert.deepEqual(tiers.standard.prices, { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 });
+  assert.deepEqual(tiers.standard.prices, { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 });
   assert.equal(tiers.standard.label, "Sonnet 5.5");
-  assert.equal(tiers.simple.contextWindow, 200_000);
+  assert.equal(tiers.simple.label, "Haiku 5.5");
+  assert.equal(tiers.simple.prices?.longPrompt?.overTokens, 100_000);
+  assert.equal(tiers.simple.contextWindow, 1_000_000);
   assert.equal(tiers.standard.contextWindow, 1_000_000);
 });
 
@@ -107,8 +109,9 @@ test("fallback: a catalog without the docs fields still resolves the current lin
   assert.equal(tiers.standard.modelId, "claude-sonnet-5-5");
   assert.equal(tiers.standard.label, "Sonnet 5.5");
   assert.deepEqual(tiers.standard.prices, { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 });
-  assert.equal(tiers.simple.supportsEffort, false);
-  assert.equal(tiers.simple.contextWindow, 200_000);
+  assert.equal(tiers.simple.modelId, "claude-haiku-5-5", "a catalog with no tier on its Haiku row falls to the built-in simple model");
+  assert.equal(tiers.simple.supportsEffort, true);
+  assert.equal(tiers.simple.contextWindow, 1_000_000);
   assert.equal(tiers.complex.contextWindow, 1_000_000);
   const fable = resolveAccountTiers({ env: {}, catalog: V1_CATALOG.map((row) => (row.id === "claude-fable-5-1" ? { ...row, available: true } : row)), quota: quota({ usedPercent: 0 }) });
   assert.deepEqual(fable.frontier.prices, { input: 10, cacheWrite: 20, cacheRead: 0.25, output: 50 });
@@ -168,7 +171,7 @@ test("gateway: a missing tier variable falls back to the next stronger one, neve
 });
 
 test("never an unavailable model: a tier whose model the catalog marks unavailable moves to the next stronger available one", () => {
-  const noHaiku = SEED_CATALOG.map((row) => (row.id === "claude-haiku-4-5-20251001" ? { ...row, available: false } : row));
+  const noHaiku = SEED_CATALOG.map((row) => (row.id === "claude-haiku-5-5" ? { ...row, available: false } : row));
   const tiers = resolveAccountTiers({ env: {}, catalog: noHaiku, quota: null });
   assert.equal(tiers.simple.modelId, "claude-sonnet-5-5");
   const noOpus = SEED_CATALOG.map((row) => (row.id === "claude-opus-5-5" ? { ...row, available: false } : row));
@@ -197,7 +200,7 @@ test("tierOfModel / modelRank: a session's model maps back to its tier, ignoring
   assert.equal(tierOfModel(tiers, "claude-opus-5-5[1m]"), "complex");
   assert.equal(tierOfModel(tiers, "some-other-model"), null);
   const opus = modelRank(tiers, "claude-opus-5-5");
-  const haiku = modelRank(tiers, "claude-haiku-4-5-20251001");
+  const haiku = modelRank(tiers, "claude-haiku-5-5");
   assert.ok(opus !== null && haiku !== null && opus > haiku);
   assert.equal(modelRank(tiers, "some-other-model"), null);
 });

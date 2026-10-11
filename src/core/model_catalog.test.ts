@@ -56,18 +56,18 @@ test("the shipped Claude ladder follows the models overview, largest first", () 
   const ladder = orderedLadder(parseModelSeedEntries(seedFile)).filter((row) => row.rank !== null);
   assert.deepEqual(
     ladder.map((row) => row.id),
-    ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"],
+    ["claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
   );
 });
 
 test("seed v2: every shipped row carries its tier, prices, effort support and context window from the docs", () => {
-  assert.ok(parseModelSeedVersion(seedFile) >= 2, "the seed must be version 2 so existing installs are offered Sonnet 5.5");
+  assert.ok(parseModelSeedVersion(seedFile) >= 3, "the seed must be version 3 so existing installs are offered Haiku 5.5");
   const byId = new Map(parseModelSeedEntries(seedFile).map((row) => [row.id, row] as const));
   const sonnet = byId.get("claude-sonnet-5-5");
   assert.equal(sonnet?.label, "Claude Sonnet 5.5");
   assert.equal(sonnet?.summary, "The best combination of speed and intelligence");
   assert.equal(sonnet?.tier, "standard");
-  assert.deepEqual(sonnet?.prices, { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 });
+  assert.deepEqual(sonnet?.prices, { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 });
   assert.deepEqual(sonnet?.thinkingReadsFrom, ["claude-sonnet-5", "claude-haiku-4-5-20251001"]);
   assert.equal(sonnet?.defaultEffort, "high");
   const fable = byId.get("claude-fable-5-1");
@@ -78,13 +78,15 @@ test("seed v2: every shipped row carries its tier, prices, effort support and co
   const opus = byId.get("claude-opus-5-5");
   assert.equal(opus?.tier, "complex");
   assert.equal(opus?.defaultEffort, "medium");
-  const haiku = byId.get("claude-haiku-4-5-20251001");
+  const haiku = byId.get("claude-haiku-5-5");
   assert.equal(haiku?.tier, "simple");
-  assert.equal(haiku?.supportsEffort, false);
-  assert.equal(haiku?.defaultEffort, undefined);
-  assert.equal(haiku?.contextWindow, 200_000);
-  assert.equal(haiku?.retiresNotBefore, "2026-10-15");
+  assert.equal(haiku?.supportsEffort, true);
+  assert.equal(haiku?.defaultEffort, "medium");
+  assert.equal(haiku?.contextWindow, 1_000_000);
+  assert.equal(haiku?.retiresNotBefore, "2027-10-07");
+  assert.deepEqual(haiku?.prices, { input: 0.1, cacheWrite: 0.2, cacheRead: 0.01, output: 0.5, longPrompt: { overTokens: 100_000, input: 0.5, cacheWrite: 1, cacheRead: 0.05, output: 2.5 } });
   assert.equal(byId.has("claude-sonnet-5"), false, "Sonnet 5 is legacy");
+  assert.equal(byId.has("claude-haiku-4-5-20251001"), false, "Haiku 4.5 is legacy: no longer on the models overview, and an install that has it is migrated, not shipped it again");
 });
 
 test("the optional docs fields validate when present and are not required", () => {

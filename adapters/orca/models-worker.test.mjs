@@ -27,6 +27,7 @@ import {
   publishModelsSeedNotice,
   refreshModelDocs,
   seedModelsIfEmpty,
+  upgradeLegacySimpleDefaultIfUntouched,
 } from './models-worker.mjs'
 
 function fakeOrca () {
@@ -117,6 +118,75 @@ test('seedModelsIfEmpty: never touches an existing catalog, seeded or not', asyn
   await seedModelsIfEmpty(orca, storageHost, { seedPayload: fakeSeedPayload() })
   assert.deepEqual(await storageHost.get(MODELS_KEY), mine)
   assert.equal(await storageHost.get(MODEL_SEED_MARKER_KEY), null, 'never touched -- untouched per this slice\'s scope')
+})
+
+// ---------------------------------------------------------------------------
+// upgradeLegacySimpleDefaultIfUntouched (0.6.29)
+// ---------------------------------------------------------------------------
+
+const REAL_SEED = JSON.parse(readFileSync(new URL('../../seed/models.json', import.meta.url), 'utf8'))
+const LEGACY_HAIKU = {
+  id: 'claude-haiku-4-5-20251001',
+  provider: 'anthropic',
+  label: 'Claude Haiku 4.5',
+  rank: 4,
+  agentModel: 'haiku',
+  summary: 'The fastest model with near-frontier intelligence',
+  source: 'https://platform.claude.com/docs/en/about-claude/models/overview',
+  available: true,
+  tier: 'simple',
+  prices: { input: 1, cacheWrite: 2, cacheRead: 0.1, output: 5 },
+  supportsEffort: false,
+  contextWindow: 200000,
+  retiresNotBefore: '2026-10-15',
+}
+const V2_CATALOG = [...REAL_SEED.models.filter((row) => row.id !== 'claude-haiku-5-5'), LEGACY_HAIKU]
+
+test('upgradeLegacySimpleDefaultIfUntouched: an install still on the old default moves its simple tier to Haiku 5.5, once', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: V2_CATALOG, [MODEL_SEED_MARKER_KEY]: true })
+  await upgradeLegacySimpleDefaultIfUntouched(orca, storageHost, { seedPayload: fakeSeedPayload(REAL_SEED) })
+
+  const models = await storageHost.get(MODELS_KEY)
+  const simple = models.filter((row) => row.tier === 'simple' && row.rank !== null).map((row) => row.id)
+  assert.deepEqual(simple, ['claude-haiku-5-5'])
+  const old = models.find((row) => row.id === 'claude-haiku-4-5-20251001')
+  assert.equal(old.rank, null)
+  assert.equal(old.tier, undefined)
+  assert.equal(orca._logs.filter((line) => line.includes('Haiku 5.5')).length, 1, 'one log line says it happened')
+
+  const after = JSON.stringify(models)
+  await upgradeLegacySimpleDefaultIfUntouched(orca, storageHost, { seedPayload: fakeSeedPayload(REAL_SEED) })
+  assert.equal(JSON.stringify(await storageHost.get(MODELS_KEY)), after, 'a second activation changes nothing')
+  assert.equal(orca._logs.filter((line) => line.includes('Haiku 5.5')).length, 1)
+})
+
+test('upgradeLegacySimpleDefaultIfUntouched: a Haiku 4.5 row the person edited, an emptied catalog and a catalog with an invalid row are left exactly as they are', async () => {
+  const orca = fakeOrca()
+  const edited = V2_CATALOG.map((row) => (row.id === LEGACY_HAIKU.id ? { ...row, label: 'My Haiku' } : row))
+  const withInvalid = [...V2_CATALOG, { id: 'broken' }]
+  for (const stored of [edited, [], withInvalid]) {
+    const storageHost = fakeStorageHost({ [MODELS_KEY]: stored })
+    await upgradeLegacySimpleDefaultIfUntouched(orca, storageHost, { seedPayload: fakeSeedPayload(REAL_SEED) })
+    assert.deepEqual(await storageHost.get(MODELS_KEY), stored)
+  }
+  assert.deepEqual(orca._logs, [])
+})
+
+test('upgradeLegacySimpleDefaultIfUntouched: an unreadable baseline changes nothing and logs one line', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: V2_CATALOG })
+  await upgradeLegacySimpleDefaultIfUntouched(orca, storageHost, { seedPayload: async () => { throw new Error('no seed file') } })
+  assert.deepEqual(await storageHost.get(MODELS_KEY), V2_CATALOG)
+  assert.equal(orca._logs.length, 1)
+})
+
+test('activation runs the legacy simple-tier upgrade after seeding and before the first mirror, so the hooks see it at once', () => {
+  const main = readFileSync(new URL('./main.mjs', import.meta.url), 'utf8')
+  const seeding = main.indexOf('.then(() => seedModelsIfEmpty(')
+  const upgrade = main.indexOf('.then(() => upgradeLegacySimpleDefaultIfUntouched(')
+  const mirror = main.indexOf('.then(() => mirrorModels(orca, storageHost, MODELS_WORKER_OPTIONS))')
+  assert.ok(seeding !== -1 && upgrade > seeding && mirror > upgrade)
 })
 
 // ---------------------------------------------------------------------------
@@ -277,7 +347,7 @@ test('the shipped seed v2 offers Sonnet 5.5 to an install still on the v1 catalo
   await attendModelsSeedRequest(orca, storageHost, { mirror: noopMirror() })
   const sonnet = (await storageHost.get(MODELS_KEY)).find((m) => m.id === 'claude-sonnet-5-5')
   assert.equal(sonnet.tier, 'standard')
-  assert.deepEqual(sonnet.prices, { input: 2, cacheWrite: 4, cacheRead: 0.2, output: 10 })
+  assert.deepEqual(sonnet.prices, { input: 2, cacheWrite: 4, cacheRead: 0.1, output: 10 })
 })
 
 // ---------------------------------------------------------------------------
@@ -385,7 +455,7 @@ test('publishModelMeasurements: does not re-mirror when readiness is unchanged',
 
 const DOCS_OVERVIEW = readFileSync(new URL('../../src/core/fixtures/model_docs/models-overview.md', import.meta.url), 'utf8')
 const DOCS_PRICING = readFileSync(new URL('../../src/core/fixtures/model_docs/pricing.md', import.meta.url), 'utf8')
-const SHIPPED_V2 = JSON.parse(readFileSync(new URL('../../seed/models.json', import.meta.url), 'utf8'))
+const SHIPPED_SEED_FILE = JSON.parse(readFileSync(new URL('../../seed/models.json', import.meta.url), 'utf8'))
 const REPRICED_PRICING = DOCS_PRICING.replace(/\| Claude Opus 5\.5 +\| \$4 \/ MTok +\| \$5 \/ MTok +\| \$8 \/ MTok +\|/, '| Claude Opus 5.5 | $3 / MTok | $3.75 / MTok | $6 / MTok |')
 
 /** Records every URL asked for and answers from `pages` (url -> text), or fails. */
@@ -406,32 +476,32 @@ const NOW = '2026-09-29T12:00:00.000Z'
 
 test('refreshModelDocs: a changed price on the docs is offered through the seed notice, and the catalog itself is untouched', async () => {
   const orca = fakeOrca()
-  const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_V2.models, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 2 } })
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_SEED_FILE.models, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 3 } })
   const fetchText = fakeFetchText({ [OVERVIEW_URL]: DOCS_OVERVIEW, [PRICING_URL]: REPRICED_PRICING })
   await refreshModelDocs(orca, storageHost, { fetchText, now: () => NOW })
 
   assert.deepEqual(fetchText.calls.sort(), [PRICING_URL, OVERVIEW_URL].sort())
   const docs = await storageHost.get(MODELS_DOCS_SEED_KEY)
-  assert.equal(docs.version, 3)
+  assert.equal(docs.version, 4)
   assert.equal(docs.fetchedAt, NOW)
   const notice = await storageHost.get(MODELS_SEED_NOTICE_KEY)
   assert.equal(notice.due, true)
-  assert.equal(notice.shippedVersion, 3)
+  assert.equal(notice.shippedVersion, 4)
   assert.deepEqual(notice.items, [{ id: 'claude-opus-5-5', label: 'Claude Opus 5.5', kind: 'changed', fields: ['prices'] }])
-  assert.deepEqual(await storageHost.get(MODELS_KEY), SHIPPED_V2.models, 'routing only changes when the person accepts')
+  assert.deepEqual(await storageHost.get(MODELS_KEY), SHIPPED_SEED_FILE.models, 'routing only changes when the person accepts')
 
   await storageHost.set(MODELS_SEED_REQUEST_KEY, { id: 'req-docs', at: new Date().toISOString(), action: 'apply', acceptedIds: ['claude-opus-5-5'] })
   await attendModelsSeedRequest(orca, storageHost, { mirror: noopMirror() })
   const opus = (await storageHost.get(MODELS_KEY)).find((m) => m.id === 'claude-opus-5-5')
   assert.deepEqual(opus.prices, { input: 3, cacheWrite: 6, cacheRead: 0.2, output: 20 })
-  assert.deepEqual(await storageHost.get(MODEL_SEED_OFFERED_VERSION_KEY), { version: 3 })
+  assert.deepEqual(await storageHost.get(MODEL_SEED_OFFERED_VERSION_KEY), { version: 4 })
 })
 
 test('refreshModelDocs: docs that match the shipped seed offer nothing', async () => {
   const orca = fakeOrca()
-  const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_V2.models, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 2 } })
+  const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_SEED_FILE.models, [MODEL_SEED_OFFERED_VERSION_KEY]: { version: 3 } })
   await refreshModelDocs(orca, storageHost, { fetchText: fakeFetchText({ [OVERVIEW_URL]: DOCS_OVERVIEW, [PRICING_URL]: DOCS_PRICING }), now: () => NOW })
-  assert.equal((await storageHost.get(MODELS_DOCS_SEED_KEY)).version, 2)
+  assert.equal((await storageHost.get(MODELS_DOCS_SEED_KEY)).version, 3)
   assert.equal((await storageHost.get(MODELS_SEED_NOTICE_KEY)).due, false)
 })
 
@@ -444,13 +514,13 @@ test('refreshModelDocs: at most once a day, a failed attempt included', async ()
 })
 
 test('refreshModelDocs: a failed fetch or a page that changed format keeps the last good docs seed and logs one line', async () => {
-  const good = { version: 3, fetchedAt: '2026-09-27T00:00:00.000Z', models: SHIPPED_V2.models }
+  const good = { version: 3, fetchedAt: '2026-09-27T00:00:00.000Z', models: SHIPPED_SEED_FILE.models }
   for (const pages of [{}, { [OVERVIEW_URL]: '<html>maintenance</html>', [PRICING_URL]: DOCS_PRICING }, { [OVERVIEW_URL]: DOCS_OVERVIEW, [PRICING_URL]: 'no table' }]) {
     const orca = fakeOrca()
-    const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_V2.models, [MODELS_DOCS_SEED_KEY]: good })
+    const storageHost = fakeStorageHost({ [MODELS_KEY]: SHIPPED_SEED_FILE.models, [MODELS_DOCS_SEED_KEY]: good })
     await refreshModelDocs(orca, storageHost, { fetchText: fakeFetchText(pages), now: () => NOW })
     assert.deepEqual(await storageHost.get(MODELS_DOCS_SEED_KEY), good)
-    assert.deepEqual(await storageHost.get(MODELS_KEY), SHIPPED_V2.models)
+    assert.deepEqual(await storageHost.get(MODELS_KEY), SHIPPED_SEED_FILE.models)
     assert.equal(orca._logs.length, 1, JSON.stringify(orca._logs))
     assert.match(orca._logs[0], /^model docs check failed: /)
     assert.equal((await storageHost.get(MODELS_DOCS_CHECK_KEY)).at, NOW)

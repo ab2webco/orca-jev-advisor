@@ -16,6 +16,13 @@
 // `available` is never compared or taken from the seed: whether a person can
 // run a model is theirs to say, whatever the baseline ships.
 //
+// One narrow exception to "never changed without a choice" (0.6.29):
+// upgradeLegacySimpleDefault. A stored Haiku 4.5 row that is still, field by
+// field, the row every earlier release shipped is a default nobody chose, and
+// leaving it would keep the simple tier on a model ten times dearer than its
+// successor. Anything the person edited, added or switched is theirs and
+// stays.
+//
 // Pure: the worker reads the seed file and storage and writes the result.
 // ---------------------------------------------------------------------------
 
@@ -177,4 +184,48 @@ export function applyModelSeedChoices(
     }
   }
   return { result, replaced, added };
+}
+
+// ---------------------------------------------------------------------------
+// The old default simple-tier model (0.6.29)
+// ---------------------------------------------------------------------------
+
+/** The Haiku 4.5 row every baseline up to version 2 shipped, exactly. */
+export const LEGACY_SIMPLE_DEFAULT: ModelEntry = {
+  id: "claude-haiku-4-5-20251001",
+  provider: "anthropic",
+  label: "Claude Haiku 4.5",
+  rank: 4,
+  agentModel: "haiku",
+  summary: "The fastest model with near-frontier intelligence",
+  source: "https://platform.claude.com/docs/en/about-claude/models/overview",
+  available: true,
+  tier: "simple",
+  prices: { input: 1, cacheWrite: 2, cacheRead: 0.1, output: 5 },
+  supportsEffort: false,
+  contextWindow: 200_000,
+  retiresNotBefore: "2026-10-15",
+};
+
+const SIMPLE_SUCCESSOR_ID = "claude-haiku-5-5";
+
+/**
+ * The catalog with the old default simple-tier model replaced by its
+ * successor, or null when there is nothing to do. It applies only to an
+ * install whose Haiku 4.5 row still equals LEGACY_SIMPLE_DEFAULT on every
+ * compared field (`available` aside: it is the person's and is carried over
+ * to the successor), that has no Haiku 5.5 row yet, and where no other model
+ * holds the simple tier. The old row stays, unranked and without a tier, so
+ * the person can place it again; the successor is the shipped row.
+ */
+export function upgradeLegacySimpleDefault(existing: readonly ModelEntry[], shipped: readonly ModelEntry[]): readonly ModelEntry[] | null {
+  const old = existing.find((row) => row.id === LEGACY_SIMPLE_DEFAULT.id);
+  const successor = shipped.find((row) => row.id === SIMPLE_SUCCESSOR_ID);
+  if (old === undefined || successor === undefined || existing.some((row) => row.id === SIMPLE_SUCCESSOR_ID)) return null;
+  if (existing.some((row) => row.tier === "simple" && row.id !== old.id)) return null;
+  if (COMPARED_FIELDS.some((field) => !sameValue(old[field], LEGACY_SIMPLE_DEFAULT[field]))) return null;
+  const { tier: _tier, ...rest } = old;
+  void _tier;
+  const demoted: ModelEntry = { ...rest, rank: null };
+  return [...existing.map((row) => (row === old ? demoted : row)), { ...successor, available: old.available }];
 }

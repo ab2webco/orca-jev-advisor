@@ -27,11 +27,12 @@ import type { ActivityMessage } from "./model_router_stage.ts";
 function entry(id: string, rank: number, available: boolean): ModelEntry {
   return { id, provider: "anthropic", label: id, rank, agentModel: id, source: "", available };
 }
+// The simple tier is a Haiku 4.5 row an install chose to keep (an edited row is never migrated): it takes no effort.
 const CATALOG: readonly ModelEntry[] = [
   entry("claude-fable-5-1", 1, false),
   entry("claude-opus-5-5", 2, true),
   entry("claude-sonnet-5-5", 3, true),
-  entry("claude-haiku-4-5-20251001", 4, true),
+  { ...entry("claude-haiku-4-5-20251001", 4, true), tier: "simple", supportsEffort: false },
 ];
 const TIERS = resolveAccountTiers({ env: {}, catalog: CATALOG, quota: null });
 const GATEWAY = resolveAccountTiers({ env: { ANTHROPIC_BASE_URL: "https://gw.example", ANTHROPIC_DEFAULT_OPUS_MODEL: "big", ANTHROPIC_DEFAULT_SONNET_MODEL: "mid", ANTHROPIC_DEFAULT_HAIKU_MODEL: "small" }, catalog: CATALOG, quota: null });

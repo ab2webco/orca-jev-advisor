@@ -16,7 +16,7 @@
 
 import { isRecord, isString } from "../guards.ts";
 import { parseModelCatalog, parseModelSeedEntries, parseModelSeedVersion, isModelEntry } from "./model_catalog.ts";
-import type { ModelEntry, ModelPrices, RouterTier } from "./model_catalog.ts";
+import type { ModelEntry, ModelPrices, RateCard, RouterTier } from "./model_catalog.ts";
 import { diffModelSeed } from "./model_seed_notice.ts";
 
 export const MODELS_OVERVIEW_URL = "https://platform.claude.com/docs/en/about-claude/models/overview";
@@ -159,7 +159,17 @@ export function parseModelsOverview(markdown: string): readonly OverviewModel[] 
   return models;
 }
 
-/** The "Model pricing" table: model name → list prices, the 1h cache write as `cacheWrite`. */
+/** "Claude Haiku 5.5 (for prompts over 100,000 tokens)" → the model name, whether it is the over or the up-to row, and the threshold. */
+const PROMPT_LENGTH_ROW = /^(.*?)\s*\(for prompts (up to|over) ([\d,]+) tokens\)$/i;
+
+/**
+ * The "Model pricing" table: model name → list prices, the 1h cache write as
+ * `cacheWrite`. A model priced by prompt length has two rows ("for prompts up
+ * to N tokens", "for prompts over N tokens"): they become one entry, the
+ * first as the base card and the second as `longPrompt`. A model with only
+ * one of the two yields nothing -- a lone card would price every prompt as if
+ * it were the other kind.
+ */
 export function parseModelPricing(markdown: string): ReadonlyMap<string, ModelPrices> {
   const prices = new Map<string, ModelPrices>();
   const table = markdownTables(markdown).find((rows) => (rows[0] ?? []).some((cell) => plain(cell) === "Base input tokens"));
@@ -168,14 +178,29 @@ export function parseModelPricing(markdown: string): ReadonlyMap<string, ModelPr
   const at = (name: string): number => header.indexOf(name);
   const columns = { input: at("Base input tokens"), cacheWrite: at("1h cache writes"), cacheRead: at("Cache hits and refreshes"), output: at("Output tokens") };
   if (Object.values(columns).some((index) => index < 1)) return prices;
+  const upTo = new Map<string, { readonly overTokens: number; readonly card: RateCard }>();
+  const over = new Map<string, { readonly overTokens: number; readonly card: RateCard }>();
   for (const row of table.slice(1)) {
-    const name = plain(row[0] ?? "").replace(/\s*\(.*\)$/, "");
+    const label = plain(row[0] ?? "");
+    const lengthRow = PROMPT_LENGTH_ROW.exec(label);
+    const name = lengthRow === null ? label.replace(/\s*\(.*\)$/, "") : (lengthRow[1] as string);
     const input = price(row[columns.input] ?? "");
     const cacheWrite = price(row[columns.cacheWrite] ?? "");
     const cacheRead = price(row[columns.cacheRead] ?? "");
     const output = price(row[columns.output] ?? "");
     if (name.length === 0 || name.length > MAX_LABEL_LENGTH || input === undefined || cacheWrite === undefined || cacheRead === undefined || output === undefined) continue;
-    prices.set(name, { input, cacheWrite, cacheRead, output });
+    const card: RateCard = { input, cacheWrite, cacheRead, output };
+    if (lengthRow === null) {
+      prices.set(name, card);
+      continue;
+    }
+    const overTokens = Number((lengthRow[3] as string).replace(/,/g, ""));
+    if (!Number.isInteger(overTokens) || overTokens <= 0) continue;
+    (lengthRow[2]?.toLowerCase() === "over" ? over : upTo).set(name, { overTokens, card });
+  }
+  for (const [name, base] of upTo) {
+    const long = over.get(name);
+    if (long !== undefined && long.overTokens === base.overTokens) prices.set(name, { ...base.card, longPrompt: { overTokens: long.overTokens, ...long.card } });
   }
   return prices;
 }
