@@ -11,5 +11,5 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["claude-code.d.ts", "hooks/*.ts"]
+  "include": ["claude-code.d.ts", "claude-code-tools.d.ts", "hooks/*.ts"]
 }
