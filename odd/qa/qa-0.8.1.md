@@ -15,7 +15,7 @@ Run on 2026-10-12 against `release/0.8.1`, from `main` at 665bc7f (0.8.0 plus th
 | `npm test` | 3868/3868 |
 | `npm run test:panels` | 223/223 |
 | Shots of the router card, 1440 and 390, light | 2, read (scenario 12) |
-| Live marketplace install | Pending |
+| Live marketplace install | 0.8.1 installed through the catalog; scenarios 17 to 20 PASS (19 with a gap, fixed next), 21 partial |
 
 ## Scenarios
 
@@ -37,14 +37,18 @@ Run on 2026-10-12 against `release/0.8.1`, from `main` at 665bc7f (0.8.0 plus th
 | 14 | Router: wiring, measure and active | `hooks.test.ts` (R2, 89a23cb) | `classic.Stop` reads the tail only while the router is on and never fails the Stop; main steps stamp the clock, subagents do not; `wouldApplyCold` / `appliedCold` | RED 6; GREEN; the module-load test fires `classic.Stop` on the real mod | PASS |
 | 15 | Router card line | `read-consumption.test.mjs`, `panels.spec.mjs` (R3, 25fcf75) | "Switches after a cold cache: N (7 days)" es/en; no line without the count | RED 4 unit and 1 panel; GREEN. Shots `router-card-cold-switches-1440.png` and `-390.png` read: the line sits between "Applied 5 · not applied 4" and the saving line, no overlap or overflow at 390 ("Deep reasoning" was already cut at 390 before) | PASS |
 | 16 | One version everywhere | `scripts/release-docs.test.mjs` | package.json, orca-plugin.json, CHANGELOG and README at 0.8.1 | 2/2 after the bump (no RED run observed for this release; the guard has its own RED in 0.8.0) | PASS |
-| 17 | Live: marketplace install at 0.8.1 | `plugins.lock.json`, `current`, hooks, mod markers | Everything names the same 0.8.1 root | Pending the release | PENDING |
-| 18 | Live: `git add -f .env` asks, naming the file | the installed gate on a throwaway repo | ask, `secret-publish` row | Pending on 17 | PENDING |
-| 19 | Live: commit and push of a secret ask; `.env.example` and a clean `add -A && commit` do not | the installed gate, throwaway repo with a local bare remote (no network) | ask, ask, allow, allow | Pending on 17 | PENDING |
-| 20 | Live: the router reads the cache clock | a main turn ends; `routerCache` in the mod state or a stage row with `cacheWarm` | `ttlMs` 1h, `cacheWarm` true or false | Pending on 17 | PENDING |
-| 21 | Live: 0.8.0 items 14 to 18 | `qa-0.8.0.md` | Verify done card in Shadow; a candidate turn writes one row; a verified turn none; Off none | Pending on 17 | PENDING |
+| 17 | Live: marketplace install at 0.8.1 | `plugins.lock.json`, `current`, hooks in the 5 settings files | Everything names the same 0.8.1 root | Catalog pin moved to `v0.8.1` (Follow releases run 38308250926). Lock `0.8.1`, ref `v0.8.1`, resolved `df31c3b`; `current` = `b3a13b88…`, its `package.json` 0.8.1; 8 hook entries in each of the 5 settings files point at `b3a13b88…` | PASS |
+| 18 | Live: `git add -f .env` asks, naming the file | the installed `gate-bash.ts` fed a PreToolUse payload, throwaway repo in the scratchpad | ask, `secret-publish` row | `ask`: "Esto prepara .env para un commit. Parece un archivo secreto…"; row `stopReason: secret-publish`, `source: local-rule` at 21:26:53Z. `git add .env.example`: allow | PASS |
+| 19 | Live: commit and push of a secret ask; `.env.example` and a clean add and commit do not | the installed gate, same repo on branch `feat/x`, a local bare remote (no network) | ask, ask, allow, allow | `git add -f .env && git commit`: ask. `git add .env.example README.md && git commit`: allow. `git push -u origin feat/x` and `git push origin HEAD` with `.env` in commit `b799e51`: ask, naming `.env` and the commit; 2 `secret-publish` rows. **Gap:** `git add -A && git commit` with an untracked, not ignored `.env` was allowed as own-tree and the commit took `.env`; the push guard then asked, so the secret did not reach the remote silently. Fixed in the next release (an `add` whose broad pathspec would stage a secret asks) | PASS with gap |
+| 20 | Live: the router reads the cache clock | stage rows of real sessions after the update | `cacheWarm` known after the first `classic.Stop` | Session `96232877`: 21:28:43Z `cacheWarm: null` (first turn, no Stop yet), 21:29:14Z `cacheWarm: true`. The installed `readCacheTail` on a real transcript tail (300 lines, 710 KB) gives `ttlMs: 3600000` | PASS |
+| 21 | Live: 0.8.0 items 14 to 18 | `qa-0.8.0.md`, `verify-done-decisions-*.jsonl` | Card in Shadow; candidate turns write rows; verified turns none; Off none | 14: the 0.8.0 install was in place before this update (lock 0.8.0). 16: 11 rows from real sessions between 05:09Z and 20:42Z (7 not-claimed, 2 would-block, 1 no-claim, 1 low-confidence), each with files edited. 17: none of the 11 has passing tests. 15 and 18 need the owner at the Orca panel (the card, and switching Off): not checked | PARTIAL |
 
 ## Not covered
 
 - Publishing paths other than `git push`, such as `gh repo create --source=. --push`.
 - If git fails or times out, the secret check steps aside and the normal gate path decides; without an API key that path allows.
 - The steward or verify-done fork that runs after a turn can also refresh the main cache; the router ignores it and may read a warm cache as cold. Those forks run within seconds of the turn ending.
+
+## Observations from the live check
+
+- Setting up the throwaway repo, the gate refused `git push origin main` to a bare repository in the scratchpad ("pushes straight to a shared branch"). That is the policy as written: the gate cannot tell a throwaway remote from a shared one. The repo was set up with no push to `main`.
