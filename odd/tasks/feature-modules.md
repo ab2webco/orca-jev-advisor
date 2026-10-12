@@ -235,7 +235,7 @@ Splitting into separate Orca plugins, or changing Orca. If Orca later gains mani
 
 ### Next modules, after the registry ships
 Each one is a registry entry that enters in `shadow`. Its own task file is written when it starts. The details and the first thing to verify are in `odd/backlog.md`, under "Candidate modules from similar tools".
-- [ ] M1 Verify the "done" (jev-belay): a Stop hook that blocks an unverified "done".
+- [x] M1 Verify the "done" (jev-belay): a Stop hook that blocks an unverified "done". Delivered in 0.8.0 as a shadow measure (Off and Shadow only, no Stop hook); live check in `odd/qa/qa-0.8.0.md`. An Active (blocking) state waits for a week of data.
 - [ ] M2 Gate MCP tools against the goal (jev-browser's irreversible question). This could extend the `gate` module instead of being a new one; decide in its task file.
 - [ ] M3 Browser steps judged by Jev (jev-browser).
 - [ ] M4 Project rules on every edit (abide), turn level, shadow only.
