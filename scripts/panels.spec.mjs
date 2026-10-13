@@ -16,6 +16,16 @@
 // Playwright is a devDependency and the README is explicit that Orca installs
 // nothing when it clones this plugin, so a machine without it skips rather
 // than fails. `npm run test:panels` is the command that runs this.
+//
+// It runs it in four shards. Almost every test here opens a panel and waits
+// SETTLE_MS for it, so ~200 of them back to back in one process took ~25
+// minutes, almost all of it waiting. scripts/panels.shard-N.spec.mjs each set
+// PANELS_SPEC_SHARD to "N/4" and import this file, which then registers only
+// the tests whose position in it, modulo 4, is N-1; node --test runs the four
+// files as parallel processes, so every test still runs exactly once, with its
+// own assertions, in one combined report. Run on its own
+// (`node --test scripts/panels.spec.mjs`), with the variable unset, the file
+// registers every test, as it always did.
 
 import { strict as assert } from 'node:assert'
 import { execFileSync } from 'node:child_process'
@@ -24,7 +34,27 @@ import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { after, test } from 'node:test'
+import { after, test as nodeTest } from 'node:test'
+
+/** "N/COUNT" (1-based) to { index, count }, or null when the variable is unset.
+ *  Anything else throws: a typo here must not quietly run a quarter of the suite. */
+function parseShard (value) {
+  if (value === undefined || value === '') return null
+  const match = /^(\d+)\/(\d+)$/.exec(value)
+  const shard = match ? Number(match[1]) : 0
+  const count = match ? Number(match[2]) : 0
+  if (shard < 1 || shard > count) throw new Error(`PANELS_SPEC_SHARD must look like "2/4", got ${JSON.stringify(value)}`)
+  return { index: shard - 1, count }
+}
+
+const SHARD = parseShard(process.env.PANELS_SPEC_SHARD)
+let testsSeen = 0
+
+/** node:test's own `test`, registered only when the test's position falls in this shard. */
+function test (...args) {
+  const position = testsSeen++
+  if (SHARD === null || position % SHARD.count === SHARD.index) nodeTest(...args)
+}
 
 // main.mjs pulls in src/core/secrets.ts, which resolves the config dir at
 // MODULE scope -- and src/core/paths.ts now refuses to hand back the real
@@ -56,6 +86,24 @@ try {
 } catch {
   chromium = null
 }
+
+// One Chromium per process, launched on first use; each test gets its own
+// context (its own storage, viewport, locale and colour scheme) and closes it.
+// Launching a browser per test cost a second or more each, ~200 times over.
+// The openers below hand the context back as `browser`, so every test's
+// `finally { await browser.close() }` closes its own context and nothing else.
+let browserLaunch = null
+async function sharedBrowser () {
+  if (browserLaunch !== null) {
+    const running = await browserLaunch
+    if (running.isConnected()) return running
+  }
+  browserLaunch = chromium.launch()
+  return browserLaunch
+}
+after(async () => {
+  if (browserLaunch !== null) await (await browserLaunch).close()
+})
 
 // SCENARIOS.ready is screenshot-panels.mjs's own fixture, derived from the
 // same worker shapes this file already checks (see its own module doc and
@@ -255,8 +303,7 @@ async function renderBoardPanel () {
 // throws, the same simulation openPanelWithThrowingStorage uses for
 // config.html, applied before the board's own script runs.
 async function openBoardPanel (storage, locale = 'en', colorScheme = 'light', options = {}) {
-  const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: options.viewport ?? { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
+  const context = await (await sharedBrowser()).newContext({ viewport: options.viewport ?? { width: 1440, height: 1200 }, colorScheme, locale: playwrightLocaleFor(locale) })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
@@ -270,7 +317,7 @@ async function openBoardPanel (storage, locale = 'en', colorScheme = 'light', op
   }
   await page.goto(`file://${await renderBoardPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
-  return { browser, page, errors }
+  return { browser: context, page, errors }
 }
 
 // `viewport` defaults to what every existing test in this file already
@@ -278,15 +325,14 @@ async function openBoardPanel (storage, locale = 'en', colorScheme = 'light', op
 // that needs a narrower one (320px, the layout every .row/.row.two/.row.four
 // rule collapses to a single column at, and so the tallest one).
 async function openPanel (storage, locale = 'en', colorScheme = 'light', viewport = { width: 1440, height: 1200 }) {
-  const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport, colorScheme, locale: playwrightLocaleFor(locale) })
+  const context = await (await sharedBrowser()).newContext({ viewport, colorScheme, locale: playwrightLocaleFor(locale) })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
   await page.addInitScript(hostBridge, storage)
   await page.goto(`file://${await renderPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
-  return { browser, page, errors }
+  return { browser: context, page, errors }
 }
 
 /** Same host simulation as openPanel, but with `window.localStorage`
@@ -298,8 +344,7 @@ async function openPanel (storage, locale = 'en', colorScheme = 'light', viewpor
  *  before config.html's own script executes, not something set after
  *  goto -- by then the panel's first paint has already happened. */
 async function openPanelWithThrowingStorage (storage) {
-  const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, locale: 'en-US' })
+  const context = await (await sharedBrowser()).newContext({ viewport: { width: 1440, height: 1200 }, locale: 'en-US' })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
@@ -311,7 +356,7 @@ async function openPanelWithThrowingStorage (storage) {
   })
   await page.goto(`file://${await renderPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
-  return { browser, page, errors }
+  return { browser: context, page, errors }
 }
 
 test('the seeded policies are the ones a person actually sees in the panel', { skip: chromium ? false : 'playwright is not installed' }, async () => {
@@ -3306,8 +3351,7 @@ function silentHostBridge () {
 /** openBoardPanel's shape, plus: `localTab` pre-seeds localStorage, and
  *  `silent` swaps the answering host for one that never answers. */
 async function openBoardForTabMemory (storage, { localTab = null, silent = false, settleMs = SETTLE_MS } = {}) {
-  const browser = await chromium.launch()
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1200 }, colorScheme: 'light', locale: 'en-US' })
+  const context = await (await sharedBrowser()).newContext({ viewport: { width: 1440, height: 1200 }, colorScheme: 'light', locale: 'en-US' })
   const page = await context.newPage()
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error.message)))
@@ -3319,7 +3363,7 @@ async function openBoardForTabMemory (storage, { localTab = null, silent = false
   }
   await page.goto(`file://${await renderBoardPanel()}`)
   await page.waitForTimeout(settleMs)
-  return { browser, page, errors }
+  return { browser: context, page, errors }
 }
 
 function firstShown (timeline) {

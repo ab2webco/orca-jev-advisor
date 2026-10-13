@@ -16,7 +16,7 @@
     "shots:band": "node scripts/screenshot-band.mjs",
     "preflight": "npm run typecheck && npm run test && npm run shots",
     "check": "npm run preflight && npm run test:panels",
-    "test:panels": "node --test scripts/panels.spec.mjs",
+    "test:panels": "node --test --test-concurrency=4 scripts/panels.shard-1.spec.mjs scripts/panels.shard-2.spec.mjs scripts/panels.shard-3.spec.mjs scripts/panels.shard-4.spec.mjs",
     "ab-benchmark": "node --experimental-strip-types adapters/cli/ab_benchmark_cli.ts",
     "jev-health": "node --experimental-strip-types adapters/cli/jev_health_cli.ts",
     "measure-module-cost": "node --experimental-strip-types scripts/measure-module-cost.mjs"
