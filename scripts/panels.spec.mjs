@@ -4741,7 +4741,7 @@ test('Modules: the memory card offers Off, Shadow and Active, states the fork sa
     assert.match(card.text, /Haiku sees your MEMORY\.md \(up to 8,000 characters\) and the last exchange \(up to 12,000 characters, secrets redacted/)
     assert.match(card.text, /The fork sees this session's own transcript/)
     assert.match(card.text, /Where it would save: Engram, which is live \(its tools are connected and it answered the check\)\./)
-    assert.match(card.text, /This week: 212 Haiku decisions, 20% marked for an update, 8 forks\. It would save 5 feedback, 1 user, 4 project and 1 reference\. Your main thread saved 65 times on its own, and Haiku agreed with it on 86% of turns\./)
+    assert.match(card.text, /This week: 212 Haiku decisions, 20% marked for an update, 8 forks\. The forks drafted 5 feedback, 1 user, 4 project and 1 reference\. Your main thread saved 65 times on its own, and Haiku agreed with it on 86% of turns\./)
     assert.doesNotMatch(card.text, /Written this week/, 'Shadow writes nothing, so it has no writes line')
     assert.match(card.text, /Background: nothing of its own\./)
     assert.match(card.text, /follows the switch directly/)
