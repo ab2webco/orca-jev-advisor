@@ -56,7 +56,7 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
   - memory offers Off, Shadow and Active; default Shadow;
   - the card's Active text per backend, the cost line for every-UPDATE forks, the week's written and updated counts (es/en);
   - `panels.spec.mjs` cases for the Active choice and its lines.
-- [ ] A4 Mod wiring, the write path in the turn-end timer. Tests in `hooks.test.ts`:
+- [x] A4 Mod wiring, the write path in the turn-end timer. Tests in `hooks.test.ts`:
   - Off: 0 Haiku calls, 0 rows, 0 writes;
   - Shadow: unchanged, 0 writes;
   - Active, no Engram: spool, then the file and its `MEMORY.md` line, then the item in `done/`;
