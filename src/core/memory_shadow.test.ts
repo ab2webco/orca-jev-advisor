@@ -18,7 +18,9 @@ import {
   dryJudgeBuilds,
   isForkSampled,
   memoryDecisionFileName,
+  memoryReplayRecord,
   memoryShadowRecord,
+  NO_WRITES,
   memoryTopics,
   noteMainCall,
   readMemSaveCandidates,
@@ -187,6 +189,7 @@ test("row: counts, types, outcomes and usage; no memory content, no titles", () 
     account: "acct-1",
     project: "repo",
     mode: "shadow",
+    effective: "shadow",
     sessionId: "session-1",
     backend: "live",
     decidedBy: "tools+health",
@@ -211,8 +214,65 @@ test("row: counts, types, outcomes and usage; no memory content, no titles", () 
     mainCandidates: 1,
     mainAutoMemoryWrites: 0,
     agreement: "both",
+    spooled: 0,
+    written: 0,
+    updated: 0,
+    backups: 0,
+    dropped: 0,
+    writeFailures: 0,
+    lockHeld: false,
   });
   assert.doesNotMatch(JSON.stringify(row), /Secret title/);
+});
+
+test("row in Active: the switch and what ran, and what it wrote, as counts only", () => {
+  const writes = { spooled: 2, written: 1, updated: 1, backups: 1, dropped: 1, writeFailures: 0, lockHeld: false };
+  const row = memoryShadowRecord({ ...BASE, backend: ABSENT, mode: "active", effective: "active", writes });
+  assert.equal(row.mode, "active");
+  assert.equal(row.effective, "active");
+  assert.deepEqual(
+    { spooled: row.spooled, written: row.written, updated: row.updated, backups: row.backups, dropped: row.dropped, writeFailures: row.writeFailures, lockHeld: row.lockHeld },
+    writes,
+  );
+  const measuring = memoryShadowRecord({ ...BASE, mode: "active", effective: "shadow" });
+  assert.equal(measuring.mode, "active");
+  assert.equal(measuring.effective, "shadow", "Engram live: Active keeps measuring, and the row says so");
+  assert.equal(measuring.written, 0);
+  assert.deepEqual(NO_WRITES, { spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: false });
+});
+
+test("replay row: an event of its own, counts only", () => {
+  const row = memoryReplayRecord({
+    at: "2026-10-12T08:00:00.000Z",
+    account: "acct-1",
+    project: "repo",
+    sessionId: "session-2",
+    backend: ABSENT,
+    items: 3,
+    replayed: 2,
+    superseded: 1,
+    writes: { spooled: 0, written: 1, updated: 1, backups: 1, dropped: 0, writeFailures: 0, lockHeld: false },
+  });
+  assert.deepEqual(row, {
+    at: "2026-10-12T08:00:00.000Z",
+    account: "acct-1",
+    project: "repo",
+    event: "replay",
+    mode: "active",
+    effective: "active",
+    sessionId: "session-2",
+    backend: "absent",
+    decidedBy: "none",
+    permission: "unknown",
+    items: 3,
+    replayed: 2,
+    superseded: 1,
+    written: 1,
+    updated: 1,
+    backups: 1,
+    writeFailures: 0,
+    lockHeld: false,
+  });
 });
 
 test("row: a skip has no fork; a gate with no answer has no usage", () => {
@@ -272,7 +332,44 @@ test("summary: the week's gates, UPDATE rate, forks, would-save by type, main sa
     haikuTokens: { input: 2700, output: 27 },
     forkTokens: { input: 10, output: 300, cacheRead: 180_000 },
     latest: { at: "2026-10-12T09:00:00.000Z", backend: "live", decidedBy: "tools+health", permission: "ok" },
+    activeDecisions: 0,
+    draftFailures: 0,
+    spooled: 0,
+    written: 0,
+    updated: 0,
+    backups: 0,
+    dropped: 0,
+    writeFailures: 0,
+    lockHeld: 0,
+    replays: 0,
+    replayed: 0,
   });
+});
+
+test("summary in Active: what was written, updated, spooled and replayed; a replay row is never a decision", () => {
+  const writes = { spooled: 2, written: 1, updated: 1, backups: 1, dropped: 1, writeFailures: 0, lockHeld: false };
+  const rows = [
+    memoryShadowRecord({ ...BASE, at: "2026-10-12T09:00:00.000Z", backend: ABSENT, mode: "active", effective: "active", writes }),
+    memoryShadowRecord({ ...BASE, at: "2026-10-12T08:00:00.000Z", backend: ABSENT, mode: "active", effective: "active", fork: "unparsable", forkUsage: null, draft: null, judgeBuilds: 0 }),
+    memoryShadowRecord({ ...BASE, at: "2026-10-12T07:00:00.000Z", backend: ABSENT, mode: "active", effective: "active", writes: { ...NO_WRITES, spooled: 1, lockHeld: true } }),
+    memoryShadowRecord({ ...BASE, at: "2026-10-12T06:00:00.000Z", mode: "active", effective: "shadow" }),
+    memoryReplayRecord({ at: "2026-10-12T10:00:00.000Z", account: "acct-1", project: "repo", sessionId: "session-2", backend: ABSENT, items: 2, replayed: 1, superseded: 0, writes: { ...NO_WRITES, written: 1, writeFailures: 1 } }),
+  ];
+  const summary = summarizeMemoryDecisions(rows, NOW, WEEK);
+  assert.equal(summary.decisions, 4, "the replay row is not a decision");
+  assert.equal(summary.gates, 4);
+  assert.equal(summary.activeDecisions, 3, "the row that only measured under a live Engram is not an Active one");
+  assert.equal(summary.draftFailures, 1);
+  assert.equal(summary.spooled, 3);
+  assert.equal(summary.written, 2, "one at a turn, one at the replay");
+  assert.equal(summary.updated, 1);
+  assert.equal(summary.backups, 1);
+  assert.equal(summary.dropped, 1);
+  assert.equal(summary.writeFailures, 1);
+  assert.equal(summary.lockHeld, 1);
+  assert.equal(summary.replays, 1);
+  assert.equal(summary.replayed, 1);
+  assert.equal(summary.latest?.backend, "absent");
 });
 
 test("summary: no rows is zeros and nulls, never a division by zero", () => {

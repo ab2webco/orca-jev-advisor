@@ -5075,6 +5075,7 @@ test("M8 memory shadow (the default): a sampled UPDATE turn asks Haiku once, for
     account: "x",
     project: "sandbox",
     mode: "shadow",
+    effective: "shadow",
     sessionId: "session-1",
     backend: "live",
     decidedBy: "tools+health",
@@ -5099,6 +5100,13 @@ test("M8 memory shadow (the default): a sampled UPDATE turn asks Haiku once, for
     mainCandidates: 1,
     mainAutoMemoryWrites: 0,
     agreement: "both",
+    spooled: 0,
+    written: 0,
+    updated: 0,
+    backups: 0,
+    dropped: 0,
+    writeFailures: 0,
+    lockHeld: false,
   });
   assert.doesNotMatch(JSON.stringify(row), /Spanish|vos|tú/, "no memory text or title in the row");
   assertNothingWritten(host, seeded);

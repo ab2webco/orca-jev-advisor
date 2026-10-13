@@ -46,7 +46,7 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
 
 - [x] A0 Task file (this file).
 - [x] A1 `renderMemoryFile` writes the folder's own metadata: `node_type: memory` and `modified`; the spool passes its clock.
-- [ ] A2 `src/core/memory_active.ts` and `memory_shadow.ts`:
+- [x] A2 `src/core/memory_active.ts` and `memory_shadow.ts`:
   - the effective mode from the switch and the backend;
   - the spool root per store;
   - the update check;

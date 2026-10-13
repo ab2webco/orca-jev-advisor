@@ -48,7 +48,7 @@ export function memoryDecisionFileName(atIso: string): string {
 export const FORK_SAMPLE_EVERY = 5;
 
 /** FNV-1a, 32 bits: a stable spread of a short key. */
-function fnv1a(text: string): number {
+export function fnv1a(text: string): number {
   let hash = 0x811c9dc5;
   for (let i = 0; i < text.length; i += 1) {
     hash ^= text.charCodeAt(i);
@@ -258,6 +258,29 @@ export interface RowTokens {
 /** The fork's outcome on an UPDATE turn: not in the sample, sampled but a new turn had started, a parsed draft, an answer that is not one, or no answer. */
 export type ForkOutcome = "not-sampled" | "turn-moved-on" | "drafted" | "unparsable" | "no-answer";
 
+/** The module's switch, and what ran: Active runs as Shadow while Engram is live (memory_active.ts effectiveMemoryMode). */
+export type MemoryMode = "shadow" | "active";
+
+/** What Active wrote in one pass, as counts (odd/tasks/memory-active-files.md). Shadow writes nothing: NO_WRITES. */
+export interface ActiveWriteCounts {
+  /** Saves put in the spool before any memory file was touched. */
+  readonly spooled: number;
+  /** Memory files created. */
+  readonly written: number;
+  /** Existing memory files rewritten, each after its backup. */
+  readonly updated: number;
+  /** Files copied byte for byte to `.memory-backup/` before a rewrite. */
+  readonly backups: number;
+  /** Updates refused: the file was not there, or the new text had no frontmatter name. */
+  readonly dropped: number;
+  /** Writes that failed; a save among them stays spooled. */
+  readonly writeFailures: number;
+  /** Claude Code's own consolidation held the folder, so nothing was written. */
+  readonly lockHeld: boolean;
+}
+
+export const NO_WRITES: ActiveWriteCounts = { spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: false };
+
 export interface MemoryShadowRecordInput {
   readonly at: string;
   readonly account: string;
@@ -276,13 +299,20 @@ export interface MemoryShadowRecordInput {
   readonly draft: DraftCounts | null;
   readonly judgeBuilds: number;
   readonly seen: MainMemorySeen;
+  /** The switch; Shadow when absent. */
+  readonly mode?: MemoryMode;
+  /** What ran; Shadow when absent. */
+  readonly effective?: MemoryMode;
+  /** What Active wrote; NO_WRITES when absent. */
+  readonly writes?: ActiveWriteCounts;
 }
 
 export interface MemoryShadowRecord {
   readonly at: string;
   readonly account: string;
   readonly project: string;
-  readonly mode: "shadow";
+  readonly mode: MemoryMode;
+  readonly effective: MemoryMode;
   readonly sessionId: string | null;
   readonly backend: MemoryBackendDecision["backend"];
   readonly decidedBy: MemoryBackendDecision["decidedBy"];
@@ -307,6 +337,13 @@ export interface MemoryShadowRecord {
   readonly mainCandidates: number;
   readonly mainAutoMemoryWrites: number;
   readonly agreement: Agreement;
+  readonly spooled: number;
+  readonly written: number;
+  readonly updated: number;
+  readonly backups: number;
+  readonly dropped: number;
+  readonly writeFailures: number;
+  readonly lockHeld: boolean;
 }
 
 function rowTokens(usage: ModelTokens | null): RowTokens | null {
@@ -318,11 +355,13 @@ function rowTokens(usage: ModelTokens | null): RowTokens | null {
 export function memoryShadowRecord(input: MemoryShadowRecordInput): MemoryShadowRecord {
   const draft = input.draft;
   const seen = input.seen;
+  const writes = input.writes ?? NO_WRITES;
   return {
     at: input.at,
     account: input.account,
     project: input.project,
-    mode: "shadow",
+    mode: input.mode ?? "shadow",
+    effective: input.effective ?? "shadow",
     sessionId: input.sessionId,
     backend: input.backend.backend,
     decidedBy: input.backend.decidedBy,
@@ -347,6 +386,73 @@ export function memoryShadowRecord(input: MemoryShadowRecordInput): MemoryShadow
     mainCandidates: seen.candidates.length,
     mainAutoMemoryWrites: seen.autoMemoryWrites,
     agreement: agreementOf(input.gate, seen.engramSaves > 0 || seen.autoMemoryWrites > 0),
+    spooled: writes.spooled,
+    written: writes.written,
+    updated: writes.updated,
+    backups: writes.backups,
+    dropped: writes.dropped,
+    writeFailures: writes.writeFailures,
+    lockHeld: writes.lockHeld,
+  };
+}
+
+export interface MemoryReplayRecordInput {
+  readonly at: string;
+  readonly account: string;
+  readonly project: string;
+  readonly sessionId: string | null;
+  readonly backend: MemoryBackendDecision;
+  /** Spool items this pass took up (planReplay's run and superseded). */
+  readonly items: number;
+  /** Items that reached done/, or were parked as a fallback copy, in this pass. */
+  readonly replayed: number;
+  /** Older items of a topic a newer one replaced, closed without a write. */
+  readonly superseded: number;
+  readonly writes: ActiveWriteCounts;
+}
+
+export interface MemoryReplayRecord {
+  readonly at: string;
+  readonly account: string;
+  readonly project: string;
+  readonly event: "replay";
+  readonly mode: "active";
+  readonly effective: "active";
+  readonly sessionId: string | null;
+  readonly backend: MemoryBackendDecision["backend"];
+  readonly decidedBy: MemoryBackendDecision["decidedBy"];
+  readonly permission: MemoryBackendDecision["permission"];
+  readonly items: number;
+  readonly replayed: number;
+  readonly superseded: number;
+  readonly written: number;
+  readonly updated: number;
+  readonly backups: number;
+  readonly writeFailures: number;
+  readonly lockHeld: boolean;
+}
+
+/** The row a spool replay at session start logs when it found items: counts only, and never a decision. */
+export function memoryReplayRecord(input: MemoryReplayRecordInput): MemoryReplayRecord {
+  return {
+    at: input.at,
+    account: input.account,
+    project: input.project,
+    event: "replay",
+    mode: "active",
+    effective: "active",
+    sessionId: input.sessionId,
+    backend: input.backend.backend,
+    decidedBy: input.backend.decidedBy,
+    permission: input.backend.permission,
+    items: input.items,
+    replayed: input.replayed,
+    superseded: input.superseded,
+    written: input.writes.written,
+    updated: input.writes.updated,
+    backups: input.writes.backups,
+    writeFailures: input.writes.writeFailures,
+    lockHeld: input.writes.lockHeld,
   };
 }
 
@@ -378,6 +484,22 @@ export interface MemoryShadowSummary {
   readonly forkTokens: { readonly input: number; readonly output: number; readonly cacheRead: number };
   /** The newest row's backend: what the module last detected. */
   readonly latest: { readonly at: string; readonly backend: string; readonly decidedBy: string; readonly permission: string } | null;
+  /** Decisions that ran in Active (written to the files store), not those that only measured. */
+  readonly activeDecisions: number;
+  /** Forks that ran and gave no draft (unparsable or no answer): nothing was written. */
+  readonly draftFailures: number;
+  /** Active's writes, over decisions and replays alike. */
+  readonly spooled: number;
+  readonly written: number;
+  readonly updated: number;
+  readonly backups: number;
+  readonly dropped: number;
+  readonly writeFailures: number;
+  /** Passes that found the folder locked. */
+  readonly lockHeld: number;
+  /** Replay rows (a session start that found spooled items), and the items they moved on. */
+  readonly replays: number;
+  readonly replayed: number;
 }
 
 function count(value: unknown): number {
@@ -408,11 +530,26 @@ export function summarizeMemoryDecisions(rows: readonly unknown[], nowMs: number
   const forkTokens = { input: 0, output: 0, cacheRead: 0 };
   let latest: MemoryShadowSummary["latest"] = null;
   let latestMs = Number.NEGATIVE_INFINITY;
+  const active = { activeDecisions: 0, draftFailures: 0, spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: 0, replays: 0, replayed: 0 };
   for (const row of rows) {
     if (!isRecord(row) || typeof row.at !== "string") continue;
     const atMs = Date.parse(row.at);
     if (Number.isNaN(atMs) || atMs > nowMs || atMs < nowMs - windowMs) continue;
+    active.spooled += count(row.spooled);
+    active.written += count(row.written);
+    active.updated += count(row.updated);
+    active.backups += count(row.backups);
+    active.dropped += count(row.dropped);
+    active.writeFailures += count(row.writeFailures);
+    if (row.lockHeld === true) active.lockHeld += 1;
+    if (row.event === "replay") {
+      active.replays += 1;
+      active.replayed += count(row.replayed);
+      continue;
+    }
     decisions += 1;
+    if (row.effective === "active") active.activeDecisions += 1;
+    if (row.fork === "unparsable" || row.fork === "no-answer") active.draftFailures += 1;
     if (row.gate === "update") updates += 1;
     if (row.gate === "skip") skips += 1;
     if (RAN_FORKS.includes(row.fork)) forks += 1;
@@ -460,5 +597,6 @@ export function summarizeMemoryDecisions(rows: readonly unknown[], nowMs: number
     haikuTokens,
     forkTokens,
     latest,
+    ...active,
   };
 }
