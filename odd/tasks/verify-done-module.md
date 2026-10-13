@@ -44,7 +44,7 @@ Strict TDD for each: RED observed, then GREEN, then a Conventional Commit on thi
 - [x] V5 `scripts/measure-module-cost.mjs`: a row for the module (Jev calls, per prompt, p50/p90) and the count of claimed-done-unverified turns in the window.
 - [x] V6 README (what is sent to Jev, that it only measures, default shadow, how to turn it off), CHANGELOG 0.8.0, version 0.8.0 in `package.json` and `orca-plugin.json`, `odd/qa/qa-0.8.0.md` with scenarios and the live ones left PENDING.
 - [x] V7 Shots of the Modules section at 1440, 768, 390 and 320, light and dark. **They go to the `qa-evidence` branch under `odd/qa/screens-0.8.0/`, never to `main`** (`odd/qa/README.md`; `scripts/install-size.test.mjs` fails the tree over 40 MiB). Say which were read.
-- [x] V8 PR #52, merge, release 0.8.0, catalog pin, live check from the marketplace install (0.8.1, which contains it): a candidate turn writes one row, a verified turn none, Off none (`odd/qa/qa-0.8.0.md`, scenarios 14, 16, 17, 18 PASS). Open: scenario 15, the card seen in the real Orca window, needs the owner.
+- [x] V8 PR #52, merge, release 0.8.0, catalog pin, live check from the marketplace install (0.8.1, which contains it): a candidate turn writes one row, a verified turn none, Off none (`odd/qa/qa-0.8.0.md`, scenarios 14, 16, 17, 18 PASS). Scenario 15, the card in the real Orca window, confirmed from the owner's screenshots.
 
 ## Acceptance criteria
 
