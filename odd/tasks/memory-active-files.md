@@ -45,7 +45,7 @@ Out (later releases): Engram writes (`mem_save`, `mem_judge`), replaying fallbac
 Strict TDD: a test written and observed failing, then green, then refactor and one Conventional Commit. A box is ticked only with observed proof.
 
 - [x] A0 Task file (this file).
-- [ ] A1 `renderMemoryFile` writes the folder's own metadata: `node_type: memory` and `modified`; the spool passes its clock.
+- [x] A1 `renderMemoryFile` writes the folder's own metadata: `node_type: memory` and `modified`; the spool passes its clock.
 - [ ] A2 `src/core/memory_active.ts` and `memory_shadow.ts`:
   - the effective mode from the switch and the backend;
   - the spool root per store;

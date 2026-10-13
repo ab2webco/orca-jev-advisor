@@ -219,6 +219,8 @@ test("absent: pending -> written -> done, the file and the index line written, t
   const file = run.disk.get(fileOf(FEEDBACK)) ?? "";
   assert.match(file, /type: feedback/);
   assert.match(file, /topic_key: language-es/);
+  assert.match(file, /\n {2}node_type: memory\n/, "the engine's own metadata");
+  assert.match(file, /\n {2}modified: 2026-10-12T10:05:00\.000Z\n/, "stamped with the pass's clock");
   assert.doesNotMatch(file, /pending_engram|engram_id/);
   assert.match(run.disk.get(`${DIR}/MEMORY.md`) ?? "", /\[Spanish with tú\]\(language-es\.md\)/);
   assert.equal(run.disk.has(path), false, "no longer in the live folder");

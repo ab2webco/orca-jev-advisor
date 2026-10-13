@@ -224,20 +224,24 @@ export interface RenderOptions {
   /** A fallback copy written while Engram could not take the save. */
   readonly pendingEngram?: boolean;
   readonly originSessionId?: string;
+  /** ISO time the file was written, as the engine stamps its own memory files. */
+  readonly modified?: string;
 }
 
 function collapse(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** One auto-memory file in the folder's own shape: name, a quoted description, metadata, then the content. */
+/** One auto-memory file in the folder's own shape (the engine's own files carry node_type, type, originSessionId and modified): name, a quoted description, metadata, then the content. */
 export function renderMemoryFile(save: DraftSave, options: RenderOptions): string {
   const metadata = [
+    "  node_type: memory",
     `  type: ${save.type}`,
     `  topic_key: ${save.topic_key}`,
     ...(options.engramId === undefined ? [] : [`  engram_id: ${String(options.engramId)}`]),
     ...(options.pendingEngram === true ? ["  pending_engram: true"] : []),
     ...(options.originSessionId === undefined ? [] : [`  originSessionId: ${options.originSessionId}`]),
+    ...(options.modified === undefined ? [] : [`  modified: ${options.modified}`]),
   ];
   return ["---", `name: ${save.topic_key}`, `description: ${JSON.stringify(collapse(save.title))}`, "metadata:", ...metadata, "---", "", `${save.content.trimEnd()}`, ""].join("\n");
 }

@@ -198,6 +198,7 @@ test("render: frontmatter in the folder's own shape, then the content", () => {
       "name: language-spanish-no-voseo",
       'description: "Spanish with tú, never voseo"',
       "metadata:",
+      "  node_type: memory",
       "  type: feedback",
       "  topic_key: language-spanish-no-voseo",
       "  originSessionId: aa14153f-9dcc-4ae9-8414-a8c1101e4417",
@@ -209,6 +210,19 @@ test("render: frontmatter in the folder's own shape, then the content", () => {
       "",
     ].join("\n"),
   );
+});
+
+test("render: the engine's own metadata, node_type memory and the time it was modified, when given", () => {
+  const text = renderMemoryFile(SAVE, { originSessionId: "s-1", modified: "2026-10-13T12:00:00.000Z" });
+  const front = text.split("\n---\n")[0] ?? "";
+  assert.deepEqual(front.split("\n").slice(3), [
+    "metadata:",
+    "  node_type: memory",
+    "  type: feedback",
+    "  topic_key: language-spanish-no-voseo",
+    "  originSessionId: s-1",
+    "  modified: 2026-10-13T12:00:00.000Z",
+  ]);
 });
 
 test("render: a mirror carries the Engram id, a fallback copy is tagged pending_engram", () => {

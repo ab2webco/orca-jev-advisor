@@ -210,7 +210,7 @@ function mirrors(type: MemoryType): boolean {
 function autoMemoryOps(item: SpoolItem, ctx: SpoolContext, options: { readonly engramId?: string; readonly pendingEngram?: boolean }): readonly FileOp[] {
   const save = item.save;
   const file = memoryFileName(save.type, save.topic_key);
-  const content = renderMemoryFile(save, { originSessionId: item.sessionId, ...(options.engramId === undefined ? {} : { engramId: options.engramId }), ...(options.pendingEngram === true ? { pendingEngram: true } : {}) });
+  const content = renderMemoryFile(save, { originSessionId: item.sessionId, modified: ctx.now,...(options.engramId === undefined ? {} : { engramId: options.engramId }), ...(options.pendingEngram === true ? { pendingEngram: true } : {}) });
   return [
     { kind: "write", path: `${ctx.autoMemoryDir}/${file}`, content },
     { kind: "write", path: `${ctx.autoMemoryDir}/MEMORY.md`, content: upsertIndexLine(ctx.index, file, memoryIndexLine(save, file)) },
