@@ -37,8 +37,8 @@ Out of scope: deferring upgrades to a cold cache; Windows (`tail` is not there; 
   - Router/steward/subagent: `isJevPaymentFailure(jevFailureOf(error))` turns a `jev-failed` decision into `jev-payment` (start, stage, subagent and matched teammate rows; steward rows) via `withJevPayment` / `withStewardPayment`; nothing else is decided differently. `subagentWhy` reads it as `no-jev`, `routerJevCalls` as a failed call, and a teammate with it is not `teammate-routed`. Not changed: verify-done (`jev-failed`), the `agent-model.ts` classic hook, and the router reasons have no on-screen text.
   - RED: jev_call.test.ts and gate_unreachable_notice.test.ts failed to load (no `isJevPaymentFailure`, `unreachableNoticeKey`); i18n_catalogs "G8: the no-credit gate notice …" failed (no `jevNoCredit`); hooks.test.ts "G8: a Jev answer of 402 (no credit) names the router rows jev-payment, …" (`[start, jev-failed], [stage, jev-failed]`) and "G8: a subagent judged into a 402 …" (`jev-failed`); steward.test.ts "G8: a Jev answer of 402 is logged jev-payment, …" (`jev-failed`); subagent_status and module_cost reader assertions for `jev-payment` failed.
   - GREEN: those seven files 358/358; typecheck clean.
-- [ ] Release 0.8.3 (docs, version, QA)
-- [ ] Live: a Koombea account session gives `cacheWarm` true/false; the partner's Linux shows the 402 notice text (read-only check)
+- [x] Release 0.8.3 (docs, version, QA)
+- [ ] Live: a Team-account session gives `cacheWarm` true/false (PASS, qa-0.8.3 #10); the partner's Linux shows the 402 notice text (read-only check, waits for his update)
 
 ## Acceptance
 

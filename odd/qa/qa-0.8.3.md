@@ -16,7 +16,7 @@ Run on 2026-10-13 against `fix/router-cache-ttl`, from `main` at 61efc64 (0.8.2 
 | `npm test` | 4281/4281 (4270 with the router and Jev changes; 4281 with the CI band) |
 | `npm run test:panels` | 239/239 |
 | Shots | None: no panel text changed (the CI band is drawn in the terminal) |
-| Live marketplace install | Pending |
+| Live marketplace install | PASS (scenarios 9 and 10); 11 waits for the partner's update |
 
 ## Scenarios
 
@@ -30,9 +30,9 @@ Run on 2026-10-13 against `fix/router-cache-ttl`, from `main` at 61efc64 (0.8.2 
 | 6 | G8: Jev 402 | `jev_call.test.ts`, `gate_unreachable_notice.test.ts`, i18n catalogs, `hooks.test.ts`, `steward.test.ts` G8 | The gate notice names a key without credit (es, en); router, steward and subagent rows `jev-payment` | RED per file; GREEN 358/358. The gate's notice is covered by pure functions and the catalog only: the gate cannot be pointed at a fake Jev end to end | PASS |
 | 7 | One version everywhere | `scripts/release-docs.test.mjs` | 0.8.3 in package.json, orca-plugin.json, CHANGELOG, README | RED after the bump (`0.8.2` vs `0.8.3`); GREEN 2/2 after the notes | PASS |
 | 8 | CI watcher band text | `ci_watch.test.ts`, `hooks.test.ts` ci-watch | Branch, sha, running workflows, elapsed and usual time; slower than usual; waiting stops after 4 min; passed/failed with duration; at most one extra `gh` call per watch inside the ceiling | RED: `ciIsSlow` not exported; 12 hook tests failed once the core changed. GREEN: ci_watch 55/55, hooks 238/238 (three new: the usual-time lookup shown once, left out on failure or under 3 runs, never asked with no run or the module off) | PASS |
-| 9 | Live: marketplace install at 0.8.3 | lock, `current`, hooks | Same 0.8.3 root everywhere | Pending the release | PENDING |
-| 10 | Live: a Team-account session knows its cache | `model-router-decisions-*.jsonl` | Stage rows after the first turn with `cacheWarm` true or false, no null without `cacheUnknown` | Pending on 9 | PENDING |
-| 11 | Live: the partner's Linux shows the no-credit notice | read-only look at the gate rows and notice there | 402 rows; the notice text names the key | Pending on 9 and the partner's update | PENDING |
+| 9 | Live: marketplace install at 0.8.3 | lock, `current`, hooks | Same 0.8.3 root everywhere | `current` = `1ca8c1f2…` (version 0.8.3, provenance recorded); all 32 hook commands in the four Orca accounts and 8 in `~/.claude/settings.json` point at `1ca8c1f2` | PASS |
+| 10 | Live: a Team-account session knows its cache | `model-router-decisions-*.jsonl` | Stage rows after the first turn with `cacheWarm` true or false, no null without `cacheUnknown` | the Team account, real work in Orca terminals. Before the update (22:15Z) session `b6066d4b` logged `cacheWarm: null`; after it, the same session logged `true` at 22:30:59Z and 22:31:13Z. A new session in another client project logged `false` on its first turn (22:30:33Z) and applied an upgrade with `switchCost: 0`, which is the cold-cache case the fix exists for. No null rows after the update. Headless `-p` writes only a `start` row (origin `sdk`), as designed | PASS |
+| 11 | Live: the partner's Linux shows the no-credit notice | read-only look at the gate rows and notice there | 402 rows; the notice text names the key | Pending the partner's update | PENDING |
 
 ## Not covered
 
