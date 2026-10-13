@@ -193,10 +193,10 @@ import type { HealthCall, HealthOutcome, MemoryBackendDecision } from '../../../
 import { GATE_MAX_TOKENS, GATE_SYSTEM, GATE_TIMEOUT_MS, buildGatePrompt, freeChecks, lastExchange, parseGate, typedPrompt } from '../../../../src/core/memory_decide.ts'
 import { buildDraftPrompt, parseDraft } from '../../../../src/core/memory_draft.ts'
 import type { MemoryDraft } from '../../../../src/core/memory_draft.ts'
-import { EMPTY_SEEN, NO_WRITES, classifyMainCall, draftCounts, dryJudgeBuilds, isForkSampled, memoryDecisionFileName, memoryShadowRecord, memoryTopics, noteMainCall, readMemSaveCandidates, withinBudget } from '../../../../src/core/memory_shadow.ts'
+import { EMPTY_SEEN, NO_WRITES, classifyMainCall, draftCounts, dryJudgeBuilds, isForkSampled, memoryDecisionFileName, memoryReplayRecord, memoryShadowRecord, memoryTopics, noteMainCall, readMemSaveCandidates, withinBudget } from '../../../../src/core/memory_shadow.ts'
 import type { ActiveWriteCounts, ForkOutcome, GateOutcome, MainMemorySeen, MemoryMode, ModelTokens } from '../../../../src/core/memory_shadow.ts'
 import { CONSOLIDATE_LOCK, backupDir, checkUpdate, effectiveMemoryMode, lockHeld, memorySpoolRoot } from '../../../../src/core/memory_active.ts'
-import { enqueueSave, isSettled, nextAction } from '../../../../src/core/memory_spool.ts'
+import { enqueueSave, isSettled, nextAction, parseSpoolItem, planReplay, supersedeItem } from '../../../../src/core/memory_spool.ts'
 import type { FileOp, SpoolItem } from '../../../../src/core/memory_spool.ts'
 import { lockPid } from '../../../../src/core/memory_tidy.ts'
 import { isRecord } from '../../../../src/guards.ts'
@@ -3002,12 +3002,14 @@ async function detectMemory($: EngineInterface, at: 'start' | 'turn', previous: 
   return { ...decision, detectedAt: at, health, rechecked: at === 'turn' || (previous?.rechecked ?? false) }
 }
 
-/** session.start's timer: decide the backend and keep it in `$.state`. Never throws. */
+/** session.start's timer: decide the backend and keep it in `$.state`; in Active, then finish what the spool holds. Never throws. */
 async function memoryDetectAtStart($: EngineInterface, modulesFile: FeatureModulesFile): Promise<void> {
   try {
-    if (moduleState(await resolveFeatureModules($, modulesFile), 'memory') === 'off') return
+    const mode = moduleState(await resolveFeatureModules($, modulesFile), 'memory')
+    if (mode === 'off') return
     const state = await detectMemory($, 'start', undefined)
     await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'memory' }, state)
+    if (mode === 'active') await replayMemorySpool($, state)
   } catch {
     // No backend known yet: the first turn decides it.
   }
@@ -3253,23 +3255,105 @@ async function applyMemoryOps($: EngineInterface, pass: MemoryPass, ops: readonl
   return true
 }
 
-/** Walks one spooled save as far as it goes now: `settled` in done/, `parked` waiting (for Engram), or `failed` (its file says where it stopped). */
-async function driveSpoolItem($: EngineInterface, pass: MemoryPass, item: SpoolItem, backend: MemoryBackendDecision, spoolRoot: string): Promise<'settled' | 'parked' | 'failed'> {
+/**
+ * Walks one spooled save as far as it goes now: `settled` in done/, `parked`
+ * waiting (for Engram), or `failed` (its file says where it stopped), and
+ * whether any step was taken.
+ */
+async function driveSpoolItem($: EngineInterface, pass: MemoryPass, item: SpoolItem, backend: MemoryBackendDecision, spoolRoot: string): Promise<{ outcome: 'settled' | 'parked' | 'failed'; moved: boolean }> {
   let current = item
+  let moved = false
   try {
     for (let step = 0; step < 4; step += 1) {
       const now = new Date(await $.clock.now()).toISOString()
       const index = (await readTextOrNull($, `${pass.dir}/MEMORY.md`)) ?? ''
       const action = nextAction(current, { backend, spoolRoot, autoMemoryDir: pass.dir, index, now })
       // `engram-save` cannot come up: Active writes only when Engram is not usable.
-      if (action.kind !== 'apply') return 'parked'
-      if (!(await applyMemoryOps($, pass, action.transition.ops))) return 'failed'
+      if (action.kind !== 'apply') return { outcome: 'parked', moved }
+      if (!(await applyMemoryOps($, pass, action.transition.ops))) return { outcome: 'failed', moved }
+      moved = true
       current = action.transition.item
-      if (isSettled(current.state)) return 'settled'
+      if (isSettled(current.state)) return { outcome: 'settled', moved }
     }
-    return 'parked'
+    return { outcome: 'parked', moved }
   } catch {
-    return 'failed'
+    return { outcome: 'failed', moved }
+  }
+}
+
+/** Every item in this folder's spool, from each session's live folder (done/ left out); a file that does not read back as an item is skipped. */
+async function readSpoolItems($: EngineInterface, spoolRoot: string): Promise<SpoolItem[]> {
+  const items: SpoolItem[] = []
+  let sessions: readonly { readonly name: string; readonly kind: string }[] = []
+  try {
+    sessions = await $.fs.list(spoolRoot)
+  } catch {
+    return items
+  }
+  for (const session of sessions) {
+    if (session.kind !== 'dir') continue
+    let entries: readonly { readonly name: string; readonly kind: string }[] = []
+    try {
+      entries = await $.fs.list(`${spoolRoot}/${session.name}`)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+      const text = await readTextOrNull($, `${spoolRoot}/${session.name}/${entry.name}`)
+      const item = text === null ? null : parseSpoolItem(text)
+      if (item !== null) items.push(item)
+    }
+  }
+  return items
+}
+
+/**
+ * session.start's replay, after the backend is known: in Active on the files
+ * store, the saves this folder's spool still holds are finished in
+ * planReplay's order (this session's, a parked fallback copy, another
+ * session's once it has been still for 10 minutes); an older item of a topic
+ * a newer one replaces is closed unwritten. One row when anything happened.
+ * Never throws.
+ */
+async function replayMemorySpool($: EngineInterface, state: MemoryShadowState): Promise<void> {
+  try {
+    const backend: MemoryBackendDecision = { backend: state.backend, decidedBy: state.decidedBy, server: state.server, permission: state.permission }
+    if (effectiveMemoryMode('active', backend) !== 'active') return
+    const dir = await resolveMemoryDir($)
+    const paths = await resolveHomePaths($)
+    const sessionId = await readSessionId($)
+    if (dir === null || paths === null || sessionId === null) return
+    const spoolRoot = memorySpoolRoot(paths.cacheDir, dir)
+    const items = await readSpoolItems($, spoolRoot)
+    if (items.length === 0) return
+    const nowMs = await $.clock.now()
+    const nowIso = new Date(nowMs).toISOString()
+    const plan = planReplay(items, { currentSessionId: sessionId, now: nowIso })
+    const due = plan.run.filter((item) => !(item.state === 'fallback' && item.store === null)).length + plan.superseded.length
+    if (due === 0) return
+    const pass = newMemoryPass(dir, nowIso)
+    let replayed = 0
+    let superseded = 0
+    if (await memoryFolderLocked($, dir, nowMs)) {
+      pass.tally.lockHeld = true
+    } else {
+      for (const { item, by } of plan.superseded) {
+        const ctx = { backend, spoolRoot, autoMemoryDir: dir, index: '', now: nowIso }
+        if (await applyMemoryOps($, pass, supersedeItem(item, by, ctx).ops)) superseded += 1
+        else pass.tally.writeFailures += 1
+      }
+      for (const item of plan.run) {
+        const { outcome, moved } = await driveSpoolItem($, pass, item, backend, spoolRoot)
+        if (outcome === 'failed') pass.tally.writeFailures += 1
+        else if (moved) replayed += 1
+      }
+    }
+    const at = new Date(await $.clock.now()).toISOString()
+    const record = memoryReplayRecord({ at, account: await resolveAccountId($), project: baseName(await $.session.root()), sessionId, backend, items: due, replayed, superseded, writes: pass.tally })
+    await appendMemoryDecision($, at, `${JSON.stringify(record)}\n`)
+  } catch {
+    // A replay that failed leaves the items where their files say; the next start tries again.
   }
 }
 
@@ -3299,7 +3383,7 @@ async function writeMemoryDraft($: EngineInterface, draft: MemoryDraft, backend:
     if (await memoryFolderLocked($, dir, nowMs)) return { ...pass.tally, lockHeld: true }
     // 3. The saves, each as far as it goes.
     for (const item of items) {
-      if ((await driveSpoolItem($, pass, item, backend, spoolRoot)) === 'failed') pass.tally.writeFailures += 1
+      if ((await driveSpoolItem($, pass, item, backend, spoolRoot)).outcome === 'failed') pass.tally.writeFailures += 1
     }
     // 4. The updates: an existing file only, with frontmatter, after its backup.
     for (const update of draft.updates) {

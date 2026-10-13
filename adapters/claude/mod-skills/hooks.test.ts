@@ -35,6 +35,7 @@ import { register } from "./hooks/index.ts";
 import { walkModSkillsClosure } from "../../../src/core/mod_skills_copy.ts";
 import { isForkSampled } from "../../../src/core/memory_shadow.ts";
 import { memorySpoolRoot } from "../../../src/core/memory_active.ts";
+import { enqueueSave, spoolDonePath, spoolItemPath } from "../../../src/core/memory_spool.ts";
 
 // ---------------------------------------------------------------------------
 // A minimal fake of the Claude Code function-hooks host: only the `on`
@@ -5642,6 +5643,116 @@ test("A4 memory active: a subagent's turn or a turn that did not end with an ans
     assert.equal(host.modelCalls.length, 0, label);
     assert.equal(host.forkCalls.length, 0, label);
     assert.equal(host.files.has(MEMORY_ROWS_PATH), false, label);
+    assertNothingWritten(host, seeded);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// The spool replay at session.start (odd/tasks/memory-active-files.md, A5):
+// after the backend is detected, Active on the files store finishes the saves
+// its folder's spool still holds, in planReplay's order. A save writes the
+// same file and the same index line however often it is replayed.
+// ---------------------------------------------------------------------------
+
+const SPANISH_SAVE = { type: "feedback" as const, title: "Spanish with tú", content: "Reply in Spanish with tú, never voseo.", topic_key: "spanish-tu" };
+
+/** A save another session spooled and never finished (it crashed), as the mod writes it. */
+function seedSpooledSave(host: FakeHost, sessionId: string, id: string, at: string): string {
+  const queued = enqueueSave(SPANISH_SAVE, { id, sessionId, now: at }, MEMORY_SPOOL_ROOT);
+  for (const op of queued.ops) if (op.kind === "write") host.files.set(op.path, op.content);
+  return spoolItemPath(MEMORY_SPOOL_ROOT, sessionId, id);
+}
+
+function replayRows(host: FakeHost): Record<string, unknown>[] {
+  return memoryRows(host).filter((row) => row.event === "replay");
+}
+
+function memoryFolder(host: FakeHost): Map<string, string> {
+  return new Map([...host.files].filter(([path]) => path.startsWith(MEMORY_DIR)));
+}
+
+test("A5 memory active: a save a crashed session left in the spool is written once at the next start; a second start adds nothing", async () => {
+  const host = activeHost();
+  const live = seedSpooledSave(host, "session-0", "crashed-1", "2026-09-25T09:00:00.000Z");
+  const { handlers, engine } = loadHooks(host);
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+
+  assert.match(host.files.get(`${MEMORY_DIR}/spanish-tu.md`) ?? "", /\n {2}originSessionId: session-0\n/, "written for the session that drafted it");
+  assert.equal(host.files.get(`${MEMORY_DIR}/MEMORY.md`)?.split("\n").filter((line) => line.includes("(spanish-tu.md)")).length, 1);
+  assert.equal(host.files.has(live), false);
+  assert.equal(JSON.parse(host.files.get(spoolDonePath(MEMORY_SPOOL_ROOT, "session-0", "crashed-1")) ?? "{}").state, "done");
+  const rows = replayRows(host);
+  assert.equal(rows.length, 1);
+  assert.deepEqual({ ...rows[0], at: "x", account: "x" }, {
+    at: "x",
+    account: "x",
+    project: "sandbox",
+    event: "replay",
+    mode: "active",
+    effective: "active",
+    sessionId: "session-1",
+    backend: "absent",
+    decidedBy: "none",
+    permission: "unknown",
+    items: 1,
+    replayed: 1,
+    superseded: 0,
+    written: 1,
+    updated: 0,
+    backups: 0,
+    writeFailures: 0,
+    lockHeld: false,
+  });
+  assert.equal(host.modelCalls.length, 0, "a replay asks no model");
+
+  const after = memoryFolder(host);
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  assert.deepEqual(memoryFolder(host), after, "a second replay changes nothing");
+  assert.equal(replayRows(host).length, 1, "and logs nothing, since it found nothing to do");
+});
+
+test("A5 memory active: a save the lock held back is finished at the next start; another session's fresh item is left to it", async () => {
+  const host = activeHost();
+  memoryShell(host, { alive: true });
+  host.files.set(`${MEMORY_DIR}/.consolidate-lock`, "4242");
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(DRAFT_REPLY);
+  const running = seedSpooledSave(host, "session-9", "running-1", "2026-09-25T09:59:00.000Z");
+  const { handlers, engine } = loadHooks(host);
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  assert.equal(replayRows(host).length, 0, "nothing of this folder is due: the other session's item is a minute old");
+  await completeTurn(handlers, engine, { turnId: turnIdWhere(false) });
+  await runTimers(host);
+  assert.equal(host.files.has(`${MEMORY_DIR}/spanish-tu.md`), false, "held back by the lock");
+  assert.equal(memoryRows(host).at(-1)?.lockHeld, true);
+
+  host.files.delete(`${MEMORY_DIR}/.consolidate-lock`);
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  assert.match(host.files.get(`${MEMORY_DIR}/spanish-tu.md`) ?? "", /\n {2}originSessionId: session-1\n/);
+  assert.equal(host.files.has(running), true, "a session that moved a minute ago may still be running: its item is its own");
+  const last = replayRows(host).at(-1);
+  assert.equal(last?.replayed, 1);
+  assert.equal(last?.written, 1);
+});
+
+test("A5 memory: Shadow, and Active with Engram live, replay nothing", async () => {
+  for (const [modules, engram] of [[{ memory: "shadow" }, false], [{ memory: "active" }, true]] as const) {
+    const host = memoryHost({ engram });
+    setModules(host, modules);
+    memoryShell(host);
+    const live = seedSpooledSave(host, "session-0", "crashed-1", "2026-09-25T09:00:00.000Z");
+    const seeded = new Set(host.files.keys());
+    const { handlers, engine } = loadHooks(host);
+    await startSessionWith(handlers, engine);
+    await runTimers(host);
+    const label = JSON.stringify(modules);
+    assert.equal(host.files.has(live), true, label);
+    assert.equal(host.files.has(`${MEMORY_DIR}/spanish-tu.md`), false, label);
+    assert.equal(replayRows(host).length, 0, label);
     assertNothingWritten(host, seeded);
   }
 });
