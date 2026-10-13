@@ -430,4 +430,38 @@ test("report: the memory module's own background cost from its log, per prompt, 
   const text = formatModuleCostReport(report).join("\n");
   assert.match(text, /memory \(main thread, transcripts\): 0 Engram calls \(0 per prompt\); 0 responses held an Engram call, 0 held only Engram calls \(0 with a save, 0 with judges and no save\)\./);
   assert.match(text, /memory \(module, its log\): 3 Haiku gates \(0\.3 per prompt, 1 failed, 1 UPDATE\), 1 forks \(0\.1 per prompt\), 2 judge builds \(0\.2 per prompt, none asked\); Haiku tokens 2000 in \/ 4 out; fork tokens 10 in \/ 300 out \/ 150000 cache read\./);
+  assert.match(text, /memory \(Active, its log\): 0 turns wrote the files store; 0 files written, 0 rewritten \(0 backups\), 0 saves spooled, 0 replayed at a session start, 0 failed writes, 0 refused updates, 0 passes held by the lock\./);
+});
+
+test("report: what memory in Active wrote, from its decision and replay rows; a replay is never a gate", () => {
+  const tally = newTranscriptTally();
+  tally.prompts = 10;
+  const writes = { spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: false };
+  const decision = (overrides: Record<string, unknown>): Record<string, unknown> => ({
+    at: AT, mode: "active", effective: "active", backend: "absent", decidedBy: "none", permission: "unknown", gate: "update", gateTokens: { input: 1000, output: 2, cacheRead: 0, cacheWrite: 0 },
+    fork: "drafted", forkTokens: { input: 10, output: 300, cacheRead: 150_000, cacheWrite: 0 }, wouldSave: { user: 0, feedback: 1, project: 0, reference: 0 }, judgeBuilds: 0, mainEngramSaves: 0, mainJudges: 0, mainAutoMemoryWrites: 0, agreement: "module-only", ...writes, ...overrides,
+  });
+  const report = buildModuleCostReport({
+    window: WINDOW,
+    tally,
+    hooks: [],
+    rows: {
+      gate: [], skills: [], tools: [], router: [], models: [], steward: [], verifyDone: [], ciWatch: [],
+      memory: [
+        decision({ spooled: 2, written: 1, updated: 1, backups: 1 }),
+        decision({ spooled: 1, lockHeld: true }),
+        decision({ effective: "shadow", backend: "live" }),
+        { at: AT, event: "replay", mode: "active", effective: "active", backend: "absent", items: 1, replayed: 1, superseded: 0, written: 1, updated: 0, backups: 0, writeFailures: 1, lockHeld: false },
+      ],
+    },
+    audit: { times: new Map(), firstMs: null, lastMs: null },
+  });
+  assert.equal(report.memory.gates, 3, "the replay row asked no Haiku");
+  assert.equal(report.memory.activeDecisions, 2);
+  assert.equal(report.memory.written, 2);
+  assert.equal(report.memory.updated, 1);
+  assert.equal(report.memory.spooled, 3);
+  assert.equal(report.memory.replayed, 1);
+  const text = formatModuleCostReport(report).join("\n");
+  assert.match(text, /memory \(Active, its log\): 2 turns wrote the files store; 2 files written, 1 rewritten \(1 backups\), 3 saves spooled, 1 replayed at a session start, 1 failed writes, 0 refused updates, 1 passes held by the lock\./);
 });

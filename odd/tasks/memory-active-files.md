@@ -67,7 +67,7 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
   - a lock: nothing written, the item stays spooled;
   - a subagent turn or a turn that did not end with an answer does nothing.
 - [x] A5 Replay at `session.start`: a pending item is written once; a second replay adds nothing; a replay row is logged.
-- [ ] A6 `measure-module-cost` memory line: written, updated and spooled counts.
+- [x] A6 `measure-module-cost` memory line: written, updated and spooled counts.
 - [ ] A7 Release 0.9.0: README and CHANGELOG disclosure, version, `odd/qa/qa-0.9.0.md` with test scenarios and pending live ones.
 
 ## Acceptance criteria

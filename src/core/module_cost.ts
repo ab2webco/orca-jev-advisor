@@ -698,6 +698,16 @@ export interface MemoryCost {
   readonly judgeBuildsPerPrompt: number | null;
   readonly haikuTokens: { readonly input: number; readonly output: number };
   readonly forkTokens: { readonly input: number; readonly output: number; readonly cacheRead: number };
+  /** Active on the files store (odd/tasks/memory-active-files.md): turns that wrote, and what they and the session-start replays wrote. */
+  readonly activeDecisions: number;
+  readonly written: number;
+  readonly updated: number;
+  readonly backups: number;
+  readonly spooled: number;
+  readonly replayed: number;
+  readonly writeFailures: number;
+  readonly dropped: number;
+  readonly lockHeld: number;
 }
 
 function memoryCost(tally: TranscriptTally, rows: readonly unknown[], window: TimeWindow): MemoryCost {
@@ -735,6 +745,15 @@ function memoryCost(tally: TranscriptTally, rows: readonly unknown[], window: Ti
     judgeBuildsPerPrompt: ratio(log.judgeBuilds, tally.prompts),
     haikuTokens: log.haikuTokens,
     forkTokens: log.forkTokens,
+    activeDecisions: log.activeDecisions,
+    written: log.written,
+    updated: log.updated,
+    backups: log.backups,
+    spooled: log.spooled,
+    replayed: log.replayed,
+    writeFailures: log.writeFailures,
+    dropped: log.dropped,
+    lockHeld: log.lockHeld,
   };
 }
 
@@ -919,6 +938,7 @@ export function formatModuleCostReport(report: ModuleCostReport): string[] {
   const byTool = Object.entries(memory.engramCalls).sort((a, b) => b[1] - a[1]).map(([tool, calls]) => `${tool} ${calls}`).join(", ");
   if (byTool !== "") lines.push(`memory Engram calls by tool: ${byTool}.`);
   lines.push(`memory (module, its log): ${memory.gates} Haiku gates (${fixed(memory.gatesPerPrompt)} per prompt, ${memory.gateFailures} failed, ${memory.updates} UPDATE), ${memory.forks} forks (${fixed(memory.forksPerPrompt)} per prompt), ${memory.judgeBuilds} judge builds (${fixed(memory.judgeBuildsPerPrompt)} per prompt, none asked); Haiku tokens ${memory.haikuTokens.input} in / ${memory.haikuTokens.output} out; fork tokens ${memory.forkTokens.input} in / ${memory.forkTokens.output} out / ${memory.forkTokens.cacheRead} cache read.`);
+  lines.push(`memory (Active, its log): ${memory.activeDecisions} turns wrote the files store; ${memory.written} files written, ${memory.updated} rewritten (${memory.backups} backups), ${memory.spooled} saves spooled, ${memory.replayed} replayed at a session start, ${memory.writeFailures} failed writes, ${memory.dropped} refused updates, ${memory.lockHeld} passes held by the lock.`);
   lines.push(`Agent spawns: ${report.agentSpawns.agentCalls} Agent calls; ${report.agentSpawns.reclassifications} agent-model decisions; ${report.agentSpawns.routerSubagentRows} router subagent rows.`);
   lines.push("");
   lines.push(`Worker (audit log ${iso(report.audit.firstMs)} to ${iso(report.audit.lastMs)}, ${fixed(report.audit.spanHours, 1)} h; board CLI cache refreshes ${fixed(report.audit.boardCliRefreshesPerHour, 1)}/h):`);
