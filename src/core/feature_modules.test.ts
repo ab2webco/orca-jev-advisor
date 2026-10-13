@@ -117,14 +117,14 @@ test("ci-watch: off, shadow and active; its own state is the switch, no existing
   assert.equal(parseFeatureModules(fileWith({ "ci-watch": "active" }))["ci-watch"], "active");
   assert.equal(parseFeatureModules(fileWith({ "ci-watch": "off" }))["ci-watch"], "off");
   assert.equal(parseFeatureModules(fileWith({ "ci-watch": "paused" }))["ci-watch"], "shadow", "a state it does not offer reads as its default");
-  // Only ci-watch's own switch opts out of "shadow caps an existing mode".
-  assert.deepEqual(FEATURE_MODULES.filter((module) => module.ownSwitch === true).map((module) => module.id), ["ci-watch"]);
+  // Only ci-watch's and memory's own switches opt out of "shadow caps an existing mode".
+  assert.deepEqual(FEATURE_MODULES.filter((module) => module.ownSwitch === true).map((module) => module.id), ["ci-watch", "memory"]);
 });
 
-test("memory: off and shadow until Active is wired (odd/tasks/memory-shadow.md T2); three mod features and nothing else", () => {
+test("memory: off, shadow and active, now that Active writes the files store (odd/tasks/memory-active-files.md A3); three mod features and nothing else", () => {
   const entry = FEATURE_MODULES.find((module) => module.id === "memory");
   assert.ok(entry !== undefined);
-  assert.deepEqual(entry.states, ["off", "shadow"]);
+  assert.deepEqual(entry.states, ["off", "shadow", "active"]);
   assert.equal(entry.defaultState, "shadow");
   // It uses Haiku, not Jev, so none of its features is a Jev feature.
   assert.deepEqual(entry.modFeatures, [
@@ -144,9 +144,10 @@ test("memory: off and shadow until Active is wired (odd/tasks/memory-shadow.md T
     assert.equal(on.includes(id), true, id);
     assert.equal(modFeaturesOn(withStates({ memory: "off" })).includes(id), false, id);
   }
-  // No hidden state: a hand-edited "active" has no code behind it yet, so it reads as the default.
-  assert.equal(parseFeatureModules(fileWith({ memory: "active" })).memory, "shadow");
-  assert.equal(validateFeatureModulesInput({ modules: { ...VALID_INPUT.modules, memory: "active" } }).ok, false);
+  // Active has code behind it now: a stored "active" is read as written, and the writer accepts it.
+  assert.equal(parseFeatureModules(fileWith({ memory: "active" })).memory, "active");
+  assert.equal(validateFeatureModulesInput({ modules: { ...VALID_INPUT.modules, memory: "active" } }).ok, true);
+  assert.equal(modFeaturesOn(withStates({ memory: "active" })).includes("memory-save"), true);
   assert.equal(parseFeatureModules(fileWith({ memory: "paused" })).memory, "shadow");
 });
 

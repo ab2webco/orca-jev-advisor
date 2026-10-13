@@ -38,7 +38,9 @@
 // of measurement is the point (odd/tasks/verify-done-module.md). ci-watch,
 // new in 0.9.0, is in the same case and also defaults to `shadow`.
 // memory (odd/tasks/memory-core.md) is new in the same way and also
-// defaults to `shadow`; it will offer `active` once its writes are wired.
+// defaults to `shadow`; like ci-watch its state is its own switch
+// (`ownSwitch`), and `active` writes the auto-memory files
+// (odd/tasks/memory-active-files.md).
 //
 // Pure: no I/O and no node: import, so the mod sandbox can load it too.
 
@@ -319,11 +321,12 @@ export const FEATURE_MODULES: readonly FeatureModule[] = [
     // is the store. Haiku decides and judges, a fork drafts, so no feature
     // here is a Jev feature. It has no mode of its own, so its state is its
     // one switch: shadow decides, judges (dry) and drafts (sampled) and
-    // writes nothing (odd/tasks/memory-shadow.md). Active, which writes,
-    // is offered once it is wired (M9 to M13): until then a stored "active"
-    // reads as the default, so no state exists that no code runs.
+    // writes nothing (odd/tasks/memory-shadow.md). Active writes the files
+    // store, auto-memory, when Engram is absent or down; with Engram live it
+    // keeps measuring as shadow until Engram writes are wired
+    // (odd/tasks/memory-active-files.md).
     id: "memory",
-    states: ["off", "shadow"],
+    states: MODULE_STATES,
     defaultState: "shadow",
     hooks: [],
     modFeatures: [
@@ -335,6 +338,7 @@ export const FEATURE_MODULES: readonly FeatureModule[] = [
     // memory keeps that panel-only job running while it is on, and starts nothing of its own.
     workerJobs: [MEASUREMENTS_SUMMARY],
     modes: [],
+    ownSwitch: true,
   },
 ];
 

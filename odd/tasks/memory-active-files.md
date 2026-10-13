@@ -52,7 +52,7 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
   - the update check;
   - the row's Active fields and the replay row;
   - the weekly summary's Active counts.
-- [ ] A3 Registry and card:
+- [x] A3 Registry and card:
   - memory offers Off, Shadow and Active; default Shadow;
   - the card's Active text per backend, the cost line for every-UPDATE forks, the week's written and updated counts (es/en);
   - `panels.spec.mjs` cases for the Active choice and its lines.

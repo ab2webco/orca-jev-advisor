@@ -729,9 +729,17 @@
           'modules.weekly.ci-watch': 'Últimos 7 días: vigilancias {{watches}}, consultas de CI del agente mientras tanto {{polls}}, esperas largas {{sleeps}}{{notes}} (lo que un aviso habría reemplazado).',
           'modules.weekly.ci-watch.notes': ', avisos enviados {{injected}}',
           'modules.name.memory': 'Memoria',
-          'modules.desc.memory': 'Al final de cada turno respondido decide si hay algo que valga la pena recordar y dónde iría: con Engram, Engram lo guarda todo y tu auto-memoria solo los avisos sobre cómo trabajar (feedback) y los datos sobre ti (user); sin Engram, la auto-memoria lo guarda todo. En sombra solo mide: no guarda nada en Engram, no juzga conflictos y no escribe archivos de memoria; tu hilo principal sigue guardando como hoy. El estado Activo, que sí escribe, todavía no está disponible.',
-          'modules.cost.memory': 'En uso: una llamada a Haiku por turno respondido y, en 1 de cada {{every}} turnos que Haiku marca para actualizar, un fork de la sesión que redacta la memoria. Las llamadas a Haiku y los forks cuentan contra la cuota de tu plan Max. La única llamada a Engram es una comprobación de solo lectura, una vez por sesión.',
-          'modules.memory.sees': 'Haiku ve tu MEMORY.md (hasta 8.000 caracteres) y el último intercambio (hasta 12.000 caracteres, con los secretos redactados y solo el nombre de cada herramienta, nunca su entrada ni su salida). El fork ve la transcripción de esta sesión y las claves de tema de tu memoria, o tus archivos de memoria si no hay Engram. El registro guarda conteos y tipos, nunca lo que se guardaría.',
+          'modules.desc.memory': 'Al final de cada turno respondido decide si hay algo que valga la pena recordar y dónde iría: con Engram, Engram lo guarda todo y tu auto-memoria solo los avisos sobre cómo trabajar (feedback) y los datos sobre ti (user); sin Engram, la auto-memoria lo guarda todo. En sombra solo mide: no guarda nada en Engram, no juzga conflictos y no escribe archivos de memoria. En activo escribe en tu carpeta de auto-memoria cuando Engram no está en uso (no hay Engram, o está configurado pero no responde): cada memoria nueva es un archivo con una línea en MEMORY.md, y antes de reescribir un archivo lo copia byte a byte en .memory-backup. En este release nunca borra una memoria. Tu hilo principal sigue guardando como hoy.',
+          'modules.cost.memory': 'En uso: una llamada a Haiku por turno respondido. En sombra, en 1 de cada {{every}} turnos que Haiku marca para actualizar, un fork de la sesión redacta la memoria; en activo, cada uno de esos turnos tiene su fork. Las llamadas a Haiku y los forks cuentan contra la cuota de tu plan Max. La única llamada a Engram es una comprobación de solo lectura, una vez por sesión.',
+          'modules.memory.sees': 'Haiku ve tu MEMORY.md (hasta 8.000 caracteres) y el último intercambio (hasta 12.000 caracteres, con los secretos redactados y solo el nombre de cada herramienta, nunca su entrada ni su salida). El fork ve la transcripción de esta sesión y las claves de tema de tu memoria, o tus archivos de memoria si no hay Engram. En activo, lo que el fork redacta se escribe en tu carpeta de auto-memoria. El registro guarda conteos y tipos, nunca lo que se guarda.',
+          'modules.memory.active.unknown': 'Dónde guarda: todavía no se ha detectado. Lo decide el primer turno respondido.',
+          'modules.memory.active.live': 'Dónde guarda: todavía en ningún sitio. Engram está en marcha ({{signal}}). Con Engram en marcha, el estado Activo sigue midiendo; escribir en Engram llegará en un release posterior.',
+          'modules.memory.active.refused': 'Dónde guarda: todavía en ningún sitio. Engram está conectado, pero se rechazó su comprobación por falta de un permiso ({{signal}}). Con Engram en marcha, el estado Activo sigue midiendo; escribir en Engram llegará en un release posterior.',
+          'modules.memory.active.down': 'Dónde guarda: en tu carpeta de auto-memoria, porque Engram está configurado pero no responde ({{signal}}). Cada archivo que escribe queda marcado con pending_engram; pasarlos a Engram llegará en un release posterior.',
+          'modules.memory.active.absent': 'Dónde guarda: en tu carpeta de auto-memoria, porque no hay Engram ({{signal}}).',
+          'modules.memory.writes': 'Escrito esta semana: {{written}} archivos de memoria nuevos y {{updated}} reescritos ({{backups}} copias de seguridad). {{spooled}} guardados pasaron por la cola y {{replayed}} se terminaron al empezar una sesión. Escrituras fallidas: {{failed}}; actualizaciones rechazadas: {{dropped}}.',
+          'modules.memory.writesNone': 'Escrito esta semana: todavía nada.',
+          'modules.memory.writesUnavailable': 'Escrito esta semana: los conteos todavía no se han podido leer.',
           'modules.memory.backend.unknown': 'Dónde guardaría: todavía no se ha detectado. Lo decide el primer turno respondido.',
           'modules.memory.backend.live': 'Dónde guardaría: Engram, que está en marcha ({{signal}}). Engram guardaría todo; la auto-memoria, solo feedback y user.',
           'modules.memory.backend.refused': 'Dónde guardaría: Engram está conectado, pero se rechazó su comprobación por falta de un permiso ({{signal}}). Permite mem_current_project de Engram en tus permisos para que el módulo pueda llamarlo.',
@@ -1160,9 +1168,17 @@
           'modules.weekly.ci-watch': 'Last 7 days: watches {{watches}}, CI checks by the agent meanwhile {{polls}}, long sleeps {{sleeps}}{{notes}} (what a note would replace).',
           'modules.weekly.ci-watch.notes': ', notes sent {{injected}}',
           'modules.name.memory': 'Memory',
-          'modules.desc.memory': 'At the end of each answered turn, decides whether anything is worth remembering and where it would go: with Engram, Engram holds everything and your auto-memory keeps only the rules for how to work (feedback) and the facts about you (user); without Engram, auto-memory holds everything. In Shadow it only measures: it saves nothing to Engram, judges no conflict and writes no memory file; your main thread keeps saving as it does today. Active, which writes, is not offered yet.',
-          'modules.cost.memory': 'In use: one Haiku call per answered turn and, on 1 in {{every}} turns Haiku marks for an update, one fork of the session that drafts the memory. Haiku calls and forks count against your Max plan quota. The only Engram call is a read-only check, once a session.',
-          'modules.memory.sees': 'Haiku sees your MEMORY.md (up to 8,000 characters) and the last exchange (up to 12,000 characters, secrets redacted, only the name of each tool, never its input or output). The fork sees this session\'s own transcript and your memory topic keys, or your memory files when there is no Engram. The log keeps counts and types, never what would be saved.',
+          'modules.desc.memory': 'At the end of each answered turn, decides whether anything is worth remembering and where it would go: with Engram, Engram holds everything and your auto-memory keeps only the rules for how to work (feedback) and the facts about you (user); without Engram, auto-memory holds everything. In Shadow it only measures: it saves nothing to Engram, judges no conflict and writes no memory file. Active writes into your auto-memory folder when Engram is not in use (no Engram, or Engram configured but not answering): each new memory is a file with one line in MEMORY.md, and a file it rewrites is first copied byte for byte to .memory-backup. It never deletes a memory in this release. Your main thread keeps saving as it does today.',
+          'modules.cost.memory': 'In use: one Haiku call per answered turn. In Shadow, on 1 in {{every}} turns Haiku marks for an update, one fork of the session drafts the memory; in Active, every such turn gets its fork. Haiku calls and forks count against your Max plan quota. The only Engram call is a read-only check, once a session.',
+          'modules.memory.sees': 'Haiku sees your MEMORY.md (up to 8,000 characters) and the last exchange (up to 12,000 characters, secrets redacted, only the name of each tool, never its input or output). The fork sees this session\'s own transcript and your memory topic keys, or your memory files when there is no Engram. In Active, what the fork drafts is written into your auto-memory folder. The log keeps counts and types, never what is saved.',
+          'modules.memory.active.unknown': 'Where it saves: not detected yet. The first answered turn decides it.',
+          'modules.memory.active.live': 'Where it saves: nothing yet. Engram is live ({{signal}}). With Engram live, Active keeps measuring; writing to Engram arrives in a later release.',
+          'modules.memory.active.refused': 'Where it saves: nothing yet. Engram is connected, but its check was refused for want of a permission rule ({{signal}}). With Engram live, Active keeps measuring; writing to Engram arrives in a later release.',
+          'modules.memory.active.down': 'Where it saves: your auto-memory folder, because Engram is configured but not answering ({{signal}}). Each file it writes is marked pending_engram; passing them to Engram arrives in a later release.',
+          'modules.memory.active.absent': 'Where it saves: your auto-memory folder, since there is no Engram ({{signal}}).',
+          'modules.memory.writes': 'Written this week: {{written}} new memory files and {{updated}} rewritten ({{backups}} backups taken). {{spooled}} saves went through the spool and {{replayed}} were finished at a session start. Failed writes: {{failed}}; refused updates: {{dropped}}.',
+          'modules.memory.writesNone': 'Written this week: nothing yet.',
+          'modules.memory.writesUnavailable': 'Written this week: the counts could not be read yet.',
           'modules.memory.backend.unknown': 'Where it would save: not detected yet. The first answered turn decides it.',
           'modules.memory.backend.live': 'Where it would save: Engram, which is live ({{signal}}). Engram would hold everything; auto-memory, only feedback and user.',
           'modules.memory.backend.refused': 'Where it would save: Engram is connected, but its check was refused for want of a permission rule ({{signal}}). Allow Engram\'s mem_current_project in your permissions so the module can call it.',
@@ -4226,10 +4242,11 @@
         // 0.9.0 (odd/tasks/ci-watcher.md): its cost is gh calls, not Jev calls. 45 is CI_WATCH_MAX_POLLS (src/core/ci_watch.ts), the
         // ceiling of one watch's schedule over the 60-minute cap; config_html_ci_watch.test.mjs holds the two together.
         { id: 'ci-watch', states: ['off', 'shadow', 'active'], cost: { polls: 45 }, weekly: true, background: { open: 0, closed: 0, kind: 'processes' } },
-        // odd/tasks/memory-shadow.md: shadow only until its writes are wired (M9 to M13). `every` is the fork sample,
-        // the mod's own FORK_SAMPLE_EVERY (src/core/memory_shadow.ts), a fact and not a setting; a test holds the two
-        // equal. Its weekly counts ride on the shared measurements summary, so it starts no process of its own.
-        { id: 'memory', states: ['off', 'shadow'], cost: { every: 5 }, background: { open: 0, closed: 0, kind: 'processes' } }
+        // odd/tasks/memory-shadow.md and memory-active-files.md: Active writes the auto-memory files when Engram is absent
+        // or down, and keeps measuring while Engram is live. `every` is Shadow's fork sample, the mod's own
+        // FORK_SAMPLE_EVERY (src/core/memory_shadow.ts), a fact and not a setting; a test holds the two equal. Its weekly
+        // counts ride on the shared measurements summary, so it starts no process of its own.
+        { id: 'memory', states: ['off', 'shadow', 'active'], cost: { every: 5 }, background: { open: 0, closed: 0, kind: 'processes' } }
       ]
       var moduleStates = null
       var moduleRowsBuilt = false
@@ -4286,7 +4303,7 @@
             card.appendChild(line)
           })
           if (row.id === 'memory') {
-            ;['sees', 'backend', 'week'].forEach(function (part) {
+            ;['sees', 'backend', 'week', 'writes'].forEach(function (part) {
               var line = elMake('p', 'hint module-memory-' + part)
               line.setAttribute('data-module-memory', part)
               card.appendChild(line)
@@ -4343,19 +4360,41 @@
 
       /**
        * The memory card's own lines: what Haiku and the fork see, where it
-       * would save (the newest logged row's backend and the signal that
-       * decided it) and the week's counts. `summary` is read-measurements.mjs's
-       * `memory`, undefined until the worker has published it.
+       * saves or would save (the newest logged row's backend and the signal
+       * that decided it; in Active, what Active does on that backend), the
+       * week's counts and, in Active, the week's writes. `summary` is
+       * read-measurements.mjs's `memory`, undefined until the worker has
+       * published it; `state` is the module's state, null while unknown.
        */
-      function renderMemoryCard (summary) {
+      function renderMemoryCard (summary, state) {
         var sees = document.querySelector('[data-module-memory="sees"]')
         if (!sees) return
         sees.textContent = t('modules.memory.sees')
+        var active = state === 'active'
         var latest = summary && summary.latest && typeof summary.latest === 'object' ? summary.latest : null
         var backend = 'unknown'
         if (latest) backend = latest.backend === 'live' ? (latest.permission === 'refused' ? 'refused' : 'live') : (latest.backend === 'configured-down' ? 'down' : 'absent')
         var signal = latest ? t('modules.memory.signal.' + (['tools+health', 'tools', 'health', 'user-config', 'plugin', 'binary', 'none'].indexOf(latest.decidedBy) === -1 ? 'none' : latest.decidedBy)) : ''
-        document.querySelector('[data-module-memory="backend"]').textContent = t('modules.memory.backend.' + backend, { signal: signal })
+        document.querySelector('[data-module-memory="backend"]').textContent = t((active ? 'modules.memory.active.' : 'modules.memory.backend.') + backend, { signal: signal })
+        var writes = document.querySelector('[data-module-memory="writes"]')
+        writes.hidden = !active
+        if (!active) {
+          writes.textContent = ''
+        } else if (!summary || typeof summary !== 'object' || typeof summary.written !== 'number') {
+          writes.textContent = t('modules.memory.writesUnavailable')
+        } else if (summary.written + summary.updated + summary.spooled + summary.writeFailures + summary.dropped === 0) {
+          writes.textContent = t('modules.memory.writesNone')
+        } else {
+          writes.textContent = t('modules.memory.writes', {
+            written: countOf(summary.written),
+            updated: countOf(summary.updated),
+            backups: countOf(summary.backups),
+            spooled: countOf(summary.spooled),
+            replayed: countOf(summary.replayed),
+            failed: countOf(summary.writeFailures),
+            dropped: countOf(summary.dropped)
+          })
+        }
         var week = document.querySelector('[data-module-memory="week"]')
         if (!summary || typeof summary !== 'object' || typeof summary.decisions !== 'number') {
           week.textContent = t('modules.memory.weekUnavailable')
@@ -4402,7 +4441,7 @@
           setPressedValue(group, states[row.id])
         })
         moduleStates = known ? states : null
-        renderMemoryCard(measurements && typeof measurements === 'object' ? measurements.memory : undefined)
+        renderMemoryCard(measurements && typeof measurements === 'object' ? measurements.memory : undefined, states.memory)
         applyModuleVisibility()
       }
 
