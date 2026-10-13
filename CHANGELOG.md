@@ -2,6 +2,19 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.9.0
+
+- **Memory module: Active on the files store** (`src/core/memory_active.ts`, odd/tasks/memory-active-files.md). The registry offers Off, Shadow and Active again; the default stays Shadow. Active writes only where Claude Code's auto-memory folder is the store: no Engram, or Engram configured but not answering. With Engram live, Active keeps measuring exactly as Shadow and writes nothing; every row carries `mode` (the switch) and `effective` (what ran), so that case reads `mode: active, effective: shadow`. Writing to Engram arrives in a later release.
+  - **Every UPDATE is drafted.** In Active the fork runs on every turn Haiku marks for an update (Shadow keeps its 1 in 5). A turn whose next turn already started is still not forked.
+  - **Spool before writing.** Each save is written to its own file, `memory-spool/<store id>/<session id>/<id>.json` under the cache dir, before any memory file is touched; the store id is a hash of the memory folder, so a replay only writes its own folder's items. No Engram: the file and its `MEMORY.md` line are written, then the item moves to `done/` (`mv`). Engram down: the file carries `pending_engram: true` and the item stays parked for the Engram replay of a later release.
+  - **Replay at session start.** After the backend is detected, Active finishes what the folder's spool holds: this session's items, and another session's once it has been still for 10 minutes. A save upserts `<topic_key>.md` and its index line, so a second replay changes nothing. One `event: replay` row when anything happened.
+  - **Files in the folder's own shape**: `name`, a quoted `description`, and `metadata` with `node_type: memory`, `type`, `topic_key`, `originSessionId` and `modified`.
+  - **Backups.** A memory file that already exists (an update, or a save of an existing topic) is copied byte for byte with `cp -p` to `<memory dir>/.memory-backup/<stamp>/` first; if the copy fails it is not rewritten. Updates name a bare file that must exist and carry frontmatter, otherwise they are refused and counted. `MEMORY.md` is edited one line at a time and is not copied.
+  - **Not in this release:** deletes (counted as `wouldDelete`, never applied), Engram writes and judging, the `tool.call` intercept of the main thread's own memory writes (they stay; the fork reads the current files, so it updates instead of duplicating), tidy.
+  - **`.consolidate-lock`.** While Claude Code's own consolidation holds the folder (a lock under an hour old whose pid answers `kill -0`), nothing is written: saves stay spooled, updates are not applied, the row says `lockHeld`.
+  - **Fails open.** A malformed gate answer or a fork answer that is not a draft writes nothing and is counted in the row; any failure leaves the turn untouched.
+  - **Rows and card.** Rows add `spooled`, `written`, `updated`, `backups`, `dropped`, `writeFailures` and `lockHeld`, counts only, never a title, a file name or text. The Memory card (es/en) says per backend what Active does, the cost of a fork per UPDATE, and the week's writes. `npm run measure-module-cost` adds a line for Active's writes.
+
 ## 0.8.3
 
 - **Router: the cache state on Team and Enterprise organizations** (`src/core/cache_warmth.ts`, odd/tasks/router-cache-ttl.md R5). Claude Code 2.1.296 seats the built-in `cc-plugin-sec-default` outermost for Team and Enterprise organizations, and it keeps `classic.*` events from the plugins a person installs. The cache TTL was read only at `classic.Stop`, so on those accounts it stayed unknown and every router row logged `cacheWarm: null`. The router now reads the TTL and the last main request from the transcript tail at its own stage decision whenever either is unknown: `<config>/projects/<slug of the session root>/<session id>.jsonl`, or the same id found under `<config>/projects/*/` with `find`. macOS and Linux. `classic.Stop` still reads it where it is delivered.

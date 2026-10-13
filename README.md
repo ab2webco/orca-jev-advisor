@@ -16,6 +16,17 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.9.0
+
+- **Memory can now save for you (Active).** Until now the Memory module only measured. Set it to Active in Settings → Jev Advisor → General → Modules → Memory and, when you do not use Engram (or Engram is configured but not answering), it saves what is worth remembering into Claude Code's own auto-memory folder for the repository: one file per memory, plus one line in `MEMORY.md`, which Claude Code reads at the start of every session. The default stays Shadow, so nothing changes until you choose Active.
+  - **With Engram live, Active does not write yet.** It keeps measuring exactly as Shadow, and the card says so. Writing to Engram arrives in a later release.
+  - **What it reads and sends.** Haiku sees your `MEMORY.md` (up to 8,000 characters) and the last exchange (up to 12,000 characters, secrets masked, only the names of the tools used). On every turn Haiku marks for an update, a fork of your session (your session's own transcript, plus your current memory files: up to 40 files, 40,000 characters) drafts what to save. Both go to Anthropic as part of your Claude Code use, like the session itself.
+  - **What it writes.** New memory files, their line in `MEMORY.md`, and, before it rewrites a file that already exists, a byte-for-byte copy in `.memory-backup/<date>/` inside the same folder. It never deletes a memory in this release. Each save is first written to a queue in the plugin's cache directory, so a crash never loses it: the next session start finishes it, once.
+  - **Cost.** One Haiku call per answered turn, and one fork per turn Haiku marks for an update (in Shadow it was 1 in 5 of those). Both count against your Max plan quota.
+  - **Your agent keeps its own memory habits.** If it saves something itself, that stays; the module reads the current files, so it updates a memory instead of adding a duplicate.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.8.3
 
 - **Model router on Team and Enterprise accounts.** The router now knows whether your prompt cache is warm or cold on every account. Until now, on Team and Enterprise organizations Claude Code kept back the turn-end event the router used, so it never knew, and it priced every switch as if the cache were warm. It now reads the cache from the session's transcript itself, on macOS and Linux. When it still cannot tell, the decision log says why.
@@ -301,6 +312,16 @@ for the three setting mirrors and the queue below:
 | Which modules are on (not secret) | `~/.config/orca-supervisor/feature-modules.json` | the hooks and the skills mod read it outside Orca; written only when you save the Modules section |
 | The actions queued for a person, command redacted | `~/.cache/orca-supervisor/human-queue.jsonl` | the board's "Waiting for you" list; only written in queue mode |
 
+**Memory in Active (0.9.0)** writes one more thing, and only when you set
+the Memory module to Active and Engram is absent or not answering: memory
+files and their `MEMORY.md` lines in Claude Code's auto-memory folder of the
+repository (`<config root>/projects/<repository>/memory/`), and, before it
+rewrites a file that already exists, a byte-for-byte copy under that
+folder's `.memory-backup/<date>/`. Each save is queued first under
+`~/.cache/orca-supervisor/memory-spool/`. It never deletes a memory, and
+**Revert everything** does not remove what it saved: those are your
+memories now, in Claude Code's own folder.
+
 Nothing is sent anywhere except the questions themselves, to
 `api.typesafe.ai` (see "What leaves your machine" below). Your commands are
 not stored: the measurement log keeps a coarse command *family* (`git
@@ -390,6 +411,18 @@ no commands and no paths of its own. Unlike the gate, it does not replace
 repository, branch or path names written in the message with placeholders
 (the context steward's prompt excerpts do not either). Set the module to Off
 and nothing is sent.
+
+**Memory (0.8.2, Active in 0.9.0):** the Memory module sends nothing to
+Jev. It asks Haiku, through your own Claude Code session, whether a turn is
+worth remembering: Haiku sees your `MEMORY.md` (up to 8,000 characters) and
+the last exchange (up to 12,000 characters, credential values masked as
+above, only the names of the tools used). When Haiku says yes, a fork of
+your session, which already holds your transcript, drafts the memory and
+also sees your memory files (up to 40 files, 40,000 characters) or, with
+Engram live, their topic keys. Both are ordinary Claude Code requests to
+Anthropic and count against your plan's quota. The module's own log keeps
+counts only, never what was saved. Set the module to Off and none of this
+happens.
 
 This masking runs only on the copy sent to Jev. The local rules that refuse
 a force push, a recursive delete or a dropped table always judge the real,

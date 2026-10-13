@@ -68,7 +68,7 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
   - a subagent turn or a turn that did not end with an answer does nothing.
 - [x] A5 Replay at `session.start`: a pending item is written once; a second replay adds nothing; a replay row is logged.
 - [x] A6 `measure-module-cost` memory line: written, updated and spooled counts.
-- [ ] A7 Release 0.9.0: README and CHANGELOG disclosure, version, `odd/qa/qa-0.9.0.md` with test scenarios and pending live ones.
+- [x] A7 Release 0.9.0: README and CHANGELOG disclosure, version, `odd/qa/qa-0.9.0.md` with test scenarios and pending live ones.
 
 ## Acceptance criteria
 
@@ -94,3 +94,13 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
 - Killing a session between the fork and the write leaves a spool item that the next session start writes once.
 - With Engram live, Active writes nothing and the card says it keeps measuring.
 - The card's weekly counts match the log.
+
+## Outcome
+
+- `npm run typecheck` exit 0; `npm test` 4304/4304; `npm run test:panels` 241/241.
+- The Memory card was photographed in Active with no Engram, English, at 1440 and 390, light. No colour was added, so there is no dark shot. The images are kept out of the repository.
+- Decisions taken while building:
+  - "Live" means the backend `live` whatever the permission: a refused health check still keeps Active measuring, since the main thread can use Engram.
+  - The spool root carries a store id (a hash of the memory folder), so a replay never writes another repository's or account's items into this folder.
+  - The replay runs at session start only, not at turn end; an item held by the lock waits for the next start.
+  - A replay row is logged only when the replay did something (or found the lock), so a parked fallback copy does not log a row at every start.
