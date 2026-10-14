@@ -2,6 +2,12 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.11.1
+
+- **Band: stacks under another plugin's band** (`adapters/claude/mod-skills/hooks/index.ts`, AbovePrompt). Since 0.6.14 the subagent band (and, since the CI watcher, its rows) passed whenever a plugin beneath had already drawn a band, so in a project whose own plugin draws one (a client project's orchestrator plugin draws a "Fleet" band in its orchestrator session) the running agents, their model and effort never showed. The other plugin's tree is now kept first and untouched, and these rows stack under it in one column. With nothing running, the other band is passed through as before; a survey still holds the band.
+- **Status line: no-pick parts left out** (`src/core/status_line.ts`). `skillStatusPart` and `toolStatusPart` return null when nothing was picked, so "sin skill" and "herramientas: sin cambio" (and their measuring forms) no longer push the model part past a narrow pane's edge. A turn whose line is empty now clears it (`$.ui.status(undefined)`), so the previous turn's skill does not stay showing. The four unused catalog keys are removed.
+- **Board: the reason a quota could not be read.** The quota mirror keeps Orca's `quota.error` (cut to 160 characters, only when present), `parseQuota` carries it, and the Consumption tab shows it under the account ("Orca could not read this quota: …"). The owner's account read "error" with no reason; Orca's was "Claude usage is rate limited right now."
+
 ## 0.11.0
 
 - **Board: one time window for every tab** (odd/tasks/board-global-window.md, W1-W2). `src/core/board_windows.ts` defines `day` (24 h rolling), `week` (7 days rolling), `version` (since the first gate decision stamped with the running plugin version) and `all`, and every reader (measurements, consumption, activity) summarizes per window with the same instants. Each per-window summary carries `coverageSinceMs`; usage, router, steward and typing logs are pruned at 8 days, so under `all` those cards say they show the 8 days kept. Activity moved from 7 local calendar days to the rolling window. The chips moved above the tabs, default to 24 h (the version window was minutes of data right after a release: 38 decisions vs 2,132 in 24 h) and are remembered per viewer. Every card heading names its window or says it does not follow it. Real `storage.json`: 351,974 bytes before, 305,420 after (per-project 7-day sparklines dropped).

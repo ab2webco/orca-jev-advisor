@@ -16,6 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.11.1
+
+- **Your agents show beside a project's own band.** When a project's plugin draws its own band above the prompt (a fleet or orchestrator band, say), the running agents with their model and effort, and the CI watcher's rows, used to step aside and not show at all. They now sit right under that band.
+- **A shorter status line.** "no skill" and "tools: no change" are no longer printed when nothing was picked, so the model and router part fits a narrow pane; a turn with nothing to say clears the line instead of leaving the last skill showing.
+- **Why a quota could not be read.** When Orca cannot read an account's quota, the Consumption tab now shows Orca's own reason under that account instead of a bare "error".
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.11.0
 
 - **One time window for the whole board.** The 24 h / 7 days / this version / all chips now sit above the tabs and every tab follows them, not only Gate. They start at 24 h, so the board is no longer near-empty right after an update. Every card says which window it shows; a card that cannot follow it (live states, account quota, the last 10 decisions) says so. Usage, router and steward logs are kept for 8 days, so under "all" those cards say they show the 8 days that are kept.
