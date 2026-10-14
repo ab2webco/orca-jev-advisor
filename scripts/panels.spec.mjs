@@ -4732,9 +4732,11 @@ test('Modules: the memory card offers Off, Shadow and Active, states the fork sa
     assert.deepEqual(card.labels, ['Off', 'Shadow', 'Active'])
     assert.deepEqual(card.pressed, ['shadow'])
     assert.match(card.text, /In Shadow it only measures: it saves nothing to Engram, judges no conflict and writes no memory file/)
-    assert.match(card.text, /Active writes into your auto-memory folder when Engram is not in use \(no Engram, or Engram configured but not answering\)/)
-    assert.match(card.text, /a file it rewrites is first copied byte for byte to \.memory-backup/)
-    assert.match(card.text, /It never deletes a memory in this release\./)
+    assert.match(card.text, /Active saves to Engram when Engram is live, and mirrors the rules for how to work and the facts about you into your auto-memory folder; with no Engram, or Engram configured but not answering, it writes into your auto-memory folder/)
+    assert.match(card.text, /a file it rewrites or removes is first copied byte for byte to \.memory-backup/)
+    assert.match(card.text, /It never deletes a memory in this release: a fallback copy is removed only once Engram has it\./)
+    assert.match(card.text, /When your main thread saves to Engram in a turn, Active saves nothing of its own for that turn\./)
+    assert.match(card.text, /In Shadow the only Engram call is a read-only check, once a session; in Active with Engram, each memory is one mem_save, and each conflict one read, one Haiku call and one mem_judge\./)
     assert.doesNotMatch(card.text, /not offered yet/)
     assert.match(card.text, /one Haiku call per answered turn\. In Shadow, on 1 in 5 turns Haiku marks for an update, one fork of the session drafts the memory; in Active, every such turn gets its fork\./)
     assert.match(card.text, /Haiku calls and forks count against your Max plan quota\./)
@@ -4801,12 +4803,12 @@ function memoryActiveScenario (latest, writes = {}) {
   return withModuleStates({ memory: 'active' }, { measurementsSummary: { ...ready.measurementsSummary, memory } })
 }
 
-test('Modules: memory in Active says, per backend, where it saves; with Engram live it keeps measuring and says so', MODULES_SKIP, async () => {
+test('Modules: memory in Active says, per backend, where it saves; with Engram it saves there, and with its check refused it keeps measuring and says so', MODULES_SKIP, async () => {
   const cases = [
     [{ backend: 'absent', decidedBy: 'none', permission: 'unknown' }, /Where it saves: your auto-memory folder, since there is no Engram \(no sign of Engram\)\./],
-    [{ backend: 'configured-down', decidedBy: 'user-config', permission: 'unknown' }, /Where it saves: your auto-memory folder, because Engram is configured but not answering \(found in your user MCP config\)\. Each file it writes is marked pending_engram; passing them to Engram arrives in a later release\./],
-    [{ backend: 'live', decidedBy: 'tools+health', permission: 'ok' }, /Where it saves: nothing yet\. Engram is live \(its tools are connected and it answered the check\)\. With Engram live, Active keeps measuring; writing to Engram arrives in a later release\./],
-    [{ backend: 'live', decidedBy: 'tools', permission: 'refused' }, /Where it saves: nothing yet\. Engram is connected, but its check was refused for want of a permission rule \(its tools are connected\)\. With Engram live, Active keeps measuring; writing to Engram arrives in a later release\./]
+    [{ backend: 'configured-down', decidedBy: 'user-config', permission: 'unknown' }, /Where it saves: your auto-memory folder, because Engram is configured but not answering \(found in your user MCP config\)\. Each file it writes is marked pending_engram, and the next session that finds Engram live passes it to Engram\./],
+    [{ backend: 'live', decidedBy: 'tools+health', permission: 'ok' }, /Where it saves: Engram, which is live \(its tools are connected and it answered the check\)\. Every memory goes to Engram; rules for how to work and facts about you are also mirrored as files in your auto-memory folder, so every session reads them\. When Engram reports a conflict, Haiku judges the clear ones and leaves the rest pending\./],
+    [{ backend: 'live', decidedBy: 'tools', permission: 'refused' }, /Where it saves: nothing yet\. Engram is connected, but its check was refused for want of a permission rule \(its tools are connected\)\. Allow Engram's tools in your permissions; until then, Active keeps measuring\./]
   ]
   for (const [latest, expected] of cases) {
     const { browser, page, errors } = await openPanel(memoryActiveScenario(latest))
@@ -4851,6 +4853,50 @@ test('Modules: memory in Active shows the week\'s writes from its log; none yet,
   }
 })
 
+/** A week of Active with Engram live: what reached Engram, the mirrors, the judge and the dropped double saves. */
+const ENGRAM_WEEK = { engramSaved: 18, engramFailed: 2, mirrored: 7, judged: 5, judgePending: 3, judgeUnavailable: 0, judgeFailed: 1, droppedMainSaved: 4, replayedToEngram: 2, fallbackRemoved: 1, fallbackMirrored: 1 }
+const LIVE_OK = { backend: 'live', decidedBy: 'tools+health', permission: 'ok' }
+
+test('Modules: memory in Active with Engram shows the week in Engram and the pending conflicts, with why they are not lost', MODULES_SKIP, async () => {
+  const { browser, page, errors } = await openPanel(memoryActiveScenario(LIVE_OK, ENGRAM_WEEK))
+  try {
+    const text = (await moduleCards(page))[7].text
+    assert.match(text, /Engram this week: 18 memories saved and 2 failed \(each kept as a file until Engram takes it\); 7 mirrored into files; 2 fallback copies passed to Engram at a session start\. Conflicts: 5 judged, 4 left pending, 0 not judged because this Engram has no mem_judge\. 4 drafts dropped because your main thread saved to Engram in the same turn\./)
+    assert.match(text, /Pending conflicts this week: 4\. They stay in Engram, where the agent sees them and can resolve them; nothing is lost\./)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+  const none = await openPanel(memoryActiveScenario(LIVE_OK, { ...Object.fromEntries(Object.keys(ENGRAM_WEEK).map((key) => [key, 0])) }))
+  try {
+    const text = (await moduleCards(none.page))[7].text
+    assert.match(text, /Engram this week: nothing yet\./)
+    assert.match(text, /Pending conflicts this week: 0\./)
+  } finally {
+    await none.browser.close()
+  }
+  const unread = await openPanel(withModuleStates({ memory: 'active' }, { measurementsSummary: { ...SCENARIOS.ready.measurementsSummary, memory: { ...SCENARIOS.ready.measurementsSummary.memory, latest: { at: '2026-09-24T17:40:00.000Z', ...LIVE_OK } } } }))
+  try {
+    const text = (await moduleCards(unread.page))[7].text
+    assert.match(text, /Engram this week: the counts could not be read yet\./, 'a summary from before 0.10.0 has no Engram figures: said in words, never zeros')
+    assert.doesNotMatch(text, /Pending conflicts/)
+  } finally {
+    await unread.browser.close()
+  }
+  for (const [label, scenario] of [
+    ['Shadow', withModuleStates({ memory: 'shadow' }, { measurementsSummary: { ...SCENARIOS.ready.measurementsSummary, memory: { ...SCENARIOS.ready.measurementsSummary.memory, ...ENGRAM_WEEK } } })],
+    ['Active with no Engram and nothing sent to it', memoryActiveScenario({ backend: 'absent', decidedBy: 'none', permission: 'unknown' }, Object.fromEntries(Object.keys(ENGRAM_WEEK).map((key) => [key, 0])))]
+  ]) {
+    const { browser: other, page: otherPage } = await openPanel(scenario)
+    try {
+      const text = (await moduleCards(otherPage))[7].text
+      assert.doesNotMatch(text, /Engram this week|Pending conflicts/, label)
+    } finally {
+      await other.close()
+    }
+  }
+})
+
 test('Modules: the memory card in Spanish speaks with tú and says the same', MODULES_SKIP, async () => {
   const { browser, page } = await openPanel(SCENARIOS.ready, 'es')
   try {
@@ -4858,8 +4904,8 @@ test('Modules: the memory card in Spanish speaks with tú and says the same', MO
     assert.equal(card.name, 'Memoria')
     assert.deepEqual(card.labels, ['Apagado', 'Sombra', 'Activo'])
     assert.match(card.text, /En sombra solo mide: no guarda nada en Engram, no juzga conflictos y no escribe archivos de memoria/)
-    assert.match(card.text, /En activo escribe en tu carpeta de auto-memoria cuando Engram no está en uso/)
-    assert.match(card.text, /En este release nunca borra una memoria\./)
+    assert.match(card.text, /En activo guarda en Engram cuando Engram está en marcha/)
+    assert.match(card.text, /En este release nunca borra una memoria: una copia de reserva solo se quita cuando Engram ya la tiene\./)
     assert.match(card.text, /En sombra, en 1 de cada 5 turnos que Haiku marca para actualizar, un fork de la sesión redacta la memoria; en activo, cada uno de esos turnos tiene su fork\./)
     assert.match(card.text, /cuentan contra la cuota de tu plan Max/)
     assert.match(card.text, /Esta semana: 212 decisiones de Haiku, 20% para actualizar y 8 forks\./)
@@ -4867,11 +4913,13 @@ test('Modules: the memory card in Spanish speaks with tú and says the same', MO
   } finally {
     await browser.close()
   }
-  const active = await openPanel(memoryActiveScenario({ backend: 'live', decidedBy: 'tools+health', permission: 'ok' }), 'es')
+  const active = await openPanel(memoryActiveScenario({ backend: 'live', decidedBy: 'tools+health', permission: 'ok' }, ENGRAM_WEEK), 'es')
   try {
     const text = (await moduleCards(active.page))[7].text
-    assert.match(text, /Dónde guarda: todavía en ningún sitio\. Engram está en marcha \(sus herramientas están conectadas y respondió a la comprobación\)\. Con Engram en marcha, el estado Activo sigue midiendo; escribir en Engram llegará en un release posterior\./)
+    assert.match(text, /Dónde guarda: en Engram, que está en marcha \(sus herramientas están conectadas y respondió a la comprobación\)\. Cada memoria va a Engram; las reglas sobre cómo trabajar y los datos sobre ti también se reflejan como archivos en tu carpeta de auto-memoria, para que cada sesión los lea\. Cuando Engram avisa de un conflicto, Haiku juzga los claros y deja pendientes los demás\./)
     assert.match(text, /Escrito esta semana: 24 archivos de memoria nuevos y 6 reescritos \(6 copias de seguridad\)\./)
+    assert.match(text, /Engram esta semana: 18 memorias guardadas y 2 fallidas \(cada una queda como archivo hasta que Engram la recibe\); 7 reflejadas en archivos; 2 copias de reserva pasadas a Engram al empezar una sesión\. Conflictos: 5 juzgados, 4 pendientes, 0 sin juzgar porque este Engram no tiene mem_judge\. 4 borradores descartados porque tu hilo principal guardó en Engram en el mismo turno\./)
+    assert.match(text, /Conflictos pendientes esta semana: 4\. Siguen en Engram, donde el agente los ve y puede resolverlos; no se pierde nada\./)
     assert.doesNotMatch(text, /\b(tenés|podés|revisá|decime|querés)\b/, 'no voseo')
   } finally {
     await active.browser.close()
