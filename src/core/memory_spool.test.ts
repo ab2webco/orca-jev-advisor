@@ -105,6 +105,11 @@ function contextFor(run: Run, now = "2026-10-12T10:05:00.000Z"): SpoolContext {
   return { backend: run.backend, spoolRoot: ROOT, autoMemoryDir: DIR, index: run.disk.get(`${DIR}/MEMORY.md`) ?? "", now };
 }
 
+/** The context with the item's auto-memory file as it is on the disk now, as the mod reads it before each step. */
+function withCopy(run: Run, item: SpoolItem): SpoolContext {
+  return { ...contextFor(run), copy: run.disk.get(`${DIR}/${item.save.topic_key}.md`) ?? null };
+}
+
 function applyStepwise(run: Run, ops: readonly FileOp[]): void {
   for (const op of ops) {
     step(run);
@@ -116,7 +121,7 @@ function applyStepwise(run: Run, ops: readonly FileOp[]): void {
 function drive(run: Run, itemPath: string, item: SpoolItem): SpoolItem {
   let current = item;
   for (let guard = 0; guard < 20; guard += 1) {
-    const action = nextAction(current, contextFor(run));
+    const action = nextAction(current, withCopy(run, current));
     if (action.kind === "none") return current;
     if (action.kind === "apply") {
       applyStepwise(run, action.transition.ops);
@@ -568,4 +573,85 @@ test("mem_save result: an unreadable result is a failure, never a success withou
 
 test("mem_save result: a saved answer without an id is still a success (the id is optional), with a null id", () => {
   assert.deepEqual(parseMemSaveResult(mcpText({ result: 'Memory saved: "t" (policy)', judgment_required: false })), { ok: true, engramId: null, candidates: [] });
+});
+
+// ---------------------------------------------------------------------------
+// Active with Engram live (odd/tasks/memory-active-engram.md, E1)
+// ---------------------------------------------------------------------------
+
+const CANDIDATE = { id: 7, syncId: "obs-7", title: "Spanish with vos", type: "policy", score: -3.2, judgmentId: "rel-aaa", topicKey: "language-es" };
+
+test("E1 spool: a saved item keeps the observation id and the candidates[] Engram answered with, and they read back", () => {
+  const run = newRun(LIVE);
+  const { item } = start(run, FEEDBACK);
+  assert.deepEqual(item.candidates, [], "a new item has none");
+  const saved = completeEngramSave(item, { ok: true, engramId: "413", candidates: [CANDIDATE] }, contextFor(run));
+  assert.equal(saved.item.engramId, "413");
+  assert.deepEqual(saved.item.candidates, [CANDIDATE]);
+  const write = saved.ops.find((op) => op.kind === "write");
+  assert.ok(write !== undefined && write.kind === "write");
+  if (write !== undefined && write.kind === "write") assert.deepEqual(parseSpoolItem(write.content)?.candidates, [CANDIDATE], "persisted in the item's file");
+  const failed = completeEngramSave(saved.item, { ok: false, kind: "rejected", error: "x" }, contextFor(run));
+  assert.deepEqual(failed.item.candidates, [CANDIDATE], "a later failure keeps what was answered");
+});
+
+test("E1 spool: a 0.9.0 item, written before candidates[] existed, reads as none; malformed candidates are skipped", () => {
+  const item = enqueue(FEEDBACK, "old").item;
+  const older: Record<string, unknown> = { ...item };
+  delete older.candidates;
+  assert.deepEqual(parseSpoolItem(JSON.stringify(older))?.candidates, []);
+  assert.deepEqual(parseSpoolItem(JSON.stringify({ ...item, candidates: [CANDIDATE, { id: "x" }, 3] }))?.candidates, [CANDIDATE]);
+  assert.equal(parseSpoolItem(JSON.stringify({ ...item, candidates: "none" })), null, "not a list is a bad file");
+});
+
+test("E1 mem_save result: an older Engram's plain 'Memory saved:' text is a success with no id and no candidates", () => {
+  assert.deepEqual(parseMemSaveResult(mcpText('Memory saved: "Spanish with tú" (policy)')), { ok: true, engramId: null, candidates: [] });
+  assert.equal(parseMemSaveResult(mcpText("Something else entirely")).ok, false, "any other plain text is still unreadable");
+  assert.equal(parseMemSaveResult(mcpText('Memory saved: "x" (policy)', true)).ok, false, "a tool error is never a success");
+});
+
+function parkedProjectRun(): { run: Run; path: string; waiting: SpoolItem } {
+  const engram = newEngram(false);
+  const run = newRun(LIVE, engram);
+  const { path, item } = start(run, PROJECT);
+  const waiting = drive(run, path, item);
+  assert.equal(waiting.state, "fallback");
+  engram.up = true;
+  return { run, path, waiting };
+}
+
+test("E1 replay (project): a file that is no longer the item's own fallback copy is left, with its index line", () => {
+  const edits: [string, (text: string) => string][] = [
+    ["the person dropped pending_engram", (text) => text.replace("  pending_engram: true\n", "")],
+    ["another session wrote it", (text) => text.replace(`originSessionId: ${SESSION}`, "originSessionId: other-session")],
+    ["another topic took the name", (text) => text.replace("topic_key: billing-migration", "topic_key: billing")],
+  ];
+  for (const [label, edit] of edits) {
+    const { run, path, waiting } = parkedProjectRun();
+    const changed = edit(run.disk.get(fileOf(PROJECT)) ?? "");
+    assert.notEqual(changed, run.disk.get(fileOf(PROJECT)), `${label}: the edit applies`);
+    run.disk.set(fileOf(PROJECT), changed);
+    const index = run.disk.get(`${DIR}/MEMORY.md`);
+    const end = drive(run, path, waiting);
+    assert.equal(end.state, "replayed", label);
+    assert.equal(run.disk.get(fileOf(PROJECT)), changed, label);
+    assert.equal(run.disk.get(`${DIR}/MEMORY.md`), index, label);
+    assert.ok(run.disk.has(donePath()), `${label}: the item is still settled, Engram has it`);
+  }
+});
+
+test("E1 replay (project): when the copy is already gone (a crash after its removal), only its index line goes", () => {
+  const { run, path, waiting } = parkedProjectRun();
+  run.disk.delete(fileOf(PROJECT));
+  drive(run, path, waiting);
+  assert.doesNotMatch(run.disk.get(`${DIR}/MEMORY.md`) ?? "", /billing-migration/);
+  assert.ok(run.disk.has(donePath()));
+});
+
+test("E1 replay (project): without the copy's text the folder is not touched", () => {
+  const { run, waiting } = parkedProjectRun();
+  const saved = completeEngramSave(waiting, { ok: true, engramId: "100", candidates: [] }, contextFor(run));
+  const action = nextAction(saved.item, contextFor(run));
+  assert.equal(action.kind, "apply");
+  if (action.kind === "apply") assert.deepEqual(action.transition.ops.filter((op) => op.kind !== "move" && !(op.kind === "write" && op.path.startsWith(ROOT))), [], "only the item's own file and its move");
 });

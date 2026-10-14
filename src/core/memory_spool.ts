@@ -33,6 +33,7 @@ import { engramUsable, isPermissionRefusal } from "./memory_detect.ts";
 import type { MemoryBackendDecision } from "./memory_detect.ts";
 import { memoryFileName, memoryIndexLine, removeIndexLine, renderMemoryFile, slugTopicKey, upsertIndexLine } from "./memory_draft.ts";
 import type { DraftSave } from "./memory_draft.ts";
+import { parseFrontmatter } from "./memory_tidy.ts";
 
 export type SpoolState = "pending" | "written" | "done" | "fallback" | "replayed";
 export const SPOOL_STATES: readonly SpoolState[] = ["pending", "written", "done", "fallback", "replayed"];
@@ -60,6 +61,8 @@ export interface SpoolItem {
   readonly store: "engram" | "auto-memory" | null;
   /** The Engram observation id, when Engram answered with one. */
   readonly engramId: string | null;
+  /** The conflict candidates Engram's `mem_save` answered with (`judgment_required`); none until it has. Items from 0.9.0 read as none. */
+  readonly candidates: readonly EngramCandidate[];
   /** A pending item whose Engram attempt failed: its next step is the fallback copy. */
   readonly engramFailed: boolean;
   readonly attempts: number;
@@ -85,6 +88,12 @@ export interface SpoolContext {
   readonly autoMemoryDir: string;
   /** MEMORY.md as it is now, '' when there is none. */
   readonly index: string;
+  /**
+   * The item's own auto-memory file as it is now: its text, null when there is
+   * none, absent when it was not read. A fallback copy is removed only when
+   * this shows it is still the item's own copy.
+   */
+  readonly copy?: string | null;
   /** ISO time. */
   readonly now: string;
 }
@@ -120,6 +129,18 @@ function readSave(value: unknown): DraftSave | null {
   return { type, title, content, topic_key: topicKey };
 }
 
+/** The candidates as the item stores them; absent (a 0.9.0 item) is none, an entry that is not one is skipped, anything but a list is a bad file. */
+function readStoredCandidates(value: unknown): readonly EngramCandidate[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  return value.flatMap((entry): EngramCandidate[] => {
+    if (!isRecord(entry)) return [];
+    const { id, syncId, title, type, score, judgmentId, topicKey } = entry;
+    if (typeof id !== "number" || typeof title !== "string" || typeof type !== "string" || typeof judgmentId !== "string" || judgmentId === "") return [];
+    return [{ id, syncId: typeof syncId === "string" ? syncId : null, title, type, score: typeof score === "number" ? score : null, judgmentId, topicKey: typeof topicKey === "string" ? topicKey : null }];
+  });
+}
+
 function readFailure(value: unknown): SpoolFailure | null | undefined {
   if (value === null) return null;
   if (!isRecord(value) || (value.kind !== "permission" && value.kind !== "failed") || typeof value.message !== "string") return undefined;
@@ -146,7 +167,9 @@ export function parseSpoolItem(text: string): SpoolItem | null {
   if (engramId !== null && typeof engramId !== "string") return null;
   if (supersededBy !== null && typeof supersededBy !== "string") return null;
   if (typeof value.engramFailed !== "boolean" || typeof value.attempts !== "number" || !Number.isInteger(value.attempts) || value.attempts < 0) return null;
-  return { version: 1, id, sessionId, createdAt, updatedAt, save, state, store, engramId, engramFailed: value.engramFailed, attempts: value.attempts, lastFailure: failure, supersededBy };
+  const candidates = readStoredCandidates(value.candidates);
+  if (candidates === null) return null;
+  return { version: 1, id, sessionId, createdAt, updatedAt, save, state, store, engramId, candidates, engramFailed: value.engramFailed, attempts: value.attempts, lastFailure: failure, supersededBy };
 }
 
 function serialize(item: SpoolItem): string {
@@ -175,6 +198,7 @@ export function enqueueSave(save: DraftSave, meta: EnqueueMeta, spoolRoot: strin
     state: "pending",
     store: null,
     engramId: null,
+    candidates: [],
     engramFailed: false,
     attempts: 0,
     lastFailure: null,
@@ -202,8 +226,15 @@ function settle(item: SpoolItem, state: "done" | "replayed", ctx: SpoolContext, 
   return { item: next, ops: [...before, { kind: "write", path: from, content: serialize(next) }, { kind: "move", from, to: spoolDonePath(ctx.spoolRoot, next.sessionId, next.id) }] };
 }
 
-function mirrors(type: MemoryType): boolean {
+/** Whether a save of this type is mirrored into auto-memory while Engram is the store (design 5.3): the always-on rules, feedback and user. */
+export function mirrors(type: MemoryType): boolean {
   return type === "feedback" || type === "user";
+}
+
+/** Whether a memory file is still this item's own fallback copy: tagged pending_engram, written by the item's session, on the item's topic. */
+export function isOwnFallbackCopy(text: string, item: SpoolItem): boolean {
+  const front = parseFrontmatter(text);
+  return front.pendingEngram && front.originSessionId === item.sessionId && front.topicKey === item.save.topic_key;
 }
 
 /** The auto-memory file and its index line, in that order: a crash between them leaves an unlisted file, which the next pass rewrites. */
@@ -292,10 +323,14 @@ export function nextAction(item: SpoolItem, ctx: SpoolContext, project?: string)
       return { kind: "apply", transition: settle(item, "replayed", ctx, autoMemoryOps(item, ctx, item.engramId === null ? {} : { engramId: item.engramId })) };
     }
     const file = memoryFileName(type, item.save.topic_key);
-    const before: readonly FileOp[] = [
-      { kind: "remove", path: `${ctx.autoMemoryDir}/${file}` },
-      { kind: "write", path: `${ctx.autoMemoryDir}/MEMORY.md`, content: removeIndexLine(ctx.index, file) },
-    ];
+    const unlist: FileOp = { kind: "write", path: `${ctx.autoMemoryDir}/MEMORY.md`, content: removeIndexLine(ctx.index, file) };
+    // Only the item's own copy is removed. Gone already (a crash after the removal): only its line is left to drop.
+    // Changed since, or not read: the folder is left as it is; Engram has the save either way.
+    const before: readonly FileOp[] = ctx.copy === null
+      ? [unlist]
+      : ctx.copy !== undefined && isOwnFallbackCopy(ctx.copy, item)
+        ? [{ kind: "remove", path: `${ctx.autoMemoryDir}/${file}` }, unlist]
+        : [];
     return { kind: "apply", transition: settle(item, "replayed", ctx, before) };
   }
   if (engramUsable(ctx.backend)) return { kind: "engram-save", args: engramSaveArgs(item, project), replay: true };
@@ -323,6 +358,8 @@ export type MemSaveOutcome =
   | { readonly ok: false; readonly kind: "rejected" | "ambiguous-project" | "unreadable"; readonly error: string };
 
 const ERROR_CHARS = 300;
+/** The plain message Engram's mem_save answers with, before (and inside) the 2.x envelope. */
+const OLD_SAVED = /^Memory saved: /;
 
 function firstText(result: unknown): string | null {
   if (!isRecord(result) || !Array.isArray(result.content)) return null;
@@ -359,6 +396,8 @@ export function parseMemSaveResult(result: unknown): MemSaveOutcome {
   if (isRecord(result) && result.isError === true) {
     return { ok: false, kind: /ambiguous_project/.test(text) ? "ambiguous-project" : "rejected", error: text.slice(0, ERROR_CHARS) };
   }
+  // An older Engram (1.12.0) answers its plain message, with no envelope: saved, with no id and no candidates.
+  if (OLD_SAVED.test(text)) return { ok: true, engramId: null, candidates: [] };
   let envelope: unknown;
   try {
     envelope = JSON.parse(text);
@@ -384,7 +423,7 @@ export function parseMemSaveResult(result: unknown): MemSaveOutcome {
  */
 export function completeEngramSave(item: SpoolItem, outcome: MemSaveOutcome, ctx: SpoolContext): Transition {
   if (outcome.ok) {
-    const saved = { store: "engram" as const, engramId: outcome.engramId, engramFailed: false, lastFailure: null };
+    const saved = { store: "engram" as const, engramId: outcome.engramId, candidates: outcome.candidates, engramFailed: false, lastFailure: null };
     return persist(withState(item, item.state === "pending" ? { ...saved, state: "written" } : saved, ctx), ctx);
   }
   const failure: SpoolFailure = { kind: isPermissionRefusal(outcome.error) ? "permission" : "failed", message: outcome.error };

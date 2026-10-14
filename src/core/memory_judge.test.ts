@@ -17,6 +17,7 @@ import {
   decideVerdict,
   parseJudgment,
   parseObservationText,
+  readObservationResult,
 } from "./memory_judge.ts";
 import type { Relation, Verdict } from "./memory_judge.ts";
 
@@ -192,4 +193,15 @@ test("observation text: id, type, title and content are read from mem_get_observ
 test("observation text: anything else is null", () => {
   assert.equal(parseObservationText("Observation #5 not found"), null);
   assert.equal(parseObservationText(""), null);
+});
+
+test("E1 observation result: mem_get_observation's MCP result, the text inside Engram 2.x's project envelope or bare", () => {
+  const text = "#18 [policy] Spanish with vos\nTalk to the owner in Spanish with vos.\nSession: manual-save-x\nCreated: 2026-10-01";
+  const expected = { id: 18, type: "policy", title: "Spanish with vos", content: "Talk to the owner in Spanish with vos." };
+  const enveloped = { content: [{ type: "text", text: JSON.stringify({ project: "orca", project_source: "git_remote", result: text }) }], isError: false };
+  assert.deepEqual(readObservationResult(enveloped), expected);
+  assert.deepEqual(readObservationResult({ content: [{ type: "text", text }] }), expected, "an older Engram answers the bare text");
+  assert.equal(readObservationResult({ content: [{ type: "text", text: "Observation #18 not found" }], isError: true }), null, "a tool error is no observation");
+  assert.equal(readObservationResult({ content: [{ type: "text", text: JSON.stringify({ project: "orca" }) }] }), null);
+  assert.equal(readObservationResult(null), null);
 });

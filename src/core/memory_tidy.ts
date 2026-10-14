@@ -159,6 +159,8 @@ export interface Frontmatter {
   readonly topicKey: string | null;
   readonly engramId: string | null;
   readonly pendingEngram: boolean;
+  /** The session that wrote the file (the engine's own field, and the module's). */
+  readonly originSessionId: string | null;
 }
 
 function frontLines(text: string): string[] {
@@ -189,7 +191,15 @@ export function parseFrontmatter(text: string): Frontmatter {
     const value = fields.get(key);
     return value === undefined || value === "" ? null : unquote(value);
   };
-  return { name: field("name"), description: field("description"), type: field("type"), topicKey: field("topic_key"), engramId: field("engram_id"), pendingEngram: field("pending_engram") === "true" };
+  return {
+    name: field("name"),
+    description: field("description"),
+    type: field("type"),
+    topicKey: field("topic_key"),
+    engramId: field("engram_id"),
+    pendingEngram: field("pending_engram") === "true",
+    originSessionId: field("originSessionId"),
+  };
 }
 
 export interface EngramObservationRef {

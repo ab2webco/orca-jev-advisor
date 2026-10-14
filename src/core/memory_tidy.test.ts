@@ -339,9 +339,9 @@ test("lock: a fresh lock with a pid is that pid; a stale, empty or garbled one i
 // ---------------------------------------------------------------------------
 
 test("frontmatter: name, description and the metadata the module reads", () => {
-  const text = memo("always pnpm", "  type: feedback\n  topic_key: pm\n  engram_id: 412\n  pending_engram: true\n");
-  assert.deepEqual(parseFrontmatter(text), { name: "x", description: "always pnpm", type: "feedback", topicKey: "pm", engramId: "412", pendingEngram: true });
-  assert.deepEqual(parseFrontmatter("no frontmatter"), { name: null, description: null, type: null, topicKey: null, engramId: null, pendingEngram: false });
+  const text = memo("always pnpm", "  type: feedback\n  topic_key: pm\n  engram_id: 412\n  pending_engram: true\n  originSessionId: session-0\n");
+  assert.deepEqual(parseFrontmatter(text), { name: "x", description: "always pnpm", type: "feedback", topicKey: "pm", engramId: "412", pendingEngram: true, originSessionId: "session-0" });
+  assert.deepEqual(parseFrontmatter("no frontmatter"), { name: null, description: null, type: null, topicKey: null, engramId: null, pendingEngram: false, originSessionId: null });
 });
 
 test("frontmatter: a quoted description is unquoted", () => {

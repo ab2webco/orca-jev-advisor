@@ -171,3 +171,26 @@ export function parseObservationText(text: string): ObservationRecord | null {
   const session = rest.lastIndexOf("\nSession: ");
   return { id: Number(head[1]), type: head[2], title: head[3], content: session < 0 ? rest : rest.slice(0, session) };
 }
+
+/**
+ * The observation in `mem_get_observation`'s MCP result. Engram 2.x wraps the
+ * text in its project envelope (`{"project": …, "result": "<text>"}`); an older
+ * one answers the bare text. A tool error, or anything else, is null.
+ */
+export function readObservationResult(result: unknown): ObservationRecord | null {
+  if (!isRecord(result) || result.isError === true || !Array.isArray(result.content)) return null;
+  const block = result.content.find((entry): entry is { type: "text"; text: string } => isRecord(entry) && entry.type === "text" && typeof entry.text === "string");
+  if (block === undefined) return null;
+  let text = block.text;
+  if (text.trimStart().startsWith("{")) {
+    let envelope: unknown;
+    try {
+      envelope = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    if (!isRecord(envelope) || typeof envelope.result !== "string") return null;
+    text = envelope.result;
+  }
+  return parseObservationText(text);
+}

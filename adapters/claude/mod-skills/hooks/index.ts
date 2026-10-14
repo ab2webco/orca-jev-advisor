@@ -3178,7 +3178,7 @@ interface MemoryPass {
   readonly dir: string
   readonly stampIso: string
   readonly backedUp: Set<string>
-  tally: { spooled: number; written: number; updated: number; backups: number; dropped: number; writeFailures: number; lockHeld: boolean }
+  tally: { -readonly [K in keyof ActiveWriteCounts]: ActiveWriteCounts[K] }
 }
 
 function newMemoryPass(dir: string, stampIso: string): MemoryPass {

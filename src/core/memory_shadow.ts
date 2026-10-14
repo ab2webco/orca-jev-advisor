@@ -277,9 +277,79 @@ export interface ActiveWriteCounts {
   readonly writeFailures: number;
   /** Claude Code's own consolidation held the folder, so nothing was written. */
   readonly lockHeld: boolean;
+  // Engram live (odd/tasks/memory-active-engram.md).
+  /** Saves Engram took (`mem_save` answered a success). */
+  readonly engramSaved: number;
+  /** `mem_save` calls that failed, were refused or timed out; each left a fallback file. */
+  readonly engramFailed: number;
+  /** user and feedback saves mirrored into the auto-memory folder with their engram_id. */
+  readonly mirrored: number;
+  /** Conflict candidates whose verdict was recorded with `mem_judge`. */
+  readonly judged: number;
+  /** Candidates left pending in Engram for a person: low confidence, or a protected type. */
+  readonly judgePending: number;
+  /** Candidates not judged because this Engram lists no `mem_judge`. */
+  readonly judgeUnavailable: number;
+  /** Candidates not judged because their text, Haiku's answer or the `mem_judge` call failed; they stay pending in Engram. */
+  readonly judgeFailed: number;
+  /** The fork's saves dropped because the main thread saved to Engram in the same turn. */
+  readonly droppedMainSaved: number;
+  /** Haiku's tokens for the judge calls. */
+  readonly judgeTokens: { readonly input: number; readonly output: number };
+  /** Replay only: parked fallback items Engram took at a session start. */
+  readonly replayedToEngram: number;
+  /** Replay only: fallback copies (project, reference) removed once Engram had them. */
+  readonly fallbackRemoved: number;
+  /** Replay only: fallback copies (user, feedback) turned into mirrors. */
+  readonly fallbackMirrored: number;
 }
 
-export const NO_WRITES: ActiveWriteCounts = { spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: false };
+export const NO_WRITES: ActiveWriteCounts = {
+  spooled: 0,
+  written: 0,
+  updated: 0,
+  backups: 0,
+  dropped: 0,
+  writeFailures: 0,
+  lockHeld: false,
+  engramSaved: 0,
+  engramFailed: 0,
+  mirrored: 0,
+  judged: 0,
+  judgePending: 0,
+  judgeUnavailable: 0,
+  judgeFailed: 0,
+  droppedMainSaved: 0,
+  judgeTokens: { input: 0, output: 0 },
+  replayedToEngram: 0,
+  fallbackRemoved: 0,
+  fallbackMirrored: 0,
+};
+
+/** The Engram counts a decision row and a replay row both carry. */
+export interface EngramRowCounts {
+  readonly engramSaved: number;
+  readonly engramFailed: number;
+  readonly mirrored: number;
+  readonly judged: number;
+  readonly judgePending: number;
+  readonly judgeUnavailable: number;
+  readonly judgeFailed: number;
+  readonly judgeTokens: { readonly input: number; readonly output: number };
+}
+
+function engramRowCounts(writes: ActiveWriteCounts): EngramRowCounts {
+  return {
+    engramSaved: writes.engramSaved,
+    engramFailed: writes.engramFailed,
+    mirrored: writes.mirrored,
+    judged: writes.judged,
+    judgePending: writes.judgePending,
+    judgeUnavailable: writes.judgeUnavailable,
+    judgeFailed: writes.judgeFailed,
+    judgeTokens: { input: writes.judgeTokens.input, output: writes.judgeTokens.output },
+  };
+}
 
 export interface MemoryShadowRecordInput {
   readonly at: string;
@@ -307,7 +377,8 @@ export interface MemoryShadowRecordInput {
   readonly writes?: ActiveWriteCounts;
 }
 
-export interface MemoryShadowRecord {
+export interface MemoryShadowRecord extends EngramRowCounts {
+  readonly droppedMainSaved: number;
   readonly at: string;
   readonly account: string;
   readonly project: string;
@@ -393,6 +464,8 @@ export function memoryShadowRecord(input: MemoryShadowRecordInput): MemoryShadow
     dropped: writes.dropped,
     writeFailures: writes.writeFailures,
     lockHeld: writes.lockHeld,
+    ...engramRowCounts(writes),
+    droppedMainSaved: writes.droppedMainSaved,
   };
 }
 
@@ -411,7 +484,10 @@ export interface MemoryReplayRecordInput {
   readonly writes: ActiveWriteCounts;
 }
 
-export interface MemoryReplayRecord {
+export interface MemoryReplayRecord extends EngramRowCounts {
+  readonly replayedToEngram: number;
+  readonly fallbackRemoved: number;
+  readonly fallbackMirrored: number;
   readonly at: string;
   readonly account: string;
   readonly project: string;
@@ -453,6 +529,10 @@ export function memoryReplayRecord(input: MemoryReplayRecordInput): MemoryReplay
     backups: input.writes.backups,
     writeFailures: input.writes.writeFailures,
     lockHeld: input.writes.lockHeld,
+    ...engramRowCounts(input.writes),
+    replayedToEngram: input.writes.replayedToEngram,
+    fallbackRemoved: input.writes.fallbackRemoved,
+    fallbackMirrored: input.writes.fallbackMirrored,
   };
 }
 
@@ -500,7 +580,21 @@ export interface MemoryShadowSummary {
   /** Replay rows (a session start that found spooled items), and the items they moved on. */
   readonly replays: number;
   readonly replayed: number;
+  /** Engram live (odd/tasks/memory-active-engram.md), over decisions and replays alike. */
+  readonly engramSaved: number;
+  readonly engramFailed: number;
+  readonly mirrored: number;
+  readonly judged: number;
+  readonly judgePending: number;
+  readonly judgeUnavailable: number;
+  readonly judgeFailed: number;
+  readonly droppedMainSaved: number;
+  readonly replayedToEngram: number;
+  readonly fallbackRemoved: number;
+  readonly fallbackMirrored: number;
 }
+
+const ENGRAM_COUNTS = ["engramSaved", "engramFailed", "mirrored", "judged", "judgePending", "judgeUnavailable", "judgeFailed", "droppedMainSaved", "replayedToEngram", "fallbackRemoved", "fallbackMirrored"] as const;
 
 function count(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
@@ -531,10 +625,16 @@ export function summarizeMemoryDecisions(rows: readonly unknown[], nowMs: number
   let latest: MemoryShadowSummary["latest"] = null;
   let latestMs = Number.NEGATIVE_INFINITY;
   const active = { activeDecisions: 0, draftFailures: 0, spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: 0, replays: 0, replayed: 0 };
+  const engram: Record<(typeof ENGRAM_COUNTS)[number], number> = { engramSaved: 0, engramFailed: 0, mirrored: 0, judged: 0, judgePending: 0, judgeUnavailable: 0, judgeFailed: 0, droppedMainSaved: 0, replayedToEngram: 0, fallbackRemoved: 0, fallbackMirrored: 0 };
   for (const row of rows) {
     if (!isRecord(row) || typeof row.at !== "string") continue;
     const atMs = Date.parse(row.at);
     if (Number.isNaN(atMs) || atMs > nowMs || atMs < nowMs - windowMs) continue;
+    for (const key of ENGRAM_COUNTS) engram[key] += count(row[key]);
+    // The judge's Haiku calls count against the same quota as the gate's.
+    const judge = tokensOf(row.judgeTokens);
+    haikuTokens.input += judge.input;
+    haikuTokens.output += judge.output;
     active.spooled += count(row.spooled);
     active.written += count(row.written);
     active.updated += count(row.updated);
@@ -598,5 +698,6 @@ export function summarizeMemoryDecisions(rows: readonly unknown[], nowMs: number
     forkTokens,
     latest,
     ...active,
+    ...engram,
   };
 }

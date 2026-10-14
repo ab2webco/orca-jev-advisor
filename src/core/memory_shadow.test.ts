@@ -221,24 +221,64 @@ test("row: counts, types, outcomes and usage; no memory content, no titles", () 
     dropped: 0,
     writeFailures: 0,
     lockHeld: false,
+    engramSaved: 0,
+    engramFailed: 0,
+    mirrored: 0,
+    judged: 0,
+    judgePending: 0,
+    judgeUnavailable: 0,
+    judgeFailed: 0,
+    droppedMainSaved: 0,
+    judgeTokens: { input: 0, output: 0 },
   });
   assert.doesNotMatch(JSON.stringify(row), /Secret title/);
 });
 
 test("row in Active: the switch and what ran, and what it wrote, as counts only", () => {
-  const writes = { spooled: 2, written: 1, updated: 1, backups: 1, dropped: 1, writeFailures: 0, lockHeld: false };
-  const row = memoryShadowRecord({ ...BASE, backend: ABSENT, mode: "active", effective: "active", writes });
+  const files = { spooled: 2, written: 1, updated: 1, backups: 1, dropped: 1, writeFailures: 0, lockHeld: false };
+  const row = memoryShadowRecord({ ...BASE, backend: ABSENT, mode: "active", effective: "active", writes: { ...NO_WRITES, ...files } });
   assert.equal(row.mode, "active");
   assert.equal(row.effective, "active");
   assert.deepEqual(
     { spooled: row.spooled, written: row.written, updated: row.updated, backups: row.backups, dropped: row.dropped, writeFailures: row.writeFailures, lockHeld: row.lockHeld },
-    writes,
+    files,
   );
   const measuring = memoryShadowRecord({ ...BASE, mode: "active", effective: "shadow" });
   assert.equal(measuring.mode, "active");
   assert.equal(measuring.effective, "shadow", "Engram live: Active keeps measuring, and the row says so");
   assert.equal(measuring.written, 0);
-  assert.deepEqual(NO_WRITES, { spooled: 0, written: 0, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: false });
+  assert.deepEqual(NO_WRITES, {
+    spooled: 0,
+    written: 0,
+    updated: 0,
+    backups: 0,
+    dropped: 0,
+    writeFailures: 0,
+    lockHeld: false,
+    engramSaved: 0,
+    engramFailed: 0,
+    mirrored: 0,
+    judged: 0,
+    judgePending: 0,
+    judgeUnavailable: 0,
+    judgeFailed: 0,
+    droppedMainSaved: 0,
+    judgeTokens: { input: 0, output: 0 },
+    replayedToEngram: 0,
+    fallbackRemoved: 0,
+    fallbackMirrored: 0,
+  });
+});
+
+test("E1 row in Active with Engram: what reached Engram, the mirrors, the judge and the dropped double saves, as counts only", () => {
+  const writes = { ...NO_WRITES, spooled: 2, written: 1, engramSaved: 2, engramFailed: 1, mirrored: 1, judged: 1, judgePending: 2, judgeUnavailable: 1, judgeFailed: 1, droppedMainSaved: 3, judgeTokens: { input: 600, output: 40 } };
+  const row = memoryShadowRecord({ ...BASE, mode: "active", effective: "active", writes });
+  assert.deepEqual(
+    [row.engramSaved, row.engramFailed, row.mirrored, row.judged, row.judgePending, row.judgeUnavailable, row.judgeFailed, row.droppedMainSaved],
+    [2, 1, 1, 1, 2, 1, 1, 3],
+  );
+  assert.deepEqual(row.judgeTokens, { input: 600, output: 40 });
+  assert.equal("replayedToEngram" in row, false, "replay counts belong to the replay row");
 });
 
 test("replay row: an event of its own, counts only", () => {
@@ -251,7 +291,7 @@ test("replay row: an event of its own, counts only", () => {
     items: 3,
     replayed: 2,
     superseded: 1,
-    writes: { spooled: 0, written: 1, updated: 1, backups: 1, dropped: 0, writeFailures: 0, lockHeld: false },
+    writes: { ...NO_WRITES, written: 1, updated: 1, backups: 1, engramSaved: 2, replayedToEngram: 2, fallbackRemoved: 1, fallbackMirrored: 1, judged: 1 },
   });
   assert.deepEqual(row, {
     at: "2026-10-12T08:00:00.000Z",
@@ -272,6 +312,17 @@ test("replay row: an event of its own, counts only", () => {
     backups: 1,
     writeFailures: 0,
     lockHeld: false,
+    engramSaved: 2,
+    engramFailed: 0,
+    mirrored: 0,
+    judged: 1,
+    judgePending: 0,
+    judgeUnavailable: 0,
+    judgeFailed: 0,
+    judgeTokens: { input: 0, output: 0 },
+    replayedToEngram: 2,
+    fallbackRemoved: 1,
+    fallbackMirrored: 1,
   });
 });
 
@@ -343,11 +394,50 @@ test("summary: the week's gates, UPDATE rate, forks, would-save by type, main sa
     lockHeld: 0,
     replays: 0,
     replayed: 0,
+    engramSaved: 0,
+    engramFailed: 0,
+    mirrored: 0,
+    judged: 0,
+    judgePending: 0,
+    judgeUnavailable: 0,
+    judgeFailed: 0,
+    droppedMainSaved: 0,
+    replayedToEngram: 0,
+    fallbackRemoved: 0,
+    fallbackMirrored: 0,
   });
 });
 
+test("E1 summary in Active with Engram: the week's Engram saves, mirrors, judgments and replays; judge tokens count as Haiku tokens", () => {
+  const writes = { ...NO_WRITES, spooled: 2, engramSaved: 2, mirrored: 1, judged: 1, judgePending: 1, judgeFailed: 1, judgeTokens: { input: 600, output: 40 } };
+  const rows = [
+    memoryShadowRecord({ ...BASE, at: "2026-10-12T09:00:00.000Z", mode: "active", effective: "active", writes }),
+    memoryShadowRecord({ ...BASE, at: "2026-10-12T08:00:00.000Z", mode: "active", effective: "active", writes: { ...NO_WRITES, droppedMainSaved: 2, judgeUnavailable: 3, engramFailed: 1 } }),
+    memoryReplayRecord({ at: "2026-10-12T10:00:00.000Z", account: "acct-1", project: "repo", sessionId: "session-2", backend: LIVE, items: 2, replayed: 2, superseded: 0, writes: { ...NO_WRITES, engramSaved: 2, replayedToEngram: 2, fallbackRemoved: 1, fallbackMirrored: 1 } }),
+  ];
+  const summary = summarizeMemoryDecisions(rows, NOW, WEEK);
+  assert.deepEqual(
+    {
+      engramSaved: summary.engramSaved,
+      engramFailed: summary.engramFailed,
+      mirrored: summary.mirrored,
+      judged: summary.judged,
+      judgePending: summary.judgePending,
+      judgeUnavailable: summary.judgeUnavailable,
+      judgeFailed: summary.judgeFailed,
+      droppedMainSaved: summary.droppedMainSaved,
+      replayedToEngram: summary.replayedToEngram,
+      fallbackRemoved: summary.fallbackRemoved,
+      fallbackMirrored: summary.fallbackMirrored,
+    },
+    { engramSaved: 4, engramFailed: 1, mirrored: 1, judged: 1, judgePending: 1, judgeUnavailable: 3, judgeFailed: 1, droppedMainSaved: 2, replayedToEngram: 2, fallbackRemoved: 1, fallbackMirrored: 1 },
+  );
+  assert.deepEqual(summary.haikuTokens, { input: 900 * 2 + 600, output: 9 * 2 + 40 }, "two gates and one judge");
+  assert.equal(summary.activeDecisions, 2);
+});
+
 test("summary in Active: what was written, updated, spooled and replayed; a replay row is never a decision", () => {
-  const writes = { spooled: 2, written: 1, updated: 1, backups: 1, dropped: 1, writeFailures: 0, lockHeld: false };
+  const writes = { ...NO_WRITES, spooled: 2, written: 1, updated: 1, backups: 1, dropped: 1, writeFailures: 0, lockHeld: false };
   const rows = [
     memoryShadowRecord({ ...BASE, at: "2026-10-12T09:00:00.000Z", backend: ABSENT, mode: "active", effective: "active", writes }),
     memoryShadowRecord({ ...BASE, at: "2026-10-12T08:00:00.000Z", backend: ABSENT, mode: "active", effective: "active", fork: "unparsable", forkUsage: null, draft: null, judgeBuilds: 0 }),

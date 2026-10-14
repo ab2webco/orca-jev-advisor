@@ -5109,6 +5109,15 @@ test("M8 memory shadow (the default): a sampled UPDATE turn asks Haiku once, for
     dropped: 0,
     writeFailures: 0,
     lockHeld: false,
+    engramSaved: 0,
+    engramFailed: 0,
+    mirrored: 0,
+    judged: 0,
+    judgePending: 0,
+    judgeUnavailable: 0,
+    judgeFailed: 0,
+    droppedMainSaved: 0,
+    judgeTokens: { input: 0, output: 0 },
   });
   assert.doesNotMatch(JSON.stringify(row), /Spanish|vos|tú/, "no memory text or title in the row");
   assertNothingWritten(host, seeded);
@@ -5717,6 +5726,17 @@ test("A5 memory active: a save a crashed session left in the spool is written on
     backups: 0,
     writeFailures: 0,
     lockHeld: false,
+    engramSaved: 0,
+    engramFailed: 0,
+    mirrored: 0,
+    judged: 0,
+    judgePending: 0,
+    judgeUnavailable: 0,
+    judgeFailed: 0,
+    judgeTokens: { input: 0, output: 0 },
+    replayedToEngram: 0,
+    fallbackRemoved: 0,
+    fallbackMirrored: 0,
   });
   assert.equal(host.modelCalls.length, 0, "a replay asks no model");
 
