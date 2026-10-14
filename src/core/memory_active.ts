@@ -1,10 +1,11 @@
 // ---------------------------------------------------------------------------
-// Memory module in Active, files store (odd/tasks/memory-active-files.md).
+// Memory module in Active (odd/tasks/memory-active-files.md, files store;
+// odd/tasks/memory-active-engram.md, Engram live).
 //
-// Active writes only where the auto-memory folder is the store: no Engram, or
-// Engram configured but down. With Engram live it keeps measuring as Shadow,
-// since writing to Engram arrives in a later release. This file holds the
-// pure rules the mod's write path follows:
+// Active writes into the auto-memory folder when it is the store (no Engram,
+// or Engram configured but down) and into Engram when Engram is usable. With
+// Engram live but its check refused it keeps measuring as Shadow. This file
+// holds the pure rules the mod's write path follows:
 //   - which mode really runs, from the switch and the backend;
 //   - where the spool lives, one root per memory folder, so a replay only
 //     ever writes the items of its own folder;
@@ -15,6 +16,7 @@
 // Pure: no I/O and no node: import, so the mod sandbox can load it too.
 // ---------------------------------------------------------------------------
 
+import { engramUsable } from "./memory_detect.ts";
 import type { MemoryBackendDecision } from "./memory_detect.ts";
 import type { DraftUpdate } from "./memory_draft.ts";
 import { fnv1a } from "./memory_shadow.ts";
@@ -24,9 +26,15 @@ import { BACKUP_DIR, backupStamp, lockPid, parseFrontmatter } from "./memory_tid
 /** Claude Code's own consolidation lock, in the memory folder. */
 export const CONSOLIDATE_LOCK = ".consolidate-lock";
 
-/** What runs: Active only when the files are the store; with Engram live, Active keeps measuring as Shadow. */
+/**
+ * What runs. Active writes to the files store (no Engram, or Engram down) and,
+ * since 0.10.0, to Engram when it is usable. Engram live with its check
+ * refused for want of a permission rule cannot be written: Active keeps
+ * measuring as Shadow there.
+ */
 export function effectiveMemoryMode(mode: MemoryMode, backend: MemoryBackendDecision): MemoryMode {
-  return mode === "active" && backend.backend !== "live" ? "active" : "shadow";
+  if (mode !== "active") return "shadow";
+  return backend.backend !== "live" || engramUsable(backend) ? "active" : "shadow";
 }
 
 function withoutTrailingSlash(path: string): string {

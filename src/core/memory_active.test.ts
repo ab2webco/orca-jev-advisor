@@ -11,6 +11,7 @@ import type { MemorySignals } from "./memory_detect.ts";
 const NONE: MemorySignals = { liveServer: null, health: null, userConfigured: false, pluginEnabled: false, binaryVersion: null };
 const LIVE = detectMemoryBackend({ ...NONE, liveServer: "engram", health: "ok" });
 const REFUSED = detectMemoryBackend({ ...NONE, liveServer: "engram", health: "permission" });
+const TOOLS_ONLY = detectMemoryBackend({ ...NONE, liveServer: "plugin_engram_engram", health: null });
 const DOWN = detectMemoryBackend({ ...NONE, userConfigured: true });
 const ABSENT = detectMemoryBackend(NONE);
 const DIR = "/acct/projects/-repo/memory";
@@ -20,12 +21,13 @@ test("the module is pure: no node: import, so the mod sandbox can load it", () =
   assert.doesNotMatch(source, /from "node:/);
 });
 
-test("effective mode: Active writes only to the files store; with Engram live it keeps measuring", () => {
+test("effective mode: Active writes to the files store, and to Engram when it is usable; a refused check keeps measuring", () => {
   assert.equal(effectiveMemoryMode("active", ABSENT), "active");
   assert.equal(effectiveMemoryMode("active", DOWN), "active");
-  assert.equal(effectiveMemoryMode("active", LIVE), "shadow", "Engram writes arrive in a later release");
-  assert.equal(effectiveMemoryMode("active", REFUSED), "shadow", "live is live, whatever the permission");
-  for (const backend of [ABSENT, DOWN, LIVE, REFUSED]) assert.equal(effectiveMemoryMode("shadow", backend), "shadow");
+  assert.equal(effectiveMemoryMode("active", LIVE), "active", "0.10.0: Engram live takes the saves");
+  assert.equal(effectiveMemoryMode("active", TOOLS_ONLY), "active", "an Engram with no health tool (1.12.0) is live by its tools");
+  assert.equal(effectiveMemoryMode("active", REFUSED), "shadow", "a refused check means Engram cannot be written: keep measuring");
+  for (const backend of [ABSENT, DOWN, LIVE, TOOLS_ONLY, REFUSED]) assert.equal(effectiveMemoryMode("shadow", backend), "shadow");
 });
 
 test("spool root: one per memory folder, so a replay only writes the items of its own folder", () => {

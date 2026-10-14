@@ -191,13 +191,14 @@ import type { CiBandRow, CiRun, CiTriggerKind, CiVerdict, CiWatchOutcome, CiWatc
 import { autoMemoryDir, claudeConfigDir, classifyHealthOutcome, detectMemoryBackend, engramHasTool, engramServerFromTools, engramUsable, parseEnabledEngramPlugin, parseUserMcpEngram } from '../../../../src/core/memory_detect.ts'
 import type { HealthCall, HealthOutcome, MemoryBackendDecision } from '../../../../src/core/memory_detect.ts'
 import { GATE_MAX_TOKENS, GATE_SYSTEM, GATE_TIMEOUT_MS, buildGatePrompt, freeChecks, lastExchange, parseGate, typedPrompt } from '../../../../src/core/memory_decide.ts'
-import { buildDraftPrompt, parseDraft } from '../../../../src/core/memory_draft.ts'
+import { buildDraftPrompt, memoryFileName, parseDraft } from '../../../../src/core/memory_draft.ts'
 import type { MemoryDraft } from '../../../../src/core/memory_draft.ts'
+import { JUDGE_MAX_TOKENS, JUDGE_SYSTEM, JUDGE_TIMEOUT_MS, buildJudgeArgs, buildJudgePrompt, decideVerdict, parseJudgment, readObservationResult } from '../../../../src/core/memory_judge.ts'
 import { EMPTY_SEEN, NO_WRITES, classifyMainCall, draftCounts, dryJudgeBuilds, isForkSampled, memoryDecisionFileName, memoryReplayRecord, memoryShadowRecord, memoryTopics, noteMainCall, readMemSaveCandidates, withinBudget } from '../../../../src/core/memory_shadow.ts'
 import type { ActiveWriteCounts, ForkOutcome, GateOutcome, MainMemorySeen, MemoryMode, ModelTokens } from '../../../../src/core/memory_shadow.ts'
 import { CONSOLIDATE_LOCK, backupDir, checkUpdate, effectiveMemoryMode, lockHeld, memorySpoolRoot } from '../../../../src/core/memory_active.ts'
-import { enqueueSave, isSettled, nextAction, parseSpoolItem, planReplay, supersedeItem } from '../../../../src/core/memory_spool.ts'
-import type { FileOp, SpoolItem } from '../../../../src/core/memory_spool.ts'
+import { completeEngramSave, engramTypeOf, enqueueSave, isSettled, mirrors, nextAction, parseMemSaveResult, parseSpoolItem, planReplay, supersedeItem } from '../../../../src/core/memory_spool.ts'
+import type { FileOp, MemSaveOutcome, SpoolItem } from '../../../../src/core/memory_spool.ts'
 import { lockPid } from '../../../../src/core/memory_tidy.ts'
 import { isRecord } from '../../../../src/guards.ts'
 
@@ -2920,6 +2921,8 @@ async function ciWatchOnSessionStart($: EngineInterface, host: CiWatchHost): Pro
 
 const MEMORY_DELAY_MS = 250
 const MEMORY_HEALTH_TIMEOUT_MS = 3000
+/** Active with Engram (odd/tasks/memory-active-engram.md): how long one mem_save, mem_get_observation or mem_judge may take before it counts as failed. */
+const MEMORY_ENGRAM_TIMEOUT_MS = 10_000
 /** What the fork reads of the memory folder when it is the store: whole files, at most this many and this many characters. */
 const MEMORY_FORK_FILES = 40
 const MEMORY_FORK_CHARS = 40_000
@@ -3097,10 +3100,10 @@ async function draftMemory($: EngineInterface, reason: string, backend: MemoryBa
 
 /**
  * The timer `turn.complete` schedules: free checks, Haiku, the fork, one row.
- * In Shadow (and in Active while Engram is live) the fork is sampled, the
- * judge is built dry and nothing but the row is written. In Active on the
- * files store every UPDATE is drafted and the draft is written
- * (writeMemoryDraft). Never throws.
+ * In Shadow (and in Active while Engram's check is refused) the fork is
+ * sampled, the judge is built dry and nothing but the row is written. In
+ * Active every UPDATE is drafted and the draft is written (writeMemoryDraft):
+ * to Engram when it is usable, else to the files store. Never throws.
  */
 async function memoryAfterTurn($: EngineInterface, modulesFile: FeatureModulesFile, host: MemoryHost, seen: MainMemorySeen, turnId: string): Promise<void> {
   try {
@@ -3131,7 +3134,7 @@ async function memoryAfterTurn($: EngineInterface, modulesFile: FeatureModulesFi
       else ({ fork, forkMs, forkUsage, draft } = await draftMemory($, verdict.reason, backend, dir, new Date(answered).toISOString().slice(0, 10)))
     }
     // A malformed gate or draft leaves `draft` null: nothing is written, and the row says which step failed.
-    const writes = effective === 'active' && draft !== null ? await writeMemoryDraft($, draft, backend, dir, sessionId) : NO_WRITES
+    const writes = effective === 'active' && draft !== null ? await writeMemoryDraft($, draft, backend, dir, sessionId, seen.engramSaves) : NO_WRITES
     const at = new Date(await $.clock.now()).toISOString()
     const record = memoryShadowRecord({
       at,
@@ -3147,7 +3150,8 @@ async function memoryAfterTurn($: EngineInterface, modulesFile: FeatureModulesFi
       forkMs,
       forkUsage,
       draft: draft === null ? null : draftCounts(draft, backend),
-      judgeBuilds: draft !== null && engramUsable(backend) ? dryJudgeBuilds(draft.saves, seen.candidates) : 0,
+      // The dry judge is Shadow's measure; Active with Engram judges for real (judgeCandidates).
+      judgeBuilds: draft !== null && effective === 'shadow' && engramUsable(backend) ? dryJudgeBuilds(draft.saves, seen.candidates) : 0,
       seen,
       mode,
       effective,
@@ -3160,29 +3164,122 @@ async function memoryAfterTurn($: EngineInterface, modulesFile: FeatureModulesFi
 }
 
 // ---------------------------------------------------------------------------
-// Memory in Active, files store (odd/tasks/memory-active-files.md). With no
-// Engram, or Engram configured but down, the draft is written into the
-// auto-memory folder: every save goes to its own spool file first
-// (memory_spool.ts), then walks pending -> written -> done (no Engram) or
-// pending -> fallback (Engram down, the file tagged pending_engram and the
-// item parked for the Engram replay of a later release). A memory file that
-// already exists is copied byte for byte to `.memory-backup/<stamp>/` first;
-// when the copy fails it is not rewritten. Updates (whole files, by bare
-// name) are applied after the same backup; deletes never are. Claude Code's
-// own `.consolidate-lock` stops every write. `$.fs` has no move, copy or
-// remove, so those go through `$.process.run` (mkdir, mv, cp, rm, kill -0).
+// Memory in Active (odd/tasks/memory-active-files.md, files store;
+// odd/tasks/memory-active-engram.md, Engram live). Every save goes to its own
+// spool file first (memory_spool.ts), then walks:
+//   - no Engram: pending -> written -> done, the file being the store;
+//   - Engram usable: pending -> mem_save -> written -> done, a user or
+//     feedback save mirrored as a file with its engram_id; Engram's conflict
+//     candidates judged by Haiku (judgeCandidates);
+//   - Engram down, or a mem_save that failed: pending -> fallback, the file
+//     tagged pending_engram and the item parked until a session start finds
+//     Engram usable and replays it (the copy then becomes a mirror, or is
+//     removed when it is still the item's own).
+// A memory file that already exists is copied byte for byte to
+// `.memory-backup/<stamp>/` before it is rewritten or removed; when the copy
+// fails it is left alone. Updates (whole files, by bare name) are applied
+// after the same backup, only when the files are the store; deletes never
+// are. Claude Code's own `.consolidate-lock` stops every write. `$.fs` has no
+// move, copy or remove, so those go through `$.process.run` (mkdir, mv, cp,
+// rm, kill -0).
 // ---------------------------------------------------------------------------
 
-/** One write pass: the memory folder, the stamp of its backup folder, the files already copied in this pass, and the counts. */
+/** What a pass needs to reach Engram: the server, and whether it lists the judge and the read. */
+interface EngramReach {
+  readonly server: string
+  readonly canJudge: boolean
+  readonly canRead: boolean
+}
+
+/** One write pass: the memory folder, the stamp of its backup folder, the files already copied in this pass, Engram when it is usable, and the counts. */
 interface MemoryPass {
   readonly dir: string
   readonly stampIso: string
   readonly backedUp: Set<string>
+  readonly engram: EngramReach | null
   tally: { -readonly [K in keyof ActiveWriteCounts]: ActiveWriteCounts[K] }
 }
 
-function newMemoryPass(dir: string, stampIso: string): MemoryPass {
-  return { dir, stampIso, backedUp: new Set<string>(), tally: { ...NO_WRITES } }
+function newMemoryPass(dir: string, stampIso: string, engram: EngramReach | null = null): MemoryPass {
+  return { dir, stampIso, backedUp: new Set<string>(), engram, tally: { ...NO_WRITES } }
+}
+
+/** Engram's server and its optional tools, when the backend says Engram is usable; null otherwise. */
+async function engramReach($: EngineInterface, backend: MemoryBackendDecision): Promise<EngramReach | null> {
+  if (!engramUsable(backend) || backend.server === null) return null
+  const server = backend.server
+  let tools: readonly { readonly name: string }[] = []
+  try {
+    tools = await $.tool.list()
+  } catch {
+    tools = []
+  }
+  return { server, canJudge: engramHasTool(tools, server, 'mem_judge'), canRead: engramHasTool(tools, server, 'mem_get_observation') }
+}
+
+type EngramCallResult = { readonly ok: true; readonly result: unknown } | { readonly ok: false; readonly error: string }
+
+/** One Engram call raced against MEMORY_ENGRAM_TIMEOUT_MS; a rejection or the clock running out is a failure with its reason. */
+async function engramCall($: EngineInterface, server: string, tool: string, args: Record<string, unknown>): Promise<EngramCallResult> {
+  const call: Promise<EngramCallResult> = $.mcp.call(server, tool, args).then(
+    (result): EngramCallResult => ({ ok: true, result }),
+    (error: unknown): EngramCallResult => ({ ok: false, error: error instanceof Error ? error.message : String(error) }),
+  )
+  const late: Promise<EngramCallResult> = $.clock.sleep(MEMORY_ENGRAM_TIMEOUT_MS).then((): EngramCallResult => ({ ok: false, error: 'timed out' }))
+  return Promise.race([call, late])
+}
+
+/**
+ * Judges the conflict candidates Engram's mem_save answered with
+ * (odd/tasks/memory-active-engram.md): with no mem_judge listed, none is
+ * judged. Otherwise each candidate's text is read (mem_get_observation, read
+ * only), Haiku reads the two observations' text and nothing else, and
+ * decideVerdict says who may record it: a clear verdict goes to mem_judge
+ * with the candidate's own judgment_id; one for a person stays pending in
+ * Engram. Counts only; never throws.
+ */
+async function judgeCandidates($: EngineInterface, pass: MemoryPass, item: SpoolItem): Promise<void> {
+  const engram = pass.engram
+  if (engram === null || item.candidates.length === 0) return
+  if (!engram.canJudge) {
+    pass.tally.judgeUnavailable += item.candidates.length
+    return
+  }
+  const saved = { title: item.save.title, type: engramTypeOf(item.save.type), content: item.save.content }
+  for (const candidate of item.candidates) {
+    try {
+      const read = engram.canRead ? await engramCall($, engram.server, 'mem_get_observation', { id: candidate.id }) : null
+      const observation = read !== null && read.ok ? readObservationResult(read.result) : null
+      if (observation === null) {
+        pass.tally.judgeFailed += 1
+        continue
+      }
+      const reply = await $.model.complete({
+        model: 'haiku',
+        system: JUDGE_SYSTEM,
+        prompt: buildJudgePrompt({ saved, candidate: { title: observation.title, type: candidate.type, content: observation.content } }),
+        maxTokens: JUDGE_MAX_TOKENS,
+        effort: 'low',
+        timeoutMs: JUDGE_TIMEOUT_MS,
+      })
+      const usage = 'usage' in reply ? reply.usage : null
+      if (usage) pass.tally.judgeTokens = { input: pass.tally.judgeTokens.input + usage.input_tokens, output: pass.tally.judgeTokens.output + usage.output_tokens }
+      const judgment = reply.isAnswered ? parseJudgment(reply.text) : null
+      if (judgment === null || judgment.kind === 'failure') {
+        pass.tally.judgeFailed += 1
+        continue
+      }
+      if (decideVerdict(judgment.verdict, { savedType: saved.type, candidateType: candidate.type }).action === 'pending') {
+        pass.tally.judgePending += 1
+        continue
+      }
+      const recorded = await engramCall($, engram.server, 'mem_judge', { ...buildJudgeArgs(candidate.judgmentId, judgment.verdict) })
+      if (recorded.ok && !(isRecord(recorded.result) && recorded.result.isError === true)) pass.tally.judged += 1
+      else pass.tally.judgeFailed += 1
+    } catch {
+      pass.tally.judgeFailed += 1
+    }
+  }
 }
 
 /** One shell step of the write path; false on a non-zero exit or a process that could not start. */
@@ -3250,8 +3347,10 @@ async function applyMemoryOps($: EngineInterface, pass: MemoryPass, ops: readonl
       if (!(await $.fs.exists(op.from))) continue
       if (!(await memoryShell($, ['mkdir', '-p', op.to.slice(0, op.to.lastIndexOf('/'))]))) return false
       if (!(await memoryShell($, ['mv', '-f', op.from, op.to]))) return false
-    } else if (!(await memoryShell($, ['rm', '-f', op.path]))) {
-      return false
+    } else {
+      // A memory file is copied byte for byte before it is removed; when the copy fails it stays.
+      if (isMemoryFilePath(pass.dir, op.path) && (await $.fs.exists(op.path)) && !(await backupMemoryFile($, pass, op.path))) return false
+      if (!(await memoryShell($, ['rm', '-f', op.path]))) return false
     }
   }
   return true
@@ -3260,21 +3359,48 @@ async function applyMemoryOps($: EngineInterface, pass: MemoryPass, ops: readonl
 /**
  * Walks one spooled save as far as it goes now: `settled` in done/, `parked`
  * waiting (for Engram), or `failed` (its file says where it stopped), and
- * whether any step was taken.
+ * whether any step was taken. At most one Engram save per item per pass: a
+ * failed one leaves the fallback copy and waits for the next session start.
  */
 async function driveSpoolItem($: EngineInterface, pass: MemoryPass, item: SpoolItem, backend: MemoryBackendDecision, spoolRoot: string): Promise<{ outcome: 'settled' | 'parked' | 'failed'; moved: boolean }> {
   let current = item
   let moved = false
+  let engramTried = false
   try {
-    for (let step = 0; step < 4; step += 1) {
+    for (let step = 0; step < 6; step += 1) {
       const now = new Date(await $.clock.now()).toISOString()
       const index = (await readTextOrNull($, `${pass.dir}/MEMORY.md`)) ?? ''
-      const action = nextAction(current, { backend, spoolRoot, autoMemoryDir: pass.dir, index, now })
-      // `engram-save` cannot come up: Active writes only when Engram is not usable.
-      if (action.kind !== 'apply') return { outcome: 'parked', moved }
+      const copy = await readTextOrNull($, `${pass.dir}/${memoryFileName(current.save.type, current.save.topic_key)}`)
+      const ctx = { backend, spoolRoot, autoMemoryDir: pass.dir, index, now, copy }
+      const action = nextAction(current, ctx)
+      if (action.kind === 'none') return { outcome: 'parked', moved }
+      if (action.kind === 'engram-save') {
+        if (pass.engram === null || engramTried) return { outcome: 'parked', moved }
+        engramTried = true
+        const call = await engramCall($, pass.engram.server, 'mem_save', { ...action.args })
+        const outcome: MemSaveOutcome = call.ok ? parseMemSaveResult(call.result) : { ok: false, kind: 'rejected', error: call.error }
+        const saved = completeEngramSave(current, outcome, ctx)
+        if (!(await applyMemoryOps($, pass, saved.ops))) return { outcome: 'failed', moved }
+        moved = true
+        current = saved.item
+        if (!outcome.ok) {
+          pass.tally.engramFailed += 1
+          continue
+        }
+        pass.tally.engramSaved += 1
+        if (action.replay) pass.tally.replayedToEngram += 1
+        await judgeCandidates($, pass, current)
+        continue
+      }
+      const before = current
       if (!(await applyMemoryOps($, pass, action.transition.ops))) return { outcome: 'failed', moved }
       moved = true
       current = action.transition.item
+      if (before.store === 'engram' && before.state === 'written' && mirrors(before.save.type)) pass.tally.mirrored += 1
+      if (before.store === 'engram' && before.state === 'fallback') {
+        if (mirrors(before.save.type)) pass.tally.fallbackMirrored += 1
+        else if (action.transition.ops.some((op) => op.kind === 'remove')) pass.tally.fallbackRemoved += 1
+      }
       if (isSettled(current.state)) return { outcome: 'settled', moved }
     }
     return { outcome: 'parked', moved }
@@ -3311,12 +3437,14 @@ async function readSpoolItems($: EngineInterface, spoolRoot: string): Promise<Sp
 }
 
 /**
- * session.start's replay, after the backend is known: in Active on the files
- * store, the saves this folder's spool still holds are finished in
- * planReplay's order (this session's, a parked fallback copy, another
- * session's once it has been still for 10 minutes); an older item of a topic
- * a newer one replaces is closed unwritten. One row when anything happened.
- * Never throws.
+ * session.start's replay, after the backend is known: in Active, the saves
+ * this folder's spool still holds are finished in planReplay's order (this
+ * session's, a parked fallback copy, another session's once it has been
+ * still for 10 minutes); an older item of a topic a newer one replaces is
+ * closed unwritten. With Engram usable, a parked fallback copy is saved to
+ * Engram, then becomes a mirror (user, feedback) or is removed when it is
+ * still the item's own copy (project, reference). One row when anything
+ * happened. Never throws.
  */
 async function replayMemorySpool($: EngineInterface, state: MemoryShadowState): Promise<void> {
   try {
@@ -3359,13 +3487,22 @@ async function replayMemorySpool($: EngineInterface, state: MemoryShadowState): 
   }
 }
 
-/** Writes a draft into the auto-memory folder: saves spooled first, then written; updates after a backup; deletes never. Never throws. */
-async function writeMemoryDraft($: EngineInterface, draft: MemoryDraft, backend: MemoryBackendDecision, dir: string | null, sessionId: string | null): Promise<ActiveWriteCounts> {
+/**
+ * Writes a draft: saves spooled first, then to Engram when it is usable (a
+ * user or feedback save mirrored as a file) or to the auto-memory folder;
+ * updates after a backup, only when the files are the store; deletes never.
+ * With Engram usable, a turn whose main thread already called mem_save
+ * writes nothing of the fork's (`mainEngramSaves`). Never throws.
+ */
+async function writeMemoryDraft($: EngineInterface, draft: MemoryDraft, backend: MemoryBackendDecision, dir: string | null, sessionId: string | null, mainEngramSaves: number): Promise<ActiveWriteCounts> {
   const nowMs = await $.clock.now()
   const nowIso = new Date(nowMs).toISOString()
-  const pass = newMemoryPass(dir ?? '', nowIso)
+  const engram = await engramReach($, backend)
+  const pass = newMemoryPass(dir ?? '', nowIso, engram)
   const work = draft.saves.length + draft.updates.length
   try {
+    // No double save: the main thread's own mem_save this turn stands, and the fork's are dropped unwritten.
+    if (engram !== null && mainEngramSaves > 0) return { ...pass.tally, droppedMainSaved: draft.saves.length, dropped: draft.updates.length }
     const paths = await resolveHomePaths($)
     if (dir === null || paths === null || sessionId === null) return { ...pass.tally, writeFailures: work }
     const spoolRoot = memorySpoolRoot(paths.cacheDir, dir)
@@ -3387,8 +3524,12 @@ async function writeMemoryDraft($: EngineInterface, draft: MemoryDraft, backend:
     for (const item of items) {
       if ((await driveSpoolItem($, pass, item, backend, spoolRoot)).outcome === 'failed') pass.tally.writeFailures += 1
     }
-    // 4. The updates: an existing file only, with frontmatter, after its backup.
+    // 4. The updates: an existing file only, with frontmatter, after its backup; none while Engram is the store.
     for (const update of draft.updates) {
+      if (engram !== null) {
+        pass.tally.dropped += 1
+        continue
+      }
       const path = `${dir}/${update.name}`
       const current = await readTextOrNull($, path)
       if (!checkUpdate(update, current).ok) {

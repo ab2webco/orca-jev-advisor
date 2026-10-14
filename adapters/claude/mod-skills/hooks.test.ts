@@ -109,7 +109,10 @@ interface FakeHost {
   readonly forkQueue: unknown[];
   /** Memory (M8): every `$.mcp.call`, and what it answers (a thrown Error rejects). */
   readonly mcpCalls: { server: string; tool: string; args?: Record<string, unknown> }[];
-  mcpAnswer: (server: string, tool: string) => unknown;
+  /** It also gets the call's args (M9: the fake Engram reads them), and may return a promise that never settles, like a hung server. */
+  mcpAnswer: (server: string, tool: string, args?: Record<string, unknown>) => unknown;
+  /** M9: a `$.clock.sleep` of exactly this many ms resolves at once (a timeout that has run out); every other sleep never resolves. */
+  resolveSleepMs: number | null;
   /** Memory (M8): `$.session.repo()`; null when not in a repository. */
   repo: { root: string } | null;
 }
@@ -150,6 +153,7 @@ function makeFakeHost(): FakeHost {
     mcpAnswer: (server: string, tool: string) => {
       throw new Error(`fake host: $.mcp.call: no connected MCP tool "${tool}" on a server named "${server}"`);
     },
+    resolveSleepMs: null,
     repo: null,
   };
 }
@@ -221,7 +225,7 @@ function makeFakeEngine(host: FakeHost): unknown {
     mcp: {
       call: async (server: string, tool: string, args?: Record<string, unknown>) => {
         host.mcpCalls.push({ server, tool, ...(args === undefined ? {} : { args }) });
-        return host.mcpAnswer(server, tool);
+        return host.mcpAnswer(server, tool, args);
       },
     },
     env: { get: async (name: string) => (name === "HOME" ? HOME : host.env.get(name)) },
@@ -266,7 +270,7 @@ function makeFakeEngine(host: FakeHost): unknown {
       // resolveOrcaContext's process-run timeout) is won by the other side
       // (a fake fetch/process.run that always settles on its own), so a
       // sleep that never resolves never wins and never introduces flakiness.
-      sleep: async () => new Promise<void>(() => {}),
+      sleep: async (ms: number) => (ms === host.resolveSleepMs ? undefined : new Promise<void>(() => {})),
       // Held, never run on its own: a test that wants a timer's work runs it (runTimers).
       after: (ms: number, fn: () => unknown) => {
         host.timers.push(fn);
@@ -5535,8 +5539,11 @@ test("A4 memory active, Engram configured but down: the file is tagged pending_e
   assert.deepEqual(writesOf(row), { spooled: 1, written: 1, updated: 0, backups: 0, dropped: 0, writeFailures: 0, lockHeld: false });
 });
 
-test("A4 memory active with Engram live: it keeps measuring as Shadow, writes nothing, and the row says effective shadow", async () => {
+test("E2 memory active with Engram's check refused (no permission rule): it keeps measuring as Shadow, writes nothing, and the row says effective shadow", async () => {
   const host = activeHost({ engram: true });
+  host.mcpAnswer = () => {
+    throw new Error("Claude requested permissions to use mcp__engram__mem_current_project, but you haven't granted it yet.");
+  };
   host.modelQueue.push(GATE_UPDATE, GATE_UPDATE);
   host.forkQueue.push(DRAFT_REPLY);
   const seeded = new Set(host.files.keys());
@@ -5773,9 +5780,14 @@ test("A5 memory active: a save the lock held back is finished at the next start;
   assert.equal(last?.written, 1);
 });
 
-test("A5 memory: Shadow, and Active with Engram live, replay nothing", async () => {
+test("A5 memory: Shadow, and Active with Engram's check refused, replay nothing", async () => {
   for (const [modules, engram] of [[{ memory: "shadow" }, false], [{ memory: "active" }, true]] as const) {
     const host = memoryHost({ engram });
+    if (engram) {
+      host.mcpAnswer = () => {
+        throw new Error("Claude requested permissions to use mcp__engram__mem_current_project, but you haven't granted it yet.");
+      };
+    }
     setModules(host, modules);
     memoryShell(host);
     const live = seedSpooledSave(host, "session-0", "crashed-1", "2026-09-25T09:00:00.000Z");
@@ -5789,4 +5801,272 @@ test("A5 memory: Shadow, and Active with Engram live, replay nothing", async () 
     assert.equal(replayRows(host).length, 0, label);
     assertNothingWritten(host, seeded);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Memory in Active with Engram live (odd/tasks/memory-active-engram.md, E2):
+// every UPDATE is drafted; each save is spooled, then saved with mem_save;
+// user and feedback are mirrored as a file with its engram_id; Engram's
+// conflict candidates are judged by Haiku from the two texts alone, recorded
+// with mem_judge when clear and left pending otherwise; a failed save falls
+// back to the 0.9.0 file; a turn whose main thread saved to Engram writes
+// nothing of the fork's. The Engram below is a fake on `host.mcpAnswer`.
+// ---------------------------------------------------------------------------
+
+/** MEMORY_ENGRAM_TIMEOUT_MS in hooks/index.ts: a sleep of this length is the Engram call's clock. */
+const ENGRAM_TIMEOUT_MS = 10_000;
+const ENGRAM_2_TOOLS = ["mem_save", "mem_current_project", "mem_judge", "mem_get_observation", "mem_search"].map((tool) => ({ name: `mcp__engram__${tool}`, description: "", mcp: true }));
+const PROJECT_SAVE = { type: "project", title: "Billing migration", content: "Billing moves to Stripe in Q4.", topic_key: "billing-migration" };
+const REFERENCE_SAVE = { type: "reference", title: "Ops runbook", content: "The runbook lives in the ops wiki.", topic_key: "ops-runbook" };
+
+interface CandidateSeed {
+  readonly id: number;
+  readonly title: string;
+  readonly type: string;
+  readonly content: string;
+  readonly judgment_id: string;
+}
+
+interface FakeEngramStore {
+  readonly observations: Map<string, { id: number; title: string; type: string; content: string }>;
+  /** What mem_save answers: Engram 2.x's envelope, an older Engram's plain text, a tool error, a rejection, or never. */
+  saveMode: "ok" | "old" | "error" | "reject" | "hang";
+  /** The conflict candidates every successful 2.x save reports. */
+  candidates: CandidateSeed[];
+  readonly judged: Record<string, unknown>[];
+  /** The spool files on disk when each mem_save came in. */
+  readonly spoolAtSave: string[][];
+  nextId: number;
+}
+
+function mcpTextResult(value: unknown, isError = false): unknown {
+  return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value) }], isError };
+}
+
+/** A small Engram behind `$.mcp.call`: mem_save upserts by topic_key, mem_get_observation answers the seeded candidates, mem_judge records. */
+function fakeEngram(host: FakeHost): FakeEngramStore {
+  const engram: FakeEngramStore = { observations: new Map(), saveMode: "ok", candidates: [], judged: [], spoolAtSave: [], nextId: 500 };
+  host.mcpAnswer = (_server: string, tool: string, args?: Record<string, unknown>): unknown => {
+    if (tool === "mem_current_project") return mcpTextResult({ project: "sandbox" });
+    if (tool === "mem_save") {
+      engram.spoolAtSave.push(spoolFiles(host));
+      if (engram.saveMode === "reject") throw new Error("connection closed");
+      if (engram.saveMode === "hang") return new Promise(() => {});
+      if (engram.saveMode === "error") return mcpTextResult("Failed to save: database is locked", true);
+      const title = String(args?.title);
+      const type = String(args?.type);
+      if (engram.saveMode === "old") return mcpTextResult(`Memory saved: "${title}" (${type})`);
+      const key = String(args?.topic_key);
+      const id = engram.observations.get(key)?.id ?? engram.nextId++;
+      engram.observations.set(key, { id, title, type, content: String(args?.content) });
+      const candidates = engram.candidates.map((seed) => ({ id: seed.id, sync_id: `obs-${seed.id}`, title: seed.title, type: seed.type, score: -2, judgment_id: seed.judgment_id }));
+      const conflict = candidates.length > 0 ? { judgment_required: true, judgment_id: candidates[0]?.judgment_id, candidates } : { judgment_required: false };
+      return mcpTextResult({ project: "sandbox", result: `Memory saved: "${title}" (${type})`, id, ...conflict });
+    }
+    if (tool === "mem_get_observation") {
+      const seed = engram.candidates.find((candidate) => candidate.id === args?.id);
+      if (seed === undefined) return mcpTextResult(`Observation #${String(args?.id)} not found`, true);
+      return mcpTextResult({ project: "sandbox", result: `#${seed.id} [${seed.type}] ${seed.title}\n${seed.content}\nSession: s-old\nCreated: 2026-09-01` });
+    }
+    if (tool === "mem_judge") {
+      engram.judged.push({ ...args });
+      return mcpTextResult({ relation: { judgment_id: args?.judgment_id } });
+    }
+    throw new Error(`fake Engram: unexpected tool ${tool}`);
+  };
+  return engram;
+}
+
+function engramActiveHost(tools: { name: string; description: string; mcp: boolean }[] = ENGRAM_2_TOOLS): { host: FakeHost; engram: FakeEngramStore } {
+  const host = activeHost({ engram: true });
+  host.toolList = [...tools];
+  return { host, engram: fakeEngram(host) };
+}
+
+function engramCounts(row: Record<string, unknown> | undefined): Record<string, unknown> {
+  return {
+    engramSaved: row?.engramSaved,
+    engramFailed: row?.engramFailed,
+    mirrored: row?.mirrored,
+    judged: row?.judged,
+    judgePending: row?.judgePending,
+    judgeUnavailable: row?.judgeUnavailable,
+    judgeFailed: row?.judgeFailed,
+    droppedMainSaved: row?.droppedMainSaved,
+  };
+}
+
+const NO_ENGRAM_COUNTS = { engramSaved: 0, engramFailed: 0, mirrored: 0, judged: 0, judgePending: 0, judgeUnavailable: 0, judgeFailed: 0, droppedMainSaved: 0 };
+
+function engramSaveCalls(host: FakeHost): { server: string; tool: string; args?: Record<string, unknown> }[] {
+  return host.mcpCalls.filter((call) => call.tool === "mem_save");
+}
+
+test("E2 memory active, Engram live: the save is spooled, saved to Engram with the main thread's args, mirrored as a file with its engram_id, and the item ends in done/", async () => {
+  const { host, engram } = engramActiveHost();
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(DRAFT_REPLY);
+  const { result } = await activeTurn(host);
+
+  assert.equal(result, TURN_RESULT, "next(e)'s result is handed back as it was");
+  assert.equal(host.forkCalls.length, 1, "Active drafts every UPDATE, sampled or not");
+  assert.deepEqual(engramSaveCalls(host), [{ server: "engram", tool: "mem_save", args: { title: "Spanish with tú", content: "Reply in Spanish with tú, never voseo.", type: "policy", topic_key: "spanish-tu", capture_prompt: false } }]);
+  assert.equal(engram.spoolAtSave[0]?.length, 1, "the item was on disk before mem_save");
+  assert.doesNotMatch(engram.spoolAtSave[0]?.[0] ?? "", /\/done\//);
+
+  const mirror = host.files.get(`${MEMORY_DIR}/spanish-tu.md`) ?? "";
+  assert.match(mirror, /\n {2}topic_key: spanish-tu\n {2}engram_id: 500\n/, "a mirror of the observation");
+  assert.doesNotMatch(mirror, /pending_engram/);
+  assert.match(host.files.get(`${MEMORY_DIR}/MEMORY.md`) ?? "", /^- \[Spanish with tú\]\(spanish-tu\.md\)/m, "in MEMORY.md, so every session reads it");
+
+  const spooled = spoolFiles(host);
+  assert.equal(spooled.length, 1);
+  assert.match(spooled[0] ?? "", /\/done\/[0-9a-f-]{36}\.json$/);
+  const item = JSON.parse(host.files.get(spooled[0] ?? "") ?? "{}") as Record<string, unknown>;
+  assert.deepEqual([item.state, item.store, item.engramId, item.candidates], ["done", "engram", "500", []]);
+
+  const row = memoryRows(host)[0];
+  assert.deepEqual([row?.mode, row?.effective, row?.backend], ["active", "active", "live"]);
+  assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, engramSaved: 1, mirrored: 1 });
+  assert.deepEqual([row?.spooled, row?.written, row?.writeFailures], [1, 1, 0]);
+  assert.doesNotMatch(JSON.stringify(row), /Spanish|vos|tú|spanish-tu/, "no memory text, title or file name in the row");
+});
+
+test("E2 memory active, Engram live: project and reference saves go to Engram only; the memory folder is untouched", async () => {
+  const { host, engram } = engramActiveHost();
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(draftReply({ saves: [PROJECT_SAVE, REFERENCE_SAVE], updates: [{ name: "merge-email.md", content: DRAFT_UPDATE_TEXT }] }));
+  const before = memoryFolder(host);
+  await activeTurn(host);
+  assert.deepEqual(engramSaveCalls(host).map((call) => [call.args?.topic_key, call.args?.type]), [["billing-migration", "discovery"], ["ops-runbook", "discovery"]]);
+  assert.equal(engram.observations.size, 2);
+  assert.deepEqual(memoryFolder(host), before, "no file, no index line, and no file update while Engram is the store");
+  assert.ok(spoolFiles(host).every((path) => path.includes("/done/")));
+  const row = memoryRows(host)[0];
+  assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, engramSaved: 2 });
+  assert.deepEqual([row?.spooled, row?.written, row?.updated, row?.dropped], [2, 0, 0, 1]);
+});
+
+test("E2 memory active, Engram live: a rejected, failed or timed-out mem_save writes the fallback file and leaves the item parked", async () => {
+  for (const mode of ["reject", "error", "hang"] as const) {
+    const { host, engram } = engramActiveHost();
+    engram.saveMode = mode;
+    if (mode === "hang") host.resolveSleepMs = ENGRAM_TIMEOUT_MS;
+    host.modelQueue.push(GATE_UPDATE);
+    host.forkQueue.push(DRAFT_REPLY);
+    const { result } = await activeTurn(host);
+    assert.equal(result, TURN_RESULT, mode);
+    assert.equal(engramSaveCalls(host).length, 1, `${mode}: one attempt in the pass`);
+    const copy = host.files.get(`${MEMORY_DIR}/spanish-tu.md`) ?? "";
+    assert.match(copy, /\n {2}pending_engram: true\n/, mode);
+    assert.doesNotMatch(copy, /engram_id/, mode);
+    assert.match(host.files.get(`${MEMORY_DIR}/MEMORY.md`) ?? "", /\(spanish-tu\.md\)/, mode);
+    const spooled = spoolFiles(host);
+    assert.equal(spooled.length, 1, mode);
+    assert.doesNotMatch(spooled[0] ?? "", /\/done\//, `${mode}: parked in the live folder`);
+    const item = JSON.parse(host.files.get(spooled[0] ?? "") ?? "{}") as Record<string, unknown>;
+    assert.deepEqual([item.state, item.engramFailed], ["fallback", true], mode);
+    const row = memoryRows(host)[0];
+    assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, engramFailed: 1 }, mode);
+    assert.deepEqual([row?.spooled, row?.written, row?.effective], [1, 1, "active"], mode);
+  }
+});
+
+test("E2 memory active, Engram live: when the main thread saved to Engram in the same turn, the fork's saves are dropped and nothing is written", async () => {
+  const { host } = engramActiveHost();
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(draftReply({ saves: [SPANISH_SAVE, PROJECT_SAVE] }));
+  const before = memoryFolder(host);
+  const { handlers, engine } = loadHooks(host);
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  const answer = { result: mcpTextResult({ id: 9, judgment_required: false }) };
+  await mainToolCall(handlers, engine, "mcp__engram__mem_save", { title: "Spanish with tú", type: "policy", content: "x" }, answer);
+  await completeTurn(handlers, engine, { turnId: turnIdWhere(false) });
+  await runTimers(host);
+  assert.equal(host.forkCalls.length, 1, "the draft is still made, so the drop is measured");
+  assert.deepEqual(engramSaveCalls(host), [], "the module saves nothing to Engram");
+  assert.deepEqual(spoolFiles(host), [], "nothing spooled");
+  assert.deepEqual(memoryFolder(host), before, "nothing written");
+  const row = memoryRows(host)[0];
+  assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, droppedMainSaved: 2 });
+  assert.deepEqual([row?.mainEngramSaves, row?.spooled, row?.written], [1, 0, 0]);
+});
+
+function judgeReply(relation: string, confidence: number): unknown {
+  return { isAnswered: true, text: JSON.stringify({ relation, confidence, reason: "r" }), usage: USAGE(300, 20) };
+}
+
+test("E2 memory active, Engram live: conflict candidates are judged from the two texts alone; clear verdicts go to mem_judge, the rest stay pending", async () => {
+  const { host, engram } = engramActiveHost();
+  engram.candidates = [
+    { id: 11, title: "Language notes", type: "discovery", content: "The owner writes in Spanish.", judgment_id: "rel-11" },
+    { id: 12, title: "Spanish with vos", type: "policy", content: "Talk to the owner in Spanish with vos.", judgment_id: "rel-12" },
+    { id: 13, title: "Tone", type: "discovery", content: "Keep a neutral tone.", judgment_id: "rel-13" },
+    { id: 14, title: "Language decision", type: "decision", content: "All replies in English.", judgment_id: "rel-14" },
+    { id: 15, title: "Garbled", type: "discovery", content: "Something else.", judgment_id: "rel-15" },
+  ];
+  host.modelQueue.push(
+    GATE_UPDATE,
+    judgeReply("related", 0.9),
+    judgeReply("supersedes", 0.95),
+    judgeReply("compatible", 0.5),
+    judgeReply("conflicts_with", 0.9),
+    { isAnswered: true, text: "I am not sure", usage: USAGE(300, 5) },
+  );
+  host.forkQueue.push(DRAFT_REPLY);
+  await activeTurn(host);
+
+  assert.deepEqual(host.mcpCalls.filter((call) => call.tool === "mem_get_observation").map((call) => call.args), [{ id: 11 }, { id: 12 }, { id: 13 }, { id: 14 }, { id: 15 }], "each candidate's text, read only");
+  const judges = host.modelCalls.slice(1);
+  assert.equal(judges.length, 5, "one Haiku judge per candidate");
+  for (const call of judges) {
+    assert.equal(call.model, "haiku");
+    const prompt = String(call.prompt);
+    assert.match(prompt, /<new>\nTitle: Spanish with tú\nType: policy\nReply in Spanish with tú, never voseo\.\n<\/new>/);
+    assert.match(prompt, /<existing>\nTitle: /);
+    assert.doesNotMatch(prompt, /respóndeme|Entendido/, "never the session's own text");
+  }
+  assert.match(String(judges[1]?.prompt), /<existing>\nTitle: Spanish with vos\nType: policy\nTalk to the owner in Spanish with vos\.\n<\/existing>/);
+  assert.deepEqual(engram.judged, [
+    { judgment_id: "rel-11", relation: "related", confidence: 0.9, reason: "r" },
+    { judgment_id: "rel-12", relation: "supersedes", confidence: 0.95, reason: "r" },
+  ], "the clear verdicts, each with its own judgment_id (a feedback superseding a feedback is the owner's exception)");
+  const row = memoryRows(host)[0];
+  assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, engramSaved: 1, mirrored: 1, judged: 2, judgePending: 2, judgeFailed: 1 });
+  assert.deepEqual(row?.judgeTokens, { input: 1500, output: 85 });
+  const item = JSON.parse(host.files.get(spoolFiles(host)[0] ?? "") ?? "{}") as Record<string, unknown>;
+  assert.equal(Array.isArray(item.candidates) ? item.candidates.length : -1, 5, "the spool item keeps the candidates");
+  assert.doesNotMatch(JSON.stringify(row), /vos|Garbled|rel-1/, "no title or judgment id in the row");
+});
+
+test("E2 memory active, Engram live without mem_judge: candidates are counted unavailable; no Haiku judge, no read, no mem_judge", async () => {
+  const { host, engram } = engramActiveHost(ENGRAM_2_TOOLS.filter((tool) => !tool.name.endsWith("__mem_judge")));
+  engram.candidates = [
+    { id: 11, title: "Language notes", type: "discovery", content: "x", judgment_id: "rel-11" },
+    { id: 12, title: "Spanish with vos", type: "policy", content: "y", judgment_id: "rel-12" },
+  ];
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(DRAFT_REPLY);
+  await activeTurn(host);
+  assert.equal(host.modelCalls.length, 1, "the gate only");
+  assert.deepEqual(host.mcpCalls.map((call) => call.tool), ["mem_current_project", "mem_save"]);
+  assert.deepEqual(engramCounts(memoryRows(host)[0]), { ...NO_ENGRAM_COUNTS, engramSaved: 1, mirrored: 1, judgeUnavailable: 2 });
+});
+
+test("E2 memory active, an older Engram (1.12.0: no health tool, no mem_judge): its plain answer is a save, mirrored without an id", async () => {
+  const tools = ["mem_save", "mem_search", "mem_context"].map((tool) => ({ name: `mcp__plugin_engram_engram__${tool}`, description: "", mcp: true }));
+  const { host, engram } = engramActiveHost(tools);
+  engram.saveMode = "old";
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(DRAFT_REPLY);
+  await activeTurn(host);
+  assert.deepEqual(host.mcpCalls.map((call) => [call.server, call.tool]), [["plugin_engram_engram", "mem_save"]]);
+  const mirror = host.files.get(`${MEMORY_DIR}/spanish-tu.md`) ?? "";
+  assert.match(mirror, /\n {2}topic_key: spanish-tu\n/);
+  assert.doesNotMatch(mirror, /engram_id|pending_engram/);
+  assert.ok(spoolFiles(host).every((path) => path.includes("/done/")));
+  const row = memoryRows(host)[0];
+  assert.deepEqual([row?.effective, row?.decidedBy], ["active", "tools"]);
+  assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, engramSaved: 1, mirrored: 1 });
 });
