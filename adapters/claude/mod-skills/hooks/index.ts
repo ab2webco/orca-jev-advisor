@@ -4218,8 +4218,9 @@ export function register(on: On, options: PluginOptions): void {
   // is, what it is doing, its model, its effort and why. Drawn from the copy
   // in `$.state` (reading it subscribes this band, so every write of the
   // running set redraws it) against `$.agent.list()`, so the count is the
-  // host's. Passes while nothing runs, while a survey holds the band, and
-  // whenever a plugin beneath already drew one: never a second band over it.
+  // host's. Passes while nothing runs and while a survey holds the band. When
+  // a plugin beneath already drew a band (a project's own, like a fleet
+  // band), it stays first and untouched, and these rows stack under it.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const modules = await resolveFeatureModules($, modulesFile)
@@ -4227,7 +4228,6 @@ export function register(on: On, options: PluginOptions): void {
     const ciOn = moduleState(modules, 'ci-watch') !== 'off'
     if (!routerOn && !ciOn) return next(e)
     const beneath = await next(e)
-    if (beneath.type !== 'engine') return beneath
     try {
       const locale = await resolveLocale($)
       let band: SubagentBand | null = null
@@ -4241,7 +4241,8 @@ export function register(on: On, options: PluginOptions): void {
       if (band === null && watching.length === 0) return beneath
       const { Box, Text } = $.ui.resolve(e)
       const agentLines = band === null ? [] : [Text({ bold: true, wrap: 'truncate-end', children: band.heading }), ...band.rows.map((row) => Text({ wrap: 'truncate-end', children: row.why.length > 0 ? [row.text, Text({ dimColor: true, children: row.why })] : row.text }))]
-      return Box({ flexDirection: 'column', children: [...agentLines, ...watching.map((line) => Text({ wrap: 'truncate-end', children: line }))] })
+      const ownLines = [...agentLines, ...watching.map((line) => Text({ wrap: 'truncate-end', children: line }))]
+      return Box({ flexDirection: 'column', children: beneath.type === 'engine' ? ownLines : [beneath, ...ownLines] })
     } catch {
       return beneath
     }
