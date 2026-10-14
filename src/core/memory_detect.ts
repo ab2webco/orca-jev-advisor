@@ -68,6 +68,12 @@ export function engramServerFromTools(tools: readonly { readonly name: string }[
   return servers.has("plugin_engram_engram") ? "plugin_engram_engram" : null;
 }
 
+/** Whether `server` lists `tool`: older Engram (1.12.0) has `mem_save` but no `mem_current_project` or `mem_judge`, so a call is made only to a tool that is there. */
+export function engramHasTool(tools: readonly { readonly name: string }[], server: string, tool: string): boolean {
+  const name = `mcp__${server}__${tool}`;
+  return tools.some((listed) => listed.name === name);
+}
+
 function parseRecord(content: string): Record<string, unknown> | null {
   let parsed: unknown;
   try {

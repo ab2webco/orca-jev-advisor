@@ -188,7 +188,7 @@ import { noteTypingEdit, typingAtSubmit, typingFileName, typingRecord } from '..
 import type { TypingDraft } from '../../../../src/core/typing_lead_time.ts'
 import { CI_RUN_FIELDS, CI_ROW_KEEP_MS, CI_TYPICAL_FIELDS, ciBandRows, ciBashCallFrom, ciFinishedText, ciNoteText, ciWatchDecisionFileName, ciWatchRecord, ciWatchStep, classifyAgentCall, couldStartCiWatch, detectCiTriggers, extendCiWatch, isCiWatchNote, newCiWatchProgress, noteCiLookup, parseCiBandRows, parseCiRuns, parsePrMergeView, parseTypicalSeconds } from '../../../../src/core/ci_watch.ts'
 import type { CiBandRow, CiRun, CiTriggerKind, CiVerdict, CiWatchOutcome, CiWatchProgress, CiWatchRecordInput } from '../../../../src/core/ci_watch.ts'
-import { autoMemoryDir, claudeConfigDir, classifyHealthOutcome, detectMemoryBackend, engramServerFromTools, engramUsable, parseEnabledEngramPlugin, parseUserMcpEngram } from '../../../../src/core/memory_detect.ts'
+import { autoMemoryDir, claudeConfigDir, classifyHealthOutcome, detectMemoryBackend, engramHasTool, engramServerFromTools, engramUsable, parseEnabledEngramPlugin, parseUserMcpEngram } from '../../../../src/core/memory_detect.ts'
 import type { HealthCall, HealthOutcome, MemoryBackendDecision } from '../../../../src/core/memory_detect.ts'
 import { GATE_MAX_TOKENS, GATE_SYSTEM, GATE_TIMEOUT_MS, buildGatePrompt, freeChecks, lastExchange, parseGate, typedPrompt } from '../../../../src/core/memory_decide.ts'
 import { buildDraftPrompt, parseDraft } from '../../../../src/core/memory_draft.ts'
@@ -2984,10 +2984,12 @@ async function engramHealth($: EngineInterface, server: string): Promise<HealthO
  * run (no process per session), so `binary` never decides here.
  */
 async function detectMemory($: EngineInterface, at: 'start' | 'turn', previous: MemoryShadowState | undefined): Promise<MemoryShadowState> {
-  const liveServer = engramServerFromTools(await $.tool.list())
+  const tools = await $.tool.list()
+  const liveServer = engramServerFromTools(tools)
   // A failed start (a cold dial) is asked once more; ok and permission are kept, so the call is not repeated.
   let health: HealthOutcome | null = previous?.health === 'failed' ? null : (previous?.health ?? null)
-  if (liveServer !== null && health === null) health = await engramHealth($, liveServer)
+  // An older Engram (1.12.0) has no mem_current_project: no call, the tools alone decide live.
+  if (liveServer !== null && health === null && engramHasTool(tools, liveServer, 'mem_current_project')) health = await engramHealth($, liveServer)
   let userConfigured = false
   let pluginEnabled = false
   if (liveServer === null) {

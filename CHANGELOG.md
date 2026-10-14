@@ -2,6 +2,10 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.9.1
+
+- **Memory: an older Engram reads as live** (`src/core/memory_detect.ts` `engramHasTool`). The backend health check calls `mem_current_project`, which Engram 1.12.0 does not have; on a partner's Linux machine every one of 309 rows said `configured-down` (`decidedBy: health`) while the main thread saved to Engram in 27 of those turns. The health call is now made only when the server lists `mem_current_project`; otherwise the tools alone decide `live` (`decidedBy: tools`, `permission: unknown`). In Active this stops fallback memory files from being written beside a working Engram.
+
 ## 0.9.0
 
 - **Memory module: Active on the files store** (`src/core/memory_active.ts`, odd/tasks/memory-active-files.md). The registry offers Off, Shadow and Active again; the default stays Shadow. Active writes only where Claude Code's auto-memory folder is the store: no Engram, or Engram configured but not answering. With Engram live, Active keeps measuring exactly as Shadow and writes nothing; every row carries `mode` (the switch) and `effective` (what ran), so that case reads `mode: active, effective: shadow`. Writing to Engram arrives in a later release.

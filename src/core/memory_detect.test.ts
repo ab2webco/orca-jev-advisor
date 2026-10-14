@@ -11,6 +11,7 @@ import {
   claudeConfigDir,
   classifyHealthOutcome,
   detectMemoryBackend,
+  engramHasTool,
   engramServerFromTools,
   engramUsable,
   isPermissionRefusal,
@@ -48,6 +49,31 @@ test("tools: when both spellings are listed, the manual server wins (the engine 
 
 test("tools: no mem_save, no server (search alone is not enough to write)", () => {
   assert.equal(engramServerFromTools([{ name: "mcp__engram__mem_search" }, { name: "Bash" }]), null);
+});
+
+// Engram 1.12.0 (a partner's Linux, 2026-10-13) lists mem_save but has no
+// mem_current_project: calling it always failed, so a working Engram read as
+// configured-down on every row.
+const OLD_ENGRAM_TOOLS = ["mem_capture_passive", "mem_context", "mem_get_observation", "mem_save", "mem_save_prompt", "mem_search", "mem_session_end", "mem_session_start", "mem_session_summary", "mem_suggest_topic_key", "mem_update"].map((tool) => ({ name: `mcp__plugin_engram_engram__${tool}` }));
+
+test("health tool: an Engram that lists mem_current_project can be health-checked", () => {
+  const tools = [{ name: "mcp__engram__mem_save" }, { name: "mcp__engram__mem_current_project" }];
+  assert.equal(engramHasTool(tools, "engram", "mem_current_project"), true);
+});
+
+test("health tool: Engram 1.12.0 has no mem_current_project, so no health call is made", () => {
+  assert.equal(engramServerFromTools(OLD_ENGRAM_TOOLS), "plugin_engram_engram");
+  assert.equal(engramHasTool(OLD_ENGRAM_TOOLS, "plugin_engram_engram", "mem_current_project"), false);
+  assert.equal(engramHasTool(OLD_ENGRAM_TOOLS, "plugin_engram_engram", "mem_judge"), false);
+});
+
+test("health tool: another server's tool does not count", () => {
+  const tools = [{ name: "mcp__engram__mem_save" }, { name: "mcp__plugin_engram_engram__mem_current_project" }];
+  assert.equal(engramHasTool(tools, "engram", "mem_current_project"), false);
+});
+
+test("health tool: with no health call the decision is live by tools alone", () => {
+  assert.deepEqual(detectMemoryBackend({ ...NONE, liveServer: "plugin_engram_engram" }), { backend: "live", decidedBy: "tools", server: "plugin_engram_engram", permission: "unknown" });
 });
 
 test("tools: another server's mem_save is not Engram", () => {

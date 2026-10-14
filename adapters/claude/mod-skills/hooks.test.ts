@@ -5141,6 +5141,20 @@ test("M8 memory shadow: an UPDATE outside the sample makes no fork; a SKIP neith
   }
 });
 
+test("memory detection: an Engram without mem_current_project (1.12.0) gets no health call and reads live by its tools", async () => {
+  const host = memoryHost({ engram: false });
+  host.toolList = ["mem_save", "mem_search", "mem_context", "mem_update"].map((tool) => ({ name: `mcp__plugin_engram_engram__${tool}`, description: "", mcp: true }));
+  host.modelQueue.push(GATE_SKIP);
+  const { handlers, engine } = loadHooks(host);
+  await startSessionWith(handlers, engine);
+  await completeTurn(handlers, engine, { turnId: turnIdWhere(true) });
+  await runTimers(host);
+  assert.deepEqual(host.mcpCalls, [], "no call to a tool the server does not list");
+  const row = memoryRows(host)[0];
+  assert.equal(row?.backend, "live");
+  assert.equal(row?.decidedBy, "tools");
+});
+
 test("M8 memory off: no detection, no Haiku call, no fork, no row; nothing scheduled", async () => {
   const host = memoryHost();
   setModules(host, { memory: "off", "verify-done": "off", steward: "off" });

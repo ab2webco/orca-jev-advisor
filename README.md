@@ -16,6 +16,12 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.9.1
+
+- **Older Engram is recognised as working.** Engram 1.12.0 has no `mem_current_project`, the read-only call the Memory module used to check that Engram answers. The call always failed, so a working Engram was logged as "configured but not answering" on every row, and Active would have written memory files while your agent was saving to Engram too. The module now makes that check only when Engram lists the tool; otherwise the listed Engram tools decide that Engram is live. Updating Engram (`brew upgrade engram`) is still worth it.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.9.0
 
 - **Memory can now save for you (Active).** Until now the Memory module only measured. Set it to Active in Settings → Jev Advisor → General → Modules → Memory and, when you do not use Engram (or Engram is configured but not answering), it saves what is worth remembering into Claude Code's own auto-memory folder for the repository: one file per memory, plus one line in `MEMORY.md`, which Claude Code reads at the start of every session. The default stays Shadow, so nothing changes until you choose Active.
