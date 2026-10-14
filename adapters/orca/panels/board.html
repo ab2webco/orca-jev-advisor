@@ -765,6 +765,7 @@
           'consumption.session': 'Sesión',
           'consumption.weekly': 'Semanal',
           'consumption.resetsAt': 'Reinicia: {{when}}',
+          'consumption.quotaError': 'Orca no pudo leer este cupo: {{reason}}',
           'consumption.claudeMdSize': 'El CLAUDE.md global pesa unos {{tokens}} tokens estimados.',
           'consumption.claudeMdSizeSuggestion': 'Considera acortarlo para ahorrar tokens en cada llamada.',
           'consumption.mcpServerCount': 'Tienes {{count}} servidor(es) MCP en el ~/.claude.json global; cada cuenta de Orca puede tener su propia lista.',
@@ -1029,6 +1030,7 @@
           'consumption.session': 'Session',
           'consumption.weekly': 'Weekly',
           'consumption.resetsAt': 'Resets: {{when}}',
+          'consumption.quotaError': 'Orca could not read this quota: {{reason}}',
           'consumption.claudeMdSize': 'The global CLAUDE.md is about {{tokens}} estimated tokens.',
           'consumption.claudeMdSizeSuggestion': 'Consider trimming it to save tokens on every call.',
           'consumption.mcpServerCount': 'You have {{count}} MCP server(s) in the global ~/.claude.json; each Orca account can have its own list.',
@@ -2122,7 +2124,8 @@
             barRow(t('consumption.session'), account.sessionUsedPercent, 'v1') +
             barRow(t('consumption.weekly'), account.weeklyUsedPercent, 'v3') +
           '</div>' +
-          line(t('consumption.resetsAt', { when: resetText || t('consumption.na') }))
+          line(t('consumption.resetsAt', { when: resetText || t('consumption.na') })) +
+          (typeof account.error === 'string' && account.error.length > 0 ? line(t('consumption.quotaError', { reason: account.error })) : '')
       }
 
       /**

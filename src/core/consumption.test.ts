@@ -194,6 +194,18 @@ test("parseQuota: an account that genuinely has fableWeekly keeps it", () => {
   assert.deepEqual(result.accounts[0]?.fableWeekly, { usedPercent: 5, resetsAt: 456 });
 });
 
+test("parseQuota: an account's error reason is kept when it is a string, and absent otherwise", () => {
+  const result = parseQuota({
+    accounts: [
+      { id: "a1", status: "error", sessionUsedPercent: null, weeklyUsedPercent: null, resetsAt: null, error: "waiting for the live terminal" },
+      { id: "a2", status: "ok", sessionUsedPercent: 1, weeklyUsedPercent: 2, resetsAt: null, error: 42 },
+    ],
+    checkedAt: null,
+  });
+  assert.equal(result.accounts[0]?.error, "waiting for the live terminal");
+  assert.equal("error" in result.accounts[1]!, false);
+});
+
 test("parseQuota: a malformed field on one account degrades that field to null, never throws, never drops the account", () => {
   const result = parseQuota({
     accounts: [{ id: "a1", status: 123, sessionUsedPercent: "not-a-number", weeklyUsedPercent: null, resetsAt: null }],

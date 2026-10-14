@@ -2296,6 +2296,27 @@ test('a populated consumptionSummary renders real per-model shares, quota bars, 
   }
 })
 
+// 0.11.1: the owner saw "error" on a quota row with no reason; Orca's own
+// reason (`orca account list --json` quota.error) is shown under it.
+test('a quota account in error shows Orca\'s reason', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({
+    consumptionSummary: {
+      ...POPULATED_CONSUMPTION,
+      quota: {
+        accounts: [{ id: 'dddddddd-0000-4000-8000-000000000004', email: 'someone@example.com', status: 'error', sessionUsedPercent: null, weeklyUsedPercent: null, resetsAt: null, error: 'Claude usage refresh is waiting for the live Claude terminal to rotate its credentials.' }],
+        checkedAt: new Date().toISOString()
+      }
+    }
+  })
+  try {
+    const body = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(body, /Orca could not read this quota: Claude usage refresh is waiting for the live Claude terminal to rotate its credentials\./)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 // odd/tasks/board-tabs-and-names.md T1: the owner read "Cuenta aaaaaaaa"
 // on every quota row. The worker now joins each account's email from
 // `orca account list --json` (main.mjs's publishConsumptionSummary); the

@@ -356,12 +356,14 @@ const ACCOUNT_LIST_SHARE_MS = 30 * 1000
 const sharedAccountList = shareRecentAccountList(fetchAccountQuotas, ACCOUNT_LIST_SHARE_MS)
 
 /** One raw CLI account -> the quota-only shape this plugin mirrors: id,
- *  status, session/weekly usedPercent, the weekly reset time, and
- *  fableWeekly ONLY when the CLI actually reported one -- never a
+ *  status, session/weekly usedPercent, the weekly reset time, Orca's error
+ *  reason and fableWeekly ONLY when the CLI actually reported one -- never a
  *  fabricated `{usedPercent: 0}` for an account that has none. Never the
  *  email, never `auth`, never a session/auth token: those never leave this
  *  function. Tolerant of a missing/malformed quota sub-object -- an account
  *  the CLI could not check yet reads as all-null rather than throwing. */
+const QUOTA_ERROR_MAX_CHARS = 160
+
 function accountQuotaEntry (account) {
   const quota = isRecord(account.quota) ? account.quota : {}
   const session = isRecord(quota.session) ? quota.session : {}
@@ -373,6 +375,9 @@ function accountQuotaEntry (account) {
     weeklyUsedPercent: typeof weekly.usedPercent === 'number' ? weekly.usedPercent : null,
     resetsAt: typeof weekly.resetsAt === 'number' ? weekly.resetsAt : null
   }
+  // Orca's own reason when it could not read the quota, shown on the board
+  // under the account (0.11.1). Cut: it is a status message, never a payload.
+  if (typeof quota.error === 'string' && quota.error.trim().length > 0) entry.error = quota.error.trim().slice(0, QUOTA_ERROR_MAX_CHARS)
   if (isRecord(quota.fableWeekly)) {
     entry.fableWeekly = {
       usedPercent: typeof quota.fableWeekly.usedPercent === 'number' ? quota.fableWeekly.usedPercent : null,

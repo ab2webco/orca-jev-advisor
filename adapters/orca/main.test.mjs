@@ -1982,6 +1982,18 @@ test('mirrorAccountQuota: writes id/status/session/weekly/fableWeekly only, drop
 
   assert.equal(second.status, 'error')
   assert.deepEqual(second.fableWeekly, { usedPercent: 0, resetsAt: 1790593200000 })
+  // 0.11.1: the board says why a quota could not be read, in Orca's words.
+  assert.equal(second.error, 'Rate limited by the token endpoint')
+  assert.equal('error' in first, false, 'a null error is not mirrored')
+})
+
+test('mirrorAccountQuota: an error reason is cut to 160 characters', async () => {
+  let savedPayload = null
+  await mirrorAccountQuota(fakeOrca(), {
+    fetchAccountQuotas: fakeAccountQuotaFetch([{ provider: 'claude', id: 'a1', quota: { status: 'error', error: 'x'.repeat(400) } }]),
+    saveQuota: async (payload) => { savedPayload = payload; return { ok: true } }
+  })
+  assert.equal(savedPayload.accounts[0].error.length, 160)
 })
 
 test('mirrorAccountQuota: a CLI failure is handled without throwing, without writing, and is logged once for repeats of the same detail', async () => {

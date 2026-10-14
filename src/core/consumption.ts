@@ -244,6 +244,8 @@ export interface QuotaAccount {
   readonly resetsAt: number | null;
   /** Present only when the source object actually had one -- see main.mjs's accountQuotaEntry, the writer this mirrors on the read side. Never fabricated as null-but-present. */
   readonly fableWeekly?: QuotaAccountFableWeekly;
+  /** Orca's reason when it could not read this quota; present only when the mirror carried one. */
+  readonly error?: string;
 }
 
 export interface ParsedQuota {
@@ -283,6 +285,7 @@ function parseQuotaAccount(raw: unknown): QuotaAccount | null {
     weeklyUsedPercent: numberOrNull(raw.weeklyUsedPercent),
     resetsAt: numberOrNull(raw.resetsAt),
     ...(fableWeekly !== undefined ? { fableWeekly } : {}),
+    ...(typeof raw.error === "string" && raw.error.length > 0 ? { error: raw.error } : {}),
   };
 }
 
