@@ -2787,7 +2787,7 @@ test('W4 #4: token usage says how much, per model and in total, and folds models
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /In total: 7,701,300 tokens in 200 steps\./)
     assert.match(text, /Sonnet 5 · 150 step\(s\) · 6,000,000 tokens/)
-    assert.match(text, /2 more models with under 2% of the steps: 2 steps · 1,300 tokens/)
+    assert.match(text, /Other models with under 2% of the steps \(2\): 2 step\(s\) · 1,300 tokens/)
     assert.doesNotMatch(text, /some-gateway-model/)
     assert.deepEqual(errors, [])
   } finally {
@@ -2974,6 +2974,27 @@ test('W6 #15: the interventions line counts only what the table shows; advice to
     const day = SCENARIOS.ready.measurementsSummary.gate.windows.day
     assert.doesNotMatch(text.split('\n')[0], /avisadas/)
     assert.match(text, new RegExp(`${day.byVerdict.advise} veces se avisó al modelo sin detener a nadie`))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// odd/tasks/board-global-window.md W7: what the real-data screenshots showed.
+test('W7: a share that is not zero never prints 0%, a router share with no switch prints no line, and the A/B verdicts are words', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const day = { ...POPULATED_USAGE_DAY, byModel: [{ model: 'claude-sonnet-5', stepCount: 42, tokens: 100000, inputShare: 0.0002, cacheReadShare: 0.9, cacheWriteShare: 0.0948, outputShare: 0.005 }], stepCount: 42 }
+  const quiet = activityProject({ project: 'measured-only', judged: 1, gateOutcomes: { allowed: 1, advised: 0, asked: 0, blocked: 0 }, router: { applied: 0, savedEstimate: null } })
+  const { browser, page, errors } = await openBoardPanel({ ...SCENARIOS.ready, ...activitySummary([quiet]), consumptionSummary: { ...POPULATED_CONSUMPTION, usage: { ...windowed(day), corruptLines: 0 } } }, 'es')
+  try {
+    const speed = await page.evaluate(() => document.getElementById('speed-body').innerText)
+    assert.match(speed, /Jev «permitido» \/ modelo «preguntó»/)
+    await page.click('#tab-consumption')
+    const consumption = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(consumption, /<0,1%/)
+    assert.doesNotMatch(consumption, /\n0%/)
+    await page.click('#tab-activity')
+    const activity = await page.evaluate(() => document.getElementById('card-projects').innerText)
+    assert.doesNotMatch(activity, /0 cambio/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

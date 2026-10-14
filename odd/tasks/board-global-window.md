@@ -205,8 +205,27 @@ Retention is out of scope here; worth a follow-up.
   pills drawn in --ring. #15 "W6 #15" (RED first): the line above the table
   counts only asked and blocked; the advice to the model is its own
   sentence.
-- [ ] W7 Evidence: re-run the audit render against the owner's real
+- [x] W7 Evidence: re-run the audit render against the owner's real
   `storage.json`, 4 tabs at 1440 and 390, dark (8 images), and read each.
+  What was real: a copy of the owner's `storage.json` (2026-10-14 00:12)
+  with the three summary keys replaced by this branch's readers run on a
+  copy of the owner's real cache (`ORCA_SUPERVISOR_CACHE_DIR` pointed at the
+  copy; mod-tools logs and the memory spool left out, the readers never read
+  them); module states and quota taken from the stored values. Not real:
+  nothing invented; the live board entries are the stored snapshot, so every
+  row reads "hace 2 h" or older. Images (session scratchpad,
+  `board-audit/after/`, not committed): 1440 and 390 for Gate, Actividad,
+  Consumo, Módulos, dark, es-ES. Checks in the same run: scrollWidth ==
+  clientWidth on every tab at 1440, 390 and 320; 0 clipped `.hrow .hl`
+  labels at 390 and 320; no page errors.
+  Fixes from reading them, panels spec "W7: ..." (RED first): a non-zero
+  share printed "0%" (now "<0,1%"); a project whose router decisions were
+  all measured printed "0 cambio(s) de modelo"; the A/B disagreement showed
+  raw "allow"/"ask"; "1 modelos más ... 1 pasos" plural; the advice sentence
+  touched the interventions table.
+  Storage, the same copy: 351,974 bytes before, 305,420 after (gate
+  windows +2 KB, consumption +3.5 KB, module windows +2 KB, Actividad
+  -57 KB).
 
 ## Acceptance
 - Every card heading names the window it shows.

@@ -776,7 +776,7 @@
           'consumption.recItemMcp': '{{count}} servidor(es) MCP en el ~/.claude.json global',
           'consumption.usageTotal': 'En total: {{tokens}} tokens en {{steps}} pasos.',
           'consumption.modelTokens': '{{n}} tokens',
-          'consumption.smallModels': '{{n}} modelos más con menos del 2% de los pasos: {{steps}} pasos · {{tokens}} tokens',
+          'consumption.smallModels': 'Otros modelos con menos del 2% de los pasos ({{n}}): {{steps}} · {{tokens}} tokens',
           'consumption.longSessionWarning': 'El contexto promedio por paso principal es alto ({{tokens}} tokens); considera usar /clear entre tareas.',
           'consumption.longSessionOk': 'El contexto promedio por paso principal está en un rango sano ({{tokens}} tokens).',
           'consumption.subagentShareWarning': 'Los subagentes consumen el {{percent}}% del uso; considera reducir su alcance.',
@@ -1040,7 +1040,7 @@
           'consumption.recItemMcp': '{{count}} MCP server(s) in the global ~/.claude.json',
           'consumption.usageTotal': 'In total: {{tokens}} tokens in {{steps}} steps.',
           'consumption.modelTokens': '{{n}} tokens',
-          'consumption.smallModels': '{{n}} more models with under 2% of the steps: {{steps}} steps · {{tokens}} tokens',
+          'consumption.smallModels': 'Other models with under 2% of the steps ({{n}}): {{steps}} · {{tokens}} tokens',
           'consumption.longSessionWarning': 'Average context per main step is high ({{tokens}} tokens); consider using /clear between tasks.',
           'consumption.longSessionOk': 'Average context per main step is in a healthy range ({{tokens}} tokens).',
           'consumption.subagentShareWarning': 'Subagents consume {{percent}}% of usage; consider narrowing their scope.',
@@ -1386,6 +1386,10 @@
           .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
       }
+      /** A 0..1 fraction as an unrounded 0-100 value (null stays null), so percentText can tell a sliver from a zero. */
+      function percentOf (fraction) {
+        return fraction === null || fraction === undefined ? null : fraction * 100
+      }
       function pct (fraction) {
         return fraction === null || fraction === undefined ? null : Math.round(fraction * 1000) / 10
       }
@@ -1421,7 +1425,13 @@
       }
       /** A 0-100 value as a percentage with at most one decimal. */
       function percentText (value) {
+        // W7: a share that is not zero never reads as 0%.
+        if (value > 0 && value < 0.05) return '<' + num(0.1) + '%'
         return num(Math.round(value * 10) / 10) + '%'
+      }
+      /** A gate verdict as a word in the board's language; an unknown one keeps its raw value. */
+      function verdictWord (verdict) {
+        return ['allow', 'ask', 'deny'].indexOf(verdict) !== -1 ? t('verdict.' + verdict) : verdict === 'advise' ? t('stats.recentAdvise') : String(verdict)
       }
       function usd (amount) {
         var value = typeof amount === 'number' && isFinite(amount) ? Math.abs(amount) : 0
@@ -1458,7 +1468,7 @@
           return '<li class="' + s.cls + '"><i class="sw"></i>' +
             '<span class="lv">' + esc(num(s.value)) + '</span>' +
             '<span class="ll">' + esc(s.label) + '</span>' +
-            '<span class="lp">' + percentText(share(s.value, total)) + '</span></li>'
+            '<span class="lp">' + percentText(total > 0 ? (s.value / total) * 100 : 0) + '</span></li>'
         }).join('') + '</ul>'
       }
 
@@ -1751,7 +1761,7 @@
         // advice to the model is its own sentence, never a phantom column.
         var sub = line(t('interv.sub', {
           ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), total: num(w.totalDecisions || 0)
-        }), 'kpi-sub') + ((verdict.advise || 0) > 0 ? line(t('interv.advised', { n: num(verdict.advise) })) : '')
+        }), 'kpi-sub') + ((verdict.advise || 0) > 0 ? line(t('interv.advised', { n: num(verdict.advise) }), 'kpi-sub') : '')
         if (rows.length === 0) {
           el('interventions-body').innerHTML = sub + line(t('interv.none'), 'empty-line')
           return
@@ -1840,7 +1850,7 @@
           parts.push('<p class="cmp-foot">' + esc(t('speed.disagreementsHeading')) + ' ' +
             disagreements.map(function (d) {
               return esc(t('speed.disagreement', {
-                count: String(d.count), jev: String(d.jevVerdict), model: String(d.bigModelVerdict)
+                count: num(d.count), jev: verdictWord(d.jevVerdict), model: verdictWord(d.bigModelVerdict)
               }))
             }).join(' · ') + '</p>')
         }
@@ -2006,7 +2016,7 @@
       function barRow (label, percent, cls) {
         var rounded = (percent === null || percent === undefined || !isFinite(percent)) ? null : Math.round(percent * 10) / 10
         var widthPercent = rounded === null ? 0 : Math.min(100, Math.max(0, rounded))
-        var valueText = rounded === null ? t('consumption.na') : percentText(rounded)
+        var valueText = rounded === null ? t('consumption.na') : percentText(percent)
         return '<div class="hrow v1">' +
           '<span class="hl" title="' + esc(label) + '">' + esc(label) + '</span>' +
           '<span class="htrack"><span class="hfill ' + (cls || 'v1') + '" style="width:' + widthPercent + '%"></span></span>' +
@@ -2074,10 +2084,10 @@
         return '<p class="kpi-sub"><b title="' + esc(modelShare.model) + '">' + esc(friendlyModelName(modelShare.model)) + '</b> · ' +
           esc(t('consumption.steps', { n: num(modelShare.stepCount) }) + tokens) + '</p>' +
           '<div class="hrows">' +
-            barRow(t('consumption.input'), pct(modelShare.inputShare), 'v1') +
-            barRow(t('consumption.cacheRead'), pct(modelShare.cacheReadShare), 'v2') +
-            barRow(t('consumption.cacheWrite'), pct(modelShare.cacheWriteShare), 'v3') +
-            barRow(t('consumption.output'), pct(modelShare.outputShare), 'v1') +
+            barRow(t('consumption.input'), percentOf(modelShare.inputShare), 'v1') +
+            barRow(t('consumption.cacheRead'), percentOf(modelShare.cacheReadShare), 'v2') +
+            barRow(t('consumption.cacheWrite'), percentOf(modelShare.cacheWriteShare), 'v3') +
+            barRow(t('consumption.output'), percentOf(modelShare.outputShare), 'v1') +
           '</div>'
       }
 
@@ -2335,7 +2345,7 @@
           if (small.length > 0) {
             parts.push(line(t('consumption.smallModels', {
               n: num(small.length),
-              steps: num(small.reduce(function (acc, m) { return acc + (m.stepCount || 0) }, 0)),
+              steps: t('consumption.steps', { n: num(small.reduce(function (acc, m) { return acc + (m.stepCount || 0) }, 0)) }),
               tokens: num(small.reduce(function (acc, m) { return acc + (m.tokens || 0) }, 0))
             })))
           }
@@ -2393,7 +2403,8 @@
        *  is null when the project has no router decision in the window
        *  (never a fake zero row), in which case the line is omitted. */
       function activityRouterText (router) {
-        if (!router) return ''
+        // W7: a project whose router decisions were all measured only switched nothing.
+        if (!router || ((router.applied || 0) === 0 && (router.savedEstimate === null || router.savedEstimate === undefined))) return ''
         var estimate = router.savedEstimate
         if (estimate === null || estimate === undefined) return t('activity.routerNoEstimate', { switches: num(router.applied) })
         return t(estimate < 0 ? 'activity.routerCost' : 'activity.routerSaved', { switches: num(router.applied), amount: usd(estimate) })
