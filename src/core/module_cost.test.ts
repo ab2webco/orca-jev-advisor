@@ -465,3 +465,33 @@ test("report: what memory in Active wrote, from its decision and replay rows; a 
   const text = formatModuleCostReport(report).join("\n");
   assert.match(text, /memory \(Active, its log\): 2 turns wrote the files store; 2 files written, 1 rewritten \(1 backups\), 3 saves spooled, 1 replayed at a session start, 1 failed writes, 0 refused updates, 1 passes held by the lock\./);
 });
+
+test("E5 report: what memory in Active sent to Engram, judged and replayed; judge tokens join the Haiku tokens", () => {
+  const tally = newTranscriptTally();
+  tally.prompts = 10;
+  const base = {
+    at: AT, mode: "active", effective: "active", backend: "live", decidedBy: "tools+health", permission: "ok", gate: "update", gateTokens: { input: 1000, output: 2, cacheRead: 0, cacheWrite: 0 },
+    fork: "drafted", forkTokens: { input: 10, output: 300, cacheRead: 150_000, cacheWrite: 0 }, wouldSave: { user: 0, feedback: 1, project: 0, reference: 0 }, judgeBuilds: 0, mainEngramSaves: 0, mainJudges: 0, mainAutoMemoryWrites: 0, agreement: "module-only",
+  };
+  const report = buildModuleCostReport({
+    window: WINDOW,
+    tally,
+    hooks: [],
+    rows: {
+      gate: [], skills: [], tools: [], router: [], models: [], steward: [], verifyDone: [], ciWatch: [],
+      memory: [
+        { ...base, spooled: 2, engramSaved: 2, mirrored: 1, judged: 2, judgePending: 1, judgeFailed: 1, judgeTokens: { input: 900, output: 60 } },
+        { ...base, droppedMainSaved: 1, engramFailed: 1, judgeUnavailable: 2 },
+        { at: AT, event: "replay", mode: "active", effective: "active", backend: "live", items: 2, replayed: 2, superseded: 0, engramSaved: 2, replayedToEngram: 2, fallbackRemoved: 1, fallbackMirrored: 1 },
+      ],
+    },
+    audit: { times: new Map(), firstMs: null, lastMs: null },
+  });
+  assert.deepEqual(
+    [report.memory.engramSaved, report.memory.engramFailed, report.memory.mirrored, report.memory.judged, report.memory.judgePending, report.memory.judgeFailed, report.memory.judgeUnavailable, report.memory.droppedMainSaved, report.memory.replayedToEngram, report.memory.fallbackRemoved, report.memory.fallbackMirrored],
+    [4, 1, 1, 2, 1, 1, 2, 1, 2, 1, 1],
+  );
+  assert.deepEqual(report.memory.haikuTokens, { input: 2900, output: 64 }, "two gates and the judges");
+  const text = formatModuleCostReport(report).join("\n");
+  assert.match(text, /memory \(Active, Engram\): 4 saved to Engram, 1 failed, 1 mirrored into files; conflicts: 2 judged, 1 left pending, 1 judge failed, 2 with no mem_judge; 1 drafts dropped because the main thread saved in the same turn; 2 fallback copies replayed into Engram \(1 removed, 1 turned into mirrors\)\./);
+});

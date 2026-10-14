@@ -708,6 +708,18 @@ export interface MemoryCost {
   readonly writeFailures: number;
   readonly dropped: number;
   readonly lockHeld: number;
+  /** Active with Engram live (odd/tasks/memory-active-engram.md), from the decision and replay rows. */
+  readonly engramSaved: number;
+  readonly engramFailed: number;
+  readonly mirrored: number;
+  readonly judged: number;
+  readonly judgePending: number;
+  readonly judgeFailed: number;
+  readonly judgeUnavailable: number;
+  readonly droppedMainSaved: number;
+  readonly replayedToEngram: number;
+  readonly fallbackRemoved: number;
+  readonly fallbackMirrored: number;
 }
 
 function memoryCost(tally: TranscriptTally, rows: readonly unknown[], window: TimeWindow): MemoryCost {
@@ -754,6 +766,17 @@ function memoryCost(tally: TranscriptTally, rows: readonly unknown[], window: Ti
     writeFailures: log.writeFailures,
     dropped: log.dropped,
     lockHeld: log.lockHeld,
+    engramSaved: log.engramSaved,
+    engramFailed: log.engramFailed,
+    mirrored: log.mirrored,
+    judged: log.judged,
+    judgePending: log.judgePending,
+    judgeFailed: log.judgeFailed,
+    judgeUnavailable: log.judgeUnavailable,
+    droppedMainSaved: log.droppedMainSaved,
+    replayedToEngram: log.replayedToEngram,
+    fallbackRemoved: log.fallbackRemoved,
+    fallbackMirrored: log.fallbackMirrored,
   };
 }
 
@@ -939,6 +962,7 @@ export function formatModuleCostReport(report: ModuleCostReport): string[] {
   if (byTool !== "") lines.push(`memory Engram calls by tool: ${byTool}.`);
   lines.push(`memory (module, its log): ${memory.gates} Haiku gates (${fixed(memory.gatesPerPrompt)} per prompt, ${memory.gateFailures} failed, ${memory.updates} UPDATE), ${memory.forks} forks (${fixed(memory.forksPerPrompt)} per prompt), ${memory.judgeBuilds} judge builds (${fixed(memory.judgeBuildsPerPrompt)} per prompt, none asked); Haiku tokens ${memory.haikuTokens.input} in / ${memory.haikuTokens.output} out; fork tokens ${memory.forkTokens.input} in / ${memory.forkTokens.output} out / ${memory.forkTokens.cacheRead} cache read.`);
   lines.push(`memory (Active, its log): ${memory.activeDecisions} turns wrote the files store; ${memory.written} files written, ${memory.updated} rewritten (${memory.backups} backups), ${memory.spooled} saves spooled, ${memory.replayed} replayed at a session start, ${memory.writeFailures} failed writes, ${memory.dropped} refused updates, ${memory.lockHeld} passes held by the lock.`);
+  lines.push(`memory (Active, Engram): ${memory.engramSaved} saved to Engram, ${memory.engramFailed} failed, ${memory.mirrored} mirrored into files; conflicts: ${memory.judged} judged, ${memory.judgePending} left pending, ${memory.judgeFailed} judge failed, ${memory.judgeUnavailable} with no mem_judge; ${memory.droppedMainSaved} drafts dropped because the main thread saved in the same turn; ${memory.replayedToEngram} fallback copies replayed into Engram (${memory.fallbackRemoved} removed, ${memory.fallbackMirrored} turned into mirrors).`);
   lines.push(`Agent spawns: ${report.agentSpawns.agentCalls} Agent calls; ${report.agentSpawns.reclassifications} agent-model decisions; ${report.agentSpawns.routerSubagentRows} router subagent rows.`);
   lines.push("");
   lines.push(`Worker (audit log ${iso(report.audit.firstMs)} to ${iso(report.audit.lastMs)}, ${fixed(report.audit.spanHours, 1)} h; board CLI cache refreshes ${fixed(report.audit.boardCliRefreshesPerHour, 1)}/h):`);
