@@ -40,19 +40,19 @@ Out: the M11 `tool.call` intercept and prompt section, tidy, deletes, the band a
 
 Strict TDD: a test written and observed failing, then green, then refactor and one Conventional Commit. A box is ticked only with observed proof.
 
-- [ ] E0 Task file (this file).
-- [ ] E1 Pure core:
+- [x] E0 Task file (this file).
+- [x] E1 Pure core:
   - the spool item keeps `candidates[]` (0.9.0 items read as none);
   - an older Engram's plain `Memory saved:` answer is a success;
   - a fallback copy is removed only when its frontmatter is the item's (`originSessionId` read by `parseFrontmatter`);
   - `effectiveMemoryMode` is Active with Engram usable and Shadow when the check was refused;
   - `mem_get_observation`'s envelope is read;
   - the row, the replay row and the weekly summary carry the new counts.
-- [ ] E2 Mod wiring, the turn: spool, `mem_save`, mirror, `done/`; a failure or a timeout gives the fallback file; the double-save drop; judging (recorded, pending, unavailable, failed). Tests in `hooks.test.ts` with the fake host.
-- [ ] E3 Mod wiring, the replay into Engram: the fallback copy becomes a mirror or is removed after a backup; a file that is not the item's own copy is left; a second replay changes nothing.
-- [ ] E4 Card (es/en): per backend, what Active does now; the week's Engram figures and the pending line; `panels.spec.mjs` cases; screenshots.
-- [ ] E5 `measure-module-cost` memory line: the Engram counts.
-- [ ] E6 Release 0.10.0: README and CHANGELOG, version, `odd/qa/qa-0.10.0.md`.
+- [x] E2 Mod wiring, the turn: spool, `mem_save`, mirror, `done/`; a failure or a timeout gives the fallback file; the double-save drop; judging (recorded, pending, unavailable, failed). Tests in `hooks.test.ts` with the fake host.
+- [x] E3 Mod wiring, the replay into Engram: the fallback copy becomes a mirror or is removed after a backup; a file that is not the item's own copy is left; a second replay changes nothing.
+- [x] E4 Card (es/en): per backend, what Active does now; the week's Engram figures and the pending line; `panels.spec.mjs` cases; screenshots.
+- [x] E5 `measure-module-cost` memory line: the Engram counts.
+- [x] E6 Release 0.10.0: README and CHANGELOG, version, `odd/qa/qa-0.10.0.md`.
 
 ## Acceptance criteria
 
@@ -70,3 +70,15 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
 ## Live check (later, by the lead, against a scratch Engram via `ENGRAM_DATA_DIR`)
 
 Listed in `odd/qa/qa-0.10.0.md`.
+
+## Outcome
+
+- `npm run typecheck` exit 0; `npm test` 4329/4329; `npm run test:panels` 242/242.
+- The Memory card was photographed in Active with Engram live and a week of Engram figures: English at 1440 and 390, Spanish at 390, light. No colour was added, so there is no dark shot. The images are kept out of the repository.
+- Decisions taken while building:
+  - The judge keeps the owner's exception from `odd/tasks/memory-shadow.md` (`decideVerdict`): a confident `supersedes` between two `policy` observations is recorded, not left pending.
+  - `mem_save` gets no `project`: Engram detects it from its working directory, the same answer `mem_current_project` gives.
+  - The Engram call clock is 10 s (`MEMORY_ENGRAM_TIMEOUT_MS`), longer than the 3 s health check, since a save also runs Engram's candidate search.
+  - A candidate whose text cannot be read (no `mem_get_observation`, or the read failed) is not judged on its title alone: it is counted `judgeFailed` and stays pending in Engram.
+  - On a double-save turn the fork still runs, so the drop is measured.
+  - The card's pending figure is `judgePending + judgeFailed`: both stay pending in Engram.

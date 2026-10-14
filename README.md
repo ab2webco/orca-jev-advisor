@@ -16,6 +16,19 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.10.0
+
+- **Memory in Active now saves to Engram.** In 0.9.0, Active wrote only when you had no Engram; with Engram live it just measured. Now, with the Memory module on Active and Engram live, what is worth remembering is saved to Engram.
+  - **Rules and preferences are also kept as files.** Corrections about how to work (feedback) and facts about you (user) are copied into Claude Code's auto-memory folder, with one line in `MEMORY.md`, so every new session reads them without a search. Project facts and references go to Engram only.
+  - **Conflicts.** When Engram says a new memory may clash with an older one, Haiku reads only those two memories (never your conversation) and records the clear cases in Engram. The rest stay pending in Engram, where your agent sees them; nothing is lost. The card shows how many were left pending this week.
+  - **No double saves.** If your agent already saved to Engram in a turn, the module saves nothing of its own for that turn.
+  - **If Engram fails** (it does not answer, errors, or takes more than 10 seconds), the memory is written to the auto-memory folder as a file marked `pending_engram`, as in 0.9.0. The next session that finds Engram working passes it to Engram, then turns the file into a copy (rules and preferences) or removes it (project facts and references), after a byte-for-byte backup in `.memory-backup/`. A file you changed in the meantime is left alone.
+  - **If Engram's permission is refused,** Active keeps measuring and the card tells you to allow Engram's tools.
+  - **Cost.** Unchanged per turn (one Haiku call, one fork per turn marked for an update). Each conflict adds one Engram read, one small Haiku call and one Engram verdict. Haiku calls and forks count against your Max plan quota.
+  - The default stays Shadow, so nothing changes until you choose Active.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.9.1
 
 - **Older Engram is recognised as working.** Engram 1.12.0 has no `mem_current_project`, the read-only call the Memory module used to check that Engram answers. The call always failed, so a working Engram was logged as "configured but not answering" on every row, and Active would have written memory files while your agent was saving to Engram too. The module now makes that check only when Engram lists the tool; otherwise the listed Engram tools decide that Engram is live. Updating Engram (`brew upgrade engram`) is still worth it.
