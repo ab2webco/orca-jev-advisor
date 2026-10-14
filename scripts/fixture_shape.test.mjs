@@ -172,12 +172,13 @@ test('the empty fixture is exactly what read-measurements.mjs publishes for an e
     const real = JSON.parse(stdout)
     // `since` on the day and week windows is now minus 24h / 7d: it moves
     // with the clock, so it is the one field a literal cannot match.
+    // W1 (odd/tasks/board-global-window.md): so do `sinceMs` and
+    // `coverageSinceMs`, on the gate's windows and on the skills mod's.
+    const unbound = (windows) => Object.fromEntries(Object.entries(windows).map(([key, w]) => [key, { ...w, since: null, sinceMs: null, coverageSinceMs: null }]))
     const withoutBounds = (summary) => ({
       ...summary,
-      gate: {
-        ...summary.gate,
-        windows: Object.fromEntries(Object.entries(summary.gate.windows).map(([key, w]) => [key, { ...w, since: null }])),
-      },
+      gate: { ...summary.gate, windows: unbound(summary.gate.windows) },
+      modSkills: { ...summary.modSkills, windows: unbound(summary.modSkills.windows) },
     })
     assert.deepEqual(withoutBounds(SCENARIOS.empty.measurementsSummary), withoutBounds(real))
   } finally {
@@ -261,4 +262,57 @@ test('the fixtures\' integration status carries the modules the real installer r
   } finally {
     rmSync(home, { recursive: true, force: true })
   }
+})
+
+// odd/tasks/board-global-window.md W1: the consumption and activity readers
+// now publish one summary per board window. Their fixtures are held to the
+// keys the real readers publish, so a renamed or dropped field fails here.
+async function realSidecar (script, writeRows) {
+  const home = mkdtempSync(join(tmpdir(), 'orca-fixture-shape-windows-'))
+  try {
+    const cache = join(home, '.cache', 'orca-supervisor')
+    const config = join(home, '.config', 'orca-supervisor')
+    mkdirSync(cache, { recursive: true })
+    writeRows(cache)
+    const env = { ...process.env, HOME: home, USERPROFILE: home, ORCA_SUPERVISOR_CACHE_DIR: cache, ORCA_SUPERVISOR_CONFIG_DIR: config, NODE_TEST_CONTEXT: undefined }
+    const { stdout } = await execFileAsync(process.execPath, ['--experimental-strip-types', '--no-warnings', join(ROOT, 'adapters', 'orca', script)], { env, cwd: ROOT })
+    return JSON.parse(stdout)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+function seedWindowedLogs (cache) {
+  const at = new Date(Date.now() - 60 * 60 * 1000).toISOString()
+  const hour = at.slice(0, 13)
+  const line = (row) => `${JSON.stringify(row)}\n`
+  writeFileSync(join(cache, 'gate-decisions.jsonl'), line({ type: 'gate-decision', id: 'g1', at, project: 'p', commandFamily: 'git', source: 'jev', verdict: 'ask', latencyMs: 400, pluginVersion: '0.11.0' }))
+  writeFileSync(join(cache, `turn-usage-${hour}.jsonl`), line({ at, agent: 'main', model: 'claude-sonnet-5-5', effort: null, input: 1, output: 1, cacheRead: 1, cacheWrite: 1, stopReason: 'end_turn', account: 'home', project: 'p' }))
+  writeFileSync(join(cache, `model-router-decisions-${hour}.jsonl`), line({ at, account: 'home', project: 'p', point: 'stage', tier: 'simple', applied: true, proposed: 'claude-sonnet-5-5', switchCost: 0.01, stepSaving: 0.02 }))
+  writeFileSync(join(cache, `context-steward-decisions-${hour}.jsonl`),
+    line({ at, account: 'home', project: 'p', mode: 'active', contextBefore: 150000, decision: 'boundary', confidence: 0.9, compact: true, applied: true, contextAfter: 30000 }) +
+    // A measured pre-cold fire, so preCold's own keys are compared too.
+    line({ at, account: 'home', project: 'p', sessionId: 's', trigger: 'pre-cold', decision: 'pre-cold', mode: 'measure', contextBefore: 150000, confidence: 0.9, compact: true, applied: false, contextAfter: null, wouldFire: 'pre-cold' }))
+  writeFileSync(join(cache, `typing-${hour}.jsonl`), line({ type: 'typing', at, sessionId: 's', origin: 'composer', kind: 'composer', gapMs: 900, edits: 3 }))
+}
+
+test('the windowed consumption fixtures carry only keys read-consumption.mjs really publishes', SKIP_NO_PLAYWRIGHT, async () => {
+  const real = await realSidecar('read-consumption.mjs', seedWindowedLogs)
+  assert.equal(real.ok, true, JSON.stringify(real))
+  const realPaths = new Set(keyPaths(real))
+  for (const name of ['consumption-ready', 'router-ready', 'skills-ready']) {
+    const fixture = SCENARIOS[name].consumptionSummary
+    // The windowed parts only: quota and recommendations come from this machine's config, and checkedAt from the worker.
+    const windowed = /^(usage|modelRouter|steward|typing)\./
+    const missing = keyPaths(fixture).filter((path) => windowed.test(path) && !realPaths.has(path))
+    assert.deepEqual(missing, [], `${name}: fixture keys the worker never publishes: ${missing.join(', ')}`)
+  }
+})
+
+test('the windowed activity fixture carries only keys read-activity.mjs really publishes', SKIP_NO_PLAYWRIGHT, async () => {
+  const real = await realSidecar('read-activity.mjs', seedWindowedLogs)
+  assert.equal(real.ok, true, JSON.stringify(real))
+  const realPaths = new Set(keyPaths(real))
+  const missing = keyPaths(SCENARIOS['activity-ready'].activityByProjectSummary).filter((path) => path !== 'checkedAt' && !realPaths.has(path))
+  assert.deepEqual(missing, [], `fixture keys the worker never publishes: ${missing.join(', ')}`)
 })

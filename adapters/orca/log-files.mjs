@@ -19,7 +19,8 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
 import { GATE_DECISIONS_APPEND_FAILURES_FILE, gateDecisionFilesToRead, parseAppendFailures } from '../../src/core/measurement_files.ts'
-import { emptyGateDecisionTotals, GATE_DECISION_TOTALS_FILE, isFoldedFile, parseGateDecisionTotals } from '../../src/core/gate_decision_totals.ts'
+import { addGateDecisions, emptyGateDecisionTotals, GATE_DECISION_TOTALS_FILE, isFoldedFile, parseGateDecisionTotals } from '../../src/core/gate_decision_totals.ts'
+import { BOARD_WINDOW_KEYS, boardWindows, coverageSinceMs, versionStartOf, windowSpanMs } from '../../src/core/board_windows.ts'
 
 export const TURN_USAGE_FILE_PATTERN = /^turn-usage-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/
 // JEV-060 slice 2 (§8, T9): the router's own decision log, same hourly
@@ -296,4 +297,42 @@ export function toGateDecisionRecord (row) {
     // buildGateDecisionRecord in gate_measurement.ts.
     ...(row.pluginVersion !== undefined ? { pluginVersion: row.pluginVersion } : {}),
   }
+}
+
+/**
+ * odd/tasks/board-global-window.md W1: the board's four windows at `nowMs`
+ * (src/core/board_windows.ts), "this version" read from the gate log
+ * (readGateDecisionLog's result) the way the gate's own view reads it, so
+ * every sidecar starts it at the same instant.
+ */
+export function boardWindowsOfGateLog (gateLog, nowMs) {
+  const { records } = guardGateDecisionRows(gateLog.rows)
+  const combined = addGateDecisions(gateLog.totals, { records, corruptLines: 0, malformedRows: 0, jevRecordsForAb: 0 })
+  return boardWindows(nowMs, versionStartOf(combined))
+}
+
+/**
+ * One summary per board window, plus where it starts (`sinceMs`) and how far
+ * back its data can honestly speak (`coverageSinceMs`, given what the source
+ * still keeps, `keptSinceMs`; null when it keeps everything). `summarize`
+ * gets the window clamped to that coverage and its span in the `windowMs`
+ * shape the summarizers take, so a row about to be pruned is never counted
+ * in a window that says it does not reach that far. An unavailable window
+ * (no build stamped yet) carries no figures at all.
+ */
+export function perBoardWindow (windows, nowMs, keptSinceMs, summarize) {
+  const result = {}
+  for (const key of BOARD_WINDOW_KEYS) {
+    const window = windows[key]
+    if (!window.available) {
+      result[key] = { available: false, sinceMs: null, coverageSinceMs: null }
+      continue
+    }
+    const coverage = coverageSinceMs(window, keptSinceMs)
+    const meta = { available: true, sinceMs: window.sinceMs, coverageSinceMs: coverage }
+    if (key === 'version') meta.pluginVersion = window.pluginVersion
+    const covered = { ...window, sinceMs: coverage }
+    result[key] = { ...meta, ...summarize(covered, windowSpanMs(covered, nowMs)) }
+  }
+  return result
 }

@@ -19,8 +19,10 @@ import {
   parseQuota,
   SUBAGENT_SHARE_THRESHOLD,
   subagentShareTrigger,
+  summarizeTurnUsageForWindow,
   type TurnUsageRecord,
 } from "./consumption.ts";
+import { boardWindows } from "./board_windows.ts";
 
 const NOW = Date.parse("2026-09-26T20:00:00.000Z");
 const HOUR_MS = 60 * 60 * 1000;
@@ -301,4 +303,19 @@ test("aggregateTurnUsage: byAgent reads null tokens for a side with no reported 
     main: { stepCount: 0, tokens: null },
     subagent: { stepCount: 0, tokens: null },
   });
+});
+
+// odd/tasks/board-global-window.md W1: the board's chips ask for one window at a time.
+test("summarizeTurnUsageForWindow: the same summary as the 24 h fold, for any of the board's windows", () => {
+  const rows = [
+    step({ at: new Date(NOW - 2 * HOUR_MS).toISOString() }),
+    step({ at: new Date(NOW - 3 * DAY_MS).toISOString(), agent: "subagent" }),
+    step({ at: new Date(NOW - 10 * DAY_MS).toISOString() }),
+  ];
+  const windows = boardWindows(NOW, { pluginVersion: "0.11.0", firstAtMs: NOW - 4 * DAY_MS });
+  assert.deepEqual(summarizeTurnUsageForWindow(rows, NOW, windows.day), aggregateTurnUsage(rows, NOW).last24h);
+  assert.deepEqual(summarizeTurnUsageForWindow(rows, NOW, windows.week), aggregateTurnUsage(rows, NOW).last7d);
+  assert.equal(summarizeTurnUsageForWindow(rows, NOW, windows.version).stepCount, 2);
+  assert.equal(summarizeTurnUsageForWindow(rows, NOW, windows.all).stepCount, 3);
+  assert.equal(summarizeTurnUsageForWindow(rows, NOW, boardWindows(NOW, null).version).stepCount, 0);
 });

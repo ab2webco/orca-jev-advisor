@@ -76,11 +76,52 @@ memory decision logic, any new measurement.
   `storage.json` size before and after; report both.
 
 ## Tasks
-- [ ] W1 Shared windows: core window function, summarizers take `sinceMs`,
+- [x] W1 Shared windows: core window function, summarizers take `sinceMs`,
   readers emit per-window summaries with `coverageSinceMs`, activity on the
   rolling window. Invariant test: for one fixture and one window, per-project
   router savings sum to the Consumo router total. Retention table in this
   file. RED, GREEN, one commit.
+  Proof: `src/core/board_windows.test.ts` (9, RED on the missing module
+  first); `model_router_summary.test.ts` "W1: per-project router savings sum
+  to the router total when two projects share one account" (RED on the
+  missing `routerByProject`, two projects interleaved on one account plus a
+  row with no project); `activity_by_project.test.ts` rewritten (12, rolling
+  windows); `consumption.test.ts` "summarizeTurnUsageForWindow";
+  `read-consumption.test.mjs` (26), `read-activity.test.mjs` (9, including
+  the reader-level invariant against read-consumption.mjs),
+  `read-measurements.test.mjs` (43), `gate-log-fold.test.mjs` (11),
+  `scripts/fixture_shape.test.mjs` (11, two new: the windowed consumption and
+  activity fixtures against the real readers), `panel_values.test.mjs` (51).
+  Notes: the summarizers keep their `windowMs` parameter; readers pass
+  `windowSpanMs(window)`, clamped to what the log keeps (log-files.mjs
+  `perBoardWindow`), so a row about to be pruned is never counted in a window
+  that says it does not reach it. Two items moved here from later tasks
+  because the new data shape forced them: the default window is now 24 h on
+  every card (W2's default), and Actividad renders the new per-project rows
+  (W6's #9: labelled cost, totals, ranked by cost, no per-model text wall).
+  Storage after W1, readers run on a copy of the real cache, substituted into
+  a copy of the real `storage.json` (2-space JSON, as Orca writes it):
+  351,974 -> 300,756 bytes (Actividad 119,721 -> 62,642).
+
+### Retention (read from code, 2026-10-14; earliest file on the owner's disk in brackets)
+| Source | Kept by code | Earliest on disk | What a window can speak for |
+|---|---|---|---|
+| `turn-usage-*` (usage, Actividad steps/cost) | 8 days, deleted by read-consumption.mjs | 10-06T06 | `all` and an older `version`: the last 8 days, said in the heading |
+| `model-router-decisions-*` | 8 days, same | 10-06T06 | same |
+| `context-steward-decisions-*` | 8 days, same | 10-06T06 | same |
+| `typing-*` | 8 days, same | 10-13T00 (module new) | same |
+| `gate-decisions-*` | files folded into `gate-decisions-totals.json` after 8 days, totals kept forever | 10-05T15 | Gate: every window whole (totals); Actividad per project: 8 days |
+| `gate-approvals.jsonl` | never pruned | single file | whole |
+| `mod-skills-measurements*` | never pruned | 09-29T21 | whole |
+| `memory-decisions-*` | never pruned | 10-13T00 (module new) | whole |
+| `ci-watch-decisions-*` | never pruned | 10-13T01 (module new) | whole |
+| `verify-done-decisions-*` | never pruned | 10-12T05 (module new) | whole |
+| `ab-benchmark-results.jsonl` | never pruned | single file | point-in-time card, ignores the chip |
+
+The never-pruned logs grow without bound; once the module cards follow the
+chip (W3), `all` reads them whole on every 15 s measurement refresh (today
+~186 KB for memory, 21 MB for mod-skills, which is already read whole).
+Retention is out of scope here; worth a follow-up.
 - [ ] W2 Global chips above the tabs, default 24 h, every card follows the
   chip or says why not, window named in every card heading, remembered chip.
   Panels spec flips the T2 placement test. RED, GREEN, one commit.

@@ -15,6 +15,8 @@
 // qualifying data reads back as `null`, never a fabricated zero; only an
 // honest count (e.g. `stepCount: 0`) is ever a real zero.
 
+import type { BoardWindow } from "./board_windows.ts";
+import { isInWindow } from "./board_windows.ts";
 import { isRecord } from "../guards.ts";
 
 // ---------------------------------------------------------------------------
@@ -208,6 +210,18 @@ export function aggregateTurnUsage(records: readonly TurnUsageRecord[], nowMs: n
     last24h: summarizeWindow(windowSteps(LAST_24H_MS)),
     last7d: summarizeWindow(windowSteps(LAST_7D_MS)),
   };
+}
+
+/**
+ * The same summary as one of aggregateTurnUsage's windows, for any of the
+ * board's windows (src/core/board_windows.ts, odd/tasks/board-global-window.md
+ * W1). A record whose `at` does not parse is in no window.
+ */
+export function summarizeTurnUsageForWindow(records: readonly TurnUsageRecord[], nowMs: number, window: BoardWindow): TurnUsageWindowSummary {
+  return summarizeWindow(records.filter((record) => {
+    const ms = atMs(record.at);
+    return ms !== null && isInWindow(ms, window, nowMs);
+  }));
 }
 
 // ---------------------------------------------------------------------------

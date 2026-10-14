@@ -120,7 +120,10 @@ function run (home) {
 test('no data anywhere yet: ok, an empty project list, zero corrupt lines', () => {
   const home = makeHome()
   const result = run(home)
-  assert.deepEqual(result, { ok: true, projects: [], corruptLines: 0 })
+  assert.equal(result.ok, true)
+  assert.equal(result.corruptLines, 0)
+  for (const key of ['day', 'week', 'all']) assert.deepEqual(result.windows[key].projects, [], key)
+  assert.deepEqual(result.windows.version, { available: false, sinceMs: null, coverageSinceMs: null })
 })
 
 test('gate log plus hourly turn-usage and router files fold into one per-project summary, end to end', () => {
@@ -143,26 +146,18 @@ test('gate log plus hourly turn-usage and router files fold into one per-project
   const result = run(home)
   assert.equal(result.ok, true)
   assert.equal(result.corruptLines, 0)
-  assert.deepEqual(result.projects.map((p) => p.project).sort(), ['alpha', 'beta'])
+  assert.deepEqual(result.windows.week.projects.map((p) => p.project).sort(), ['alpha', 'beta'])
 
-  const alpha = result.projects.find((p) => p.project === 'alpha')
+  const alpha = result.windows.week.projects.find((p) => p.project === 'alpha')
   assert.deepEqual(alpha.gateOutcomes, { allowed: 1, advised: 1, asked: 0, blocked: 1 })
   assert.deepEqual(alpha.steps, { main: 1, subagent: 1 })
-  assert.equal(alpha.days.length, 7)
-  const today = alpha.days[6]
-  assert.equal(today.judgedCommands, 3)
-  assert.equal(today.mainSteps, 1)
-  assert.equal(today.subagentSteps, 1)
-  const sonnet = alpha.tokensByModel.find((m) => m.model === 'claude-sonnet-5')
-  assert.deepEqual(
-    { input: sonnet.input, output: sonnet.output, cacheRead: sonnet.cacheRead, cacheWrite: sonnet.cacheWrite },
-    { input: 100, output: 50, cacheRead: 1000, cacheWrite: 200 },
-  )
-  assert.equal(typeof alpha.totalEstimatedCostUsd, 'number')
-  assert.equal(alpha.router.total, 1)
+  assert.equal(alpha.judged, 3)
+  assert.equal(alpha.tokens, 100 + 50 + 1000 + 200 + 10 + 5)
+  assert.equal(alpha.models[0].model, 'claude-sonnet-5', 'the dearest model first')
+  assert.equal(typeof alpha.estimatedCostUsd, 'number')
   assert.equal(alpha.router.applied, 1)
 
-  const beta = result.projects.find((p) => p.project === 'beta')
+  const beta = result.windows.week.projects.find((p) => p.project === 'beta')
   assert.deepEqual(beta.gateOutcomes, { allowed: 0, advised: 0, asked: 1, blocked: 0 })
   assert.equal(beta.router, null)
 })
@@ -176,10 +171,10 @@ test('old records without a project field fold under the null project, never dro
   writeLines(home, `model-router-decisions-${hourKey(now)}.jsonl`, [legacyDecision])
   const result = run(home)
   assert.equal(result.ok, true)
-  assert.equal(result.projects.length, 1)
-  assert.equal(result.projects[0].project, null)
-  assert.deepEqual(result.projects[0].steps, { main: 1, subagent: 0 })
-  assert.equal(result.projects[0].router.total, 1)
+  assert.equal(result.windows.week.projects.length, 1)
+  assert.equal(result.windows.week.projects[0].project, null)
+  assert.deepEqual(result.windows.week.projects[0].steps, { main: 1, subagent: 0 })
+  assert.equal(result.windows.week.projects[0].router.applied, 1)
 })
 
 test('corrupt and malformed lines are skipped, counted, and never crash the read', () => {
@@ -205,10 +200,10 @@ test('corrupt and malformed lines are skipped, counted, and never crash the read
   // gate: 1 unparseable + 1 malformed verdict; usage: 1 unparseable + 1
   // malformed agent; decisions: 1 non-object + 1 non-string `at`.
   assert.equal(result.corruptLines, 6)
-  const alpha = result.projects.find((p) => p.project === 'alpha')
+  const alpha = result.windows.week.projects.find((p) => p.project === 'alpha')
   assert.deepEqual(alpha.gateOutcomes, { allowed: 1, advised: 0, asked: 0, blocked: 0 })
   assert.deepEqual(alpha.steps, { main: 1, subagent: 0 })
-  assert.equal(alpha.router.total, 1)
+  assert.equal(alpha.router.applied, 1)
 })
 
 test('never prunes: an hourly file far outside the window is left on disk (pruning is read-consumption.mjs\'s job)', () => {
@@ -218,7 +213,7 @@ test('never prunes: an hourly file far outside the window is left on disk (pruni
   writeLines(home, oldName, [usageRow({ at: new Date(oldMs).toISOString() })])
   const result = run(home)
   assert.equal(result.ok, true)
-  assert.deepEqual(result.projects, [])
+  assert.deepEqual(result.windows.all.projects, [], 'all reaches back only as far as the 8-day logs are kept')
   assert.ok(existsSync(join(cacheDirFor(home), oldName)))
 })
 
@@ -234,8 +229,8 @@ test('runs under the permission sandbox with read-only grants on the plugin root
   const argv = ['--permission', `--allow-fs-read=${PLUGIN_ROOT}`, `--allow-fs-read=${cacheDirFor(home)}`, SCRIPT_PATH]
   const result = JSON.parse(execFileSync(process.execPath, argv, { env: envFor(home), encoding: 'utf8' }))
   assert.equal(result.ok, true)
-  assert.equal(result.projects[0].project, 'alpha')
-  assert.deepEqual(result.projects[0].gateOutcomes, { allowed: 1, advised: 0, asked: 0, blocked: 0 })
+  assert.equal(result.windows.week.projects[0].project, 'alpha')
+  assert.deepEqual(result.windows.week.projects[0].gateOutcomes, { allowed: 1, advised: 0, asked: 0, blocked: 0 })
 })
 
 // 0.6.17 T4 (JEVADV-92): the gate's log is one file per UTC hour now; the
@@ -249,6 +244,44 @@ test('T4: gate decisions are read from the legacy file and from every hourly fil
   writeLines(home, `gate-decisions-${hourKey(now)}.jsonl`, [gateRow({ verdict: 'allow' }), 'not json'])
   const result = run(home)
   assert.equal(result.ok, true)
-  assert.deepEqual(result.projects[0].gateOutcomes, { allowed: 2, advised: 0, asked: 0, blocked: 1 })
+  assert.deepEqual(result.windows.week.projects[0].gateOutcomes, { allowed: 2, advised: 0, asked: 0, blocked: 1 })
   assert.equal(result.corruptLines, 1)
+})
+
+// odd/tasks/board-global-window.md W1: every board window, rolling, the same
+// instant as on every other tab, and "all" says it reaches 8 days back.
+test('W1: one summary per board window, each with its start and how far back it can speak', () => {
+  const home = makeHome()
+  const now = Date.now()
+  const day = 24 * 60 * 60 * 1000
+  writeLines(home, 'gate-decisions.jsonl', [
+    gateRow({ at: new Date(now - 2 * 60 * 60 * 1000).toISOString() }),
+    gateRow({ at: new Date(now - 3 * day).toISOString() }),
+  ])
+  const result = run(home)
+  assert.equal(result.windows.day.projects[0].judged, 1)
+  assert.equal(result.windows.week.projects[0].judged, 2)
+  assert.equal(result.windows.day.coverageSinceMs, result.windows.day.sinceMs)
+  assert.equal(result.windows.all.sinceMs, null)
+  assert.ok(Math.abs(result.windows.all.coverageSinceMs - (now - 8 * day)) < 60_000)
+  assert.equal(result.windows.week.totals.judged, 2)
+})
+
+test('W1: for the same logs and window, the per-project router estimates add up to the Consumo router total', () => {
+  const home = makeHome()
+  const now = Date.now()
+  const minutesAgo = (m) => new Date(now - m * 60 * 1000).toISOString()
+  writeLines(home, `model-router-decisions-${hourKey(now)}.jsonl`, [
+    decisionRow({ at: minutesAgo(50), project: 'alpha', point: 'stage', proposed: 'claude-haiku-4-5', switchCost: 0.01, stepSaving: 0.02 }),
+    decisionRow({ at: minutesAgo(40), project: 'beta', point: 'stage', proposed: 'claude-haiku-4-5', switchCost: 0.005, stepSaving: 0.03 }),
+    decisionRow({ at: minutesAgo(30), project: 'alpha', point: 'start', proposed: 'claude-haiku-4-5', switchCost: 0.02, stepSaving: 0.01 }),
+  ])
+  writeLines(home, `turn-usage-${hourKey(now)}.jsonl`, [45, 35, 33, 25, 20, 10, 5].map((m, i) => usageRow({ at: minutesAgo(m), model: 'claude-haiku-4-5', project: i % 2 === 0 ? 'alpha' : 'beta' })))
+  const activity = run(home)
+  const consumption = JSON.parse(execFileSync(process.execPath, [join(__dirname, 'read-consumption.mjs')], { env: envFor(home), encoding: 'utf8' }))
+  for (const key of ['day', 'week']) {
+    const total = consumption.modelRouter.windows[key].savedEstimate
+    assert.ok(total !== null)
+    assert.ok(Math.abs(activity.windows[key].totals.routerSavedEstimate - total) < 1e-9, `${key}: ${activity.windows[key].totals.routerSavedEstimate} vs ${total}`)
+  }
 })

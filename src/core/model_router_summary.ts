@@ -35,6 +35,8 @@ export interface RouterDecisionSummary {
 interface DecisionRow {
   readonly atMs: number;
   readonly account: string;
+  /** The project the decision was made in; null on rows written before JEVADV-63. */
+  readonly project: string | null;
   readonly point: RouterPointName;
   readonly tier: RouterTier | null;
   readonly applied: boolean;
@@ -64,6 +66,7 @@ function parseDecision(raw: unknown): DecisionRow | null {
   return {
     atMs,
     account: raw.account,
+    project: typeof raw.project === "string" ? raw.project : null,
     point,
     tier,
     applied: raw.applied,
@@ -96,23 +99,73 @@ export function countColdSwitches(decisionRows: readonly unknown[], nowMs: numbe
   }).length;
 }
 
-export function summarizeRouterDecisions(decisionRows: readonly unknown[], usageRows: readonly unknown[], nowMs: number, windowMs: number): RouterDecisionSummary {
-  const decisions = decisionRows.map(parseDecision).filter((row): row is DecisionRow => row !== null && row.atMs >= nowMs - windowMs && row.atMs <= nowMs);
-  const usage = usageRows.map(parseUsage).filter((row): row is UsageRow => row !== null);
-  const byPoint: Record<RouterPointName, TierCounts> = { start: emptyCounts(), stage: emptyCounts(), subagent: emptyCounts() };
-  for (const row of decisions) if (row.tier !== null) byPoint[row.point][row.tier] += 1;
-  const applied = decisions.filter((row) => row.applied).length;
+/** The decisions inside the window, parsed; malformed rows dropped. */
+function decisionsInWindow(decisionRows: readonly unknown[], nowMs: number, windowMs: number): DecisionRow[] {
+  return decisionRows.map(parseDecision).filter((row): row is DecisionRow => row !== null && row.atMs >= nowMs - windowMs && row.atMs <= nowMs);
+}
 
+/**
+ * Every applied main-loop switch that carried break-even numbers, with its
+ * own estimate: stepSaving × the main steps that ran on the new model after
+ * it (same account, until that account's next applied switch), minus its
+ * switchCost. One computation for the router total and for each project's
+ * share, so the two always add up (odd/tasks/board-global-window.md W1).
+ */
+function switchEstimates(decisions: readonly DecisionRow[], usageRows: readonly unknown[]): { readonly project: string | null; readonly saving: number }[] {
+  const usage = usageRows.map(parseUsage).filter((row): row is UsageRow => row !== null);
   // Main-loop switches only: a subagent's model never changes the main loop's.
   const mainSwitches = decisions.filter((row) => row.applied && row.point !== "subagent").sort((a, b) => a.atMs - b.atMs);
-  let saved = 0;
-  let estimated = 0;
+  const estimates: { project: string | null; saving: number }[] = [];
   for (const [index, row] of mainSwitches.entries()) {
     if (row.stepSaving === null || row.switchCost === null || row.proposed === null) continue;
     const until = mainSwitches.slice(index + 1).find((later) => later.account === row.account)?.atMs ?? Number.POSITIVE_INFINITY;
     const steps = usage.filter((step) => step.account === row.account && step.model === row.proposed && step.atMs > row.atMs && step.atMs < until).length;
-    saved += row.stepSaving * steps - row.switchCost;
-    estimated += 1;
+    estimates.push({ project: row.project, saving: row.stepSaving * steps - row.switchCost });
   }
-  return { total: decisions.length, applied, measured: decisions.length - applied, byPoint, savedEstimate: estimated === 0 ? null : saved, switchesEstimated: estimated };
+  return estimates;
+}
+
+export function summarizeRouterDecisions(decisionRows: readonly unknown[], usageRows: readonly unknown[], nowMs: number, windowMs: number): RouterDecisionSummary {
+  const decisions = decisionsInWindow(decisionRows, nowMs, windowMs);
+  const byPoint: Record<RouterPointName, TierCounts> = { start: emptyCounts(), stage: emptyCounts(), subagent: emptyCounts() };
+  for (const row of decisions) if (row.tier !== null) byPoint[row.point][row.tier] += 1;
+  const applied = decisions.filter((row) => row.applied).length;
+  const estimates = switchEstimates(decisions, usageRows);
+  const saved = estimates.reduce((sum, entry) => sum + entry.saving, 0);
+  return { total: decisions.length, applied, measured: decisions.length - applied, byPoint, savedEstimate: estimates.length === 0 ? null : saved, switchesEstimated: estimates.length };
+}
+
+/** One project's share of the router in a window: its applied decisions and the estimate of its own switches. */
+export interface ProjectRouterShare {
+  readonly applied: number;
+  /** null when none of the project's switches carried break-even numbers. */
+  readonly savedEstimate: number | null;
+}
+
+/**
+ * The router per project, for the board's Actividad tab: every project with
+ * at least one decision in the window, keyed by its name (null for rows with
+ * no project). Its estimates come from the same per-switch computation as
+ * {@link summarizeRouterDecisions} over ALL usage rows, so the per-project
+ * estimates sum to the router total.
+ */
+export function routerByProject(decisionRows: readonly unknown[], usageRows: readonly unknown[], nowMs: number, windowMs: number): Map<string | null, ProjectRouterShare> {
+  const decisions = decisionsInWindow(decisionRows, nowMs, windowMs);
+  const shares = new Map<string | null, { applied: number; savedEstimate: number | null }>();
+  const shareOf = (project: string | null): { applied: number; savedEstimate: number | null } => {
+    const existing = shares.get(project);
+    if (existing !== undefined) return existing;
+    const created = { applied: 0, savedEstimate: null };
+    shares.set(project, created);
+    return created;
+  };
+  for (const row of decisions) {
+    const share = shareOf(row.project);
+    if (row.applied) share.applied += 1;
+  }
+  for (const estimate of switchEstimates(decisions, usageRows)) {
+    const share = shareOf(estimate.project);
+    share.savedEstimate = (share.savedEstimate ?? 0) + estimate.saving;
+  }
+  return shares;
 }

@@ -831,3 +831,37 @@ test('memory: no file yet is a zeroed summary, never missing', () => {
   assert.equal(result.memory.latest, null)
   assert.equal(result.memory.updateRate, null)
 })
+
+// odd/tasks/board-global-window.md W1: the gate's windows come from the same
+// definition every other tab's reader uses, and say how far back they speak.
+test('W1: gate.windows carry sinceMs and coverageSinceMs from the shared window definition', () => {
+  const home = makeHome()
+  writeGateLog(home, [
+    gateDecisionRow('a', { at: hoursAgo(30), pluginVersion: '0.11.0' }),
+    gateDecisionRow('b', { at: hoursAgo(2), pluginVersion: '0.11.0' }),
+  ])
+  const before = Date.now()
+  const { windows } = run(home).gate
+  assert.ok(Math.abs(windows.day.sinceMs - (before - 24 * HOUR_MS)) < 60_000)
+  assert.equal(windows.day.coverageSinceMs, windows.day.sinceMs, 'the live gate files cover the 24 h window')
+  assert.equal(windows.all.sinceMs, null)
+  assert.equal(windows.all.coverageSinceMs, null, 'folded totals keep every decision ever counted')
+  assert.equal(windows.version.sinceMs, Date.parse(windows.version.since))
+})
+
+test('W1: modSkills.windows count each window\'s own prompts, and the all-time readiness stays as it was', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [
+    { ...decisionRow('recent', hoursAgo(2)), decision: { name: 'graft', reason: 'x' } },
+    { ...decisionRow('older', hoursAgo(24 * 3)), decision: { name: 'graft', reason: 'x' } },
+    { type: 'observation', id: 'recent', at: hoursAgo(2), skill: 'graft' },
+    { type: 'observation', id: 'older', at: hoursAgo(24 * 3), skill: 'dataviz' },
+  ])
+  const { modSkills } = run(home)
+  const strip = ({ available, sinceMs, coverageSinceMs, pluginVersion, ...figures }) => figures
+  assert.deepEqual(strip(modSkills.windows.day), { decisions: 1, suggestedCount: 1, comparableCount: 1, matchedCount: 1, matchRate: 1, listingCharsTotal: 120 })
+  assert.deepEqual(strip(modSkills.windows.week), { decisions: 2, suggestedCount: 2, comparableCount: 2, matchedCount: 1, matchRate: 0.5, listingCharsTotal: 240 })
+  assert.equal(modSkills.windows.all.coverageSinceMs, null, 'the skills log is never pruned')
+  assert.equal(modSkills.totalDecisions, 2)
+  assert.equal(modSkills.readiness.comparableShortfall > 0, true)
+})

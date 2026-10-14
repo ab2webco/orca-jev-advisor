@@ -40,7 +40,9 @@ import { foldAbResults } from '../src/core/ab_report.ts'
 import { EMPTY_AUTHORIZATIONS, authorizationRows, recordAuthorization } from '../src/core/gate_authorizations.ts'
 import { parseTrustedPrograms } from '../src/core/trusted_programs.ts'
 import { DEFAULT_FEATURE_MODULES } from '../src/core/feature_modules.ts'
-import { summarizeTypingLeadTime, TYPING_WINDOW_MS } from '../src/core/typing_lead_time.ts'
+import { summarizeTypingLeadTime } from '../src/core/typing_lead_time.ts'
+import { boardWindows, HOURLY_LOG_KEPT_MS } from '../src/core/board_windows.ts'
+import { perBoardWindow } from '../adapters/orca/log-files.mjs'
 import { summarizeCiWatchRows } from '../src/core/ci_watch.ts'
 import { summarizeMemoryDecisions } from '../src/core/memory_shadow.ts'
 
@@ -69,6 +71,21 @@ const THEMES = /** @type {const} */ (['light', 'dark'])
 const PANELS = ['config.html', 'board.html']
 
 const iso = new Date('2026-09-23T12:00:00.000Z').toISOString()
+const FIXTURE_NOW = Date.parse(iso)
+
+/**
+ * odd/tasks/board-global-window.md W1: a reader's per-window shape, built by
+ * the readers' own perBoardWindow (adapters/orca/log-files.mjs) at the
+ * fixture's clock, so `available`, `sinceMs` and `coverageSinceMs` are what
+ * the real readers publish. `figures` maps a window key to that window's
+ * figures; `kept` is how far back the source keeps rows ('hourly' for the
+ * 8-day logs, null for a log never pruned); `version` is the running build's
+ * start, or null for none stamped yet.
+ */
+function everyWindow (figures, { kept = 'hourly', version = null } = {}) {
+  const keptSinceMs = kept === 'hourly' ? FIXTURE_NOW - HOURLY_LOG_KEPT_MS : null
+  return perBoardWindow(boardWindows(FIXTURE_NOW, version), FIXTURE_NOW, keptSinceMs, (window, spanMs) => figures(window.key, spanMs))
+}
 
 /**
  * A machine where the worker has never run: every key absent. This is what a
@@ -147,7 +164,7 @@ const MODEL_MEASUREMENTS_SUMMARY = summarizeModelMeasurements(MODEL_MEASUREMENT_
  * version window is unavailable, exactly as the real aggregator reports it.
  */
 const READY_DAY = {
-  key: 'day', available: true, pluginVersion: null, since: '2026-09-24T00:28:46.766Z',
+  key: 'day', available: true, pluginVersion: null, since: '2026-09-24T00:28:46.766Z', sinceMs: Date.parse('2026-09-24T00:28:46.766Z'), coverageSinceMs: Date.parse('2026-09-24T00:28:46.766Z'),
   totalDecisions: 2409,
   // The advise-model release: the risk stage's own borderline verdict no
   // longer asks a person -- it advises the coding model instead. 40 of the
@@ -179,7 +196,7 @@ const READY_DAY = {
   approvals: { asked: 89, approved: 71, rejected: 0, notRun: 9, awaiting: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 37, rejectedCount: 0 } },
 }
 const READY_ALL = {
-  key: 'all', available: true, pluginVersion: null, since: null,
+  key: 'all', available: true, pluginVersion: null, since: null, sinceMs: null, coverageSinceMs: null,
   totalDecisions: 3711,
   byVerdict: { allow: 3323, ask: 316, deny: 12, advise: 60 },
   bySource: { 'local-rule': 126, cache: 278, jev: 3262, none: 45 },
@@ -210,14 +227,14 @@ const READY_ALL = {
 const READY_WINDOWS = {
   version: { ...emptyWindow('version'), available: false },
   day: READY_DAY,
-  week: { ...READY_ALL, key: 'week', since: '2026-09-18T00:28:46.766Z' },
+  week: { ...READY_ALL, key: 'week', since: '2026-09-18T00:28:46.766Z', sinceMs: Date.parse('2026-09-18T00:28:46.766Z'), coverageSinceMs: Date.parse('2026-09-18T00:28:46.766Z') },
   all: READY_ALL,
 }
 
 /** One window exactly as read-measurements.mjs publishes it for an empty log. */
 function emptyWindow (key) {
   return {
-    key, available: key !== 'version', pluginVersion: null, since: null,
+    key, available: key !== 'version', pluginVersion: null, since: null, sinceMs: null, coverageSinceMs: null,
     totalDecisions: 0,
     byVerdict: { allow: 0, ask: 0, deny: 0, advise: 0 },
     bySource: { 'local-rule': 0, cache: 0, jev: 0, none: 0 },
@@ -445,6 +462,7 @@ const READY = {
         reason: 'not-enough-samples',
         thresholds: { minComparable: 1000, minMatchRate: 0.7 },
       },
+      windows: everyWindow(() => ({ decisions: 0, suggestedCount: 0, comparableCount: 0, matchedCount: 0, matchRate: null, listingCharsTotal: null }), { kept: null }),
     },
     // Twenty real paired samples: Jev's median against the model's, and the
     // model NAMED -- the user was explicit that "the big model" is not a name.
@@ -541,7 +559,7 @@ const DEGRADED = {
       // cannot show it until gate-bash.ts stamps pluginVersion.
       windows: {
         ...READY_WINDOWS,
-        version: { ...DEGRADED_DAY, key: 'version', pluginVersion: '0.4.0', since: '2026-09-24T12:21:00.000Z' },
+        version: { ...DEGRADED_DAY, key: 'version', pluginVersion: '0.4.0', since: '2026-09-24T12:21:00.000Z', sinceMs: Date.parse('2026-09-24T12:21:00.000Z'), coverageSinceMs: Date.parse('2026-09-24T12:21:00.000Z') },
         day: DEGRADED_DAY,
       },
       health: { lastJevAt: '2026-09-24T17:20:41.118Z', consecutiveFailures: 12, lastFailureAt: '2026-09-24T17:33:10.004Z', appendFailures: { count: 3, lastAt: '2026-09-24T17:30:02.511Z' } },
@@ -726,29 +744,31 @@ const CATALOG_PROPOSALS = {
  * board.html at 1440 light and 390 dark -- actually show the card doing its
  * job, not its honest-but-uninteresting empty state.
  */
+const CONSUMPTION_DAY = {
+  stepCount: 42,
+  byModel: [
+    { model: 'claude-sonnet-5-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+    { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
+  ],
+  avgMainStepContextReread: 162345,
+  subagentShare: 0.47,
+  // 0.6.8 T6: the same split, as real totals.
+  byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } },
+}
+const CONSUMPTION_WEEK = {
+  stepCount: 300,
+  byModel: [{ model: 'claude-sonnet-5-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+  avgMainStepContextReread: 150500,
+  subagentShare: 0.3,
+  byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } },
+}
 const CONSUMPTION_READY = {
   ...READY,
   consumptionSummary: {
     ok: true,
     usage: {
-      last24h: {
-        stepCount: 42,
-        byModel: [
-          { model: 'claude-sonnet-5-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
-          { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
-        ],
-        avgMainStepContextReread: 162345,
-        subagentShare: 0.47,
-        // 0.6.8 T6: the same split, as real totals.
-        byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } },
-      },
-      last7d: {
-        stepCount: 300,
-        byModel: [{ model: 'claude-sonnet-5-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
-        avgMainStepContextReread: 150500,
-        subagentShare: 0.3,
-        byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } },
-      },
+      windows: everyWindow((key) => (key === 'day' ? CONSUMPTION_DAY : CONSUMPTION_WEEK)),
+      corruptLines: 0,
     },
     // `email` is what main.mjs's withAccountEmails joins on from `orca
     // account list --json`; the addresses are synthetic.
@@ -801,29 +821,35 @@ const ROUTER_READY = {
   },
   consumptionSummary: {
     ...CONSUMPTION_READY.consumptionSummary,
+    // One summary per board window (read-consumption.mjs, W1); the same
+    // synthetic figures in every window, which is all these cards need.
     modelRouter: {
-      total: 9,
-      applied: 5,
-      measured: 4,
-      byPoint: {
-        start: { simple: 3, standard: 0, complex: 0, frontier: 0 },
-        stage: { simple: 0, standard: 2, complex: 2, frontier: 1 },
-        subagent: { simple: 1, standard: 0, complex: 0, frontier: 0 },
-      },
-      savedEstimate: 0.0847,
-      switchesEstimated: 3,
-      // Track R: countColdSwitches over 7 days (read-consumption.mjs).
-      coldSwitches: 2,
+      windows: everyWindow(() => ({
+        total: 9,
+        applied: 5,
+        measured: 4,
+        byPoint: {
+          start: { simple: 3, standard: 0, complex: 0, frontier: 0 },
+          stage: { simple: 0, standard: 2, complex: 2, frontier: 1 },
+          subagent: { simple: 1, standard: 0, complex: 0, frontier: 0 },
+        },
+        savedEstimate: 0.0847,
+        switchesEstimated: 3,
+        // Track R: countColdSwitches, in the same window.
+        coldSwitches: 2,
+      })),
     },
     // summarizeStewardDecisions' shape plus verifyStewardSaving's; synthetic figures.
     steward: {
-      decisions: 7,
-      applied: 3,
-      wouldCompact: 2,
-      freedPerStep: 114000,
-      verified: { compactions: 59, verified: 32, steps: 4891, tokensNotReread: 1380000000, mainContextTokens: 3500000000, share: 0.283 },
-      // Track S: summarizePreCold's shape; synthetic figures.
-      preCold: { fired: 3, wouldFire: 5, skipped: 2, returned: 3, returnedEarly: 1, notReturned: 2, pending: 2, coldRewriteOnReturn: 410000, realizedSaving: 250000, waste: 44000, engineIdleCompactions: 0 },
+      windows: everyWindow(() => ({
+        decisions: 7,
+        applied: 3,
+        wouldCompact: 2,
+        freedPerStep: 114000,
+        verified: { compactions: 59, verified: 32, steps: 4891, tokensNotReread: 1380000000, mainContextTokens: 3500000000, share: 0.283 },
+        // Track S: summarizePreCold's shape; synthetic figures.
+        preCold: { fired: 3, wouldFire: 5, skipped: 2, returned: 3, returnedEarly: 1, notReturned: 2, pending: 2, coldRewriteOnReturn: 410000, realizedSaving: 250000, waste: 44000, engineIdleCompactions: 0 },
+      })),
     },
   },
 }
@@ -859,6 +885,7 @@ const SKILLS_READINESS_AT_WRITE = { ready: false, comparableShortfall: 1000, mat
  *  mode unless it is the project's last one (active mode, which withholds the
  *  listing when it names a skill), plus an observation of the skill the model
  *  really loaded for most named measurement-mode decisions. */
+const SKILLS_LOG_START_MS = Date.now() - 16 * 60 * 60 * 1000
 function skillsLogRows () {
   const rows = []
   let n = 0
@@ -866,7 +893,9 @@ function skillsLogRows () {
     for (let i = 0; i < project.decisions; i += 1) {
       n += 1
       const id = `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
-      const at = new Date(Date.parse('2026-09-22T09:00:00.000Z') + n * 47 * 60 * 1000).toISOString()
+      // Inside the last 24 h of the run (W1: the real reader windows by the real clock),
+      // so the board's default window shows them.
+      const at = new Date(SKILLS_LOG_START_MS + n * 47 * 60 * 1000).toISOString()
       const active = i === project.decisions - 1
       const skill = n % 3 === 0 ? null : SKILLS_LOG_SKILLS[n % SKILLS_LOG_SKILLS.length]
       const candidateCount = 60 + (n % 20)
@@ -940,7 +969,10 @@ function typingLogRows () {
 const SKILLS_READY = {
   ...READY,
   measurementsSummary: { ...READY.measurementsSummary, modSkills: realModSkillsSummary(skillsLogRows()) },
-  consumptionSummary: { ...CONSUMPTION_READY.consumptionSummary, typing: summarizeTypingLeadTime(typingLogRows(), Date.parse(iso), TYPING_WINDOW_MS) },
+  consumptionSummary: {
+    ...CONSUMPTION_READY.consumptionSummary,
+    typing: { windows: everyWindow((_key, spanMs) => summarizeTypingLeadTime(typingLogRows(), FIXTURE_NOW, spanMs) ?? { typed: 0, injected: 0, p50Ms: null, p90Ms: null }) },
+  },
 }
 
 const SCENARIOS = { fresh: FRESH, empty: EMPTY, ready: READY, degraded: DEGRADED, seeds: SEEDS, baseline: BASELINE, 'models-empty': MODELS_EMPTY, 'models-emptied': MODELS_EMPTIED, 'catalog-proposals': CATALOG_PROPOSALS, 'consumption-ready': CONSUMPTION_READY, 'router-ready': ROUTER_READY }
@@ -1055,108 +1087,104 @@ SCENARIOS['live-busy'] = { ...READY, board: { entries: LIVE_BUSY_ENTRIES } }
  * project names only (0.6.3 privacy rule: this repo is public and carries
  * no real client/project names or usage figures from the owner's machine).
  */
-function activityDaysFixture (peakDayIndex, peakJudged, peakSteps) {
-  return Array.from({ length: 7 }, (_, i) => ({
-    day: new Date(Date.now() - (6 - i) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
-    judgedCommands: i === peakDayIndex ? peakJudged : Math.max(0, Math.round(peakJudged * 0.2)),
-    mainSteps: i === peakDayIndex ? peakSteps : Math.max(0, Math.round(peakSteps * 0.3)),
-    subagentSteps: i === peakDayIndex ? Math.round(peakSteps * 0.4) : 0,
-  }))
+/** One project row as aggregateActivityForWindow publishes it. */
+function activityProjectFixture ({ project, minutesAgo, gateOutcomes, steps, tokens, models, router }) {
+  const { allowed, advised, asked, blocked } = gateOutcomes
+  return {
+    project,
+    lastActivityAt: new Date(FIXTURE_NOW - minutesAgo * 60 * 1000).toISOString(),
+    judged: allowed + advised + asked + blocked,
+    gateOutcomes,
+    steps,
+    tokens,
+    estimatedCostUsd: models.reduce((sum, m) => sum + m.estimatedCostUsd, 0),
+    models,
+    router,
+  }
 }
 const ACTIVITY_READY_PROJECTS = [
-  {
-    project: 'client-site-a', lastActivityAt: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(6, 14, 22),
+  activityProjectFixture({
+    project: 'client-site-a', minutesAgo: 12,
     gateOutcomes: { allowed: 58, advised: 6, asked: 3, blocked: 1 },
     steps: { main: 90, subagent: 34 },
-    tokensByModel: [
-      { model: 'claude-sonnet-5-5', input: 42000, output: 8100, cacheRead: 310000, cacheWrite: 15200, estimatedCostUsd: 1.86 },
-      { model: 'claude-opus-5-5', input: 3200, output: 900, cacheRead: 40000, cacheWrite: 2100, estimatedCostUsd: 0.71 },
-    ],
-    totalEstimatedCostUsd: 2.57,
-    router: {
-      total: 9, applied: 5, measured: 4,
-      byPoint: {
-        start: { simple: 2, standard: 0, complex: 0, frontier: 0 },
-        stage: { simple: 0, standard: 2, complex: 1, frontier: 0 },
-        subagent: { simple: 0, standard: 0, complex: 0, frontier: 0 },
-      },
-      savedEstimate: 0.94, switchesEstimated: 3,
-    },
-  },
-  {
-    // A switch happened but was net negative -- the card must relabel this
-    // as an extra cost, never a negative "saved" number.
-    project: 'service-b', lastActivityAt: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(4, 6, 10),
+    tokens: 421500,
+    models: [{ model: 'claude-sonnet-5-5', steps: 100, estimatedCostUsd: 1.86 }, { model: 'claude-opus-5-5', steps: 24, estimatedCostUsd: 0.71 }],
+    router: { applied: 5, savedEstimate: 0.94 },
+  }),
+  // A switch happened but was net negative -- the row must relabel this as
+  // an extra cost, never a negative "saved" number.
+  activityProjectFixture({
+    project: 'service-b', minutesAgo: 180,
     gateOutcomes: { allowed: 20, advised: 1, asked: 2, blocked: 0 },
     steps: { main: 40, subagent: 6 },
-    tokensByModel: [{ model: 'claude-sonnet-5-5', input: 15000, output: 2600, cacheRead: 90000, cacheWrite: 5100, estimatedCostUsd: 0.52 }],
-    totalEstimatedCostUsd: 0.52,
-    router: {
-      total: 3, applied: 2, measured: 1,
-      byPoint: {
-        start: { simple: 0, standard: 1, complex: 0, frontier: 0 },
-        stage: { simple: 0, standard: 0, complex: 1, frontier: 0 },
-        subagent: { simple: 0, standard: 0, complex: 0, frontier: 0 },
-      },
-      savedEstimate: -0.11, switchesEstimated: 1,
-    },
-  },
-  {
-    // No router decisions at all for this project -- router stays null,
-    // never a zeroed-out summary.
-    project: 'project-c', lastActivityAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(1, 3, 5),
+    tokens: 112700,
+    models: [{ model: 'claude-sonnet-5-5', steps: 46, estimatedCostUsd: 0.52 }],
+    router: { applied: 2, savedEstimate: -0.11 },
+  }),
+  // No router decisions at all for this project -- router stays null, never a zeroed-out summary.
+  activityProjectFixture({
+    project: 'project-c', minutesAgo: 26 * 60,
     gateOutcomes: { allowed: 9, advised: 0, asked: 0, blocked: 0 },
     steps: { main: 12, subagent: 0 },
-    tokensByModel: [{ model: 'claude-haiku-4-5-20251001', input: 5000, output: 900, cacheRead: 12000, cacheWrite: 800, estimatedCostUsd: 0.04 }],
-    totalEstimatedCostUsd: 0.04,
+    tokens: 18700,
+    models: [{ model: 'claude-haiku-4-5-20251001', steps: 12, estimatedCostUsd: 0.04 }],
     router: null,
-  },
-  {
-    // The gate could not resolve a project for these rows -- honestly
-    // unknown, never dropped.
-    project: null, lastActivityAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(6, 2, 3),
-    gateOutcomes: { allowed: 4, advised: 0, asked: 1, blocked: 0 },
-    steps: { main: 5, subagent: 0 },
-    tokensByModel: [],
-    totalEstimatedCostUsd: 0,
-    router: null,
-  },
-  {
-    project: 'client-site-d', lastActivityAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(0, 1, 2),
+  }),
+  activityProjectFixture({
+    project: 'client-site-d', minutesAgo: 2 * 24 * 60,
     gateOutcomes: { allowed: 3, advised: 0, asked: 0, blocked: 0 },
     steps: { main: 4, subagent: 0 },
-    tokensByModel: [{ model: 'claude-sonnet-5-5', input: 2000, output: 400, cacheRead: 6000, cacheWrite: 300, estimatedCostUsd: 0.02 }],
-    totalEstimatedCostUsd: 0.02,
+    tokens: 8700,
+    models: [{ model: 'claude-sonnet-5-5', steps: 4, estimatedCostUsd: 0.02 }],
     router: null,
-  },
-  {
-    project: 'service-e', lastActivityAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(0, 1, 1),
+  }),
+  // The gate could not resolve a project for these rows -- honestly unknown, never dropped.
+  activityProjectFixture({
+    project: null, minutesAgo: 45,
+    gateOutcomes: { allowed: 4, advised: 0, asked: 1, blocked: 0 },
+    steps: { main: 0, subagent: 0 },
+    tokens: 0,
+    models: [],
+    router: null,
+  }),
+  activityProjectFixture({
+    project: 'service-e', minutesAgo: 3 * 24 * 60,
     gateOutcomes: { allowed: 2, advised: 0, asked: 0, blocked: 0 },
-    steps: { main: 1, subagent: 0 },
-    tokensByModel: [],
-    totalEstimatedCostUsd: 0,
+    steps: { main: 0, subagent: 0 },
+    tokens: 0,
+    models: [],
     router: null,
-  },
-  {
-    // Past the top 6 -- only reachable through the show-more toggle.
-    project: 'client-site-f', lastActivityAt: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
-    days: activityDaysFixture(0, 1, 1),
+  }),
+  // Past the top 6 -- only reachable through the show-more toggle.
+  activityProjectFixture({
+    project: 'client-site-f', minutesAgo: 4 * 24 * 60,
     gateOutcomes: { allowed: 1, advised: 0, asked: 0, blocked: 0 },
-    steps: { main: 1, subagent: 0 },
-    tokensByModel: [],
-    totalEstimatedCostUsd: 0,
+    steps: { main: 0, subagent: 0 },
+    tokens: 0,
+    models: [],
     router: null,
-  },
+  }),
 ]
+/** The totals and rest row aggregateActivityForWindow adds for these projects (none past its own cut). */
+function activityWindowFixture (projects) {
+  const sum = (pick) => projects.reduce((acc, p) => acc + pick(p), 0)
+  const estimates = projects.map((p) => p.router?.savedEstimate ?? null).filter((v) => v !== null)
+  return {
+    projects,
+    rest: null,
+    totals: {
+      projects: projects.length,
+      judged: sum((p) => p.judged),
+      steps: sum((p) => p.steps.main + p.steps.subagent),
+      tokens: sum((p) => p.tokens),
+      estimatedCostUsd: sum((p) => p.estimatedCostUsd),
+      routerSavedEstimate: estimates.length === 0 ? null : estimates.reduce((a, b) => a + b, 0),
+    },
+  }
+}
 SCENARIOS['activity-ready'] = {
   ...READY,
-  activityByProjectSummary: { ok: true, projects: ACTIVITY_READY_PROJECTS, corruptLines: 0, checkedAt: iso },
+  activityByProjectSummary: { ok: true, windows: everyWindow(() => activityWindowFixture(ACTIVITY_READY_PROJECTS)), corruptLines: 0, checkedAt: iso },
 }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
@@ -1354,7 +1382,7 @@ async function main() {
 // reporting success while photographing the wrong panel. main() stays
 // behind the direct-invocation check so importing this file renders
 // nothing.
-export { SCENARIOS }
+export { SCENARIOS, everyWindow, activityWindowFixture }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main()

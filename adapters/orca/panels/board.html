@@ -148,23 +148,23 @@
       .v3 { --viz: var(--ring, var(--fb-ring)); }
       .vd { --viz: var(--destructive, var(--fb-destructive)); }
 
-      /* JEVADV-63 -- per-project activity cards (Activity tab). Each
-         project's own nested card reuses .card's own border/padding/radius;
-         its gate-outcome and token figures reuse .figures/.figure (odd/tasks/
-         board-leftovers.md L5: different units never share one bar scale);
-         "blocked" borrows .vd's own --viz variable to colour just that
-         figure's number -- no new hue, no background fill. */
-      .act-projects { display: grid; gap: 10px; }
-      .act-card-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
-      .act-name { font-weight: 600; overflow-wrap: anywhere; }
-      .act-age { margin-left: auto; font-size: 11px; white-space: nowrap;
+      /* JEVADV-63, odd/tasks/board-global-window.md W1 -- the Activity tab's
+         per-project list: one row per project, its estimated cost on the
+         right (labelled), and one or two quiet lines of counts under the
+         name. Counts of different units are joined in a sentence, never drawn
+         on one bar scale (odd/tasks/board-leftovers.md L5). */
+      .act-total { margin: 0 0 10px; font-size: 12px; color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .act-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+      .act-row { padding: 7px 0; border-top: 1px solid var(--border, var(--fb-border)); min-width: 0; }
+      .act-row:first-child { border-top: 0; padding-top: 0; }
+      .act-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+      .act-name { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
+      .act-cost { margin-left: auto; flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .act-cost small { font-weight: 400; font-size: 11px; color: var(--muted-foreground, var(--fb-muted-foreground)); margin-left: 4px; }
+      .act-sub { margin: 2px 0 0; font-size: 12px; overflow-wrap: anywhere;
                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
-      .act-chart-wrap { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
-      .act-chart { flex: none; overflow: visible; }
-      .act-chart rect, .act-chart path { fill: var(--viz); }
-      .act-chart-total { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
-      .figures .figure.vd dd { color: var(--viz); }
-      .act-model + .act-model { margin-top: 8px; }
+      .act-sub .vd { color: var(--viz); }
+      .act-rest { margin: 8px 0 0; font-size: 12px; font-style: italic; color: var(--muted-foreground, var(--fb-muted-foreground)); }
       /* Same look as .live-toggle, under its own name so the two never
          collide (they sit in different sections of the same tab). */
       .act-toggle { margin-top: 8px; background: none; border: 1px solid var(--border, var(--fb-border));
@@ -548,26 +548,25 @@
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
           'stats.listingChars': 'Caracteres de listado no enviados',
-          'activity.heading': 'Actividad por proyecto (7 días)',
+          'activity.heading': 'Actividad por proyecto',
           'activity.empty': 'Todavía no hay actividad.',
           'activity.unavailable': 'No se pudo calcular la actividad esta vez. Se vuelve a intentar en el próximo refresco.',
           'activity.showMore': 'ver más ({{n}})',
           'activity.showLess': 'ver menos',
-          'activity.chartAriaLabel': 'Actividad de 7 días para {{project}}: {{judged}}, {{steps}}.',
-          'activity.weekBreakdown': '{{judged}} · {{steps}}',
           'activity.judgedOne': '{{n}} comando juzgado',
           'activity.judgedOther': '{{n}} comandos juzgados',
           'activity.stepsOne': '{{n}} paso',
           'activity.stepsOther': '{{n}} pasos',
-          'activity.gateAllowed': 'Permitidas',
-          'activity.gateAdvised': 'Aconsejadas',
-          'activity.gateAsked': 'Preguntadas',
-          'activity.gateBlocked': 'Bloqueadas',
-          'activity.estimatedCost': 'Costo estimado a precio de lista: ${{amount}}.',
-          'activity.totalEstimatedCost': 'Costo total estimado a precio de lista: ${{amount}}.',
           'activity.routerSaved': '{{switches}} cambio(s) de modelo, un ahorro estimado de ${{amount}} a precio de lista.',
           'activity.routerCost': '{{switches}} cambio(s) de modelo, un costo extra estimado de ${{amount}} a precio de lista.',
           'activity.routerNoEstimate': '{{switches}} cambio(s) de modelo, todavía sin estimación de ahorro.',
+          'activity.total': 'Total: {{cost}} estimado a precio de lista en {{projects}} proyecto(s) · {{judged}} · {{steps}}',
+          'activity.costLabel': 'costo estimado',
+          'activity.outcomes': '{{asked}} con pregunta · {{blocked}} bloqueadas',
+          'activity.tokens': '{{n}} tokens',
+          'activity.models': 'Por modelo: {{list}}',
+          'activity.rest': '{{n}} proyecto(s) más: {{cost}} · {{judged}} · {{steps}}',
+          'window.unavailableCard': 'Ningún registro lleva todavía la versión del plugin: elige otra ventana.',
           'stats.recentHeading': 'Últimas decisiones del gate',
           'waiting.heading': 'Esperándote ({{n}})',
           'waiting.release': 'No se ejecutó nada de esto. Para soltar uno, dile al agente en esa sesión que lo corra de nuevo: en ese momento se te pregunta. Si no, queda aquí.',
@@ -639,8 +638,8 @@
           'speed.tokensNote': 'Cada deliberación del modelo se midió en frío: «claude -p» carga su propio contexto cada vez. En una sesión viva ese contexto ya está cargado, así que esa cifra es el coste de decidir en frío, no el de cada decisión dentro de la sesión.',
           'skills.heading': 'Mod de skills',
           // K0 (odd/tasks/typing-lead-time.md): from consumptionSummary.typing.
-          'skills.typing': 'Escritura antes de enviar (7 días): p50 {{p50}} s · p90 {{p90}} s · {{typed}} prompts escritos · {{injected}} inyectados',
-          'skills.typingNoneTyped': 'Escritura antes de enviar (7 días): todavía sin prompts escritos · {{injected}} inyectados',
+          'skills.typing': 'Escritura antes de enviar: p50 {{p50}} s · p90 {{p90}} s · {{typed}} prompts escritos · {{injected}} inyectados',
+          'skills.typingNoneTyped': 'Escritura antes de enviar: todavía sin prompts escritos · {{injected}} inyectados',
           'unmeasured.heading': 'Lo que estos números no miden',
           'unmeasured.money': 'Dinero. Este panel no convierte nada a coste y no va a hacerlo.',
           'unmeasured.extrapolation': 'El tiempo total ahorrado. La diferencia de arriba está medida por decisión; multiplicarla por todas las decisiones sería una extrapolación, no una medida.',
@@ -694,21 +693,21 @@
           'consumption.modelRouterTierComplex': 'Analizar',
           'consumption.modelRouterTierFrontier': 'Razonar a fondo',
           'consumption.modelRouterAppliedMeasured': 'Aplicadas {{applied}} · no aplicadas {{measured}}',
-          'consumption.modelRouterColdSwitches': 'Cambios tras una caché fría: {{n}} (7 días)',
+          'consumption.modelRouterColdSwitches': 'Cambios tras una caché fría: {{n}}',
           'consumption.modelRouterSavedEstimate': 'Ahorro estimado a precio de lista: ${{amount}}.',
           'consumption.modelRouterExtraCost': 'Costo extra estimado a precio de lista: ${{amount}}.',
           'consumption.modelRouterEstimateScope': 'Cubre solo las bajadas de modelo en un cambio de etapa: los pasos que corrieron en el modelo más barato, menos la reescritura de caché que costó cada cambio.',
           'consumption.modelRouterNoEstimateYet': 'Todavía no hay ninguna bajada en un cambio de etapa que estimar.',
           'consumption.stewardHeading': 'Guardián de contexto',
           'consumption.stewardEmpty': 'Todavía no hay decisiones del guardián de contexto.',
-          'consumption.stewardApplied': 'Compactaciones aplicadas (24 h): {{applied}} · habría compactado: {{would}} (solo mide)',
+          'consumption.stewardApplied': 'Compactaciones aplicadas: {{applied}} · habría compactado: {{would}} (solo mide)',
           'consumption.stewardFreed': 'Estimación: en promedio, unos {{tokens}} tokens menos que releer en cada paso siguiente de una sesión compactada.',
           'consumption.stewardNoFreed': 'Todavía no hay compactaciones aplicadas que estimar.',
           'consumption.stewardColdEmpty': 'Antes de que se enfríe la caché: todavía no hay decisiones.',
-          'consumption.stewardCold': 'Antes de que se enfríe la caché (7 días): compactó {{fired}} · habría compactado {{would}} (solo mide) · retomadas en 24 h, con la caché ya fría: {{returned}} · retomadas aún tibia: {{early}} · no retomadas: {{gone}} · aún en espera: {{pending}}',
+          'consumption.stewardCold': 'Antes de que se enfríe la caché: compactó {{fired}} · habría compactado {{would}} (solo mide) · retomadas en 24 h, con la caché ya fría: {{returned}} · retomadas aún tibia: {{early}} · no retomadas: {{gone}} · aún en espera: {{pending}}',
           'consumption.stewardColdSaving': 'Ahorro realizado: {{saving}} · desperdicio (nadie volvió, o volvió con la caché aún tibia): {{waste}} (en tokens equivalentes a precio de entrada)',
           'consumption.stewardColdRewrite': 'Reescritura en frío cuando se retomaron las sesiones medidas: {{tokens}} tokens; el modo activo habría evitado la mayor parte.',
-          'consumption.stewardVerified': 'Ahorro verificado (7 días): {{tokens}} tokens que el agente principal no releyó, un {{share}} de su contexto. Medido sobre el uso real en {{verified}} de {{compactions}} compactaciones.',
+          'consumption.stewardVerified': 'Ahorro verificado: {{tokens}} tokens que el agente principal no releyó, un {{share}} de su contexto. Medido sobre el uso real en {{verified}} de {{compactions}} compactaciones.',
         },
         en: {
           'window.label': 'Time window',
@@ -760,26 +759,25 @@
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
           'stats.listingChars': 'Listing characters not sent',
-          'activity.heading': 'Activity by project (7 days)',
+          'activity.heading': 'Activity by project',
           'activity.empty': 'No activity yet.',
           'activity.unavailable': 'Activity could not be calculated this time. It will try again on the next refresh.',
           'activity.showMore': 'show more ({{n}})',
           'activity.showLess': 'show less',
-          'activity.chartAriaLabel': '7-day activity for {{project}}: {{judged}}, {{steps}}.',
-          'activity.weekBreakdown': '{{judged}} · {{steps}}',
           'activity.judgedOne': '{{n}} judged command',
           'activity.judgedOther': '{{n}} judged commands',
           'activity.stepsOne': '{{n}} step',
           'activity.stepsOther': '{{n}} steps',
-          'activity.gateAllowed': 'Allowed',
-          'activity.gateAdvised': 'Advised',
-          'activity.gateAsked': 'Asked',
-          'activity.gateBlocked': 'Blocked',
-          'activity.estimatedCost': 'Estimated cost at list prices: ${{amount}}.',
-          'activity.totalEstimatedCost': 'Total estimated cost at list prices: ${{amount}}.',
           'activity.routerSaved': '{{switches}} model switch(es), an estimated ${{amount}} saved at list prices.',
           'activity.routerCost': '{{switches}} model switch(es), an estimated ${{amount}} extra cost at list prices.',
           'activity.routerNoEstimate': '{{switches}} model switch(es), no saving estimate yet.',
+          'activity.total': 'Total: {{cost}} estimated at list prices across {{projects}} project(s) · {{judged}} · {{steps}}',
+          'activity.costLabel': 'estimated cost',
+          'activity.outcomes': '{{asked}} asked · {{blocked}} blocked',
+          'activity.tokens': '{{n}} tokens',
+          'activity.models': 'By model: {{list}}',
+          'activity.rest': '{{n}} more project(s): {{cost}} · {{judged}} · {{steps}}',
+          'window.unavailableCard': 'No record carries the plugin version yet: pick another window.',
           'stats.recentHeading': 'Latest gate decisions',
           'waiting.heading': 'Waiting for you ({{n}})',
           'waiting.release': 'None of this ran. To release one, tell the agent in that session to run it again: you are asked at that moment. Otherwise it stays here.',
@@ -850,8 +848,8 @@
           'speed.tokensBig': '{{model}}: {{in}} in · {{out}} out · {{cache}} of context loaded',
           'speed.tokensNote': 'Every model deliberation was measured cold: "claude -p" loads its own context each time. Inside a live session that context is already resident, so this figure is the cost of deciding cold, not the cost of each in-session decision.',
           'skills.heading': 'Skills mod',
-          'skills.typing': 'Typing before send (7 days): p50 {{p50}} s · p90 {{p90}} s · {{typed}} typed prompts · {{injected}} injected',
-          'skills.typingNoneTyped': 'Typing before send (7 days): no typed prompts yet · {{injected}} injected',
+          'skills.typing': 'Typing before send: p50 {{p50}} s · p90 {{p90}} s · {{typed}} typed prompts · {{injected}} injected',
+          'skills.typingNoneTyped': 'Typing before send: no typed prompts yet · {{injected}} injected',
           'unmeasured.heading': 'What these numbers do not measure',
           'unmeasured.money': 'Money. This panel converts nothing into cost and will not start.',
           'unmeasured.extrapolation': 'Total time saved. The gap above is measured per decision; multiplying it by every decision would be an extrapolation, not a measurement.',
@@ -902,21 +900,21 @@
           'consumption.modelRouterTierComplex': 'Analyse',
           'consumption.modelRouterTierFrontier': 'Deep reasoning',
           'consumption.modelRouterAppliedMeasured': 'Applied {{applied}} · not applied {{measured}}',
-          'consumption.modelRouterColdSwitches': 'Switches after a cold cache: {{n}} (7 days)',
+          'consumption.modelRouterColdSwitches': 'Switches after a cold cache: {{n}}',
           'consumption.modelRouterSavedEstimate': 'Estimated saving at list prices: ${{amount}}.',
           'consumption.modelRouterExtraCost': 'Estimated extra cost at list prices: ${{amount}}.',
           'consumption.modelRouterEstimateScope': 'Covers downgrades at a stage change only: the steps that ran on the cheaper model, minus the cache rewrite each switch cost.',
           'consumption.modelRouterNoEstimateYet': 'No downgrade at a stage change to estimate yet.',
           'consumption.stewardHeading': 'Context steward',
           'consumption.stewardEmpty': 'No context steward decisions yet.',
-          'consumption.stewardApplied': 'Compactions applied (24 h): {{applied}} · would have compacted: {{would}} (measuring only)',
+          'consumption.stewardApplied': 'Compactions applied: {{applied}} · would have compacted: {{would}} (measuring only)',
           'consumption.stewardFreed': 'Estimate: on average, about {{tokens}} tokens fewer to re-read on each later step of a compacted session.',
           'consumption.stewardNoFreed': 'No applied compaction to estimate yet.',
           'consumption.stewardColdEmpty': 'Before the cache goes cold: no decision yet.',
-          'consumption.stewardCold': 'Before the cache goes cold (7 days): compacted {{fired}} · would have compacted {{would}} (measuring only) · back within 24 h, cache already cold: {{returned}} · back while still warm: {{early}} · not back: {{gone}} · still waiting: {{pending}}',
+          'consumption.stewardCold': 'Before the cache goes cold: compacted {{fired}} · would have compacted {{would}} (measuring only) · back within 24 h, cache already cold: {{returned}} · back while still warm: {{early}} · not back: {{gone}} · still waiting: {{pending}}',
           'consumption.stewardColdSaving': 'Realized saving: {{saving}} · waste (nobody came back, or came back while warm): {{waste}} (input-token equivalents)',
           'consumption.stewardColdRewrite': 'Cold rewrite when the measured sessions came back: {{tokens}} tokens; active mode would have avoided most of it.',
-          'consumption.stewardVerified': 'Verified saving (7 days): {{tokens}} tokens the main agent did not re-read, {{share}} of its context. Measured on real usage in {{verified}} of {{compactions}} compactions.',
+          'consumption.stewardVerified': 'Verified saving: {{tokens}} tokens the main agent did not re-read, {{share}} of its context. Measured on real usage in {{verified}} of {{compactions}} compactions.',
         }
       }
       /**
@@ -1346,13 +1344,13 @@
       // converted to ES5 -- `grep -n defaultWindowKey` across both files is
       // how to check the copies still agree.
       function defaultWindowKey (windows) {
-        if (!windows) return 'all'
-        var order = ['version', 'week', 'all']
+        if (!windows) return 'day'
+        var order = ['day', 'week', 'all']
         for (var i = 0; i < order.length; i++) {
           var w = windows[order[i]]
           if (w && w.available && w.totalDecisions > 0) return order[i]
         }
-        return 'all'
+        return 'day'
       }
       function relativeAge (iso, nowMs) {
         if (typeof iso !== 'string') return null
@@ -1405,6 +1403,18 @@
         if (chosenWindow && windows && windows[chosenWindow] && windows[chosenWindow].available) return chosenWindow
         return defaultWindowKey(windows)
       }
+      // odd/tasks/board-global-window.md W1: the one window every card on
+      // every tab shows, settled from the gate's windows on each render
+      // (renderStats) and by the person's chip.
+      var currentWindowKey = 'day'
+      /** This card's summary for the current window: `part.windows[key]`,
+       *  carrying its own `available`, `sinceMs` and `coverageSinceMs`; null
+       *  when the reader published no windows. */
+      function windowOf (part) {
+        if (!part || typeof part !== 'object' || !part.windows || typeof part.windows !== 'object') return null
+        var w = part.windows[currentWindowKey]
+        return w && typeof w === 'object' ? w : null
+      }
       function renderWindowPicker (windows, activeKey) {
         var version = windows && windows.version
         var versionAvailable = !!(version && version.available)
@@ -1432,7 +1442,7 @@
         var key = target.getAttribute('data-window')
         if (!key) return
         chosenWindow = key
-        if (lastStats) renderStats(lastStats)
+        renderEverything()
       })
 
       // ---------- the four questions -------------------------------------
@@ -1636,24 +1646,29 @@
 
       function renderSkills (mod) {
         if (!((mod.totalDecisions || 0) > 0)) { fill('skills-body', null, '', t('stats.skillsEmpty')); return }
-        var rows = [{ label: t('stats.skillSuggestions'), value: mod.suggestedCount || 0 }]
-        if (mod.listingCharsTotal != null) {
-          rows.push({ label: t('stats.listingChars'), value: mod.listingCharsTotal })
+        var w = windowOf(mod)
+        if (w && w.available === false) { fill('skills-body', null, '', t('window.unavailableCard')); return }
+        // A summary from before the windows (an older worker) has only the all-time figures.
+        var figuresOf = w || mod
+        var rows = [{ label: t('stats.skillSuggestions'), value: figuresOf.suggestedCount || 0 }]
+        if (figuresOf.listingCharsTotal != null) {
+          rows.push({ label: t('stats.listingChars'), value: figuresOf.listingCharsTotal })
         }
         var parts = [figures(rows)]
         parts.push(line(t('stats.skillMatchRate') + ': ' +
-          (mod.matchRate == null ? t('stats.na') : pct(mod.matchRate) + '%')))
+          (figuresOf.matchRate == null ? t('stats.na') : pct(figuresOf.matchRate) + '%')))
         fill('skills-body', null, parts.join(''), '')
       }
 
       /** K0 (odd/tasks/typing-lead-time.md): the pause between the last
-       *  keystroke and sending, over the last 7 days, from the worker's
+       *  keystroke and sending, in the window, from the worker's
        *  consumptionSummary.typing (read-consumption.mjs). No summary (no
-       *  row yet, an {ok:false} read, or none published) is no line at all,
-       *  never a zero; with only injected prompts there is no pause to show. */
+       *  file yet, no prompt in the window, an {ok:false} read, or none
+       *  published) is no line at all, never a zero; with only injected
+       *  prompts there is no pause to show. */
       function renderSkillsTyping (summary) {
-        var typing = summary && summary.ok === true ? summary.typing : null
-        if (!typing || typeof typing.typed !== 'number' || typeof typing.injected !== 'number') { el('skills-typing').innerHTML = ''; return }
+        var typing = summary && summary.ok === true ? windowOf(summary.typing) : null
+        if (!typing || typeof typing.typed !== 'number' || typeof typing.injected !== 'number' || typing.typed + typing.injected <= 0) { el('skills-typing').innerHTML = ''; return }
         var seconds = function (value) { return num(Math.round(value / 100) / 10) }
         el('skills-typing').innerHTML = typing.typed > 0 && typeof typing.p50Ms === 'number' && typeof typing.p90Ms === 'number'
           ? line(t('skills.typing', { p50: seconds(typing.p50Ms), p90: seconds(typing.p90Ms), typed: num(typing.typed), injected: num(typing.injected) }))
@@ -1864,8 +1879,9 @@
        * zeroed-out summary that would look like a router that ran and
        * decided nothing.
        */
-      function consumptionModelRouterBlock (modelRouter) {
-        if (!modelRouter) return line(t('consumption.modelRouterEmpty'), 'empty-line')
+      function consumptionModelRouterBlock (summary, modelRouter) {
+        if (!summary) return line(t('consumption.modelRouterEmpty'), 'empty-line')
+        if (!modelRouter || modelRouter.available === false) return line(t('window.unavailableCard'), 'empty-line')
 
         var parts = []
         var anyPoint = false
@@ -1878,7 +1894,7 @@
         if (!anyPoint) parts.push(line(t('consumption.modelRouterNoDecisions'), 'empty-line'))
 
         parts.push(line(t('consumption.modelRouterAppliedMeasured', { applied: num(modelRouter.applied), measured: num(modelRouter.measured) })))
-        // Track R: switches the cold cache made free (7 days). A summary from before the count has none: no line, never a zero.
+        // Track R: switches the cold cache made free, in the window. A summary from before the count has none: no line, never a zero.
         if (typeof modelRouter.coldSwitches === 'number') parts.push(line(t('consumption.modelRouterColdSwitches', { n: num(modelRouter.coldSwitches) })))
         // Never a negative "saving": a total below zero is what the
         // switches cost (review finding 8), and the line always says what
@@ -1894,15 +1910,16 @@
       }
 
       /**
-       * The context steward (odd/tasks/jev-context-steward.md): the last
-       * 24h's compactions, and an ESTIMATE of the context each one took off
-       * every later step. When `steward.verified` (verifyStewardSaving)
-       * confirms a saving on real usage over 7 days, that measured total
+       * The context steward (odd/tasks/jev-context-steward.md): the window's
+       * compactions, and an ESTIMATE of the context each one took off every
+       * later step. When `steward.verified` (verifyStewardSaving) confirms a
+       * saving on real usage in the same window, that measured total
        * replaces the per-step estimate, which overstates the drop.
-       * `steward` null: no log yet, one honest line.
+       * `summary` null: no log yet, one honest line.
        */
-      function consumptionStewardBlock (steward) {
-        if (!steward) return line(t('consumption.stewardEmpty'), 'empty-line')
+      function consumptionStewardBlock (summary, steward) {
+        if (!summary) return line(t('consumption.stewardEmpty'), 'empty-line')
+        if (!steward || steward.available === false) return line(t('window.unavailableCard'), 'empty-line')
         var parts = [line(t('consumption.stewardApplied', { applied: num(steward.applied), would: num(steward.wouldCompact) }))]
         var verified = steward.verified
         if (verified && verified.verified > 0) {
@@ -1921,8 +1938,8 @@
       }
 
       /**
-       * Track S (odd/tasks/steward-pre-cold.md): the pre-cold tier over 7
-       * days (summarizePreCold). Saving and waste only when an applied
+       * Track S (odd/tasks/steward-pre-cold.md): the pre-cold tier in the
+       * window (summarizePreCold). Saving and waste only when an applied
        * compaction measured them; the cold rewrite only when a measured
        * session came back. `undefined` (an older worker): nothing; null: one
        * honest line.
@@ -1940,15 +1957,12 @@
 
       /**
        * `summary`: the raw `consumptionSummary` storage value, or `null`
-       * before the worker's first publish. Primary window: last24h when it
-       * has any steps, else last7d -- last24h is the more actionable window,
-       * but falling back avoids showing "no data" right after an hour/day
-       * boundary when the 7-day window still has real history. The four
-       * recommendation triggers are NOT re-derived from this choice: they
-       * come straight from `recommendations`, which read-consumption.mjs
-       * always computes from last24h specifically (its own trigger
-       * functions), independent of which window this function picks to
-       * display the raw per-model/context/subagent numbers.
+       * before the worker's first publish. Usage, the router, the steward
+       * and typing each carry one summary per board window
+       * (read-consumption.mjs, odd/tasks/board-global-window.md W1); this
+       * card shows the current window's. The recommendation triggers are
+       * NOT windowed: read-consumption.mjs always computes them from the
+       * last 24 h.
        */
       // 0.6.8 T6: the main conversation and its subagents counted apart, as
       // real totals (src/core/consumption.ts's byAgent). A side with no
@@ -1970,12 +1984,10 @@
         if (!summary) { fill('consumption-body', 'consumption-empty', '', t('consumption.empty')); return }
         if (summary.ok === false) { fill('consumption-body', 'consumption-empty', '', t('consumption.unavailable')); return }
 
-        var usage = summary.usage || {}
-        var last24h = usage.last24h || { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
-        var last7d = usage.last7d || { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
+        var w = windowOf(summary.usage) || { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
         var quota = summary.quota || { accounts: [], checkedAt: null }
         var accounts = Array.isArray(quota.accounts) ? quota.accounts : []
-        var hasUsage = (last24h.stepCount || 0) > 0 || (last7d.stepCount || 0) > 0
+        var hasUsage = (w.stepCount || 0) > 0
         var hasQuota = accounts.length > 0
         var hasModelRouter = !!summary.modelRouter
         var hasSteward = !!summary.steward
@@ -1985,19 +1997,20 @@
           return
         }
 
-        var w = (last24h.stepCount || 0) > 0 ? last24h : last7d
         var parts = []
 
         parts.push('<p class="kpi-sub"><b>' + esc(t('consumption.usageHeading')) + '</b></p>')
-        if (w.byModel && w.byModel.length > 0) {
+        if (w.available === false) {
+          parts.push(line(t('window.unavailableCard'), 'empty-line'))
+        } else if (w.byModel && w.byModel.length > 0) {
           parts.push(w.byModel.map(consumptionModelBlock).join('<div class="divider"></div>'))
         } else {
           parts.push(line(t('consumption.noModelData'), 'empty-line'))
         }
-        parts.push(w.avgMainStepContextReread === null
+        if (w.available !== false) parts.push(w.avgMainStepContextReread === null || w.avgMainStepContextReread === undefined
           ? line(t('consumption.noContextData'), 'empty-line')
           : line(t('consumption.avgContext', { tokens: num(Math.round(w.avgMainStepContextReread)) })))
-        parts.push(w.byAgent ? consumptionByAgentLines(w.byAgent) : w.subagentShare === null
+        if (w.available !== false) parts.push(w.byAgent ? consumptionByAgentLines(w.byAgent) : w.subagentShare === null || w.subagentShare === undefined
           ? line(t('consumption.noSubagentData'), 'empty-line')
           : line(t('consumption.subagentSplit', { percent: String(Math.round(w.subagentShare * 1000) / 10) })))
 
@@ -2013,187 +2026,106 @@
         }
 
         parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.modelRouterHeading')) + '</b></p>')
-        parts.push(consumptionModelRouterBlock(summary.modelRouter))
+        parts.push(consumptionModelRouterBlock(summary.modelRouter, windowOf(summary.modelRouter)))
 
         parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.stewardHeading')) + '</b></p>')
-        parts.push(consumptionStewardBlock(summary.steward))
+        parts.push(consumptionStewardBlock(summary.steward, windowOf(summary.steward)))
 
         fill('consumption-body', 'consumption-empty', parts.join(''), '')
       }
 
       // ---------- render: activity per project (JEVADV-63) --------------------
-      // `activityByProjectSummary`'s own shape (src/core/activity_by_project.ts,
-      // adapters/orca/read-activity.mjs): {ok, projects: ProjectActivity[]
-      // (aggregateActivityByProject's own ranking -- lastActivityAt descending,
-      // ties by total interactions -- NEVER re-sorted here), corruptLines,
-      // checkedAt} or {ok:false, reason, detail, checkedAt}. Empty state is
-      // {ok:true, projects:[], ...}. Same null/ok:false/empty three-way split
-      // as renderConsumption above.
+      // `activityByProjectSummary` (src/core/activity_by_project.ts,
+      // adapters/orca/read-activity.mjs): {ok, windows: {day, week, version,
+      // all}, corruptLines, checkedAt} or {ok:false, reason, detail,
+      // checkedAt}. Each window: {available, sinceMs, coverageSinceMs,
+      // projects (already ranked: dearest first, NEVER re-sorted here), rest,
+      // totals}. Same null/ok:false/empty three-way split as
+      // renderConsumption above.
       var ACTIVITY_TOP_N = 6
       var activityExpanded = false
       var lastActivitySummary = null
 
-      /** One day's combined interaction count -- judged commands plus main
-       *  and subagent steps, the same combination
-       *  aggregateActivityByProject's own ranking already sums (its
-       *  totalInteractions()), reused here as the 7-day chart's one
-       *  magnitude per bar (dataviz skill: discrete daily points of one
-       *  magnitude -> a bar-per-day strip, one hue, board.html's own .v1).
-       *  Different KINDS of count folded into one total is not the same
-       *  thing the "no shared scale" rule forbids -- that rule is about
-       *  tokens/cost/steps never sharing one AXIS (see activityTokensBlock,
-       *  activityRouterLine below), not about two event counts summing to
-       *  one total. */
-      function activityDayTotal (day) {
-        return (day.judgedCommands || 0) + (day.mainSteps || 0) + (day.subagentSteps || 0)
-      }
-
-      /** dataviz skill mark spec: bars <=24px thick, a 4px rounded data-end
-       *  square at the baseline, grown from a single baseline. One hue
-       *  (.v1) -- a single series needs no legend box. Every bar keeps a
-       *  native SVG <title> (day: value), the cheapest possible hover
-       *  affordance with no chart library and no custom JS reaching this
-       *  sandboxed panel. A day with nothing in it still gets its slot (the
-       *  Decisions section: "always 7 entries even when a day is empty"),
-       *  drawn as a flat hairline at the baseline, never omitted. */
-      function activityChart (project, days) {
-        var BAR_W = 10, GAP = 3, MAX_H = 22, BASELINE = 26, RADIUS = 3
-        var values = days.map(activityDayTotal)
-        var max = values.reduce(function (m, v) { return Math.max(m, v) }, 0)
-        var width = days.length * BAR_W + (days.length - 1) * GAP
-        var bars = days.map(function (d, i) {
-          var value = values[i]
-          var x = i * (BAR_W + GAP)
-          var titleText = esc(d.day) + ': ' + num(value)
-          if (max <= 0 || value <= 0) {
-            return '<rect x="' + x + '" y="' + (BASELINE - 1) + '" width="' + BAR_W + '" height="1"><title>' + titleText + '</title></rect>'
-          }
-          var h = Math.max(2, Math.round((value / max) * MAX_H))
-          var r = Math.min(RADIUS, h, BAR_W / 2)
-          var yTop = BASELINE - h
-          var pathD = 'M' + x + ',' + BASELINE +
-            ' L' + x + ',' + (yTop + r) +
-            ' Q' + x + ',' + yTop + ' ' + (x + r) + ',' + yTop +
-            ' L' + (x + BAR_W - r) + ',' + yTop +
-            ' Q' + (x + BAR_W) + ',' + yTop + ' ' + (x + BAR_W) + ',' + (yTop + r) +
-            ' L' + (x + BAR_W) + ',' + BASELINE + ' Z'
-          return '<path d="' + pathD + '"><title>' + titleText + '</title></path>'
-        }).join('')
-        var judgedTotal = days.reduce(function (s, d) { return s + (d.judgedCommands || 0) }, 0)
-        var stepsTotal = days.reduce(function (s, d) { return s + (d.mainSteps || 0) + (d.subagentSteps || 0) }, 0)
-        var label = t('activity.chartAriaLabel', { project: projectLabel(project), judged: activityCount(judgedTotal, 'activity.judged'), steps: activityCount(stepsTotal, 'activity.steps') })
-        return {
-          svg: '<svg class="act-chart v1" viewBox="0 0 ' + width + ' 28" width="' + width + '" height="28" role="img" aria-label="' + esc(label) + '">' + bars + '</svg>',
-          judgedTotal: judgedTotal,
-          stepsTotal: stepsTotal
-        }
-      }
-
-      /** Allowed/advised/asked/blocked as labelled numbers, never a stacked
-       *  bar (odd/tasks/jev-063-activity.md Decisions: four different-
-       *  meaning counts, not one whole). Only blocked borrows .vd's own
-       *  --viz variable for its <dd> text colour; the rest stay the normal
-       *  text colour -- no new hue, no background fill. Advised once took
-       *  .v3 (--ring), the palette's faintest neutral, and a nonzero count
-       *  in it read as disabled (release screenshot pass, 2026-09-28).
-       *  A zero count never takes the colour: a red "0" reads as an alarm
-       *  for something that didn't happen. */
       /** "1 step" / "3 steps": `base` + One|Other, with the count formatted. */
       function activityCount (n, base) {
         return t(base + (n === 1 ? 'One' : 'Other'), { n: num(n) })
       }
 
-      function activityGateFigures (outcomes) {
-        var o = outcomes || {}
-        var rows = [
-          { cls: '', label: t('activity.gateAllowed'), value: o.allowed || 0 },
-          { cls: '', label: t('activity.gateAdvised'), value: o.advised || 0 },
-          { cls: '', label: t('activity.gateAsked'), value: o.asked || 0 },
-          { cls: (o.blocked || 0) > 0 ? 'vd' : '', label: t('activity.gateBlocked'), value: o.blocked || 0 }
-        ]
-        return '<dl class="figures">' + rows.map(function (r) {
-          return '<div class="figure ' + r.cls + '"><dt>' + esc(r.label) + '</dt><dd>' + esc(num(r.value)) + '</dd></div>'
-        }).join('') + '</dl>'
+      function usd (amount) {
+        return '$' + (typeof amount === 'number' && isFinite(amount) ? Math.abs(amount) : 0).toFixed(2)
       }
 
-      /** Compact per-model token counts plus an estimated cost, no bar
-       *  (four different units: four token kinds and a dollar estimate) --
-       *  reuses friendlyModelName/figures/line exactly as
-       *  consumptionModelBlock does, without its percentage bars (those
-       *  describe one model's own share of its own total; this is raw
-       *  counts). A project with no turn-usage rows in the window has an
-       *  empty tokensByModel array -- an honestly empty section, so this
-       *  returns '' rather than a lone "$0.00 estimated" with nothing to
-       *  break down. */
-      function activityTokensBlock (tokensByModel, totalCost) {
-        var models = tokensByModel || []
-        if (models.length === 0) return ''
-        var rows = models.map(function (m) {
-          return '<div class="act-model"><p class="kpi-sub"><b title="' + esc(m.model) + '">' + esc(friendlyModelName(m.model)) + '</b></p>' +
-            figures([
-              { label: t('consumption.input'), value: m.input || 0 },
-              { label: t('consumption.output'), value: m.output || 0 },
-              { label: t('consumption.cacheRead'), value: m.cacheRead || 0 },
-              { label: t('consumption.cacheWrite'), value: m.cacheWrite || 0 }
-            ]) +
-            line(t('activity.estimatedCost', { amount: (m.estimatedCostUsd || 0).toFixed(2) })) +
-            '</div>'
-        }).join('')
-        return rows + line(t('activity.totalEstimatedCost', { amount: (totalCost || 0).toFixed(2) }))
-      }
-
-      /** "N switches, ~$X saved/extra cost (estimate)" -- reuses the exact
-       *  never-negative-saving convention consumptionModelRouterBlock above
-       *  already applies (Math.abs + relabel to "extra cost" below zero),
-       *  never reimplementing the math. `router` is null when the project
-       *  has no router-decision rows in the window at all (never a fake
-       *  zero row), in which case this whole line is omitted. */
-      function activityRouterLine (router) {
+      /** "N switches, ~$X saved/extra cost (estimate)" -- the same
+       *  never-negative-saving convention consumptionModelRouterBlock
+       *  applies (Math.abs + relabel to "extra cost" below zero). `router`
+       *  is null when the project has no router decision in the window
+       *  (never a fake zero row), in which case the line is omitted. */
+      function activityRouterText (router) {
         if (!router) return ''
         var estimate = router.savedEstimate
-        if (estimate === null || estimate === undefined) {
-          return line(t('activity.routerNoEstimate', { switches: num(router.applied) }))
-        }
-        var key = estimate < 0 ? 'activity.routerCost' : 'activity.routerSaved'
-        return line(t(key, { switches: num(router.applied), amount: Math.abs(estimate).toFixed(2) }))
+        if (estimate === null || estimate === undefined) return t('activity.routerNoEstimate', { switches: num(router.applied) })
+        return t(estimate < 0 ? 'activity.routerCost' : 'activity.routerSaved', { switches: num(router.applied), amount: Math.abs(estimate).toFixed(2) })
       }
 
-      function activityProjectCard (entry) {
-        var chart = activityChart(entry.project, entry.days)
+      /** One project: its name and estimated cost (labelled) on one line,
+       *  then its counts, then its dearest models and its router line. A
+       *  blocked count takes the destructive colour only when it is not zero. */
+      function activityProjectRow (entry) {
         var name = projectLabel(entry.project)
-        var ageHtml = entry.lastActivityAt ? '<span class="act-age">' + esc(ago(entry.lastActivityAt)) + '</span>' : ''
-        return '<article class="card act-card">' +
-          '<div class="act-card-head"><span class="act-name" title="' + esc(name) + '">' + esc(name) + '</span>' + ageHtml + '</div>' +
-          '<div class="act-chart-wrap">' + chart.svg +
-            '<div><span class="act-chart-total">' + esc(num(chart.judgedTotal + chart.stepsTotal)) + '</span><br>' +
-            '<span class="cmp-foot">' + esc(t('activity.weekBreakdown', { judged: activityCount(chart.judgedTotal, 'activity.judged'), steps: activityCount(chart.stepsTotal, 'activity.steps') })) + '</span></div>' +
-          '</div>' +
-          activityGateFigures(entry.gateOutcomes) +
-          activityTokensBlock(entry.tokensByModel, entry.totalEstimatedCostUsd) +
-          activityRouterLine(entry.router) +
-        '</article>'
+        var steps = (entry.steps && (entry.steps.main || 0) + (entry.steps.subagent || 0)) || 0
+        var outcomes = entry.gateOutcomes || {}
+        var counts = [esc(activityCount(entry.judged || 0, 'activity.judged'))]
+        if ((outcomes.asked || 0) > 0 || (outcomes.blocked || 0) > 0) {
+          counts[0] += ' (' + esc(t('activity.outcomes', { asked: num(outcomes.asked || 0), blocked: '\u0000' })).replace('\u0000',
+            '<span class="' + ((outcomes.blocked || 0) > 0 ? 'vd' : '') + '">' + esc(num(outcomes.blocked || 0)) + '</span>') + ')'
+        }
+        counts.push(esc(activityCount(steps, 'activity.steps')))
+        if ((entry.tokens || 0) > 0) counts.push(esc(t('activity.tokens', { n: num(entry.tokens) })))
+        var details = []
+        var models = Array.isArray(entry.models) ? entry.models.filter(function (m) { return (m.estimatedCostUsd || 0) > 0 }) : []
+        if (models.length > 0) {
+          details.push(t('activity.models', { list: models.map(function (m) { return friendlyModelName(m.model) + ' ' + usd(m.estimatedCostUsd) }).join(' · ') }))
+        }
+        var router = activityRouterText(entry.router)
+        if (router) details.push(router)
+        var cost = (entry.estimatedCostUsd || 0) > 0
+          ? '<span class="act-cost">' + esc(usd(entry.estimatedCostUsd)) + '<small>' + esc(t('activity.costLabel')) + '</small></span>'
+          : ''
+        return '<li class="act-row">' +
+          '<div class="act-head"><span class="act-name" title="' + esc(name) + '">' + esc(name) + '</span>' + cost + '</div>' +
+          '<p class="act-sub">' + counts.join(' · ') + '</p>' +
+          (details.length ? '<p class="act-sub">' + esc(details.join(' · ')) + '</p>' : '') +
+        '</li>'
       }
 
-      /** Top ACTIVITY_TOP_N projects, in the array's own pre-ranked order
-       *  (never re-sorted here -- see the module comment above), plus a
-       *  "show more" toggle for the rest, the same interaction pattern as
-       *  the live-status list's own toggle (a button, aria-expanded, focus
-       *  returned to the button after re-render) under its own class/id
-       *  names so the two never collide. */
+      /** Top ACTIVITY_TOP_N projects, in the reader's own ranked order
+       *  (never re-sorted here), plus a "show more" toggle for the rest of
+       *  the listed ones, and the reader's own `rest` row for the projects
+       *  past the ones it lists. */
       function renderActivityProjects (summary) {
         lastActivitySummary = summary
         if (!summary) { fill('projects-body', 'projects-empty', '', t('activity.empty')); return }
         if (summary.ok === false) { fill('projects-body', 'projects-empty', '', t('activity.unavailable')); return }
-        var projects = Array.isArray(summary.projects) ? summary.projects : []
+        var w = windowOf(summary)
+        if (w && w.available === false) { fill('projects-body', 'projects-empty', '', t('window.unavailableCard')); return }
+        var projects = w && Array.isArray(w.projects) ? w.projects : []
         if (projects.length === 0) { fill('projects-body', 'projects-empty', '', t('activity.empty')); return }
+        var totals = w.totals || {}
+        var total = '<p class="act-total">' + esc(t('activity.total', {
+          cost: usd(totals.estimatedCostUsd), projects: num(totals.projects || projects.length),
+          judged: activityCount(totals.judged || 0, 'activity.judged'), steps: activityCount(totals.steps || 0, 'activity.steps')
+        })) + '</p>'
         var shown = activityExpanded ? projects : projects.slice(0, ACTIVITY_TOP_N)
         var extra = projects.length - ACTIVITY_TOP_N
-        var list = '<div class="act-projects" id="projects-list">' + shown.map(activityProjectCard).join('') + '</div>'
+        var list = '<ol class="act-list" id="projects-list">' + shown.map(activityProjectRow).join('') + '</ol>'
         var toggle = extra > 0
           ? '<button type="button" class="act-toggle" data-activity-toggle aria-controls="projects-list" aria-expanded="' + (activityExpanded ? 'true' : 'false') + '">' +
             esc(activityExpanded ? t('activity.showLess') : t('activity.showMore', { n: String(extra) })) + '</button>'
           : ''
-        fill('projects-body', 'projects-empty', list + toggle, '')
+        var rest = w.rest && (activityExpanded || extra <= 0)
+          ? '<p class="act-rest">' + esc(t('activity.rest', { n: num(w.rest.projects), cost: usd(w.rest.estimatedCostUsd), judged: activityCount(w.rest.judged || 0, 'activity.judged'), steps: activityCount(w.rest.steps || 0, 'activity.steps') })) + '</p>'
+          : ''
+        fill('projects-body', 'projects-empty', total + list + rest + toggle, '')
       }
 
       // One listener for the toggle, which is re-rendered with the cards;
@@ -2312,6 +2244,7 @@
         show('card-unmeasured', hasMeasurements)
 
         var key = activeWindowKey(windows)
+        currentWindowKey = key
         var w = (windows && windows[key]) || {}
         show('top', hasGate && w.totalDecisions > 0)
         if (hasGate) {
@@ -2476,6 +2409,17 @@
         noteEl.textContent = t('common.workerSilent')
       }
 
+      var lastConsumption = null
+      /** Every card that follows the window, from the last summaries read --
+       *  on each reload and when the person picks a chip. The gate's own
+       *  windows settle the window first (renderStats). */
+      function renderEverything () {
+        renderStats(lastStats, lastPoliciesWithoutKind)
+        renderConsumption(lastConsumption)
+        renderSkillsTyping(lastConsumption)
+        renderActivityProjects(lastActivitySummary)
+      }
+
       function reload (usuario) {
         signalPanelOpen()
         return Promise.all([
@@ -2489,11 +2433,12 @@
         ]).then(function (results) {
           modelLabels = modelLabelsFromCatalog(results[6])
           render(results[0] || { entries: [] })
-          renderStats(results[1], results[3])
           renderWorkerNote(results[2])
-          renderConsumption(results[4])
-          renderSkillsTyping(results[4])
-          renderActivityProjects(results[5])
+          lastStats = results[1]
+          lastPoliciesWithoutKind = results[3] || null
+          lastConsumption = results[4]
+          lastActivitySummary = results[5]
+          renderEverything()
         }).catch(function (error) {
           noteEl.className = 'meta nota stale'
           // Same rule as config.html: a raw fault message is written for

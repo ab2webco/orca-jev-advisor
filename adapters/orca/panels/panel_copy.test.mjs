@@ -81,9 +81,11 @@ const NEW_ROUTER_KEYS_BY_FILE = {
 // Track R (odd/tasks/router-cold-switch.md): the router card's cold-switch line.
 NEW_ROUTER_KEYS_BY_FILE['board.html'].push('consumption.modelRouterColdSwitches')
 
-test('board.html: the cold-switch line reads as a sentence in es and en, with its count and its window', () => {
+// odd/tasks/board-global-window.md W1: the count follows the board's window,
+// which the card's heading names, so the line no longer carries its own.
+test('board.html: the cold-switch line reads as a sentence in es and en, with its count', () => {
   const values = translationValues('board.html').filter((v) => v.key === 'consumption.modelRouterColdSwitches').map((v) => v.value)
-  assert.deepEqual(values, ['Cambios tras una caché fría: {{n}} (7 días)', 'Switches after a cold cache: {{n}} (7 days)'])
+  assert.deepEqual(values, ['Cambios tras una caché fría: {{n}}', 'Switches after a cold cache: {{n}}'])
 })
 
 for (const [file, keys] of Object.entries(NEW_ROUTER_KEYS_BY_FILE)) {

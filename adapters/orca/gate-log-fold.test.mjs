@@ -54,13 +54,19 @@ function runScript (name, home) {
   return JSON.parse(execFileSync(process.execPath, [join(__dirname, name)], { env: envFor(home), encoding: 'utf8' }))
 }
 
-/** Every figure a reader derives from the gate log. The day and week windows name their own start from the clock, so only that string is set aside. */
+/** Every figure a reader derives from the gate log. The day and week windows name their own start from the clock, and so does how far back an 8-day log reaches (W1's coverageSinceMs), so only those bounds are set aside. */
 function readAll (home) {
   const measurements = runScript('read-measurements.mjs', home)
   assert.equal(measurements.ok, true, JSON.stringify(measurements))
-  for (const key of ['day', 'week']) delete measurements.gate.windows[key].since
+  for (const key of ['day', 'week']) {
+    for (const field of ['since', 'sinceMs', 'coverageSinceMs']) delete measurements.gate.windows[key][field]
+  }
   const activity = runScript('read-activity.mjs', home)
   assert.equal(activity.ok, true, JSON.stringify(activity))
+  for (const key of ['day', 'week', 'version', 'all']) {
+    delete activity.windows[key].coverageSinceMs
+    if (key !== 'version') delete activity.windows[key].sinceMs
+  }
   return { gate: measurements.gate, activity, abJev: countRealJevDecisions(cacheDirFor(home)) }
 }
 

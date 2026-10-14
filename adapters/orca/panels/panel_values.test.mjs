@@ -166,31 +166,25 @@ function boardWindow (overrides = {}) {
   return { available: true, totalDecisions: 10, ...overrides }
 }
 
-each('defaultWindowKey', 'defaultWindowKey: the current plugin version when it is available and has decisions', (defaultWindowKey) => {
-  const windows = { version: boardWindow(), day: boardWindow(), week: boardWindow(), all: boardWindow() }
-  assert.equal(defaultWindowKey(windows), 'version')
+// odd/tasks/board-global-window.md: the board opens on 24 h, for every tab.
+// "This version" is never the default: right after a release it holds
+// minutes of data (38 decisions against 2,132 in 24 h on the owner's board).
+each('defaultWindowKey', 'defaultWindowKey: 24 h whenever the last 24 h have decisions, even with a version available', (defaultWindowKey) => {
+  const windows = { version: boardWindow({ totalDecisions: 38 }), day: boardWindow({ totalDecisions: 2132 }), week: boardWindow(), all: boardWindow() }
+  assert.equal(defaultWindowKey(windows), 'day')
 })
 
-each('defaultWindowKey', 'defaultWindowKey: the last 7 days when no record carries a version yet', (defaultWindowKey) => {
-  const windows = { version: boardWindow({ available: false, totalDecisions: 0 }), day: boardWindow(), week: boardWindow(), all: boardWindow() }
-  assert.equal(defaultWindowKey(windows), 'week')
+each('defaultWindowKey', 'defaultWindowKey: the next wider window with decisions when the last 24 h are quiet', (defaultWindowKey) => {
+  const quiet = boardWindow({ totalDecisions: 0 })
+  assert.equal(defaultWindowKey({ version: quiet, day: quiet, week: boardWindow(), all: boardWindow() }), 'week')
+  assert.equal(defaultWindowKey({ version: quiet, day: quiet, week: quiet, all: boardWindow({ totalDecisions: 4 }) }), 'all')
 })
 
-each('defaultWindowKey', 'defaultWindowKey: all time when the last 7 days are empty but older decisions exist', (defaultWindowKey) => {
-  const windows = {
-    version: boardWindow({ available: false, totalDecisions: 0 }),
-    day: boardWindow({ totalDecisions: 0 }),
-    week: boardWindow({ totalDecisions: 0 }),
-    all: boardWindow({ totalDecisions: 4 }),
-  }
-  assert.equal(defaultWindowKey(windows), 'all')
-})
-
-each('defaultWindowKey', 'defaultWindowKey: all time for an empty log, and for a summary with no windows at all', (defaultWindowKey) => {
+each('defaultWindowKey', 'defaultWindowKey: 24 h for an empty log, and for a summary with no windows at all', (defaultWindowKey) => {
   const empty = boardWindow({ totalDecisions: 0 })
-  assert.equal(defaultWindowKey({ version: { ...empty, available: false }, day: empty, week: empty, all: empty }), 'all')
-  assert.equal(defaultWindowKey(undefined), 'all')
-  assert.equal(defaultWindowKey(null), 'all')
+  assert.equal(defaultWindowKey({ version: { ...empty, available: false }, day: empty, week: empty, all: empty }), 'day')
+  assert.equal(defaultWindowKey(undefined), 'day')
+  assert.equal(defaultWindowKey(null), 'day')
 })
 
 const NOW = Date.parse('2026-09-24T12:00:00.000Z')

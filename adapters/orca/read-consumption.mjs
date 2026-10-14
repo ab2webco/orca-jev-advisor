@@ -26,22 +26,20 @@
  *
  * Usage: node read-consumption.mjs
  * Always prints exactly one JSON line to stdout: `{ok: true, usage, quota,
- * recommendations, modelRouter}` or `{ok: false, reason, detail}`. A
- * missing quota.json, missing CLAUDE.md, or missing .claude.json each
- * degrade their own section gracefully (parsed as if empty/absent) rather
- * than failing the script. `modelRouter` (JEV-060 slice 2, §8) is `null`
- * when no `model-router-decisions-*.jsonl` file exists at all, else
- * `summarizeRouterDecisions`'s own summary over the last 24h, read and
- * pruned the same way as turn-usage. `steward` is the same for the context
- * steward's `context-steward-decisions-*.jsonl` (summarizeStewardDecisions,
- * odd/tasks/jev-context-steward.md): null until a file exists. Its
- * `verified` (verifyStewardSaving) is the saving measured on the raw
- * turn-usage rows over the last 7 days, the usage window. Its `preCold`
- * (summarizePreCold, odd/tasks/steward-pre-cold.md) is the pre-cold tier
- * over the same 7 days, its returns joined from the same turn-usage rows.
- * `typing` is the mod's `typing-*.jsonl` rows over the last 7 days
- * (summarizeTypingLeadTime, odd/tasks/typing-lead-time.md), null with no row
- * in that window; read and pruned the same way.
+ * recommendations, modelRouter, steward, typing}` or `{ok: false, reason,
+ * detail}`. A missing quota.json, missing CLAUDE.md, or missing .claude.json
+ * each degrade their own section gracefully (parsed as if empty/absent)
+ * rather than failing the script.
+ *
+ * odd/tasks/board-global-window.md W1: `usage`, `modelRouter`, `steward` and
+ * `typing` each carry `windows: {day, week, version, all}`, one summary per
+ * board window (src/core/board_windows.ts, built by log-files.mjs's
+ * perBoardWindow), each with its `sinceMs` and `coverageSinceMs` -- these
+ * logs are kept 8 days, so "all" and an old "version" say they reach only
+ * that far. `modelRouter` (summarizeRouterDecisions plus countColdSwitches),
+ * `steward` (summarizeStewardDecisions plus verifyStewardSaving and
+ * summarizePreCold) and `typing` (summarizeTypingLeadTime) are null while
+ * their log has no file at all. `recommendations` stay on the last 24 h.
  */
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -50,6 +48,7 @@ import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/
 import { homeConfigTarget } from '../../src/core/orca_accounts.ts'
 import {
   aggregateTurnUsage,
+  summarizeTurnUsageForWindow,
   claudeMdSizeTrigger,
   longSessionTrigger,
   mcpServerCountTrigger,
@@ -58,7 +57,10 @@ import {
 } from '../../src/core/consumption.ts'
 import { countColdSwitches, summarizeRouterDecisions } from '../../src/core/model_router_summary.ts'
 import {
+  boardWindowsOfGateLog,
   listHourlyFiles,
+  perBoardWindow,
+  readGateDecisionLog,
   MODEL_ROUTER_DECISIONS_FILE_PATTERN,
   readJsonlRows,
   toTurnUsageRecord,
@@ -67,7 +69,8 @@ import {
 import { STEWARD_DECISIONS_FILE_PATTERN, summarizeStewardDecisions, verifyStewardSaving } from '../../src/core/context_steward.ts'
 import { summarizePreCold } from '../../src/core/steward_pre_cold.ts'
 import { foldGateDecisionLog } from './gate-log-fold.mjs'
-import { summarizeTypingLeadTime, TYPING_FILE_PATTERN, TYPING_WINDOW_MS } from '../../src/core/typing_lead_time.ts'
+import { summarizeTypingLeadTime, TYPING_FILE_PATTERN } from '../../src/core/typing_lead_time.ts'
+import { HOURLY_LOG_KEPT_MS } from '../../src/core/board_windows.ts'
 
 const PLATFORM = normalizePlatform(process.platform)
 const HOME = homedir()
@@ -91,10 +94,10 @@ const QUOTA_PATH = join(CONFIG_DIR, 'quota.json')
 const CLAUDE_MD_PATH = join(CLAUDE_HOME_DIR, 'CLAUDE.md')
 const CLAUDE_JSON_PATH = join(HOME, '.claude.json')
 
-const MODEL_ROUTER_WINDOW_MS = 24 * 60 * 60 * 1000
-const STEWARD_VERIFIED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-const COLD_SWITCH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
-const PRUNE_AFTER_MS = 8 * 24 * 60 * 60 * 1000
+// odd/tasks/board-global-window.md W1: every summary below is computed once
+// per board window (src/core/board_windows.ts), and the hourly logs are kept
+// HOURLY_LOG_KEPT_MS, so a window longer than that says so (coverageSinceMs).
+const PRUNE_AFTER_MS = HOURLY_LOG_KEPT_MS
 
 /**
  * Deletes every listed file whose own hour bucket is more than 8 days
@@ -181,8 +184,17 @@ async function main () {
       else turnUsageRecords.push(record)
     }
 
+    // The recommendation triggers stay on the last 24 h, whatever window
+    // the board shows; the board's recommendations heading says so.
     const aggregation = aggregateTurnUsage(turnUsageRecords, now)
-    const usage = { ...aggregation, corruptLines: corrupt + malformed }
+    // "This version" starts where the gate's own view starts it: read before
+    // the fold below, which runs only after the summary is out.
+    const windows = boardWindowsOfGateLog(await readGateDecisionLog(CACHE_DIR), now)
+    const keptSinceMs = now - HOURLY_LOG_KEPT_MS
+    const usage = {
+      windows: perBoardWindow(windows, now, keptSinceMs, (window) => summarizeTurnUsageForWindow(turnUsageRecords, now, window)),
+      corruptLines: corrupt + malformed,
+    }
 
     const quota = await readQuota()
 
@@ -206,20 +218,32 @@ async function main () {
     // distinct from a summary that ran and found zero decisions (JEV-060
     // slice 2, §8, T9). `rows` (the raw turn-usage rows, before
     // toTurnUsageRecord) is exactly what summarizeRouterDecisions' own
-    // usageRows parameter expects: it parses `agent`/`at`/`account`/`model`
-    // itself.
-    // Track R: the switches a cold cache made free, over 7 days (they are rare).
+    // usageRows parameter expects. Track R's cold switches follow the same
+    // window as the rest of the summary.
     const modelRouter = decisionFiles.length === 0
       ? null
-      : { ...summarizeRouterDecisions(decisionRows, rows, now, MODEL_ROUTER_WINDOW_MS), coldSwitches: countColdSwitches(decisionRows, now, COLD_SWITCH_WINDOW_MS) }
+      : {
+          windows: perBoardWindow(windows, now, keptSinceMs, (_window, spanMs) => {
+            return { ...summarizeRouterDecisions(decisionRows, rows, now, spanMs), coldSwitches: countColdSwitches(decisionRows, now, spanMs) }
+          }),
+        }
 
     const steward = stewardFiles.length === 0
       ? null
-      : { ...summarizeStewardDecisions(stewardRows, now, MODEL_ROUTER_WINDOW_MS), verified: verifyStewardSaving(stewardRows, rows, now, STEWARD_VERIFIED_WINDOW_MS), preCold: summarizePreCold(stewardRows, rows, now, STEWARD_VERIFIED_WINDOW_MS) }
+      : {
+          windows: perBoardWindow(windows, now, keptSinceMs, (_window, spanMs) => {
+            return { ...summarizeStewardDecisions(stewardRows, now, spanMs), verified: verifyStewardSaving(stewardRows, rows, now, spanMs), preCold: summarizePreCold(stewardRows, rows, now, spanMs) }
+          }),
+        }
 
-    // K0 (odd/tasks/typing-lead-time.md): null with no row in the last 7
-    // days, so the Skills card shows no line rather than a zero.
-    const typing = summarizeTypingLeadTime(typingRows, now, TYPING_WINDOW_MS)
+    // K0 (odd/tasks/typing-lead-time.md): null with no typing file at all;
+    // a window with no row counts zero prompts and has no pause to show.
+    const typing = typingFiles.length === 0
+      ? null
+      : {
+          windows: perBoardWindow(windows, now, keptSinceMs, (_window, spanMs) =>
+            summarizeTypingLeadTime(typingRows, now, spanMs) ?? { typed: 0, injected: 0, p50Ms: null, p90Ms: null }),
+        }
 
     result = { ok: true, usage, quota, recommendations, modelRouter, steward, typing }
   } catch (error) {

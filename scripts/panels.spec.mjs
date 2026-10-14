@@ -121,6 +121,17 @@ try {
   SCENARIOS = null
 }
 
+// odd/tasks/board-global-window.md W1: the readers publish one summary per
+// board window. `windowed(figures, byKey)` builds that shape through the
+// readers' own perBoardWindow, the same figures in every window unless
+// `byKey` names a window's own.
+const { perBoardWindow } = await import('../adapters/orca/log-files.mjs')
+const { boardWindows, HOURLY_LOG_KEPT_MS } = await import('../src/core/board_windows.ts')
+function windowed (figures, byKey = {}) {
+  const now = Date.now()
+  return { windows: perBoardWindow(boardWindows(now, null), now, now - HOURLY_LOG_KEPT_MS, (window) => (byKey[window.key] ?? figures)) }
+}
+
 const RAW_SEED = JSON.parse(await readFile(join(ROOT, 'seed/policies.json'), 'utf8'))
 const SHIPPED = parseSeedPolicies(RAW_SEED)
 const SHIPPED_VERSION = parseSeedVersion(RAW_SEED)
@@ -1980,11 +1991,11 @@ test('the calibration card\'s legend rows sum to asked, with no bucket left unco
       Array.from(document.querySelectorAll('#approvals-body .legend .lv')).map((li) => li.textContent))
     assert.ok(legendValues.length > 0, 'the calibration card rendered no legend rows at all')
     const sum = legendValues.reduce((total, text) => total + Number(String(text).replace(/,/g, '')), 0)
-    // 'week' is defaultWindowKey's pick for SCENARIOS.ready (the first
-    // available window with decisions in it, per board.html) -- read from
-    // the fixture itself, never typed here, so this cannot drift from
-    // whichever window the panel actually renders.
-    const activeApprovals = SCENARIOS.ready.measurementsSummary.gate.windows.week.approvals
+    // 'day' is defaultWindowKey's pick for SCENARIOS.ready (24 h, which has
+    // decisions in it, per board.html) -- read from the fixture itself,
+    // never typed here, so this cannot drift from whichever window the
+    // panel actually renders.
+    const activeApprovals = SCENARIOS.ready.measurementsSummary.gate.windows.day.approvals
     assert.equal(sum, activeApprovals.asked, `legend rows ${JSON.stringify(legendValues)} do not sum to asked (${activeApprovals.asked})`)
     assert.deepEqual(errors, [], 'the board threw while rendering the calibration card')
   } finally {
@@ -2101,28 +2112,28 @@ const BOARD_MODELS = [
   { id: 'claude-sonnet-5', provider: 'anthropic', label: 'Claude Sonnet 5', rank: 3, agentModel: 'sonnet', source: '', available: true }
 ]
 
+const POPULATED_USAGE_DAY = {
+  stepCount: 42,
+  byModel: [
+    { model: 'claude-sonnet-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+    { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
+  ],
+  avgMainStepContextReread: 162345,
+  subagentShare: 0.47,
+  // 0.6.8 T6: the same split, as real totals.
+  byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } }
+}
+const POPULATED_USAGE_WEEK = {
+  stepCount: 300,
+  byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+  avgMainStepContextReread: 150500,
+  subagentShare: 0.3,
+  byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } }
+}
+
 const POPULATED_CONSUMPTION = {
   ok: true,
-  usage: {
-    last24h: {
-      stepCount: 42,
-      byModel: [
-        { model: 'claude-sonnet-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
-        { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
-      ],
-      avgMainStepContextReread: 162345,
-      subagentShare: 0.47,
-      // 0.6.8 T6: the same split, as real totals.
-      byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 12, tokens: 3650000 } }
-    },
-    last7d: {
-      stepCount: 300,
-      byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
-      avgMainStepContextReread: 150500,
-      subagentShare: 0.3,
-      byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } }
-    }
-  },
+  usage: { ...windowed(POPULATED_USAGE_WEEK, { day: POPULATED_USAGE_DAY }), corruptLines: 0 },
   quota: {
     accounts: [
       { id: 'acct-primary', status: 'ok', sessionUsedPercent: 12.4, weeklyUsedPercent: 81.2, resetsAt: Date.parse('2026-10-03T23:00:00.000Z') }
@@ -2139,12 +2150,12 @@ const POPULATED_CONSUMPTION = {
 }
 
 test('steward: the Consumption tab shows compactions applied and the context no longer re-read, labelled as an estimate', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000 } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000 }) }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Context steward/)
-    assert.match(text, /Compactions applied \(24 h\): 2/)
+    assert.match(text, /Compactions applied: 2/)
     assert.match(text, /on average, about 140,000 tokens/)
     assert.match(text, /estimate/i)
     assert.match(text, /would have compacted: 1/i)
@@ -2156,12 +2167,12 @@ test('steward: the Consumption tab shows compactions applied and the context no 
 
 test('steward: a verified saving replaces the estimated per-step line with the saving measured on real usage', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const verified = { compactions: 59, verified: 32, steps: 4891, tokensNotReread: 1380000000, mainContextTokens: 3500000000, share: 0.283 }
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, verified } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, verified }) }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
-    assert.match(text, /Compactions applied \(24 h\): 2/)
-    assert.match(text, /Verified saving \(7 days\): 1,380,000,000 tokens the main agent did not re-read, 28% of its context\. Measured on real usage in 32 of 59 compactions\./)
+    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /Verified saving: 1,380,000,000 tokens the main agent did not re-read, 28% of its context\. Measured on real usage in 32 of 59 compactions\./)
     assert.doesNotMatch(text, /on average, about 140,000 tokens/)
     assert.deepEqual(errors, [])
   } finally {
@@ -2171,7 +2182,7 @@ test('steward: a verified saving replaces the estimated per-step line with the s
 
 test('steward: a verified result with nothing verified keeps the estimated per-step line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const verified = { compactions: 3, verified: 0, steps: 0, tokensNotReread: 0, mainContextTokens: 0, share: null }
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, verified } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, verified }) }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -2200,10 +2211,7 @@ test('steward: with no steward log yet the Consumption tab says so in one line',
  *  card above and the `ok:false` failure below. */
 const EMPTY_CONSUMPTION = {
   ok: true,
-  usage: {
-    last24h: { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null },
-    last7d: { stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null }
-  },
+  usage: { ...windowed({ stepCount: 0, byModel: [], avgMainStepContextReread: null, subagentShare: null, byAgent: { main: { stepCount: 0, tokens: null }, subagent: { stepCount: 0, tokens: null } } }), corruptLines: 0 },
   quota: { accounts: [], checkedAt: null },
   recommendations: { mcpServerCount: { count: 0 } },
   checkedAt: new Date().toISOString()
@@ -2223,7 +2231,7 @@ test('the Consumption tab counts the main conversation and the subagents apart, 
 })
 
 test('a side that reported no token figure says so instead of printing a zero', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const usage = { ...POPULATED_CONSUMPTION.usage, last24h: { ...POPULATED_CONSUMPTION.usage.last24h, byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 0, tokens: null } } } }
+  const usage = { ...windowed({ ...POPULATED_USAGE_DAY, byAgent: { main: { stepCount: 30, tokens: 4120000 }, subagent: { stepCount: 0, tokens: null } } }), corruptLines: 0 }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, usage } })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -2676,7 +2684,7 @@ const NO_ESTIMATE_MODEL_ROUTER = {
 
 test('a populated modelRouter renders decisions by point/tier, applied vs measured, and the dollar estimate', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({
-    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: POPULATED_MODEL_ROUTER }
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: windowed(POPULATED_MODEL_ROUTER) }
   })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -2697,19 +2705,19 @@ test('a populated modelRouter renders decisions by point/tier, applied vs measur
   }
 })
 
-test('R3: the router card says how many switches came after a cold cache in 7 days, and says nothing without the count', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+test('R3: the router card says how many switches came after a cold cache in its window, and says nothing without the count', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const withCount = await openBoardPanel({
-    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: { ...POPULATED_MODEL_ROUTER, coldSwitches: 3 } }
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: windowed({ ...POPULATED_MODEL_ROUTER, coldSwitches: 3 }) }
   })
   try {
     const text = await withCount.page.evaluate(() => document.getElementById('consumption-body').innerText)
-    assert.match(text, /Switches after a cold cache: 3 \(7 days\)/)
+    assert.match(text, /Switches after a cold cache: 3/)
     assert.deepEqual(withCount.errors, [])
   } finally {
     await withCount.browser.close()
   }
   const older = await openBoardPanel({
-    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: POPULATED_MODEL_ROUTER }
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: windowed(POPULATED_MODEL_ROUTER) }
   })
   try {
     const text = await older.page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -2734,7 +2742,7 @@ test('an absent modelRouter renders one honest "no decisions yet" line, never a 
 
 test('a modelRouter with no applied switch yet renders "no applied switch to estimate" instead of a dollar amount', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({
-    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: NO_ESTIMATE_MODEL_ROUTER }
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: windowed(NO_ESTIMATE_MODEL_ROUTER) }
   })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -2749,7 +2757,7 @@ test('a modelRouter with no applied switch yet renders "no applied switch to est
 
 test('review finding 8: a negative estimate is shown as an extra cost, never as a negative saving', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel({
-    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: { ...POPULATED_MODEL_ROUTER, savedEstimate: -0.0912 } }
+    consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: windowed({ ...POPULATED_MODEL_ROUTER, savedEstimate: -0.0912 }) }
   })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -3258,13 +3266,13 @@ async function skillsCardText (page) {
 
 test('K0c skills-ready: the Skills card shows the typing lead time line (en)', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
   const scenario = SCENARIOS['skills-ready']
-  const typing = scenario.consumptionSummary?.typing
-  assert.ok(typing && typing.typed > 0 && typing.injected > 0, 'skills-ready must carry typed and injected prompts')
+  const typing = scenario.consumptionSummary?.typing?.windows?.day
+  assert.ok(typing && typing.typed > 0 && typing.injected > 0, 'skills-ready must carry typed and injected prompts in its 24 h window')
   const { browser, page, errors } = await openBoardPanel(scenario)
   try {
     const text = await skillsCardText(page)
     const seconds = (value) => (Math.round(value / 100) / 10).toLocaleString('en')
-    assert.match(text, new RegExp(`Typing before send \\(7 days\\): p50 ${seconds(typing.p50Ms)} s · p90 ${seconds(typing.p90Ms)} s · ${typing.typed} typed prompts · ${typing.injected} injected`))
+    assert.match(text, new RegExp(`Typing before send: p50 ${seconds(typing.p50Ms)} s · p90 ${seconds(typing.p90Ms)} s · ${typing.typed} typed prompts · ${typing.injected} injected`))
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -3273,11 +3281,11 @@ test('K0c skills-ready: the Skills card shows the typing lead time line (en)', {
 
 test('K0c skills-ready: the typing lead time line in Spanish', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
   const scenario = SCENARIOS['skills-ready']
-  const typing = scenario.consumptionSummary.typing
+  const typing = scenario.consumptionSummary.typing.windows.day
   const { browser, page, errors } = await openBoardPanel(scenario, 'es')
   try {
     const text = await skillsCardText(page)
-    assert.match(text, new RegExp(`Escritura antes de enviar \\(7 días\\): p50 .+ s · p90 .+ s · ${typing.typed} prompts escritos · ${typing.injected} inyectados`))
+    assert.match(text, new RegExp(`Escritura antes de enviar: p50 .+ s · p90 .+ s · ${typing.typed} prompts escritos · ${typing.injected} inyectados`))
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -3300,10 +3308,10 @@ test('K0c with no typing summary the Skills card has no typing line, not a zero'
 })
 
 test('K0c only injected prompts: the line says no prompt was typed, never p50 0 s', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, typing: { typed: 0, injected: 4, p50Ms: null, p90Ms: null } } })
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, typing: windowed({ typed: 0, injected: 4, p50Ms: null, p90Ms: null }) } })
   try {
     const text = await skillsCardText(page)
-    assert.match(text, /Typing before send \(7 days\): no typed prompts yet · 4 injected/)
+    assert.match(text, /Typing before send: no typed prompts yet · 4 injected/)
     assert.doesNotMatch(text, /p50/)
     assert.deepEqual(errors, [])
   } finally {
@@ -3760,49 +3768,53 @@ test('L6: live-busy shows project-a/main once with its twelve sessions, and keep
 })
 
 // ---------------------------------------------------------------------------
-// JEVADV-63 -- the Activity tab's per-project cards, replacing the old flat
-// "By project" bar list. `activityByProjectSummary`'s own shape
-// (src/core/activity_by_project.ts, adapters/orca/read-activity.mjs):
-// {ok, projects: ProjectActivity[] (aggregateActivityByProject's own
-// ranking -- lastActivityAt descending, ties by total interactions -- NEVER
-// re-sorted by the panel), corruptLines, checkedAt} or {ok:false, reason,
-// detail, checkedAt}. Empty state is {ok:true, projects:[], corruptLines:0,
-// checkedAt}.
+// JEVADV-63, odd/tasks/board-global-window.md W1 -- the Activity tab's
+// per-project list. `activityByProjectSummary` (src/core/activity_by_project.ts,
+// adapters/orca/read-activity.mjs): {ok, windows: {day, week, version, all},
+// corruptLines, checkedAt}; each window {available, sinceMs, coverageSinceMs,
+// projects (already ranked by the reader: dearest first -- NEVER re-sorted by
+// the panel), rest, totals}. Or {ok:false, reason, detail, checkedAt}.
 // ---------------------------------------------------------------------------
 
-/** A minimal-but-complete ProjectActivity row (src/core/activity_by_project.ts's
- *  own shape), with sensible zero defaults so a test only names the fields
- *  it cares about. */
-function activityDays (overrides) {
-  const days = Array.from({ length: 7 }, (_, i) => ({
-    day: `2026-09-${String(20 + i).padStart(2, '0')}`, judgedCommands: 0, mainSteps: 0, subagentSteps: 0
-  }))
-  if (overrides) for (const [i, fields] of Object.entries(overrides)) Object.assign(days[Number(i)], fields)
-  return days
-}
+/** One ProjectActivity row (aggregateActivityForWindow's own shape), with
+ *  zero defaults so a test only names the fields it cares about. */
 function activityProject (fields = {}) {
   return {
     project: null,
     lastActivityAt: new Date().toISOString(),
-    days: activityDays(),
+    judged: 0,
     gateOutcomes: { allowed: 0, advised: 0, asked: 0, blocked: 0 },
     steps: { main: 0, subagent: 0 },
-    tokensByModel: [],
-    totalEstimatedCostUsd: 0,
+    tokens: 0,
+    estimatedCostUsd: 0,
+    models: [],
     router: null,
     ...fields
   }
 }
-function activitySummary (projects) {
-  return { activityByProjectSummary: { ok: true, projects, corruptLines: 0, checkedAt: new Date().toISOString() } }
+function activityWindow (projects, rest = null) {
+  const sum = (pick) => projects.reduce((acc, p) => acc + pick(p), 0)
+  return {
+    projects,
+    rest,
+    totals: {
+      projects: projects.length + (rest ? rest.projects : 0),
+      judged: sum((p) => p.judged),
+      steps: sum((p) => p.steps.main + p.steps.subagent),
+      tokens: sum((p) => p.tokens),
+      estimatedCostUsd: sum((p) => p.estimatedCostUsd),
+      routerSavedEstimate: null
+    }
+  }
+}
+function activitySummary (projects, byKey = {}) {
+  return { activityByProjectSummary: { ok: true, ...windowed(activityWindow(projects), byKey), corruptLines: 0, checkedAt: new Date().toISOString() } }
 }
 
-/** Reads the current card list/toggle state without touching the tab --
- *  re-clicking #tab-activity on every read (as activityCards below does)
- *  would steal focus from the toggle button right after clicking it. */
+/** The list and its toggle, read without touching the tab. */
 async function activityCardsState (page) {
   return page.evaluate(() => ({
-    names: Array.from(document.querySelectorAll('#projects-body .act-card .act-name')).map((el) => el.textContent),
+    names: Array.from(document.querySelectorAll('#projects-body .act-row .act-name')).map((el) => el.textContent),
     toggle: (() => {
       const button = document.querySelector('#projects-body button[data-activity-toggle]')
       return button ? { text: button.textContent, expanded: button.getAttribute('aria-expanded'), controls: button.getAttribute('aria-controls') } : null
@@ -3814,29 +3826,24 @@ async function activityCards (page) {
   return activityCardsState(page)
 }
 
-/** One card's structured content, found by its visible project name. */
+/** One project's row, found by its visible name. */
 async function activityCardDetail (page, name) {
   await page.click('#tab-activity')
   return page.evaluate((name) => {
-    const card = Array.from(document.querySelectorAll('#projects-body .act-card'))
+    const row = Array.from(document.querySelectorAll('#projects-body .act-row'))
       .find((c) => c.querySelector('.act-name').textContent === name)
-    if (!card) return null
-    const figures = Array.from(card.querySelectorAll('.figure')).map((f) => ({
-      label: f.querySelector('dt').textContent,
-      value: f.querySelector('dd').textContent,
-      className: f.className,
-      color: getComputedStyle(f.querySelector('dd')).color
-    }))
+    if (!row) return null
+    const blocked = row.querySelector('.act-sub .vd')
     return {
-      age: card.querySelector('.act-age')?.textContent ?? null,
-      chartAriaLabel: card.querySelector('svg.act-chart')?.getAttribute('aria-label') ?? null,
-      figures,
-      text: card.innerText
+      cost: row.querySelector('.act-cost')?.textContent ?? null,
+      blockedColor: blocked ? getComputedStyle(blocked).color : null,
+      textColor: getComputedStyle(row.querySelector('.act-sub')).color,
+      text: row.innerText
     }
   }, name)
 }
 
-test('activity: cards render the top 6 projects in the array\'s own pre-ranked order, never re-sorted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+test('activity: rows render the top 6 projects in the reader\'s own ranked order, never re-sorted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const names = ['zulu', 'alpha', 'mike', 'bravo', 'yankee', 'charlie', 'delta', 'echo']
   const projects = names.map((project) => activityProject({ project }))
   const { browser, page, errors } = await openBoardPanel(activitySummary(projects))
@@ -3881,8 +3888,8 @@ test('activity: no projects renders the honest empty sentence, not a blank secti
     await page.click('#tab-activity')
     const text = await page.evaluate(() => document.getElementById('card-projects').innerText)
     assert.match(text, /no activity yet/i)
-    const cardCount = await page.evaluate(() => document.querySelectorAll('#projects-body .act-card').length)
-    assert.equal(cardCount, 0)
+    const rowCount = await page.evaluate(() => document.querySelectorAll('#projects-body .act-row').length)
+    assert.equal(rowCount, 0)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -3916,35 +3923,27 @@ test('activity: project: null renders as the unknown-project label, never blank'
   }
 })
 
-test('activity: a populated card shows gate outcomes and tokens/cost by model', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+test('activity: a populated row shows its labelled cost, counts with asked and blocked, tokens and its dearest models', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const project = activityProject({
     project: 'alpha',
-    days: activityDays({ 6: { judgedCommands: 3, mainSteps: 2, subagentSteps: 1 } }),
+    judged: 14,
     gateOutcomes: { allowed: 10, advised: 2, asked: 1, blocked: 1 },
-    tokensByModel: [
-      { model: 'claude-sonnet-5', input: 1000, output: 200, cacheRead: 5000, cacheWrite: 300, estimatedCostUsd: 1.23 }
-    ],
-    totalEstimatedCostUsd: 1.23
+    steps: { main: 2, subagent: 1 },
+    tokens: 6500,
+    estimatedCostUsd: 1.23,
+    models: [{ model: 'claude-sonnet-5', steps: 3, estimatedCostUsd: 1.23 }]
   })
   const { browser, page, errors } = await openBoardPanel({ ...activitySummary([project]), models: BOARD_MODELS })
   try {
     const detail = await activityCardDetail(page, 'alpha')
-    assert.ok(detail, 'expected a card for "alpha"')
-    const byLabel = Object.fromEntries(detail.figures.map((f) => [f.label, f.value]))
-    assert.equal(byLabel.Allowed, '10')
-    assert.equal(byLabel.Advised, '2')
-    assert.equal(byLabel.Asked, '1')
-    assert.equal(byLabel.Blocked, '1')
-    const blockedFigure = detail.figures.find((f) => f.label === 'Blocked')
-    const advisedFigure = detail.figures.find((f) => f.label === 'Advised')
-    assert.match(blockedFigure.className, /\bvd\b/, 'blocked must carry the destructive-colour class')
-    // --ring is the palette's faintest neutral: on a nonzero count it reads
-    // as disabled, the opposite of "Jev had something to say here".
-    assert.doesNotMatch(advisedFigure.className, /\bv3\b/, 'a nonzero advised count must not be greyed out in the ring colour')
-    assert.equal(advisedFigure.color, detail.figures.find((f) => f.label === 'Allowed').color, 'a nonzero advised count must read at full text contrast')
-    assert.match(detail.text, /Sonnet 5/)
-    assert.match(detail.text, /1,000/)
-    assert.match(detail.text, /\$1\.23/)
+    assert.ok(detail, 'expected a row for "alpha"')
+    assert.match(detail.cost, /\$1\.23/)
+    assert.match(detail.cost, /estimated cost/)
+    assert.match(detail.text, /14 judged commands \(1 asked · 1 blocked\)/)
+    assert.match(detail.text, /3 steps/)
+    assert.match(detail.text, /6,500 tokens/)
+    assert.match(detail.text, /Sonnet 5 \$1\.23/)
+    assert.notEqual(detail.blockedColor, detail.textColor, 'a nonzero blocked count takes the destructive colour')
     assert.doesNotMatch(detail.text, /switch/i, 'router: null must omit the router line entirely')
     assert.deepEqual(errors, [])
   } finally {
@@ -3953,14 +3952,8 @@ test('activity: a populated card shows gate outcomes and tokens/cost by model', 
 })
 
 test('activity: a positive router estimate reads "saved", a negative one reads "extra cost" -- never a negative number', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const saving = activityProject({
-    project: 'saver',
-    router: { total: 5, applied: 3, measured: 2, byPoint: {}, savedEstimate: 0.42, switchesEstimated: 2 }
-  })
-  const costly = activityProject({
-    project: 'spender',
-    router: { total: 3, applied: 2, measured: 1, byPoint: {}, savedEstimate: -0.15, switchesEstimated: 1 }
-  })
+  const saving = activityProject({ project: 'saver', router: { applied: 3, savedEstimate: 0.42 } })
+  const costly = activityProject({ project: 'spender', router: { applied: 2, savedEstimate: -0.15 } })
   const { browser, page, errors } = await openBoardPanel(activitySummary([saving, costly]))
   try {
     const savingDetail = await activityCardDetail(page, 'saver')
@@ -3978,50 +3971,47 @@ test('activity: a positive router estimate reads "saved", a negative one reads "
   }
 })
 
-test('activity: an empty tokensByModel array omits the cost breakdown entirely, never a lone $0.00', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const project = activityProject({ project: 'no-tokens', tokensByModel: [], totalEstimatedCostUsd: 0 })
+test('activity: a project with no cost shows no cost and no model line, never a lone $0.00', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({ project: 'no-tokens', judged: 3, gateOutcomes: { allowed: 3, advised: 0, asked: 0, blocked: 0 } })
   const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
   try {
     const detail = await activityCardDetail(page, 'no-tokens')
-    assert.doesNotMatch(detail.text, /estimated cost/i)
+    assert.equal(detail.cost, null)
+    assert.doesNotMatch(detail.text, /\$0\.00|By model/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
   }
 })
 
-test('activity: the chart\'s role="img" aria-label states the real judged-command and step counts', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const project = activityProject({
-    project: 'aria-check',
-    days: activityDays({ 0: { judgedCommands: 4 }, 3: { mainSteps: 2, subagentSteps: 1 } })
-  })
-  const { browser, page, errors } = await openBoardPanel(activitySummary([project]))
-  try {
-    const detail = await activityCardDetail(page, 'aria-check')
-    assert.match(detail.chartAriaLabel, /aria-check/)
-    assert.match(detail.chartAriaLabel, /4 judged commands/)
-    assert.match(detail.chartAriaLabel, /3 steps/)
-    assert.deepEqual(errors, [])
-  } finally {
-    await browser.close()
-  }
-})
-
-test('activity: a count of one reads singular in the week line and the chart label, in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const project = activityProject({
-    project: 'single',
-    days: activityDays({ 6: { judgedCommands: 1, mainSteps: 1 } })
-  })
-  for (const [locale, judged, steps] of [['en', '1 judged command', '1 step'], ['es', '1 comando juzgado', '1 paso']]) {
+test('activity: the total line sums the window, and a count of one reads singular, in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const project = activityProject({ project: 'single', judged: 1, gateOutcomes: { allowed: 1, advised: 0, asked: 0, blocked: 0 }, steps: { main: 1, subagent: 0 }, estimatedCostUsd: 0.5, models: [{ model: 'x', steps: 1, estimatedCostUsd: 0.5 }] })
+  for (const [locale, judged, steps, total] of [['en', '1 judged command', '1 step', /Total: \$0\.50 estimated at list prices across 1 project/], ['es', '1 comando juzgado', '1 paso', /Total: \$0\.50 estimado a precio de lista en 1 proyecto/]]) {
     const { browser, page, errors } = await openBoardPanel(activitySummary([project]), locale)
     try {
       const detail = await activityCardDetail(page, 'single')
       assert.ok(detail.text.includes(`${judged} · ${steps}`), `${locale}: expected "${judged} · ${steps}" in ${JSON.stringify(detail.text)}`)
-      assert.ok(detail.chartAriaLabel.includes(`${judged}, ${steps}`), `${locale}: expected "${judged}, ${steps}" in ${JSON.stringify(detail.chartAriaLabel)}`)
+      const card = await page.evaluate(() => document.getElementById('card-projects').innerText)
+      assert.match(card, total)
       assert.deepEqual(errors, [])
     } finally {
       await browser.close()
     }
+  }
+})
+
+test('activity: the projects past the ones the reader names are one row, never dropped from the total', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const projects = [activityProject({ project: 'named', judged: 2 })]
+  const summary = { activityByProjectSummary: { ok: true, ...windowed(activityWindow(projects, { projects: 30, judged: 40, steps: 12, tokens: 0, estimatedCostUsd: 3.5 })), corruptLines: 0, checkedAt: new Date().toISOString() } }
+  const { browser, page, errors } = await openBoardPanel(summary)
+  try {
+    await page.click('#tab-activity')
+    const text = await page.evaluate(() => document.getElementById('card-projects').innerText)
+    assert.match(text, /30 more project\(s\): \$3\.50 · 40 judged commands · 12 steps/)
+    assert.match(text, /across 31 project/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
   }
 })
 
@@ -5162,19 +5152,19 @@ test('steward: the pre-cold switch reads in Spanish too', { skip: chromium ? fal
 })
 
 // Track S: the pre-cold tier's weekly numbers under the steward's, both locales.
-test('steward: the pre-cold tier shows fired, would fire, returned within 24 h, realized saving and waste for 7 days', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+test('steward: the pre-cold tier shows fired, would fire, returned within 24 h, realized saving and waste for its window', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const preCold = { fired: 3, wouldFire: 5, skipped: 2, returned: 3, returnedEarly: 1, notReturned: 2, pending: 2, coldRewriteOnReturn: 410000, realizedSaving: 250000, waste: 44000, engineIdleCompactions: 0 }
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, preCold } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, preCold }) }
   for (const locale of ['en', 'es']) {
     const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward }, locale)
     try {
       const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
       if (locale === 'en') {
-        assert.match(text, /Before the cache goes cold \(7 days\): compacted 3 · would have compacted 5 \(measuring only\) · back within 24 h, cache already cold: 3 · back while still warm: 1 · not back: 2 · still waiting: 2/)
+        assert.match(text, /Before the cache goes cold: compacted 3 · would have compacted 5 \(measuring only\) · back within 24 h, cache already cold: 3 · back while still warm: 1 · not back: 2 · still waiting: 2/)
         assert.match(text, /Realized saving: 250,000 · waste \(nobody came back, or came back while warm\): 44,000 \(input-token equivalents\)/)
         assert.match(text, /Cold rewrite when the measured sessions came back: 410,000 tokens/)
       } else {
-        assert.match(text, /Antes de que se enfríe la caché \(7 días\): compactó 3 · habría compactado 5 \(solo mide\) · retomadas en 24 h, con la caché ya fría: 3 · retomadas aún tibia: 1 · no retomadas: 2 · aún en espera: 2/)
+        assert.match(text, /Antes de que se enfríe la caché: compactó 3 · habría compactado 5 \(solo mide\) · retomadas en 24 h, con la caché ya fría: 3 · retomadas aún tibia: 1 · no retomadas: 2 · aún en espera: 2/)
         assert.match(text, /Ahorro realizado: 250,000|Ahorro realizado: 250.000/)
         assert.match(text, /Reescritura en frío/)
       }
@@ -5186,7 +5176,7 @@ test('steward: the pre-cold tier shows fired, would fire, returned within 24 h, 
 })
 
 test('steward: with no pre-cold row the board says so, and no saving line is invented', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, preCold: null } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, preCold: null }) }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
@@ -5201,7 +5191,7 @@ test('steward: with no pre-cold row the board says so, and no saving line is inv
 
 test('steward: measured only, the pre-cold line shows no saving or waste line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const preCold = { fired: 0, wouldFire: 2, skipped: 0, returned: 1, returnedEarly: 0, notReturned: 0, pending: 1, coldRewriteOnReturn: 150000, realizedSaving: null, waste: null, engineIdleCompactions: 0 }
-  const withSteward = { ...POPULATED_CONSUMPTION, steward: { decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, preCold } }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 6, applied: 2, wouldCompact: 1, freedPerStep: 140000, preCold }) }
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)

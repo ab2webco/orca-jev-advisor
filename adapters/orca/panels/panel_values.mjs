@@ -111,24 +111,24 @@ export function buildPolicyRow(fields) {
 // that drifts fails the tests.
 
 /**
- * Which window the board opens on. The current plugin version first, since
- * an accumulated count mixes rule semantics across releases; the last 7 days
- * while no record carries a version yet (read-measurements.mjs marks that
- * window `available: false`); all time when the last 7 days are empty but
- * older decisions exist. An empty log opens on all time, which is empty too
- * and renders the board's empty state.
+ * Which window the board opens on (odd/tasks/board-global-window.md): the
+ * last 24 h, on every tab. When the last 24 h hold no gate decision, the
+ * next wider window that does (7 days, then all time), so the board is never
+ * near-empty by default. "This version" is never the default: right after a
+ * release it holds minutes of data. An empty log, or no summary yet, opens on
+ * 24 h, which renders the board's empty state.
  *
  * @param {Record<string, { available: boolean, totalDecisions: number }> | null | undefined} windows
- * @returns {'version' | 'week' | 'all'}
+ * @returns {'day' | 'week' | 'all'}
  */
 export function defaultWindowKey(windows) {
-  if (!windows) return "all";
-  const order = ["version", "week", "all"];
+  if (!windows) return "day";
+  const order = ["day", "week", "all"];
   for (const key of order) {
     const w = windows[key];
     if (w && w.available && w.totalDecisions > 0) return key;
   }
-  return "all";
+  return "day";
 }
 
 /**

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * read-activity.mjs — sidecar that folds the last 7 days of real activity,
- * per project, into the one summary the board's Activity tab renders
+ * read-activity.mjs — sidecar that folds real activity, per project, for
+ * each of the board's windows, into the one summary the Activity tab renders
  * (JEVADV-63, A3). It reads, all under ~/.cache/orca-supervisor/ (outside
  * the worker's own permission sandbox -- same reason every other
  * cross-boundary read in this plugin goes through a clean child):
@@ -24,15 +24,19 @@
  * never race on `rm`.
  *
  * Usage: node read-activity.mjs
- * Always prints exactly one JSON line to stdout: `{ok: true, projects,
- * corruptLines}` or `{ok: false, reason, detail}`.
+ * Always prints exactly one JSON line to stdout: `{ok: true, windows,
+ * corruptLines}` (windows keyed day/week/version/all) or `{ok: false,
+ * reason, detail}`.
  */
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
-import { aggregateActivityByProject } from '../../src/core/activity_by_project.ts'
+import { aggregateActivityForWindow } from '../../src/core/activity_by_project.ts'
+import { HOURLY_LOG_KEPT_MS } from '../../src/core/board_windows.ts'
 import {
+  boardWindowsOfGateLog,
   listHourlyFiles,
+  perBoardWindow,
   MODEL_ROUTER_DECISIONS_FILE_PATTERN,
   guardGateDecisionRows,
   readGateDecisionLog,
@@ -43,11 +47,13 @@ import {
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 
-// The fold's window is 7 local calendar days, whose oldest day starts less
-// than 7*24h before now; 8 days of hourly files (UTC-named) covers it with
-// margin for any timezone offset. Same span read-consumption.mjs keeps on
-// disk before pruning, so nothing inside the window is ever missing here.
-const READ_WINDOW_MS = 8 * 24 * 60 * 60 * 1000
+// odd/tasks/board-global-window.md W1: the board's windows (24 h, 7 days,
+// this version, all), rolling, the same instants as every other tab. The
+// hourly files are kept 8 days (read-consumption.mjs prunes them, and folds
+// gate files of that age), so no window reaches further back than that, and
+// each window says so through its coverageSinceMs. An hour file is read when
+// it could hold a row of that span.
+const READ_WINDOW_MS = HOURLY_LOG_KEPT_MS + 60 * 60 * 1000
 
 /** Only the hourly files whose bucket could still hold a row inside the
  *  window -- a file whose bucket failed to parse is read anyway (the fold
@@ -101,7 +107,8 @@ async function main () {
     const turnUsage = guardRows(usage.rows, toTurnUsageRecord)
     const routerDecisions = guardRows(decisions.rows, toRouterDecisionRow)
 
-    const summary = aggregateActivityByProject(gate.records, turnUsage.records, routerDecisions.records, now)
+    const windows = perBoardWindow(boardWindowsOfGateLog(gateLog, now), now, now - HOURLY_LOG_KEPT_MS, (window) =>
+      aggregateActivityForWindow(gate.records, turnUsage.records, routerDecisions.records, now, window))
     // 0.6.21 T1: the unreadable lines of gate files already folded still
     // count, as they did while those files were read. Folded decisions are
     // all older than this fold's seven days, so only the files are folded.
@@ -111,7 +118,7 @@ async function main () {
       usage.corrupt + turnUsage.malformed +
       decisions.corrupt + routerDecisions.malformed
 
-    result = { ok: true, ...summary, corruptLines }
+    result = { ok: true, windows, corruptLines }
   } catch (error) {
     result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }
