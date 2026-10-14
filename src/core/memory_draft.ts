@@ -273,12 +273,41 @@ export function removeIndexLine(index: string, file: string): string {
   return kept.length === lines.length ? index : kept.join("\n");
 }
 
-/** The index with `line` for `file`: the line that already links the file is replaced in place, else the line is appended. Everything else is kept. */
+/** Claude Code loads MEMORY.md only up to its first 200 lines and 25,000 bytes (2.1.299: `ZN=200`, `tie=25000`); a line past either is never seen. */
+export const INDEX_LOAD_LINES = 200;
+export const INDEX_LOAD_BYTES = 25_000;
+
+/** Whether line `at` of `lines` is inside the part of the index Claude Code loads. */
+function insideLoadWindow(lines: readonly string[], at: number): boolean {
+  if (at >= INDEX_LOAD_LINES) return false;
+  const bytes = lines.slice(0, at + 1).reduce((sum, l) => sum + new TextEncoder().encode(l).length + 1, 0);
+  return bytes <= INDEX_LOAD_BYTES;
+}
+
+/** `lines` with `line` placed above the first entry (`- ` line), or at the top when there is none: inside the load window whatever the index's length. */
+function aboveFirstEntry(lines: readonly string[], line: string): string[] {
+  const first = lines.findIndex((l) => l.startsWith("- "));
+  const at = first < 0 ? 0 : first;
+  return [...lines.slice(0, at), line, ...lines.slice(at)];
+}
+
+/**
+ * The index with `line` for `file`: the line that already links the file is
+ * replaced in place, else the line is appended. A line that would land past
+ * Claude Code's load window (an index over 200 lines or 25,000 bytes) goes
+ * above the first entry instead, so a saved rule is always read; the entry
+ * that slips past the window is an older one. Everything else is kept.
+ */
 export function upsertIndexLine(index: string, file: string, line: string): string {
   const links = (l: string): boolean => l.includes(`](${file})`);
-  const lines = index.split("\n");
+  const lines = index.trimEnd() === "" ? [] : index.trimEnd().split("\n");
   const first = lines.findIndex(links);
-  if (first < 0) return index.trim() === "" ? `${line}\n` : `${index.trimEnd()}\n${line}\n`;
-  const next = lines.flatMap((l, i) => (i === first ? [line] : links(l) ? [] : [l]));
-  return `${next.join("\n").trimEnd()}\n`;
+  if (first < 0) {
+    const appended = [...lines, line];
+    const placed = insideLoadWindow(appended, appended.length - 1) ? appended : aboveFirstEntry(lines, line);
+    return `${placed.join("\n")}\n`;
+  }
+  const replaced = lines.flatMap((l, i) => (i === first ? [line] : links(l) ? [] : [l]));
+  if (insideLoadWindow(replaced, first)) return `${replaced.join("\n").trimEnd()}\n`;
+  return `${aboveFirstEntry(replaced.filter((_, i) => i !== first), line).join("\n").trimEnd()}\n`;
 }

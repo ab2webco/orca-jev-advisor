@@ -260,6 +260,32 @@ test("upsertIndexLine: appends a new file, replaces the line of a known one, kee
   assert.equal(upsertIndexLine("- [One](one.md) — first", "b.md", "- [B](b.md) — b"), "- [One](one.md) — first\n- [B](b.md) — b\n");
 });
 
+test("upsertIndexLine: a new line that would fall past Claude Code's 200-line window goes above the first entry instead", () => {
+  const entries = Array.from({ length: 200 }, (_, i) => `- [E${i}](e${i}.md) — entry ${i}`);
+  const full = `${entries.join("\n")}\n`;
+  const out = upsertIndexLine(full, "new.md", "- [New](new.md) — new").split("\n");
+  assert.equal(out[0], "- [New](new.md) — new", "inside the window");
+  assert.equal(out.filter((l) => l.includes("](new.md)")).length, 1);
+  assert.equal(out.length - 1, 201, "nothing dropped");
+  const headed = `# Memory\n\n${full}`;
+  assert.deepEqual(upsertIndexLine(headed, "new.md", "- [New](new.md) — new").split("\n").slice(0, 3), ["# Memory", "", "- [New](new.md) — new"], "under the heading, above the first entry");
+});
+
+test("upsertIndexLine: past the 25,000-byte window the new line goes above the first entry too", () => {
+  const entries = Array.from({ length: 150 }, (_, i) => `- [E${i}](e${i}.md) — ${"x".repeat(160)}`);
+  const index = `${entries.join("\n")}\n`;
+  assert.ok(index.length > 25_000 && entries.length < 200);
+  assert.equal(upsertIndexLine(index, "new.md", "- [New](new.md) — new").split("\n")[0], "- [New](new.md) — new");
+});
+
+test("upsertIndexLine: a known line past the window is moved above the first entry when it is replaced", () => {
+  const entries = Array.from({ length: 205 }, (_, i) => `- [E${i}](e${i}.md) — entry ${i}`);
+  const out = upsertIndexLine(`${entries.join("\n")}\n`, "e204.md", "- [E204!](e204.md) — changed").split("\n");
+  assert.equal(out[0], "- [E204!](e204.md) — changed");
+  assert.equal(out.filter((l) => l.includes("](e204.md)")).length, 1);
+  assert.equal(upsertIndexLine(`${entries.join("\n")}\n`, "e3.md", "- [E3!](e3.md) — changed").split("\n")[3], "- [E3!](e3.md) — changed", "a line inside the window stays in place");
+});
+
 test("removeIndexLine: drops the line that links the file, keeps the rest, and is a no-op when it is absent", () => {
   const index = "# Feedback\n- [One](one.md) — first\n- [Two](two.md) — second\n";
   assert.equal(removeIndexLine(index, "one.md"), "# Feedback\n- [Two](two.md) — second\n");
