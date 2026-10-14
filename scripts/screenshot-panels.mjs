@@ -1187,6 +1187,18 @@ SCENARIOS['activity-ready'] = {
   activityByProjectSummary: { ok: true, windows: everyWindow(() => activityWindowFixture(ACTIVITY_READY_PROJECTS)), corruptLines: 0, checkedAt: iso },
 }
 
+/**
+ * odd/tasks/board-global-window.md W2 -- every board card populated at once:
+ * the gate, the skills mod and its typing line, the router and the steward,
+ * and the Activity rows, so a window switch can be checked on every tab.
+ */
+SCENARIOS['board-full'] = {
+  ...SCENARIOS['router-ready'],
+  measurementsSummary: SCENARIOS['skills-ready'].measurementsSummary,
+  consumptionSummary: { ...SCENARIOS['router-ready'].consumptionSummary, typing: SCENARIOS['skills-ready'].consumptionSummary.typing },
+  activityByProjectSummary: SCENARIOS['activity-ready'].activityByProjectSummary,
+}
+
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
  *  needs none: the notice renders straight from policySeedNoticeStatus. */
 const SCENARIO_CLICKS = {

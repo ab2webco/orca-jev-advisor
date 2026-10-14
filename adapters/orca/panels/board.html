@@ -257,6 +257,11 @@
       .windows button[disabled] { opacity: 0.45; cursor: default; }
       .windows button:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
       .windows .meta { flex-basis: 100%; }
+      .windows .meta:empty { display: none; }
+      /* W2: the window a card shows, after its heading, in the heading's own
+         quiet colour but not shouted in capitals. */
+      h2 .win { text-transform: none; letter-spacing: 0; font-weight: 400; }
+      h2 .win:not(:empty)::before { content: " · "; }
 
       .strip { margin: 0 12px; padding: 8px 12px; border: 1px solid var(--border, var(--fb-border));
                border-radius: var(--radius-md); }
@@ -372,12 +377,25 @@
     <p class="meta nota" id="note"></p>
 
     <!--
+      odd/tasks/board-global-window.md W2 (superseding board-tabs-and-names.md
+      T2's placement): one window for the whole board. The chips drive every
+      card on every tab, so they sit above the tabs, under none of them, in
+      the order 24 h, 7 days, this version, all time. Every card heading names
+      the window it shows, or says it does not follow the chip.
+    -->
+    <nav class="windows" id="windows" data-i18n-aria="window.label">
+      <button type="button" data-window="day" data-i18n="window.day"></button>
+      <button type="button" data-window="week" data-i18n="window.week"></button>
+      <button type="button" data-window="version"></button>
+      <button type="button" data-window="all" data-i18n="window.all"></button>
+      <span class="meta" id="window-note"></span>
+    </nav>
+
+    <!--
       odd/tasks/board-tabs-and-names.md T2. Every section lives under exactly
       one tab-panel (scripts/panels.spec.mjs pins the grouping by id). The
-      header, its agent count and the worker note stay above the tabs: they
-      are about the whole board. The window chips do not: they filter only
-      the gate's own windows (status, cost, interventions, calibration --
-      see renderStats), so they sit inside the Gate tab.
+      header, its agent count, the worker note and the window chips stay
+      above the tabs: they are about the whole board.
     -->
     <div class="tabbar" id="board-tabbar" role="tablist" data-i18n-aria="tabs.groupLabel">
       <button type="button" class="tab" id="tab-gate" role="tab" aria-controls="panel-gate" aria-selected="true" data-i18n="tabs.gate"></button>
@@ -394,18 +412,10 @@
       when nothing is queued -- see renderWaiting.
     -->
     <section class="card waiting" id="card-waiting" style="display:none">
-      <h2 id="waiting-heading"></h2>
+      <h2><span id="waiting-heading"></span><span class="win" id="win-waiting"></span></h2>
       <ul class="waiting-list" id="waiting-body"></ul>
       <p class="empty-line" id="waiting-release" data-i18n="waiting.release"></p>
     </section>
-
-    <nav class="windows" id="windows" data-i18n-aria="window.label">
-      <button type="button" data-window="version"></button>
-      <button type="button" data-window="day" data-i18n="window.day"></button>
-      <button type="button" data-window="week" data-i18n="window.week"></button>
-      <button type="button" data-window="all" data-i18n="window.all"></button>
-      <span class="meta" id="window-note"></span>
-    </nav>
 
     <section class="card wide" id="card-empty" style="display:none;margin:0 12px">
       <h2 data-i18n="empty.heading"></h2>
@@ -413,35 +423,35 @@
     </section>
 
     <section class="strip" id="card-status">
-      <h2 data-i18n="status.heading"></h2>
+      <h2><span data-i18n="status.heading"></span><span class="win" id="win-status"></span></h2>
       <div class="chips" id="status-body"></div>
     </section>
 
     <div class="top" id="top">
       <section class="card" id="card-toll">
-        <h2 data-i18n="toll.heading"></h2>
+        <h2><span data-i18n="toll.heading"></span><span class="win" id="win-toll"></span></h2>
         <div id="toll-body"></div>
       </section>
 
       <section class="card" id="card-interventions">
-        <h2 data-i18n="interv.heading"></h2>
+        <h2><span data-i18n="interv.heading"></span><span class="win" id="win-interv"></span></h2>
         <div id="interventions-body"></div>
       </section>
 
       <section class="card" id="card-calibration">
-        <h2 data-i18n="approvals.heading"></h2>
+        <h2><span data-i18n="approvals.heading"></span><span class="win" id="win-calibration"></span></h2>
         <div id="approvals-body"></div>
       </section>
     </div>
 
     <div class="cards">
       <section class="card wide" id="card-recent">
-        <h2 data-i18n="stats.recentHeading"></h2>
+        <h2><span data-i18n="stats.recentHeading"></span><span class="win" id="win-recent"></span></h2>
         <div id="stats-recent"></div>
       </section>
 
       <section class="card wide" id="card-speed">
-        <h2 data-i18n="speed.heading"></h2>
+        <h2><span data-i18n="speed.heading"></span><span class="win" id="win-speed"></span></h2>
         <div id="speed-empty" class="empty-line" style="display:none"></div>
         <div id="speed-body"></div>
       </section>
@@ -456,12 +466,12 @@
     <div class="tab-panel" id="panel-activity" role="tabpanel" aria-labelledby="tab-activity" hidden>
     <div class="cards">
       <section class="card wide" id="card-live">
-        <h2 data-i18n="live.heading"></h2>
+        <h2><span data-i18n="live.heading"></span><span class="win" id="win-live"></span></h2>
         <div id="cards"><p class="empty" data-i18n="live.loading"></p></div>
       </section>
 
       <section class="card wide" id="card-projects">
-        <h2 data-i18n="activity.heading"></h2>
+        <h2><span data-i18n="activity.heading"></span><span class="win" id="win-projects"></span></h2>
         <div id="projects-empty" class="empty-line" style="display:none"></div>
         <div id="projects-body"></div>
       </section>
@@ -471,7 +481,7 @@
     <div class="tab-panel" id="panel-consumption" role="tabpanel" aria-labelledby="tab-consumption" hidden>
     <div class="cards">
       <section class="card wide" id="card-consumption">
-        <h2 data-i18n="consumption.heading"></h2>
+        <h2><span data-i18n="consumption.heading"></span><span class="win" id="win-consumption"></span></h2>
         <div id="consumption-empty" class="empty-line" style="display:none"></div>
         <div id="consumption-body"></div>
       </section>
@@ -481,7 +491,7 @@
     <div class="tab-panel" id="panel-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
     <div class="cards">
       <section class="card wide" id="card-skills">
-        <h2 data-i18n="skills.heading"></h2>
+        <h2><span data-i18n="skills.heading"></span><span class="win" id="win-skills"></span></h2>
         <div id="skills-body"></div>
         <div id="skills-typing"></div>
       </section>
@@ -506,7 +516,12 @@
           'window.day': '24 h',
           'window.week': '7 días',
           'window.all': 'Todo',
-          'window.emptyWindow': 'Sin decisiones en esta ventana. Elige una más amplia.',
+          'window.emptyWindow': 'El gate no tiene decisiones en esta ventana. Elige una más amplia.',
+          'window.kept': '{{window}}: solo los últimos {{days}} días, lo que se guarda',
+          'window.ignoresNow': 'ahora, no sigue la ventana',
+          'window.ignoresRecent': 'las últimas {{n}}, no siguen la ventana',
+          'window.ignoresAb': 'todas las comparaciones, no sigue la ventana',
+          'window.ignoresDay': 'últimas 24 h, no sigue la ventana',
           'empty.heading': 'Todavía no hay nada medido',
           'empty.body': 'El gate todavía no ha juzgado ningún comando. Cuando Claude Code proponga el primero, este tablero responde aquí sus cuatro preguntas: si el gate funciona, qué cuesta, dónde interviene y cómo va la calibración.',
           'status.heading': '¿Funciona el gate?',
@@ -717,7 +732,12 @@
           'window.day': '24 h',
           'window.week': '7 days',
           'window.all': 'All time',
-          'window.emptyWindow': 'No decisions in this window. Pick a wider one.',
+          'window.emptyWindow': 'The gate has no decision in this window. Pick a wider one.',
+          'window.kept': '{{window}}: only the last {{days}} days, all that is kept',
+          'window.ignoresNow': 'right now, not the window',
+          'window.ignoresRecent': 'the last {{n}}, not the window',
+          'window.ignoresAb': 'every comparison, not the window',
+          'window.ignoresDay': 'last 24 h, not the window',
           'empty.heading': 'Nothing measured yet',
           'empty.body': 'The gate has not judged any command yet. Once Claude Code proposes the first one, this board answers its four questions here: is the gate working, what it costs, where it steps in, and how calibration is going.',
           'status.heading': 'Is the gate working?',
@@ -1399,14 +1419,41 @@
       // defaultWindowKey, so a log that gains a stamped version moves the
       // default along with it instead of freezing whatever loaded first.
       var chosenWindow = null
+      var WINDOW_KEYS = ['day', 'week', 'version', 'all']
+      // odd/tasks/board-global-window.md W2: the chip a person picked, kept
+      // the way the tab is (writeStoredTab): the host's plugin storage inside
+      // Orca, localStorage in a plain browser. Written only on a click.
+      var WINDOW_STORAGE_KEY = 'jevAdvisor.boardPanel.window'
+      function readLocalWindow () {
+        try {
+          var value = window.localStorage.getItem(WINDOW_STORAGE_KEY)
+          return WINDOW_KEYS.indexOf(value) !== -1 ? value : null
+        } catch (e) {
+          return null
+        }
+      }
+      function writeStoredWindow (key) {
+        try {
+          window.localStorage.setItem(WINDOW_STORAGE_KEY, key)
+        } catch (e) {
+          // localStorage cannot keep it; the host still can.
+        }
+        call('storage.set', { key: WINDOW_STORAGE_KEY, value: key }, true)
+      }
+      chosenWindow = readLocalWindow()
+      /** The chip a person picked, while that window can be shown; else the
+       *  default. With no gate summary yet, any window but "this version"
+       *  (which needs a stamped build to exist) can be. */
       function activeWindowKey (windows) {
         if (chosenWindow && windows && windows[chosenWindow] && windows[chosenWindow].available) return chosenWindow
+        if (chosenWindow && !windows && chosenWindow !== 'version') return chosenWindow
         return defaultWindowKey(windows)
       }
       // odd/tasks/board-global-window.md W1: the one window every card on
       // every tab shows, settled from the gate's windows on each render
       // (renderStats) and by the person's chip.
       var currentWindowKey = 'day'
+      var lastGateWindows = null
       /** This card's summary for the current window: `part.windows[key]`,
        *  carrying its own `available`, `sinceMs` and `coverageSinceMs`; null
        *  when the reader published no windows. */
@@ -1414,6 +1461,32 @@
         if (!part || typeof part !== 'object' || !part.windows || typeof part.windows !== 'object') return null
         var w = part.windows[currentWindowKey]
         return w && typeof w === 'object' ? w : null
+      }
+
+      var DAY_MS = 24 * 60 * 60 * 1000
+      /** The current window's name: the chip's own words. */
+      function windowName (w) {
+        if (currentWindowKey !== 'version') return t('window.' + currentWindowKey)
+        var version = (w && typeof w.pluginVersion === 'string' && w.pluginVersion) || (lastGateWindows && lastGateWindows.version && lastGateWindows.version.pluginVersion)
+        return version ? t('window.version', { v: version }) : t('window.versionNone')
+      }
+      /** What a card's heading says about its window: the window's name, or,
+       *  when the window reaches further back than the card's log keeps
+       *  (`coverageSinceMs` later than `sinceMs`), how many days it really
+       *  covers. `w`: the card's own entry for the current window, or null;
+       *  `checkedAt`: when the worker read that summary (the instant its
+       *  coverage was measured from), else now. */
+      function windowLabel (w, checkedAt) {
+        var name = windowName(w)
+        if (w && typeof w.coverageSinceMs === 'number' && (w.sinceMs === null || w.sinceMs === undefined || w.coverageSinceMs > w.sinceMs)) {
+          var readAt = typeof checkedAt === 'string' && !isNaN(Date.parse(checkedAt)) ? Date.parse(checkedAt) : Date.now()
+          return t('window.kept', { window: name, days: num(Math.max(1, Math.round((readAt - w.coverageSinceMs) / DAY_MS))) })
+        }
+        return name
+      }
+      function setWindowLabel (id, text) {
+        var node = el(id)
+        if (node) node.textContent = text || ''
       }
       function renderWindowPicker (windows, activeKey) {
         var version = windows && windows.version
@@ -1427,13 +1500,13 @@
             b.disabled = !versionAvailable
             b.title = versionAvailable ? '' : t('window.versionUnavailable')
           } else {
-            b.disabled = !windows
+            b.disabled = false
           }
           b.setAttribute('aria-pressed', key === activeKey ? 'true' : 'false')
         }
         var w = windows && windows[activeKey]
-        var note = !versionAvailable ? t('window.versionUnavailable') : ''
-        if (w && w.totalDecisions <= 0) note = t('window.emptyWindow')
+        var note = ''
+        if (w && w.available && w.totalDecisions <= 0 && windows.all && windows.all.totalDecisions > 0) note = t('window.emptyWindow')
         el('window-note').textContent = note
       }
       el('windows').addEventListener('click', function (event) {
@@ -1442,6 +1515,7 @@
         var key = target.getAttribute('data-window')
         if (!key) return
         chosenWindow = key
+        writeStoredWindow(key)
         renderEverything()
       })
 
@@ -1981,6 +2055,7 @@
       }
 
       function renderConsumption (summary) {
+        setWindowLabel('win-consumption', windowLabel(summary && summary.ok !== false ? windowOf(summary.usage) : null, summary && summary.checkedAt))
         if (!summary) { fill('consumption-body', 'consumption-empty', '', t('consumption.empty')); return }
         if (summary.ok === false) { fill('consumption-body', 'consumption-empty', '', t('consumption.unavailable')); return }
 
@@ -2015,13 +2090,13 @@
           : line(t('consumption.subagentSplit', { percent: String(Math.round(w.subagentShare * 1000) / 10) })))
 
         if (hasQuota) {
-          parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.quotaHeading')) + '</b></p>')
+          parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.quotaHeading')) + '</b> · ' + esc(t('window.ignoresNow')) + '</p>')
           parts.push(accounts.map(consumptionQuotaBlock).join('<div class="divider"></div>'))
         }
 
         var recLines = consumptionRecommendationLines(summary.recommendations)
         if (recLines) {
-          parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.recommendationsHeading')) + '</b></p>')
+          parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.recommendationsHeading')) + '</b> · ' + esc(t('window.ignoresDay')) + '</p>')
           parts.push(recLines)
         }
 
@@ -2104,6 +2179,7 @@
        *  past the ones it lists. */
       function renderActivityProjects (summary) {
         lastActivitySummary = summary
+        setWindowLabel('win-projects', windowLabel(summary && summary.ok !== false ? windowOf(summary) : null, summary && summary.checkedAt))
         if (!summary) { fill('projects-body', 'projects-empty', '', t('activity.empty')); return }
         if (summary.ok === false) { fill('projects-body', 'projects-empty', '', t('activity.unavailable')); return }
         var w = windowOf(summary)
@@ -2237,7 +2313,6 @@
         renderWaiting(gate)
         show('card-empty', !hasGate)
         el('empty-body').textContent = t('empty.body')
-        show('windows', hasGate)
         show('card-status', hasGate || kindIssue || appendIssue)
         show('card-recent', hasGate)
         show('card-speed', hasMeasurements)
@@ -2245,10 +2320,22 @@
 
         var key = activeWindowKey(windows)
         currentWindowKey = key
+        lastGateWindows = windows
         var w = (windows && windows[key]) || {}
         show('top', hasGate && w.totalDecisions > 0)
+        renderWindowPicker(windows, key)
+        // W2: the gate's cards follow the window; the last decisions, the
+        // A/B comparison and the waiting queue are what they are right now.
+        var gateLabel = windowLabel(windows && windows[key])
+        setWindowLabel('win-status', gateLabel)
+        setWindowLabel('win-toll', gateLabel)
+        setWindowLabel('win-interv', gateLabel)
+        setWindowLabel('win-calibration', gateLabel)
+        setWindowLabel('win-recent', t('window.ignoresRecent', { n: num((gate.recent || []).length) }))
+        setWindowLabel('win-speed', t('window.ignoresAb'))
+        setWindowLabel('win-waiting', t('window.ignoresNow'))
+        setWindowLabel('win-skills', windowLabel(windowOf(mod)))
         if (hasGate) {
-          renderWindowPicker(windows, key)
           renderStatus(gate.health || {}, w, lastPoliciesWithoutKind)
           if (w.totalDecisions > 0) {
             renderToll(w)
@@ -2356,6 +2443,7 @@
       }
       function render (board) {
         lastBoard = board
+        setWindowLabel('win-live', t('window.ignoresNow'))
         var entries = (board && Array.isArray(board.entries)) ? board.entries.slice() : []
 
         if (!entries.length) {
@@ -2477,9 +2565,17 @@
       // still never PUSHES a locale request back (read-only, see
       // localeFromOrca's own doc comment above).
       var LOCALE_STATUS_KEY = 'localeStatus'
+      // W2: the window this viewer picked last, from the host's plugin
+      // storage (inside Orca localStorage throws), read before the first
+      // paint like the locale; the host's value wins over localStorage.
       Promise.resolve().then(function () {
-        return read(LOCALE_STATUS_KEY, false).catch(function () { return null })
-      }).then(function (status) {
+        return Promise.all([
+          read(LOCALE_STATUS_KEY, false).catch(function () { return null }),
+          read(WINDOW_STORAGE_KEY, false).catch(function () { return null })
+        ])
+      }).then(function (results) {
+        var status = results[0]
+        if (WINDOW_KEYS.indexOf(results[1]) !== -1) chosenWindow = results[1]
         currentLocale = resolveEffectiveLocale(status, currentLocale)
         applyStaticI18n()
         return reload(true)

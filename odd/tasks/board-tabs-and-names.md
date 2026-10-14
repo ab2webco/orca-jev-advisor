@@ -75,6 +75,8 @@ unless they only affect one tab; the writer checks and reports which.
 - [x] T2 Tabs, with ARIA, keyboard, remembered tab, es/en labels, and a
   panels spec proving every section sits under exactly one tab. RED first,
   then GREEN. One commit.
+  Superseded (2026-10-14): T2 put the window chips inside the Gate tab; they
+  now sit above the tabs and drive every card (odd/tasks/board-global-window.md W2).
 - [x] T3 Evidence: `npm run shots:all` in both themes at the four widths.
   The parent reads every image. Fixes found this way go in their own commit.
 

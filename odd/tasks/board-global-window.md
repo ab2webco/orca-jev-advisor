@@ -122,9 +122,21 @@ The never-pruned logs grow without bound; once the module cards follow the
 chip (W3), `all` reads them whole on every 15 s measurement refresh (today
 ~186 KB for memory, 21 MB for mod-skills, which is already read whole).
 Retention is out of scope here; worth a follow-up.
-- [ ] W2 Global chips above the tabs, default 24 h, every card follows the
+- [x] W2 Global chips above the tabs, default 24 h, every card follows the
   chip or says why not, window named in every card heading, remembered chip.
   Panels spec flips the T2 placement test. RED, GREEN, one commit.
+  Proof: panels spec "W2: ..." (7 tests, 6 RED first): chips above the tabs
+  under no tab panel and visible on every tab; chips shown with an empty
+  gate; every card heading names its window (status, toll, interventions,
+  calibration, projects, consumption, skills read "24 h"; recent, A/B, live,
+  waiting read "..., not the window"; quota and recommendations say so in
+  their subheadings); switching to 7 days changes every windowed label and
+  the usage figures; "All time" on an 8-day log reads "All time: only the
+  last 8 days, all that is kept" (days measured from the summary's
+  `checkedAt`); the chip is written to the host storage only on a click
+  (`jevAdvisor.boardPanel.window`) and reopens on it; a bad stored value or a
+  throwing localStorage opens on 24 h. The T2 grouping test now lists cards
+  only. New scenario `board-full` (screenshot-panels.mjs) populates every card.
 - [ ] W3 Modules on the board: memory (mode, backend, decisions, Engram saves,
   files written, agreement, pending judge), ci-watch (watches, gh calls, polls
   replaced), verify-done (mode and its key numbers), each with its Off /

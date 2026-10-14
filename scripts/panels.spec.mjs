@@ -2452,13 +2452,13 @@ test('every consumption.* key in one language catalog exists in the other, and t
 // Advisor panel needs tabs, it got too long." Every section the board has is
 // listed here by id, so a section added later without a tab, or placed under
 // two, fails the grouping test instead of quietly disappearing. The window
-// chips filter only the gate's own windows (status, cost, interventions,
-// calibration), so they live inside the Gate tab, not above the tabs.
+// chips drive every tab (odd/tasks/board-global-window.md W2), so they sit
+// above the tabs, under none of them.
 // ---------------------------------------------------------------------------
 
 const BOARD_TABS = ['gate', 'activity', 'consumption', 'skills']
 const BOARD_TAB_SECTIONS = {
-  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'card-waiting', 'windows'],
+  gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'card-waiting'],
   activity: ['card-live', 'card-projects'],
   consumption: ['card-consumption'],
   skills: ['card-skills']
@@ -2482,7 +2482,7 @@ test('the board groups every section under exactly one tab', { skip: chromium ? 
       const panels = Array.from(document.querySelectorAll('[role=tabpanel]')).map((panel) => ({
         id: panel.id, labelledBy: panel.getAttribute('aria-labelledby')
       }))
-      const sections = Array.from(document.querySelectorAll('section[id^="card-"], #windows')).map((node) => {
+      const sections = Array.from(document.querySelectorAll('section[id^="card-"]')).map((node) => {
         const owners = []
         for (let up = node.parentElement; up; up = up.parentElement) if (up.getAttribute('role') === 'tabpanel') owners.push(up.id)
         return { id: node.id, owners }
@@ -2500,6 +2500,157 @@ test('the board groups every section under exactly one tab', { skip: chromium ? 
       grouping[key] = [...(grouping[key] ?? []), section.id].sort()
     }
     assert.deepEqual(grouping, BOARD_TAB_SECTIONS)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/board-global-window.md W2 -- one window for the whole board. The
+// owner: the 24 h / 7 days chips "should be outside for everyone". Every card
+// heading names the window it shows, or says it does not follow the chip.
+// ---------------------------------------------------------------------------
+
+const BOARD_WINDOW_STORAGE_KEY = 'jevAdvisor.boardPanel.window'
+/** Cards with no figure of their own to place in time. */
+const BOARD_UNTIMED_CARDS = ['card-empty', 'card-unmeasured']
+
+/** Every visible card on every tab: its id and its heading's window label. */
+async function boardWindowLabels (page) {
+  const labels = {}
+  for (const key of BOARD_TABS) {
+    await page.click(`#tab-${key}`)
+    Object.assign(labels, await page.evaluate((untimed) => {
+      const found = {}
+      for (const card of document.querySelectorAll('.tab-panel:not([hidden]) section[id^="card-"]')) {
+        if (card.offsetParent === null || untimed.includes(card.id)) continue
+        found[card.id] = card.querySelector('h2 .win')?.textContent.trim() ?? ''
+      }
+      return found
+    }, BOARD_UNTIMED_CARDS))
+  }
+  return labels
+}
+
+test('W2: the window chips sit above the tabs, under no tab panel, and stay on screen on every tab', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'])
+  try {
+    const place = await page.evaluate(() => {
+      const chips = document.getElementById('windows')
+      let owner = null
+      for (let up = chips.parentElement; up; up = up.parentElement) if (up.getAttribute('role') === 'tabpanel') owner = up.id
+      const tabbar = document.getElementById('board-tabbar')
+      return { owner, beforeTabs: Boolean(chips.compareDocumentPosition(tabbar) & Node.DOCUMENT_POSITION_FOLLOWING) }
+    })
+    assert.deepEqual(place, { owner: null, beforeTabs: true })
+    for (const key of BOARD_TABS) {
+      await page.click(`#tab-${key}`)
+      assert.equal(await page.isVisible('#windows'), true, `the chips are hidden on the ${key} tab`)
+      assert.equal(await page.getAttribute('#windows button[data-window="day"]', 'aria-pressed'), 'true', `24 h is not the window on the ${key} tab`)
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W2: the chips show even when the gate has measured nothing yet', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ ...SCENARIOS.empty, consumptionSummary: SCENARIOS['consumption-ready'].consumptionSummary })
+  try {
+    await page.click('#tab-consumption')
+    assert.equal(await page.isVisible('#windows'), true)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W2: every card heading names the window it shows, or says it does not follow the chip', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'])
+  try {
+    const labels = await boardWindowLabels(page)
+    for (const id of ['card-status', 'card-toll', 'card-interventions', 'card-calibration', 'card-projects', 'card-consumption', 'card-skills']) {
+      assert.equal(labels[id], '24 h', `${id} does not name its window: ${JSON.stringify(labels)}`)
+    }
+    for (const id of ['card-recent', 'card-speed', 'card-live', 'card-waiting']) {
+      assert.match(labels[id] ?? '', /not the window/, `${id} does not say it ignores the chip: ${JSON.stringify(labels)}`)
+    }
+    const unlabelled = Object.entries(labels).filter(([, text]) => text === '')
+    assert.deepEqual(unlabelled, [], 'a card heading names no window')
+    await page.click('#tab-consumption')
+    const consumption = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(consumption, /Account quota · right now, not the window/)
+    assert.match(consumption, /Recommendations · last 24 h, not the window/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W2: switching the chip changes every card, or its label says why not', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'])
+  try {
+    const before = await boardWindowLabels(page)
+    await page.click('#tab-consumption')
+    const usageBefore = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    await page.click('#windows button[data-window="week"]')
+    const after = await boardWindowLabels(page)
+    for (const [id, label] of Object.entries(before)) {
+      if (/not the window/.test(label)) assert.equal(after[id], label, `${id} ignores the chip and must keep its label`)
+      else assert.equal(after[id], '7 days', `${id} did not follow the chip: ${JSON.stringify(after)}`)
+    }
+    await page.click('#tab-consumption')
+    const usageAfter = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.notEqual(usageAfter, usageBefore)
+    assert.match(usageAfter, /Main conversation: 21,000,000 tokens in 210 steps/, 'the usage figures are the 7-day ones')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W2: a window longer than a log keeps says so in the card heading', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'])
+  try {
+    await page.click('#windows button[data-window="all"]')
+    const labels = await boardWindowLabels(page)
+    assert.match(labels['card-projects'], /^All time: only the last 8 days, all that is kept$/)
+    assert.match(labels['card-consumption'], /^All time: only the last 8 days, all that is kept$/)
+    assert.equal(labels['card-toll'], 'All time', 'the gate keeps every decision in its totals')
+    assert.equal(labels['card-skills'], 'All time', 'the skills log is never pruned')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W2: the chosen window is remembered through the host storage bridge, and opening the board stores nothing', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const first = await openBoardPanel(SCENARIOS['board-full'])
+  try {
+    assert.equal(await first.page.evaluate((key) => window.__written[key], BOARD_WINDOW_STORAGE_KEY), undefined)
+    await first.page.click('#windows button[data-window="week"]')
+    await first.page.waitForFunction((key) => window.__written[key] !== undefined, BOARD_WINDOW_STORAGE_KEY, { timeout: 3000 })
+    assert.equal(await first.page.evaluate((key) => window.__written[key], BOARD_WINDOW_STORAGE_KEY), 'week')
+    assert.deepEqual(first.errors, [])
+  } finally {
+    await first.browser.close()
+  }
+  const again = await openBoardPanel({ ...SCENARIOS['board-full'], [BOARD_WINDOW_STORAGE_KEY]: 'week' })
+  try {
+    assert.equal(await again.page.getAttribute('#windows button[data-window="week"]', 'aria-pressed'), 'true')
+    await again.page.click('#tab-activity')
+    assert.equal(await again.page.evaluate(() => document.querySelector('#card-projects h2 .win').textContent.trim()), '7 days')
+    assert.deepEqual(again.errors, [])
+  } finally {
+    await again.browser.close()
+  }
+})
+
+test('W2: a stored window that is not a window, or a localStorage that throws, still opens on 24 h', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ ...SCENARIOS['board-full'], [BOARD_WINDOW_STORAGE_KEY]: 'fortnight' }, 'en', 'light', { throwingStorage: true })
+  try {
+    assert.equal(await page.getAttribute('#windows button[data-window="day"]', 'aria-pressed'), 'true')
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
