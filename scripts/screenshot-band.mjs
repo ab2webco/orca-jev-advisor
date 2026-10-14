@@ -83,6 +83,7 @@ function host (locale, listed = LISTED) {
       set: async () => ({ isSet: false, version: 1 }),
     },
     agent: { list: async () => listed },
+    clock: { now: async () => Date.now() },
     ui: {
       status: () => {},
       resolve: () => ({
