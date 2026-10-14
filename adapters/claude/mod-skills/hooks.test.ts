@@ -6070,3 +6070,95 @@ test("E2 memory active, an older Engram (1.12.0: no health tool, no mem_judge): 
   assert.deepEqual([row?.effective, row?.decidedBy], ["active", "tools"]);
   assert.deepEqual(engramCounts(row), { ...NO_ENGRAM_COUNTS, engramSaved: 1, mirrored: 1 });
 });
+
+// ---------------------------------------------------------------------------
+// The replay into Engram (odd/tasks/memory-active-engram.md, E3): a save
+// parked as a fallback copy while Engram was down is saved to Engram at the
+// next session start that finds it usable; the copy then becomes a mirror
+// (user, feedback) or is removed after a byte-for-byte backup (project,
+// reference), but only while it is still the item's own copy.
+// ---------------------------------------------------------------------------
+
+/** A turn with Engram configured but down: the draft's saves are parked as fallback copies. Then Engram comes back for the next start. */
+async function parkedWhileDown(saves: unknown[]): Promise<{ host: FakeHost; handlers: Map<string, Hook>; engine: unknown; engram: () => FakeEngramStore }> {
+  const host = activeHost({ down: true });
+  host.modelQueue.push(GATE_UPDATE);
+  host.forkQueue.push(draftReply({ saves }));
+  const { handlers, engine } = await activeTurn(host);
+  assert.equal(spoolFiles(host).filter((path) => !path.includes("/done/")).length, saves.length, "every save parked");
+  return {
+    host,
+    handlers,
+    engine,
+    engram: () => {
+      host.toolList = [...ENGRAM_2_TOOLS];
+      return fakeEngram(host);
+    },
+  };
+}
+
+test("E3 replay into Engram: parked fallback copies are saved at the next start; feedback becomes a mirror, project is removed after a backup; a second start changes nothing", async () => {
+  const { host, handlers, engine, engram } = await parkedWhileDown([SPANISH_SAVE, PROJECT_SAVE]);
+  const projectCopy = host.files.get(`${MEMORY_DIR}/billing-migration.md`) ?? "";
+  assert.match(projectCopy, /\n {2}pending_engram: true\n/);
+  engram();
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+
+  assert.deepEqual(engramSaveCalls(host).map((call) => call.args?.topic_key).sort(), ["billing-migration", "spanish-tu"]);
+  const mirror = host.files.get(`${MEMORY_DIR}/spanish-tu.md`) ?? "";
+  assert.match(mirror, /\n {2}engram_id: 50\d\n/, "the feedback copy is now a mirror");
+  assert.doesNotMatch(mirror, /pending_engram/);
+  assert.equal(host.files.has(`${MEMORY_DIR}/billing-migration.md`), false, "the project copy is gone: Engram has it");
+  const index = host.files.get(`${MEMORY_DIR}/MEMORY.md`) ?? "";
+  assert.doesNotMatch(index, /billing-migration/, "its line went with it");
+  assert.match(index, /\(spanish-tu\.md\)/);
+  const backups = [...host.files.keys()].filter((path) => path.startsWith(`${MEMORY_DIR}/.memory-backup/`));
+  assert.ok(backups.some((path) => path.endsWith("/billing-migration.md") && host.files.get(path) === projectCopy), "the removed copy was backed up byte for byte first");
+  assert.ok(host.processCalls.some((call) => call.startsWith("cp -p ") && call.includes("/billing-migration.md")));
+  assert.ok(spoolFiles(host).every((path) => path.includes("/done/")), "both items settled");
+  const row = replayRows(host).at(-1);
+  assert.deepEqual(
+    { backend: row?.backend, replayed: row?.replayed, engramSaved: row?.engramSaved, replayedToEngram: row?.replayedToEngram, fallbackMirrored: row?.fallbackMirrored, fallbackRemoved: row?.fallbackRemoved, writeFailures: row?.writeFailures },
+    { backend: "live", replayed: 2, engramSaved: 2, replayedToEngram: 2, fallbackMirrored: 1, fallbackRemoved: 1, writeFailures: 0 },
+  );
+
+  const after = memoryFolder(host);
+  const saves = engramSaveCalls(host).length;
+  const rows = replayRows(host).length;
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  assert.deepEqual(memoryFolder(host), after, "a second replay changes nothing");
+  assert.equal(engramSaveCalls(host).length, saves, "and saves nothing again");
+  assert.equal(replayRows(host).length, rows, "and logs nothing");
+});
+
+test("E3 replay into Engram: a fallback file changed since it was written is left as it is, with its MEMORY.md line", async () => {
+  const { host, handlers, engine, engram } = await parkedWhileDown([PROJECT_SAVE]);
+  const path = `${MEMORY_DIR}/billing-migration.md`;
+  const edited = (host.files.get(path) ?? "").replace("  pending_engram: true\n", "");
+  host.files.set(path, edited);
+  engram();
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  assert.equal(engramSaveCalls(host).length, 1, "Engram still gets the save");
+  assert.equal(host.files.get(path), edited, "the file is not the item's own copy any more");
+  assert.match(host.files.get(`${MEMORY_DIR}/MEMORY.md`) ?? "", /\(billing-migration\.md\)/);
+  assert.ok(spoolFiles(host).every((file) => file.includes("/done/")));
+  const row = replayRows(host).at(-1);
+  assert.deepEqual([row?.replayedToEngram, row?.fallbackRemoved, row?.fallbackMirrored], [1, 0, 0]);
+});
+
+test("E3 replay into Engram: a save that fails again stays parked with its copy, and is not counted as replayed", async () => {
+  const { host, handlers, engine, engram } = await parkedWhileDown([PROJECT_SAVE]);
+  const before = memoryFolder(host);
+  engram().saveMode = "reject";
+  await startSessionWith(handlers, engine);
+  await runTimers(host);
+  assert.equal(engramSaveCalls(host).length, 1, "one attempt");
+  assert.deepEqual(memoryFolder(host), before, "the copy stays");
+  const live = spoolFiles(host).filter((file) => !file.includes("/done/"));
+  assert.equal(live.length, 1, "the item stays parked");
+  const row = replayRows(host).at(-1);
+  assert.deepEqual([row?.engramFailed, row?.replayedToEngram, row?.replayed, row?.writeFailures], [1, 0, 0, 0]);
+});

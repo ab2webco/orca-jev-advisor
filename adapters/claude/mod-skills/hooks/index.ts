@@ -3460,9 +3460,11 @@ async function replayMemorySpool($: EngineInterface, state: MemoryShadowState): 
     const nowMs = await $.clock.now()
     const nowIso = new Date(nowMs).toISOString()
     const plan = planReplay(items, { currentSessionId: sessionId, now: nowIso })
-    const due = plan.run.filter((item) => !(item.state === 'fallback' && item.store === null)).length + plan.superseded.length
+    // A parked fallback copy waits for Engram: it is due only when Engram is usable now.
+    const engram = await engramReach($, backend)
+    const due = plan.run.filter((item) => engram !== null || !(item.state === 'fallback' && item.store === null)).length + plan.superseded.length
     if (due === 0) return
-    const pass = newMemoryPass(dir, nowIso)
+    const pass = newMemoryPass(dir, nowIso, engram)
     let replayed = 0
     let superseded = 0
     if (await memoryFolderLocked($, dir, nowMs)) {
@@ -3476,7 +3478,8 @@ async function replayMemorySpool($: EngineInterface, state: MemoryShadowState): 
       for (const item of plan.run) {
         const { outcome, moved } = await driveSpoolItem($, pass, item, backend, spoolRoot)
         if (outcome === 'failed') pass.tally.writeFailures += 1
-        else if (moved) replayed += 1
+        // A parked copy whose Engram retry failed again moved nothing on: it is not counted as replayed.
+        else if (outcome === 'settled' || (moved && item.state !== 'fallback')) replayed += 1
       }
     }
     const at = new Date(await $.clock.now()).toISOString()
