@@ -1847,7 +1847,7 @@ test("R5: without CLAUDE_CONFIG_DIR the config dir is ~/.claude, and a transcrip
   const stages = await stoplessTurns(host, 6 * 60_000, false);
   assert.deepEqual(stages.map((row) => row.cacheWarm), [true, true]);
   assert.ok(host.processCalls.includes("tail -n 300 /home/dev/.claude/projects/-home-dev-Projects-sandbox/session-1.jsonl"), "the session's own path first");
-  assert.ok(host.processCalls.includes("find /home/dev/.claude/projects -maxdepth 2 -type f -name session-1.jsonl"));
+  assert.ok(host.processCalls.includes("find -H /home/dev/.claude/projects -maxdepth 2 -type f -name session-1.jsonl"));
   assert.ok(host.processCalls.includes(`tail -n 300 ${moved}`));
 });
 

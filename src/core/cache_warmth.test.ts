@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import { CACHE_TTL_1H_MS, CACHE_TTL_5M_MS, cacheClockUnknown, cacheUnknownOf, cacheWarm, cacheWarmth, foundTranscriptPath, mergeCacheTail, parseCacheClock, readCacheTail, transcriptFindArgv, transcriptPathOf } from "./cache_warmth.ts";
@@ -85,7 +89,24 @@ test("R5: the transcript sits under the config dir's projects, in the slug of wh
 });
 
 test("R5: the fallback looks the session up by id two levels under projects, with no shell", () => {
-  assert.deepEqual(transcriptFindArgv("/home/dev/.claude", "4f1c-9a"), ["find", "/home/dev/.claude/projects", "-maxdepth", "2", "-type", "f", "-name", "4f1c-9a.jsonl"]);
+  assert.deepEqual(transcriptFindArgv("/home/dev/.claude", "4f1c-9a"), ["find", "-H", "/home/dev/.claude/projects", "-maxdepth", "2", "-type", "f", "-name", "4f1c-9a.jsonl"]);
+});
+
+test("R5: the fallback finds the transcript when projects is a symlink, as on every Orca account", () => {
+  const root = mkdtempSync(join(tmpdir(), "cache-warmth-find-"));
+  try {
+    mkdirSync(join(root, "shared", "-old-worktree"), { recursive: true });
+    writeFileSync(join(root, "shared", "-old-worktree", "4f1c-9a.jsonl"), "{}\n");
+    mkdirSync(join(root, "account"));
+    symlinkSync(join(root, "shared"), join(root, "account", "projects"));
+    const argv = transcriptFindArgv(join(root, "account"), "4f1c-9a");
+    assert.notEqual(argv, null);
+    const [program, ...args] = argv ?? [];
+    const stdout = execFileSync(program ?? "find", args, { encoding: "utf8" });
+    assert.equal(foundTranscriptPath(stdout, "4f1c-9a"), join(root, "account", "projects", "-old-worktree", "4f1c-9a.jsonl"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("R5: a session id that is not a plain id is never handed to find as a pattern", () => {

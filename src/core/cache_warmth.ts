@@ -129,10 +129,14 @@ export function transcriptPathOf(input: { readonly configDir: string; readonly s
 /** A session id plain enough to be a file name and never a `find` pattern. */
 const PLAIN_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 
-/** R5: the argv that finds this session's transcript under any project folder (a moved root); null for an id that is not plain. */
+/**
+ * R5: the argv that finds this session's transcript under any project folder (a moved root); null for an id that is not plain.
+ * `-H` follows `projects` itself when it is a symlink, as it is on every Orca account (it points at the shared transcript store);
+ * without it `find` lists the link and never descends, so the fallback found nothing there.
+ */
 export function transcriptFindArgv(configDir: string, sessionId: string): readonly string[] | null {
   if (!PLAIN_SESSION_ID.test(sessionId)) return null;
-  return ["find", `${withoutTrailingSlashes(configDir)}/projects`, "-maxdepth", "2", "-type", "f", "-name", `${sessionId}.jsonl`];
+  return ["find", "-H", `${withoutTrailingSlashes(configDir)}/projects`, "-maxdepth", "2", "-type", "f", "-name", `${sessionId}.jsonl`];
 }
 
 /** R5: the first line of `find`'s output that is this session's transcript; null when there is none. */
