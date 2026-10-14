@@ -2876,6 +2876,67 @@ test('W4 #11: the skills match rate is never a bare percentage on a handful of s
   }
 })
 
+// ---------------------------------------------------------------------------
+// odd/tasks/board-global-window.md W5 -- es-ES and narrow screens (audit #12,
+// #13): numbers and money in the board's own locale, words instead of raw
+// verdicts and states, and bar labels that are never cut at phone widths.
+// ---------------------------------------------------------------------------
+
+test('W5 #12: in Spanish, numbers group by thousands (four digits too), decimals use a comma, and dollar amounts are written the Spanish way', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'], 'es')
+  try {
+    const toll = await page.evaluate(() => document.getElementById('toll-body').innerText)
+    assert.match(toll, /2\.409/, 'a four-digit count is grouped')
+    await page.click('#tab-consumption')
+    const consumption = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(consumption, /4\.120\.000 tokens/)
+    assert.match(consumption, /12,4 %|12,4%/)
+    assert.doesNotMatch(consumption, /\d\.\d%/, 'no decimal point in a Spanish percentage')
+    await page.click('#tab-activity')
+    const activity = await page.evaluate(() => document.getElementById('card-projects').innerText)
+    assert.match(activity, /2,57\s?US\$/)
+    assert.doesNotMatch(activity, /\$\d/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W5 #12: verdicts and live states are words in the board\'s language, never the raw value', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ ...SCENARIOS['board-full'], board: SCENARIOS['live-busy'].board }, 'es')
+  try {
+    const recent = await page.evaluate(() => document.getElementById('stats-recent').innerText)
+    assert.match(recent, /permitido/)
+    assert.doesNotMatch(recent, /\ballow\b|\bask\b|\bdeny\b/)
+    await page.click('#tab-activity')
+    const live = await page.evaluate(() => document.getElementById('cards').innerText)
+    assert.doesNotMatch(live, /\bworking\b|\bwaiting\b|\bdone\b|\bblocked\b/)
+    assert.match(live, /trabajando|esperando|terminado|bloqueado/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const locale of ['es', 'en']) {
+  test(`W5 #13: at 390px no bar label is cut, on any tab (${locale})`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'], locale, 'dark', { viewport: { width: 390, height: 900 } })
+    try {
+      const cut = []
+      for (const key of BOARD_TABS) {
+        await page.click(`#tab-${key}`)
+        cut.push(...await page.evaluate(() => Array.from(document.querySelectorAll('.tab-panel:not([hidden]) .hrow .hl'))
+          .filter((node) => node.offsetParent !== null && node.scrollWidth > node.clientWidth + 1)
+          .map((node) => node.textContent)))
+      }
+      assert.deepEqual(cut, [])
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
 test('the board opens on Gate, and clicking a tab shows only its own panel', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
   try {
@@ -4358,7 +4419,7 @@ test('activity: a project with no cost shows no cost and no model line, never a 
 
 test('activity: the total line sums the window, and a count of one reads singular, in both languages', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const project = activityProject({ project: 'single', judged: 1, gateOutcomes: { allowed: 1, advised: 0, asked: 0, blocked: 0 }, steps: { main: 1, subagent: 0 }, estimatedCostUsd: 0.5, models: [{ model: 'x', steps: 1, estimatedCostUsd: 0.5 }] })
-  for (const [locale, judged, steps, total] of [['en', '1 judged command', '1 step', /Total: \$0\.50 estimated at list prices across 1 project/], ['es', '1 comando juzgado', '1 paso', /Total: \$0\.50 estimado a precio de lista en 1 proyecto/]]) {
+  for (const [locale, judged, steps, total] of [['en', '1 judged command', '1 step', /Total: \$0\.50 estimated at list prices across 1 project/], ['es', '1 comando juzgado', '1 paso', /Total: 0,50\s?US\$ estimado a precio de lista en 1 proyecto/]]) {
     const { browser, page, errors } = await openBoardPanel(activitySummary([project]), locale)
     try {
       const detail = await activityCardDetail(page, 'single')

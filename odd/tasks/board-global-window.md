@@ -179,9 +179,18 @@ Retention is out of scope here; worth a follow-up.
   below the readiness threshold the match rate is "8 de 9 prompts
   comparables; hacen falta 1.000 ...", never a bare percentage. Updated older
   spec assertions to the new copy (steward, skills).
-- [ ] W5 es-ES and narrow screens: `Intl` number and currency formatting in the
+- [x] W5 es-ES and narrow screens: `Intl` number and currency formatting in the
   board's locale, translated verdicts and live states (#12); labels above
   bars below about 480 px (#13). RED, GREEN, one commit.
+  Proof: panels spec "W5 #12" (2) and "W5 #13" (es, en), all RED first.
+  `num()` uses `Intl.NumberFormat` in the board's locale with
+  `useGrouping: 'always'` (es-ES leaves four-digit numbers ungrouped by
+  default: "2409" now reads "2.409"); percentages and decimals go through it
+  ("12,4%"); money is `Intl` USD ("2,57 US$" in es, "$2.57" in en), so the
+  "$" left the copy. Gate verdicts (permitido / preguntó / bloqueó) and live
+  states (trabajando / esperando / terminado / bloqueado) are words; an
+  unknown one keeps its raw value. At 480 px and below a bar's label takes
+  its own line above the bar; 0 labels cut at 390 on any tab, both locales.
 - [ ] W6 Actividad and interventions: #9, #14, #15. RED, GREEN, one commit.
 - [ ] W7 Evidence: re-run the audit render against the owner's real
   `storage.json`, 4 tabs at 1440 and 390, dark (8 images), and read each.

@@ -213,6 +213,12 @@
       .hrow { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
       @media (min-width: 720px) { .hrow { grid-template-columns: minmax(0, 16em) 1fr auto; } }
       .hrow .hl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* W5 (#13): on a phone the label takes its own line above its bar,
+         whole, instead of an ellipsis in a 7.5em column. */
+      @media (max-width: 480px) {
+        .hrow { grid-template-columns: 1fr auto; row-gap: 2px; }
+        .hrow .hl { grid-column: 1 / -1; white-space: normal; overflow: visible; overflow-wrap: anywhere; }
+      }
       .htrack { background: var(--secondary, var(--fb-secondary)); border-radius: 9999px; height: 8px; overflow: hidden; }
       .hfill { display: block; height: 100%; background: var(--viz); border-radius: 9999px; min-width: 2px; }
       .hv { font-variant-numeric: tabular-nums; color: var(--muted-foreground, var(--fb-muted-foreground)); }
@@ -595,8 +601,8 @@
           'activity.judgedOther': '{{n}} comandos juzgados',
           'activity.stepsOne': '{{n}} paso',
           'activity.stepsOther': '{{n}} pasos',
-          'activity.routerSaved': '{{switches}} cambio(s) de modelo, un ahorro estimado de ${{amount}} a precio de lista.',
-          'activity.routerCost': '{{switches}} cambio(s) de modelo, un costo extra estimado de ${{amount}} a precio de lista.',
+          'activity.routerSaved': '{{switches}} cambio(s) de modelo, un ahorro estimado de {{amount}} a precio de lista.',
+          'activity.routerCost': '{{switches}} cambio(s) de modelo, un costo extra estimado de {{amount}} a precio de lista.',
           'activity.routerNoEstimate': '{{switches}} cambio(s) de modelo, todavía sin estimación de ahorro.',
           'activity.total': 'Total: {{cost}} estimado a precio de lista en {{projects}} proyecto(s) · {{judged}} · {{steps}}',
           'activity.costLabel': 'costo estimado',
@@ -614,6 +620,13 @@
           'stats.recentJev': 'jev',
           'stats.recentNone': 'sin respuesta',
           'stats.recentAdvise': 'aviso al modelo',
+          'verdict.allow': 'permitido',
+          'verdict.ask': 'preguntó',
+          'verdict.deny': 'bloqueó',
+          'state.working': 'trabajando',
+          'state.waiting': 'esperando',
+          'state.done': 'terminado',
+          'state.blocked': 'bloqueado',
           'stats.na': 'sin datos suficientes',
           'stats.unknownProject': '(proyecto desconocido)',
           'gate.source.localRule': 'Regla local (~1ms, sin red)',
@@ -773,8 +786,8 @@
           'consumption.modelRouterTierFrontier': 'Razonar a fondo',
           'consumption.modelRouterAppliedMeasured': 'Aplicadas {{applied}} · solo medidas {{measured}}',
           'consumption.modelRouterColdSwitches': 'Cambios tras una caché fría: {{n}}',
-          'consumption.modelRouterSavedEstimate': 'Ahorro estimado a precio de lista: ${{amount}}.',
-          'consumption.modelRouterExtraCost': 'Costo extra estimado a precio de lista: ${{amount}}.',
+          'consumption.modelRouterSavedEstimate': 'Ahorro estimado a precio de lista: {{amount}}.',
+          'consumption.modelRouterExtraCost': 'Costo extra estimado a precio de lista: {{amount}}.',
           'consumption.modelRouterEstimateScope': 'Cubre solo las bajadas de modelo en un cambio de etapa: los pasos que corrieron en el modelo más barato, menos la reescritura de caché que costó cada cambio.',
           'consumption.modelRouterNoEstimateYet': 'Todavía no hay ninguna bajada en un cambio de etapa que estimar.',
           'consumption.stewardHeading': 'Guardián de contexto',
@@ -854,8 +867,8 @@
           'activity.judgedOther': '{{n}} judged commands',
           'activity.stepsOne': '{{n}} step',
           'activity.stepsOther': '{{n}} steps',
-          'activity.routerSaved': '{{switches}} model switch(es), an estimated ${{amount}} saved at list prices.',
-          'activity.routerCost': '{{switches}} model switch(es), an estimated ${{amount}} extra cost at list prices.',
+          'activity.routerSaved': '{{switches}} model switch(es), an estimated {{amount}} saved at list prices.',
+          'activity.routerCost': '{{switches}} model switch(es), an estimated {{amount}} extra cost at list prices.',
           'activity.routerNoEstimate': '{{switches}} model switch(es), no saving estimate yet.',
           'activity.total': 'Total: {{cost}} estimated at list prices across {{projects}} project(s) · {{judged}} · {{steps}}',
           'activity.costLabel': 'estimated cost',
@@ -873,6 +886,13 @@
           'stats.recentJev': 'jev',
           'stats.recentNone': 'no answer',
           'stats.recentAdvise': 'advised the model',
+          'verdict.allow': 'allowed',
+          'verdict.ask': 'asked',
+          'verdict.deny': 'blocked',
+          'state.working': 'working',
+          'state.waiting': 'waiting',
+          'state.done': 'done',
+          'state.blocked': 'blocked',
           'stats.na': 'not enough data',
           'stats.unknownProject': '(unknown project)',
           'gate.source.localRule': 'Local rule (~1ms, no network)',
@@ -1028,8 +1048,8 @@
           'consumption.modelRouterTierFrontier': 'Deep reasoning',
           'consumption.modelRouterAppliedMeasured': 'Applied {{applied}} · measured only {{measured}}',
           'consumption.modelRouterColdSwitches': 'Switches after a cold cache: {{n}}',
-          'consumption.modelRouterSavedEstimate': 'Estimated saving at list prices: ${{amount}}.',
-          'consumption.modelRouterExtraCost': 'Estimated extra cost at list prices: ${{amount}}.',
+          'consumption.modelRouterSavedEstimate': 'Estimated saving at list prices: {{amount}}.',
+          'consumption.modelRouterExtraCost': 'Estimated extra cost at list prices: {{amount}}.',
           'consumption.modelRouterEstimateScope': 'Covers downgrades at a stage change only: the steps that ran on the cheaper model, minus the cache rewrite each switch cost.',
           'consumption.modelRouterNoEstimateYet': 'No downgrade at a stage change to estimate yet.',
           'consumption.stewardHeading': 'Context steward',
@@ -1376,14 +1396,35 @@
       // why, which is the same rule the ceiling section has followed since
       // approval_record.ts's ceilingEvidence() started returning null.
 
+      // W5 (#12): every number in the board's own language -- es-ES groups
+      // four-digit numbers too (CLDR leaves them ungrouped by default) and
+      // writes decimals with a comma; money is US dollars in that locale.
+      function intlLocale () { return currentLocale === 'es' ? 'es-ES' : 'en-US' }
       function num (value) {
-        return (typeof value === 'number' && isFinite(value)) ? value.toLocaleString() : '—'
+        if (typeof value !== 'number' || !isFinite(value)) return '—'
+        try {
+          return new Intl.NumberFormat(intlLocale(), { useGrouping: 'always', maximumFractionDigits: 3 }).format(value)
+        } catch (e) {
+          return value.toLocaleString()
+        }
+      }
+      /** A 0-100 value as a percentage with at most one decimal. */
+      function percentText (value) {
+        return num(Math.round(value * 10) / 10) + '%'
+      }
+      function usd (amount) {
+        var value = typeof amount === 'number' && isFinite(amount) ? Math.abs(amount) : 0
+        try {
+          return new Intl.NumberFormat(intlLocale(), { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: 'always' }).format(value)
+        } catch (e) {
+          return '$' + value.toFixed(2)
+        }
       }
       function share (part, total) {
         return total > 0 ? Math.round((part / total) * 1000) / 10 : 0
       }
       function ms (value) {
-        return (typeof value === 'number' && isFinite(value)) ? Math.round(value).toLocaleString() : '—'
+        return (typeof value === 'number' && isFinite(value)) ? num(Math.round(value)) : '—'
       }
 
       /** segments: [{ value, cls, label }]. A zero segment is dropped
@@ -1406,7 +1447,7 @@
           return '<li class="' + s.cls + '"><i class="sw"></i>' +
             '<span class="lv">' + esc(num(s.value)) + '</span>' +
             '<span class="ll">' + esc(s.label) + '</span>' +
-            '<span class="lp">' + share(s.value, total) + '%</span></li>'
+            '<span class="lp">' + percentText(share(s.value, total)) + '</span></li>'
         }).join('') + '</ul>'
       }
 
@@ -1843,7 +1884,7 @@
         if (figuresOf.matchRate == null) parts.push(line(t('stats.skillMatchRate') + ': ' + t('stats.na')))
         else if (typeof minComparable === 'number' && comparable < minComparable) {
           parts.push(line(t('stats.skillMatchFew', { matched: num(figuresOf.matchedCount || 0), n: num(comparable), min: num(minComparable) })))
-        } else parts.push(line(t('stats.skillMatchEnough', { percent: String(pct(figuresOf.matchRate)), n: num(comparable) })))
+        } else parts.push(line(t('stats.skillMatchEnough', { percent: num(pct(figuresOf.matchRate)), n: num(comparable) })))
         fill('skills-body', null, parts.join(''), '')
       }
 
@@ -1952,7 +1993,7 @@
       function barRow (label, percent, cls) {
         var rounded = (percent === null || percent === undefined || !isFinite(percent)) ? null : Math.round(percent * 10) / 10
         var widthPercent = rounded === null ? 0 : Math.min(100, Math.max(0, rounded))
-        var valueText = rounded === null ? t('consumption.na') : (rounded + '%')
+        var valueText = rounded === null ? t('consumption.na') : percentText(rounded)
         return '<div class="hrow v1">' +
           '<span class="hl" title="' + esc(label) + '">' + esc(label) + '</span>' +
           '<span class="htrack"><span class="hfill ' + (cls || 'v1') + '" style="width:' + widthPercent + '%"></span></span>' +
@@ -2091,7 +2132,7 @@
           else checked.push(t('consumption.recItemContext', { tokens: ctx }))
         }
         if (recs.subagentShare) {
-          var percent = String(Math.round(recs.subagentShare.subagentSharePercent * 10) / 10)
+          var percent = num(Math.round(recs.subagentShare.subagentSharePercent * 10) / 10)
           if (recs.subagentShare.overThreshold) act.push(t('consumption.subagentShareWarning', { percent: percent }))
           else checked.push(t('consumption.recItemSubagents', { percent: percent }))
         }
@@ -2166,7 +2207,7 @@
         if (estimate === null || estimate === undefined) {
           parts.push(line(t('consumption.modelRouterNoEstimateYet'), 'empty-line'))
         } else {
-          parts.push(line(t(estimate < 0 ? 'consumption.modelRouterExtraCost' : 'consumption.modelRouterSavedEstimate', { amount: Math.abs(estimate).toFixed(2) })))
+          parts.push(line(t(estimate < 0 ? 'consumption.modelRouterExtraCost' : 'consumption.modelRouterSavedEstimate', { amount: usd(estimate) })))
           parts.push(line(t('consumption.modelRouterEstimateScope'), 'empty-line'))
         }
         return parts.join('')
@@ -2188,7 +2229,7 @@
         if (verified && verified.verified > 0) {
           parts.push(line(t('consumption.stewardVerified', {
             tokens: num(verified.tokensNotReread),
-            share: verified.share === null || verified.share === undefined ? '—' : Math.round(verified.share * 100) + '%',
+            share: verified.share === null || verified.share === undefined ? '—' : percentText(Math.round(verified.share * 100)),
             verified: num(verified.verified),
             compactions: num(verified.compactions)
           })))
@@ -2234,7 +2275,7 @@
         var main = byAgent.main || { stepCount: 0, tokens: null }
         var sub = byAgent.subagent || { stepCount: 0, tokens: null }
         var total = (main.tokens || 0) + (sub.tokens || 0)
-        var percent = total > 0 && sub.tokens !== null ? String(Math.round((sub.tokens / total) * 1000) / 10) : '0'
+        var percent = num(total > 0 && sub.tokens !== null ? Math.round((sub.tokens / total) * 1000) / 10 : 0)
         return (main.tokens === null
           ? line(t('consumption.byAgent.mainNoTokens', { steps: num(main.stepCount) }), 'empty-line')
           : line(t('consumption.byAgent.main', { tokens: num(main.tokens), steps: num(main.stepCount) }))) +
@@ -2293,7 +2334,7 @@
           : line(t('consumption.avgContext', { tokens: num(Math.round(w.avgMainStepContextReread)) })))
         if (w.available !== false) parts.push(w.byAgent ? consumptionByAgentLines(w.byAgent) : w.subagentShare === null || w.subagentShare === undefined
           ? line(t('consumption.noSubagentData'), 'empty-line')
-          : line(t('consumption.subagentSplit', { percent: String(Math.round(w.subagentShare * 1000) / 10) })))
+          : line(t('consumption.subagentSplit', { percent: num(Math.round(w.subagentShare * 1000) / 10) })))
 
         if (hasQuota) {
           parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.quotaHeading')) + '</b> · ' + esc(t('window.ignoresNow')) + '</p>')
@@ -2332,9 +2373,6 @@
         return t(base + (n === 1 ? 'One' : 'Other'), { n: num(n) })
       }
 
-      function usd (amount) {
-        return '$' + (typeof amount === 'number' && isFinite(amount) ? Math.abs(amount) : 0).toFixed(2)
-      }
 
       /** "N switches, ~$X saved/extra cost (estimate)" -- the same
        *  never-negative-saving convention consumptionModelRouterBlock
@@ -2345,7 +2383,7 @@
         if (!router) return ''
         var estimate = router.savedEstimate
         if (estimate === null || estimate === undefined) return t('activity.routerNoEstimate', { switches: num(router.applied) })
-        return t(estimate < 0 ? 'activity.routerCost' : 'activity.routerSaved', { switches: num(router.applied), amount: Math.abs(estimate).toFixed(2) })
+        return t(estimate < 0 ? 'activity.routerCost' : 'activity.routerSaved', { switches: num(router.applied), amount: usd(estimate) })
       }
 
       /** One project: its name and estimated cost (labelled) on one line,
@@ -2444,7 +2482,8 @@
         // never `blocked`'s red (nothing was permanently refused). Every
         // OTHER verdict keeps printing its own raw word, unchanged.
         var verdictState = { deny: 'blocked', ask: 'working', advise: 'advised' }
-        var verdictLabel = { advise: t('stats.recentAdvise') }
+        // W5 (#12): every verdict in the board's language; an unknown one keeps its raw word.
+        var verdictLabel = { advise: t('stats.recentAdvise'), allow: t('verdict.allow'), ask: t('verdict.ask'), deny: t('verdict.deny') }
         // Family, source, verdict, age: the project moves to the tooltip and
         // the full timestamp is gone -- "4 min ago" is what a person scans.
         el('stats-recent').innerHTML = '<ul class="recent-list">' + recent.map(function (r) {
@@ -2585,6 +2624,7 @@
       // The states that claim someone is active right now; `done` never goes
       // stale, it is already the end.
       var LIVE_ACTIVE_STATES = ['working', 'waiting']
+      var LIVE_STATE_WORDS = ['working', 'waiting', 'done', 'blocked']
       var liveExpanded = false
       var lastBoard = null
 
@@ -2643,7 +2683,7 @@
           (view.branch ? '<span class="tag branch">' + esc(view.branch) + '</span>' : '') +
           (noSignal
             ? '<span class="tag state nosignal">' + esc(t('live.noSignal')) + '</span>'
-            : '<span class="' + tagClass(entry.state) + ' state">' + esc(entry.state || '?') + '</span>') +
+            : '<span class="' + tagClass(entry.state) + ' state">' + esc(LIVE_STATE_WORDS.indexOf(entry.state) !== -1 ? t('state.' + entry.state) : (entry.state || '?')) + '</span>') +
           (group.count > 1 ? '<span class="count">' + esc(t('live.sessions', { n: String(group.count) })) + '</span>' : '') +
           '<span class="when">' + esc(ago(entry.updatedAt)) + '</span></div>'
       }
