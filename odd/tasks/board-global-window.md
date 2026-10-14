@@ -160,9 +160,25 @@ Retention is out of scope here; worth a follow-up.
   the same as the stored weekly summary; ci-watch 58 watches, 742 gh calls,
   36 polls replaced; verify-done 44 turns, 10 claims, 6 would-block.
   Storage after W3 on the same copy: 304,869 bytes.
-- [ ] W4 Meaning fixes: audit #5, #6, #7, #8, #10, #11, plus #3's "measured
+- [x] W4 Meaning fixes: audit #5, #6, #7, #8, #10, #11, plus #3's "measured
   only" wording and #4's totals and small-model threshold. RED, GREEN, one
   commit.
+  Proof: `consumption.test.ts` "byModel carries each model's token total"
+  (RED first); panels spec "W4 #3/#4/#5 #6/#7/#8/#10/#11" (7, all RED
+  first). #3 "Aplicadas N · solo medidas M". #4 a total line, tokens per
+  model, models under 2% of the window's steps folded into one line. #5
+  calibration copy says "en esta ventana", not "hasta ahora". #6 the status
+  chip reads "Jev en esta ventana: p50 ..."; the A/B medians say they cover
+  every comparison, from any date (its heading already says it ignores the
+  chip). #7 the steward's two moments are parallel lines: "Al final de un
+  turno: compactó N · habría compactado M (solo mide)" and "Antes de que se
+  enfríe la caché: compactó ... ", in the same window. #8 the header counts
+  the project/branch rows seen in 24 h ("N activos en 24 h"), not every
+  stored entry. #10 no recommendation uses the red; checks that ask for
+  nothing fold into one muted "Revisado, sin nada que hacer: ..." line. #11
+  below the readiness threshold the match rate is "8 de 9 prompts
+  comparables; hacen falta 1.000 ...", never a bare percentage. Updated older
+  spec assertions to the new copy (steward, skills).
 - [ ] W5 es-ES and narrow screens: `Intl` number and currency formatting in the
   board's locale, translated verdicts and live states (#12); labels above
   bars below about 480 px (#13). RED, GREEN, one commit.

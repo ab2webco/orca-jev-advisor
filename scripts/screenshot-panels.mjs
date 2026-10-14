@@ -773,8 +773,8 @@ const CATALOG_PROPOSALS = {
 const CONSUMPTION_DAY = {
   stepCount: 42,
   byModel: [
-    { model: 'claude-sonnet-5-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
-    { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
+    { model: 'claude-sonnet-5-5', stepCount: 30, tokens: 5600000, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+    { model: 'claude-opus-5-5', stepCount: 12, tokens: 2170000, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
   ],
   avgMainStepContextReread: 162345,
   subagentShare: 0.47,
@@ -783,7 +783,7 @@ const CONSUMPTION_DAY = {
 }
 const CONSUMPTION_WEEK = {
   stepCount: 300,
-  byModel: [{ model: 'claude-sonnet-5-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+  byModel: [{ model: 'claude-sonnet-5-5', stepCount: 300, tokens: 30000000, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
   avgMainStepContextReread: 150500,
   subagentShare: 0.3,
   byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } },

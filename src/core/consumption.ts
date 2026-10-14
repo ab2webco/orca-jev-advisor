@@ -62,6 +62,8 @@ export interface TurnUsageRecord {
 export interface ModelUsageShare {
   readonly model: string;
   readonly stepCount: number;
+  /** The model's own total (input+output+cacheRead+cacheWrite, nulls skipped); null when it reported no figure at all. */
+  readonly tokens: number | null;
   readonly inputShare: number | null;
   readonly cacheReadShare: number | null;
   readonly cacheWriteShare: number | null;
@@ -139,6 +141,7 @@ function modelShareFor(model: string, steps: readonly TurnUsageRecord[]): ModelU
   return {
     model,
     stepCount: steps.length,
+    tokens: hasAnyData ? total : null,
     inputShare: share(input.sum),
     cacheReadShare: share(cacheRead.sum),
     cacheWriteShare: share(cacheWrite.sum),

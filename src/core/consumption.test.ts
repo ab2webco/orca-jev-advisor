@@ -319,3 +319,17 @@ test("summarizeTurnUsageForWindow: the same summary as the 24 h fold, for any of
   assert.equal(summarizeTurnUsageForWindow(rows, NOW, windows.all).stepCount, 3);
   assert.equal(summarizeTurnUsageForWindow(rows, NOW, boardWindows(NOW, null).version).stepCount, 0);
 });
+
+// odd/tasks/board-global-window.md W4 (#4): the usage card showed shares only;
+// each model now carries its own token total, so the card can say how much.
+test("byModel carries each model's token total, null when it reported no figure at all", () => {
+  const rows = [
+    step({ model: "claude-sonnet-5", input: 10, output: 20, cacheRead: 30, cacheWrite: 40 }),
+    step({ model: "claude-sonnet-5", input: 1, output: null, cacheRead: null, cacheWrite: null }),
+    step({ model: "gateway", input: null, output: null, cacheRead: null, cacheWrite: null }),
+  ];
+  const summary = aggregateTurnUsage(rows, NOW).last24h;
+  const byModel = new Map(summary.byModel.map((m) => [m.model, m]));
+  assert.equal(byModel.get("claude-sonnet-5")?.tokens, 101);
+  assert.equal(byModel.get("gateway")?.tokens, null);
+});

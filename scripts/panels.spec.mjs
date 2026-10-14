@@ -2115,8 +2115,8 @@ const BOARD_MODELS = [
 const POPULATED_USAGE_DAY = {
   stepCount: 42,
   byModel: [
-    { model: 'claude-sonnet-5', stepCount: 30, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
-    { model: 'claude-opus-5-5', stepCount: 12, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
+    { model: 'claude-sonnet-5', stepCount: 30, tokens: 5600000, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+    { model: 'claude-opus-5-5', stepCount: 12, tokens: 2170000, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 }
   ],
   avgMainStepContextReread: 162345,
   subagentShare: 0.47,
@@ -2125,7 +2125,7 @@ const POPULATED_USAGE_DAY = {
 }
 const POPULATED_USAGE_WEEK = {
   stepCount: 300,
-  byModel: [{ model: 'claude-sonnet-5', stepCount: 300, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
+  byModel: [{ model: 'claude-sonnet-5', stepCount: 300, tokens: 30000000, inputShare: 0.12, cacheReadShare: 0.7, cacheWriteShare: 0.12, outputShare: 0.06 }],
   avgMainStepContextReread: 150500,
   subagentShare: 0.3,
   byAgent: { main: { stepCount: 210, tokens: 21000000 }, subagent: { stepCount: 90, tokens: 9000000 } }
@@ -2155,10 +2155,10 @@ test('steward: the Consumption tab shows compactions applied and the context no 
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /Context steward/)
-    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /At the end of a turn: compacted 2/)
     assert.match(text, /on average, about 140,000 tokens/)
     assert.match(text, /estimate/i)
-    assert.match(text, /would have compacted: 1/i)
+    assert.match(text, /would have compacted 1/i)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -2171,7 +2171,7 @@ test('steward: a verified saving replaces the estimated per-step line with the s
   const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
   try {
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
-    assert.match(text, /Compactions applied: 2/)
+    assert.match(text, /At the end of a turn: compacted 2/)
     assert.match(text, /Verified saving: 1,380,000,000 tokens the main agent did not re-read, 28% of its context\. Measured on real usage in 32 of 59 compactions\./)
     assert.doesNotMatch(text, /on average, about 140,000 tokens/)
     assert.deepEqual(errors, [])
@@ -2752,6 +2752,130 @@ test('W3: a summary from a worker that does not publish modules yet says so in e
   }
 })
 
+// ---------------------------------------------------------------------------
+// odd/tasks/board-global-window.md W4 -- cards that read wrong on the owner's
+// real board (audit #3, #4, #5, #6, #7, #8, #10, #11).
+// ---------------------------------------------------------------------------
+
+test('W4 #3: the router line says the other decisions were measured only, not that they failed', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, modelRouter: windowed(POPULATED_MODEL_ROUTER) } }, 'es')
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /Aplicadas 3 · solo medidas 2/)
+    assert.doesNotMatch(text, /no aplicadas/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W4 #4: token usage says how much, per model and in total, and folds models with a sliver of the steps into one line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const day = {
+    ...POPULATED_USAGE_DAY,
+    stepCount: 200,
+    byModel: [
+      { model: 'claude-sonnet-5', stepCount: 150, tokens: 6000000, inputShare: 0.11, cacheReadShare: 0.74, cacheWriteShare: 0.1, outputShare: 0.05 },
+      { model: 'claude-opus-5-5', stepCount: 48, tokens: 1700000, inputShare: 0.15, cacheReadShare: 0.57, cacheWriteShare: 0.2, outputShare: 0.08 },
+      { model: 'claude-haiku-4-5-20251001', stepCount: 1, tokens: 900, inputShare: 1, cacheReadShare: 0, cacheWriteShare: 0, outputShare: 0 },
+      { model: 'some-gateway-model', stepCount: 1, tokens: 400, inputShare: 1, cacheReadShare: 0, cacheWriteShare: 0, outputShare: 0 }
+    ],
+    byAgent: { main: { stepCount: 120, tokens: 4120000 }, subagent: { stepCount: 80, tokens: 3581300 } }
+  }
+  const consumptionSummary = { ...POPULATED_CONSUMPTION, usage: { ...windowed(day), corruptLines: 0 } }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary, models: BOARD_MODELS })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /In total: 7,701,300 tokens in 200 steps\./)
+    assert.match(text, /Sonnet 5 · 150 step\(s\) · 6,000,000 tokens/)
+    assert.match(text, /2 more models with under 2% of the steps: 2 steps · 1,300 tokens/)
+    assert.doesNotMatch(text, /some-gateway-model/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W4 #5 #6: calibration and Jev latency say they speak for the window; the A/B medians say they cover every comparison', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready, 'es')
+  try {
+    const status = await page.evaluate(() => document.getElementById('status-body').innerText)
+    assert.match(status, /Jev en esta ventana: p50 [\d.,]+ ms · p95 [\d.,]+ ms/)
+    const calibration = await page.evaluate(() => document.getElementById('approvals-body').innerText)
+    assert.doesNotMatch(calibration, /hasta ahora/)
+    assert.match(calibration, /en esta ventana/)
+    const speed = await page.evaluate(() => document.getElementById('speed-body').innerText)
+    assert.match(speed, /Medianas sobre las 20 comparaciones emparejadas que hay, de cualquier fecha\./)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W4 #7: the steward\'s two moments read side by side, each with what it did and what it would have done', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const preCold = { fired: 0, wouldFire: 9, skipped: 5, returned: 8, returnedEarly: 0, notReturned: 1, pending: 0, coldRewriteOnReturn: 1708572, realizedSaving: null, waste: null, engineIdleCompactions: 0 }
+  const withSteward = { ...POPULATED_CONSUMPTION, steward: windowed({ decisions: 181, applied: 9, wouldCompact: 0, freedPerStep: 305381, preCold }) }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: withSteward })
+  try {
+    const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
+    assert.match(text, /At the end of a turn: compacted 9 · would have compacted 0 \(measuring only\)/)
+    assert.match(text, /Before the cache goes cold: compacted 0 · would have compacted 9 \(measuring only\)/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W4 #8: the header counts the sessions seen in the last 24 h, not every entry ever stored', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['live-busy'])
+  try {
+    const header = await page.textContent('#status')
+    await page.click('#tab-activity')
+    const shown = await page.evaluate(() => document.querySelectorAll('#cards .live-row').length)
+    assert.equal(header, `${shown} active in 24 h`)
+    assert.ok(shown < SCENARIOS['live-busy'].board.entries.length)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W4 #10: recommendations never take the alarm red; checks that ask for nothing fold into one quiet line', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const recommendations = {
+    claudeMdSize: { estimatedTokens: 9000, overThreshold: true },
+    mcpServerCount: { count: 5 },
+    longSession: { avgMainStepContextReread: 62345, overThreshold: false },
+    subagentShare: { subagentSharePercent: 12, overThreshold: false }
+  }
+  const { browser, page, errors } = await openBoardPanel({ consumptionSummary: { ...POPULATED_CONSUMPTION, recommendations } })
+  try {
+    const found = await page.evaluate(() => {
+      const body = document.getElementById('consumption-body')
+      return { red: body.querySelectorAll('.stale').length, text: body.innerText }
+    })
+    assert.equal(found.red, 0, 'advice is not an alarm')
+    assert.match(found.text, /Consider trimming it to save tokens on every call\./)
+    assert.match(found.text, /Checked, nothing to do: context per main step 62,345 tokens · subagents 12% of usage · 5 MCP server\(s\) in the global ~\/\.claude\.json/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W4 #11: the skills match rate is never a bare percentage on a handful of samples', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['skills-ready']
+  const day = scenario.measurementsSummary.modSkills.windows.day
+  const min = scenario.measurementsSummary.modSkills.readiness.thresholds.minComparable
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    const text = await skillsCardText(page)
+    assert.match(text, new RegExp(`Measurement-mode match rate: ${day.matchedCount} of ${day.comparableCount} comparable prompts; ${min.toLocaleString('en')} are needed before it means anything`))
+    assert.doesNotMatch(text, /match rate: \d+(\.\d+)?%/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('the board opens on Gate, and clicking a tab shows only its own panel', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
   try {
@@ -2942,7 +3066,7 @@ test('a populated modelRouter renders decisions by point/tier, applied vs measur
     assert.match(text, /Ask/, 'the simple-tier label did not render')
     assert.match(text, /Implement/, 'the standard-tier label did not render')
     assert.match(text, /Analyse/, 'the complex-tier label did not render')
-    assert.match(text, /Applied 3 · not applied 2/, 'the applied/not-applied counts did not render')
+    assert.match(text, /Applied 3 · measured only 2/, 'the applied/not-applied counts did not render')
     assert.match(text, /Estimated saving at list prices: \$0\.04/, 'the estimated saving did not render')
     assert.doesNotMatch(text, /estimate[ds]?\b[^\n]*\bestimate/i, 'the saving line says "estimate" twice')
     assert.match(text, /Covers downgrades at a stage change only/, 'the estimate does not say what it covers')
@@ -2995,7 +3119,7 @@ test('a modelRouter with no applied switch yet renders "no applied switch to est
     const text = await page.evaluate(() => document.getElementById('consumption-body').innerText)
     assert.match(text, /No downgrade at a stage change to estimate yet/i)
     assert.doesNotMatch(text, /\$\d/, 'no dollar amount should render when savedEstimate is null')
-    assert.match(text, /Applied 0 · not applied 2/, 'the applied/not-applied counts did not render')
+    assert.match(text, /Applied 0 · measured only 2/, 'the applied/not-applied counts did not render')
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -3492,7 +3616,8 @@ test('skills-ready: the Skills tab shows what the mod recorded, not its empty se
     assert.doesNotMatch(text, /has not recorded any decision yet/)
     assert.match(text, /Skills suggested/)
     assert.match(text, /Listing characters not sent/)
-    assert.match(text, new RegExp(`${Math.round(mod.matchRate * 1000) / 10}%`))
+    // W4 #11: below the readiness threshold, counts rather than a percentage.
+    assert.match(text, new RegExp(`${mod.windows.day.matchedCount} of ${mod.windows.day.comparableCount} comparable prompts`))
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -3748,7 +3873,7 @@ test('L5: skills-ready\'s Skills card shows each figure as a labelled number, wi
     assert.match(card.text, new RegExp(String(mod.suggestedCount)))
     assert.match(card.text, /Listing characters not sent/)
     assert.match(card.text, new RegExp(mod.listingCharsTotal.toLocaleString('en-US')))
-    assert.match(card.text, /Measurement-mode match rate: 88\.9%/)
+    assert.match(card.text, /Measurement-mode match rate: 8 of 9 comparable prompts/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

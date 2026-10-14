@@ -189,6 +189,7 @@
          320px a long one would otherwise push the page sideways. */
       .kpi-sub { margin: 4px 0 10px; font-size: 12px; overflow-wrap: anywhere;
                  color: var(--muted-foreground, var(--fb-muted-foreground)); }
+      .kpi-sub.rec-act { color: var(--foreground, var(--fb-foreground)); margin: 4px 0 6px; }
 
       /* Stacked proportion bar. A 0-count segment renders nothing at all
          rather than a hairline nobody can read or click. */
@@ -550,7 +551,7 @@
           'status.failures': '{{n}} sin respuesta seguidas desde entonces',
           'status.noFailures': 'ninguna sin respuesta desde entonces',
           'status.unjudged': '{{n}} pasaron sin juicio en esta ventana',
-          'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
+          'status.latency': 'Jev en esta ventana: p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'sin latencia de Jev medida en esta ventana',
           'status.policiesWithoutKind': '{{n}} políticas del equipo no tienen tipo y no se aplican: {{ids}}. Abre Configuración → Políticas del equipo y elige un tipo.',
           'status.appendFailures': '{{n}} decisiones sin registrar, la última {{age}}',
@@ -582,6 +583,8 @@
           'stats.skillsEmpty': 'El mod de skills todavía no ha registrado ninguna decisión.',
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
+          'stats.skillMatchFew': 'Acierto en modo medición: {{matched}} de {{n}} prompts comparables; hacen falta {{min}} antes de que signifique algo',
+          'stats.skillMatchEnough': 'Acierto en modo medición: {{percent}}% sobre {{n}} prompts comparables',
           'stats.listingChars': 'Caracteres de listado no enviados',
           'activity.heading': 'Actividad por proyecto',
           'activity.empty': 'Todavía no hay actividad.',
@@ -619,7 +622,7 @@
           'gate.source.none': 'Nadie: Jev no contestó',
           'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso — fallar abierto es lo correcto — pero nadie lo revisó, así que no cuentan arriba.',
           'approvals.heading': '¿Cómo va la calibración?',
-          'approvals.empty': 'El gate todavía no ha detenido ningún comando. Esta sección se llena la próxima vez que se pregunte y la persona responda.',
+          'approvals.empty': 'El gate no ha detenido ningún comando en esta ventana. Esta sección se llena cuando se pregunte y la persona responda.',
           'approvals.approved': 'Aprobadas',
           'approvals.rejected': 'Rechazadas',
           // odd/tasks/production-honesty-pass.md P7: renombrado desde
@@ -640,14 +643,14 @@
           'approvals.lowestRejected': 'Más bajo rechazado',
           'approvals.suggestedCeiling': 'Techo sugerido',
           'approvals.evidenceCount': 'Basado en {{approved}} aprobación(es) y {{rejected}} rechazo(s) con puntaje.',
-          'approvals.noSuggestionInsufficient': 'Todavía no hay evidencia suficiente para sugerir un techo: hacen falta aprobaciones y rechazos con puntaje de ambos lados ({{approved}} aprobación(es), {{rejected}} rechazo(s) hasta ahora).',
+          'approvals.noSuggestionInsufficient': 'Todavía no hay evidencia suficiente para sugerir un techo: hacen falta aprobaciones y rechazos con puntaje de ambos lados ({{approved}} aprobación(es), {{rejected}} rechazo(s) en esta ventana).',
           'approvals.noSuggestionOverlap': 'Las aprobaciones y los rechazos se superponen — lo más alto aprobado ({{highest}}) es mayor o igual que lo más bajo rechazado ({{lowest}}), con {{approved}} aprobación(es) y {{rejected}} rechazo(s) — así que ningún techo único los separa todavía.',
           'live.heading': 'Estados en vivo',
           'live.loading': 'Cargando…',
           'live.empty': 'Sin datos todavía. El tablero se llena a medida que llegan eventos.',
           'live.unknownWorktree': '(worktree desconocido)',
           'live.floatingTerminal': 'Terminal flotante',
-          'live.agentsCount': '{{n}} agente(s)',
+          'live.agentsCount': '{{n}} activos en 24 h',
           'live.updating': 'Actualizando…',
           'live.noSignal': 'sin señal',
           'live.sessions': '×{{n}} sesiones',
@@ -659,7 +662,7 @@
           'speed.empty': 'Todavía no hay comparaciones emparejadas. Se llenan cuando el muestreo A/B corre: cada muestra manda el mismo comando a Jev y al modelo y guarda las dos respuestas.',
           'speed.jev': 'Jev',
           'speed.median': '{{ms}} ms',
-          'speed.samples': 'Medianas sobre {{n}} comparación(es) emparejada(s).',
+          'speed.samples': 'Medianas sobre las {{n}} comparaciones emparejadas que hay, de cualquier fecha.',
           'speed.agreement': 'Coinciden en {{agree}} de {{n}}.',
           'speed.disagreementsHeading': 'Dónde discrepan:',
           'speed.disagreement': '{{count}} × Jev «{{jev}}» / modelo «{{model}}»',
@@ -743,6 +746,15 @@
           'consumption.claudeMdSize': 'El CLAUDE.md global pesa unos {{tokens}} tokens estimados.',
           'consumption.claudeMdSizeSuggestion': 'Considera acortarlo para ahorrar tokens en cada llamada.',
           'consumption.mcpServerCount': 'Tienes {{count}} servidor(es) MCP en el ~/.claude.json global; cada cuenta de Orca puede tener su propia lista.',
+          'consumption.recChecked': 'Revisado, sin nada que hacer: {{list}}',
+          'consumption.recNothing': 'Nada que cambiar ahora.',
+          'consumption.recItemClaudeMd': 'CLAUDE.md global de unos {{tokens}} tokens',
+          'consumption.recItemContext': 'contexto por paso principal {{tokens}} tokens',
+          'consumption.recItemSubagents': 'subagentes {{percent}}% del uso',
+          'consumption.recItemMcp': '{{count}} servidor(es) MCP en el ~/.claude.json global',
+          'consumption.usageTotal': 'En total: {{tokens}} tokens en {{steps}} pasos.',
+          'consumption.modelTokens': '{{n}} tokens',
+          'consumption.smallModels': '{{n}} modelos más con menos del 2% de los pasos: {{steps}} pasos · {{tokens}} tokens',
           'consumption.longSessionWarning': 'El contexto promedio por paso principal es alto ({{tokens}} tokens); considera usar /clear entre tareas.',
           'consumption.longSessionOk': 'El contexto promedio por paso principal está en un rango sano ({{tokens}} tokens).',
           'consumption.subagentShareWarning': 'Los subagentes consumen el {{percent}}% del uso; considera reducir su alcance.',
@@ -759,7 +771,7 @@
           'consumption.modelRouterTierStandard': 'Implementar',
           'consumption.modelRouterTierComplex': 'Analizar',
           'consumption.modelRouterTierFrontier': 'Razonar a fondo',
-          'consumption.modelRouterAppliedMeasured': 'Aplicadas {{applied}} · no aplicadas {{measured}}',
+          'consumption.modelRouterAppliedMeasured': 'Aplicadas {{applied}} · solo medidas {{measured}}',
           'consumption.modelRouterColdSwitches': 'Cambios tras una caché fría: {{n}}',
           'consumption.modelRouterSavedEstimate': 'Ahorro estimado a precio de lista: ${{amount}}.',
           'consumption.modelRouterExtraCost': 'Costo extra estimado a precio de lista: ${{amount}}.',
@@ -767,7 +779,7 @@
           'consumption.modelRouterNoEstimateYet': 'Todavía no hay ninguna bajada en un cambio de etapa que estimar.',
           'consumption.stewardHeading': 'Guardián de contexto',
           'consumption.stewardEmpty': 'Todavía no hay decisiones del guardián de contexto.',
-          'consumption.stewardApplied': 'Compactaciones aplicadas: {{applied}} · habría compactado: {{would}} (solo mide)',
+          'consumption.stewardApplied': 'Al final de un turno: compactó {{applied}} · habría compactado {{would}} (solo mide)',
           'consumption.stewardFreed': 'Estimación: en promedio, unos {{tokens}} tokens menos que releer en cada paso siguiente de una sesión compactada.',
           'consumption.stewardNoFreed': 'Todavía no hay compactaciones aplicadas que estimar.',
           'consumption.stewardColdEmpty': 'Antes de que se enfríe la caché: todavía no hay decisiones.',
@@ -798,7 +810,7 @@
           'status.failures': '{{n}} unanswered in a row since then',
           'status.noFailures': 'none unanswered since then',
           'status.unjudged': '{{n}} passed unjudged in this window',
-          'status.latency': 'Jev p50 {{p50}} ms · p95 {{p95}} ms',
+          'status.latency': 'Jev in this window: p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'no Jev latency measured in this window',
           'status.policiesWithoutKind': '{{n}} team policies have no kind and are not applied: {{ids}}. Open Settings → Team policies and pick a kind.',
           'status.appendFailures': '{{n}} decisions not logged, the last {{age}}',
@@ -830,6 +842,8 @@
           'stats.skillsEmpty': 'The skills mod has not recorded any decision yet.',
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
+          'stats.skillMatchFew': 'Measurement-mode match rate: {{matched}} of {{n}} comparable prompts; {{min}} are needed before it means anything',
+          'stats.skillMatchEnough': 'Measurement-mode match rate: {{percent}}% over {{n}} comparable prompts',
           'stats.listingChars': 'Listing characters not sent',
           'activity.heading': 'Activity by project',
           'activity.empty': 'No activity yet.',
@@ -867,7 +881,7 @@
           'gate.source.none': 'Nobody: Jev did not answer',
           'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead — failing open is correct — but nobody reviewed it, so they are not counted above.',
           'approvals.heading': 'How is calibration going?',
-          'approvals.empty': 'The gate has not stopped any command yet. This section fills in the next time it asks and the person answers.',
+          'approvals.empty': 'The gate stopped no command in this window. This section fills in when it asks and the person answers.',
           'approvals.approved': 'Approved',
           'approvals.rejected': 'Rejected',
           // odd/tasks/production-honesty-pass.md P7: renamed from
@@ -888,14 +902,14 @@
           'approvals.lowestRejected': 'Lowest rejected',
           'approvals.suggestedCeiling': 'Suggested ceiling',
           'approvals.evidenceCount': 'Based on {{approved}} approval(s) and {{rejected}} rejection(s) with a score.',
-          'approvals.noSuggestionInsufficient': 'Not enough evidence yet to suggest a ceiling: scored approvals and rejections are needed on both sides ({{approved}} approval(s), {{rejected}} rejection(s) so far).',
+          'approvals.noSuggestionInsufficient': 'Not enough evidence yet to suggest a ceiling: scored approvals and rejections are needed on both sides ({{approved}} approval(s), {{rejected}} rejection(s) in this window).',
           'approvals.noSuggestionOverlap': 'Approvals and rejections overlap — the highest approved ({{highest}}) is at or above the lowest rejected ({{lowest}}), with {{approved}} approval(s) and {{rejected}} rejection(s) — so no single ceiling separates them yet.',
           'live.heading': 'Live status',
           'live.loading': 'Loading…',
           'live.empty': 'No data yet. The board fills in as events arrive.',
           'live.unknownWorktree': '(unknown worktree)',
           'live.floatingTerminal': 'Floating terminal',
-          'live.agentsCount': '{{n}} agent(s)',
+          'live.agentsCount': '{{n}} active in 24 h',
           'live.updating': 'Updating…',
           'live.noSignal': 'no signal',
           'live.sessions': '×{{n}} sessions',
@@ -907,7 +921,7 @@
           'speed.empty': 'No paired comparisons yet. They fill in when the A/B sampling runs: each sample sends the same command to Jev and to the model and keeps both answers.',
           'speed.jev': 'Jev',
           'speed.median': '{{ms}} ms',
-          'speed.samples': 'Medians over {{n}} paired comparison(s).',
+          'speed.samples': 'Medians over all {{n}} paired comparisons there are, from any date.',
           'speed.agreement': 'They agree on {{agree}} of {{n}}.',
           'speed.disagreementsHeading': 'Where they differ:',
           'speed.disagreement': '{{count}} × Jev "{{jev}}" / model "{{model}}"',
@@ -987,6 +1001,15 @@
           'consumption.claudeMdSize': 'The global CLAUDE.md is about {{tokens}} estimated tokens.',
           'consumption.claudeMdSizeSuggestion': 'Consider trimming it to save tokens on every call.',
           'consumption.mcpServerCount': 'You have {{count}} MCP server(s) in the global ~/.claude.json; each Orca account can have its own list.',
+          'consumption.recChecked': 'Checked, nothing to do: {{list}}',
+          'consumption.recNothing': 'Nothing to change right now.',
+          'consumption.recItemClaudeMd': 'global CLAUDE.md about {{tokens}} tokens',
+          'consumption.recItemContext': 'context per main step {{tokens}} tokens',
+          'consumption.recItemSubagents': 'subagents {{percent}}% of usage',
+          'consumption.recItemMcp': '{{count}} MCP server(s) in the global ~/.claude.json',
+          'consumption.usageTotal': 'In total: {{tokens}} tokens in {{steps}} steps.',
+          'consumption.modelTokens': '{{n}} tokens',
+          'consumption.smallModels': '{{n}} more models with under 2% of the steps: {{steps}} steps · {{tokens}} tokens',
           'consumption.longSessionWarning': 'Average context per main step is high ({{tokens}} tokens); consider using /clear between tasks.',
           'consumption.longSessionOk': 'Average context per main step is in a healthy range ({{tokens}} tokens).',
           'consumption.subagentShareWarning': 'Subagents consume {{percent}}% of usage; consider narrowing their scope.',
@@ -1003,7 +1026,7 @@
           'consumption.modelRouterTierStandard': 'Implement',
           'consumption.modelRouterTierComplex': 'Analyse',
           'consumption.modelRouterTierFrontier': 'Deep reasoning',
-          'consumption.modelRouterAppliedMeasured': 'Applied {{applied}} · not applied {{measured}}',
+          'consumption.modelRouterAppliedMeasured': 'Applied {{applied}} · measured only {{measured}}',
           'consumption.modelRouterColdSwitches': 'Switches after a cold cache: {{n}}',
           'consumption.modelRouterSavedEstimate': 'Estimated saving at list prices: ${{amount}}.',
           'consumption.modelRouterExtraCost': 'Estimated extra cost at list prices: ${{amount}}.',
@@ -1011,7 +1034,7 @@
           'consumption.modelRouterNoEstimateYet': 'No downgrade at a stage change to estimate yet.',
           'consumption.stewardHeading': 'Context steward',
           'consumption.stewardEmpty': 'No context steward decisions yet.',
-          'consumption.stewardApplied': 'Compactions applied: {{applied}} · would have compacted: {{would}} (measuring only)',
+          'consumption.stewardApplied': 'At the end of a turn: compacted {{applied}} · would have compacted {{would}} (measuring only)',
           'consumption.stewardFreed': 'Estimate: on average, about {{tokens}} tokens fewer to re-read on each later step of a compacted session.',
           'consumption.stewardNoFreed': 'No applied compaction to estimate yet.',
           'consumption.stewardColdEmpty': 'Before the cache goes cold: no decision yet.',
@@ -1813,8 +1836,14 @@
           rows.push({ label: t('stats.listingChars'), value: figuresOf.listingCharsTotal })
         }
         var parts = [figures(rows)]
-        parts.push(line(t('stats.skillMatchRate') + ': ' +
-          (figuresOf.matchRate == null ? t('stats.na') : pct(figuresOf.matchRate) + '%')))
+        // #11: a rate on a handful of samples is noise, so below the
+        // readiness threshold the line gives the counts, never a percentage.
+        var minComparable = mod.readiness && mod.readiness.thresholds && mod.readiness.thresholds.minComparable
+        var comparable = figuresOf.comparableCount || 0
+        if (figuresOf.matchRate == null) parts.push(line(t('stats.skillMatchRate') + ': ' + t('stats.na')))
+        else if (typeof minComparable === 'number' && comparable < minComparable) {
+          parts.push(line(t('stats.skillMatchFew', { matched: num(figuresOf.matchedCount || 0), n: num(comparable), min: num(minComparable) })))
+        } else parts.push(line(t('stats.skillMatchEnough', { percent: String(pct(figuresOf.matchRate)), n: num(comparable) })))
         fill('skills-body', null, parts.join(''), '')
       }
 
@@ -1987,8 +2016,9 @@
        *  id a person would need to cross-reference elsewhere lives in the
        *  same element's `title`, never dropped. */
       function consumptionModelBlock (modelShare) {
+        var tokens = typeof modelShare.tokens === 'number' ? ' · ' + t('consumption.modelTokens', { n: num(modelShare.tokens) }) : ''
         return '<p class="kpi-sub"><b title="' + esc(modelShare.model) + '">' + esc(friendlyModelName(modelShare.model)) + '</b> · ' +
-          esc(t('consumption.steps', { n: num(modelShare.stepCount) })) + '</p>' +
+          esc(t('consumption.steps', { n: num(modelShare.stepCount) }) + tokens) + '</p>' +
           '<div class="hrows">' +
             barRow(t('consumption.input'), pct(modelShare.inputShare), 'v1') +
             barRow(t('consumption.cacheRead'), pct(modelShare.cacheReadShare), 'v2') +
@@ -2044,26 +2074,30 @@
        * it.
        */
       function consumptionRecommendationLines (recommendations) {
+        // W4 #10: advice is not an alarm -- what asks for an action reads in
+        // the normal text colour; the checks that came back fine fold into
+        // one quiet line, never a column of reassurances.
         var recs = recommendations || {}
-        var parts = []
+        var act = []
+        var checked = []
         if (recs.claudeMdSize) {
-          parts.push(line(t('consumption.claudeMdSize', { tokens: num(Math.round(recs.claudeMdSize.estimatedTokens)) }),
-            recs.claudeMdSize.overThreshold ? 'stale' : 'empty-line'))
-          if (recs.claudeMdSize.overThreshold) parts.push(line(t('consumption.claudeMdSizeSuggestion'), 'stale'))
-        }
-        if (recs.mcpServerCount) {
-          parts.push(line(t('consumption.mcpServerCount', { count: num(recs.mcpServerCount.count) }), 'empty-line'))
+          var mdTokens = num(Math.round(recs.claudeMdSize.estimatedTokens))
+          if (recs.claudeMdSize.overThreshold) act.push(t('consumption.claudeMdSize', { tokens: mdTokens }) + ' ' + t('consumption.claudeMdSizeSuggestion'))
+          else checked.push(t('consumption.recItemClaudeMd', { tokens: mdTokens }))
         }
         if (recs.longSession) {
-          var longSessionKey = recs.longSession.overThreshold ? 'consumption.longSessionWarning' : 'consumption.longSessionOk'
-          parts.push(line(t(longSessionKey, { tokens: num(Math.round(recs.longSession.avgMainStepContextReread)) }),
-            recs.longSession.overThreshold ? 'stale' : 'empty-line'))
+          var ctx = num(Math.round(recs.longSession.avgMainStepContextReread))
+          if (recs.longSession.overThreshold) act.push(t('consumption.longSessionWarning', { tokens: ctx }))
+          else checked.push(t('consumption.recItemContext', { tokens: ctx }))
         }
         if (recs.subagentShare) {
-          var subagentShareKey = recs.subagentShare.overThreshold ? 'consumption.subagentShareWarning' : 'consumption.subagentShareOk'
-          parts.push(line(t(subagentShareKey, { percent: String(Math.round(recs.subagentShare.subagentSharePercent * 10) / 10) }),
-            recs.subagentShare.overThreshold ? 'stale' : 'empty-line'))
+          var percent = String(Math.round(recs.subagentShare.subagentSharePercent * 10) / 10)
+          if (recs.subagentShare.overThreshold) act.push(t('consumption.subagentShareWarning', { percent: percent }))
+          else checked.push(t('consumption.recItemSubagents', { percent: percent }))
         }
+        if (recs.mcpServerCount) checked.push(t('consumption.recItemMcp', { count: num(recs.mcpServerCount.count) }))
+        var parts = act.length > 0 ? act.map(function (text) { return line(text, 'kpi-sub rec-act') }) : [line(t('consumption.recNothing'), 'kpi-sub')]
+        if (checked.length > 0) parts.push(line(t('consumption.recChecked', { list: checked.join(' · ') }), 'empty-line'))
         return parts.join('')
       }
 
@@ -2233,7 +2267,24 @@
         if (w.available === false) {
           parts.push(line(t('window.unavailableCard'), 'empty-line'))
         } else if (w.byModel && w.byModel.length > 0) {
-          parts.push(w.byModel.map(consumptionModelBlock).join('<div class="divider"></div>'))
+          // W4 #4: how much, not only how it splits; a model with under 2% of
+          // the window's steps folds into one line instead of its own bars.
+          var main = (w.byAgent && w.byAgent.main) || {}
+          var sub = (w.byAgent && w.byAgent.subagent) || {}
+          if (typeof main.tokens === 'number' || typeof sub.tokens === 'number') {
+            parts.push(line(t('consumption.usageTotal', { tokens: num((main.tokens || 0) + (sub.tokens || 0)), steps: num(w.stepCount || 0) })))
+          }
+          var floor = (w.stepCount || 0) * 0.02
+          var big = w.byModel.filter(function (m) { return m.stepCount >= floor })
+          var small = w.byModel.filter(function (m) { return m.stepCount < floor })
+          parts.push(big.map(consumptionModelBlock).join('<div class="divider"></div>'))
+          if (small.length > 0) {
+            parts.push(line(t('consumption.smallModels', {
+              n: num(small.length),
+              steps: num(small.reduce(function (acc, m) { return acc + (m.stepCount || 0) }, 0)),
+              tokens: num(small.reduce(function (acc, m) { return acc + (m.tokens || 0) }, 0))
+            })))
+          }
         } else {
           parts.push(line(t('consumption.noModelData'), 'empty-line'))
         }
@@ -2622,7 +2673,7 @@
             esc(liveExpanded ? t('live.showLess') : t('live.showMore', { n: String(olderCount) })) + '</button>'
           : ''
         cardsEl.innerHTML = list + toggle
-        statusEl.textContent = t('live.agentsCount', { n: String(entries.length) })
+        statusEl.textContent = t('live.agentsCount', { n: num(recent.length) })
       }
 
       // One listener for the toggle, which is re-rendered with the list; the
