@@ -2618,7 +2618,30 @@ test("0.6.2 E8 (hook): skill applied + tool measuring reads as such, with one je
     jevResponse({ which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 }, needsOneTool: { type: "noul", noul: 0.1 } }),
   );
   await submitPrompt(handlers, engine, "how does the auth module work");
-  assert.equal(host.statusLines.at(-1), "jev · skill: graft-helper (applied) · tools: no change (measuring only)");
+  // 0.11.1: the tool part picked nothing, so it says nothing.
+  assert.equal(host.statusLines.at(-1), "jev · skill: graft-helper (applied)");
+});
+
+test("0.11.1: a turn with no pick clears the line, so the last turn's skill is not left showing", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+  host.fetchQueue.push(
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 }, skill_needed: { type: "noul", noul: 0.8 } }),
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 }, "fits::graft-helper": { type: "noul", noul: 0.9 } }),
+    jevResponse({ which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 }, needsOneTool: { type: "noul", noul: 0.1 } }),
+  );
+  await submitPrompt(handlers, engine, "how does the auth module work");
+  assert.equal(host.statusLines.at(-1), "jev · skill: graft-helper (applied)");
+  host.fetchQueue.push(
+    jevResponse({ which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.2 }, confidence: 0.2 }, skill_needed: { type: "noul", noul: 0.05 } }),
+    jevResponse({ which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.6 }, confidence: 0.6 }, needsOneTool: { type: "noul", noul: 0.1 } }),
+  );
+  await submitPrompt(handlers, engine, "thanks");
+  assert.equal(host.statusLines.at(-1), undefined);
 });
 
 test("0.6.2 E8 (hook): skill measuring only reads as such", async () => {

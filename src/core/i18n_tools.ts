@@ -10,8 +10,6 @@ export type ToolsKey =
   | "status.tool"
   | "status.tool.applied"
   | "status.tool.measuring"
-  | "status.noTool"
-  | "status.noTool.measuring"
   | "advice.intro"
   | "advice.instructions";
 
@@ -20,8 +18,6 @@ export const TOOLS_CATALOG: Catalog<ToolsKey> = {
     "status.tool": "herramienta: {{name}}",
     "status.tool.applied": "herramienta: {{name}} (aplicada)",
     "status.tool.measuring": "herramienta: {{name}} (solo mide)",
-    "status.noTool": "herramientas: sin cambio",
-    "status.noTool.measuring": "herramientas: sin cambio (solo mide)",
     "advice.intro": "Sugerencia para este pedido: la herramienta {{name}} podría ser la indicada.",
     "advice.instructions": "Esto es solo una sugerencia, no una orden: evalúala y úsala solo si de verdad ayuda; ignórala si no coincide con lo que el usuario pidió, y sigue teniendo el resto de las herramientas disponibles igual que antes.",
   },
@@ -29,8 +25,6 @@ export const TOOLS_CATALOG: Catalog<ToolsKey> = {
     "status.tool": "tool: {{name}}",
     "status.tool.applied": "tool: {{name}} (applied)",
     "status.tool.measuring": "tool: {{name}} (measuring only)",
-    "status.noTool": "tools: no change",
-    "status.noTool.measuring": "tools: no change (measuring only)",
     "advice.intro": "Suggestion for this request: the {{name}} tool might be the right one.",
     "advice.instructions": "This is only a suggestion, not an instruction: weigh it and use it only if it genuinely helps; ignore it if it doesn't match what the user actually asked for, and every other tool is still just as available as before.",
   },

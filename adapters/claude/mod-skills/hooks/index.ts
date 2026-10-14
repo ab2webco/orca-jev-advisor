@@ -4130,8 +4130,8 @@ export function register(on: On, options: PluginOptions): void {
 
     const statusParts = [skillOutcome.status, toolOutcome.status].filter((part): part is string => part !== null)
     promptStatusText = statusParts.length > 0 ? statusParts.join(' · ') : null
-    const line = statusLine()
-    if (line !== null) $.ui.status(line)
+    // Nothing to say clears the line: the last turn's skill must not stay showing.
+    $.ui.status(statusLine() ?? undefined)
 
     const extraContext = [skillOutcome.block, toolOutcome.block].filter((block): block is string => block !== null)
     if (extraContext.length === 0) return next(e)

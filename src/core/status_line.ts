@@ -24,14 +24,16 @@ export function composeStatusLine(parts: readonly (string | null)[]): string | n
   return shown.length === 0 ? null : ["jev", ...shown].join(" · ");
 }
 
-export function skillStatusPart(locale: Locale, name: string | null, outcome: PartOutcome): string {
-  if (name === null) return translate(MOD_SKILLS_CATALOG, locale, outcome === "measuring" ? "status.noSkill.measuring" : "status.noSkill");
+/** Null when nothing was picked: a part that changed nothing says nothing (0.11.1), so the parts that did fit a narrow pane. */
+export function skillStatusPart(locale: Locale, name: string | null, outcome: PartOutcome): string | null {
+  if (name === null) return null;
   const key = outcome === "applied" ? "status.skill.applied" : outcome === "measuring" ? "status.skill.measuring" : "status.skill";
   return translate(MOD_SKILLS_CATALOG, locale, key, { name });
 }
 
-export function toolStatusPart(locale: Locale, name: string | null, outcome: PartOutcome): string {
-  if (name === null) return translate(TOOLS_CATALOG, locale, outcome === "measuring" ? "status.noTool.measuring" : "status.noTool");
+/** Null when nothing was picked, as skillStatusPart. */
+export function toolStatusPart(locale: Locale, name: string | null, outcome: PartOutcome): string | null {
+  if (name === null) return null;
   const key = outcome === "applied" ? "status.tool.applied" : outcome === "measuring" ? "status.tool.measuring" : "status.tool";
   return translate(TOOLS_CATALOG, locale, key, { name });
 }
