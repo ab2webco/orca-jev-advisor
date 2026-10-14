@@ -191,7 +191,20 @@ Retention is out of scope here; worth a follow-up.
   states (trabajando / esperando / terminado / bloqueado) are words; an
   unknown one keeps its raw value. At 480 px and below a bar's label takes
   its own line above the bar; 0 labels cut at 390 on any tab, both locales.
-- [ ] W6 Actividad and interventions: #9, #14, #15. RED, GREEN, one commit.
+- [x] W6 Actividad and interventions: #9, #14, #15. RED, GREEN, one commit.
+  Proof: #9 landed in W1 with the per-window data shape (one row per
+  project: labelled estimated cost, counts with asked/blocked, tokens,
+  dearest models, router line; a total line; ranked by cost; projects past
+  the 25 the reader names folded into one row) -- the activity spec tests
+  rewritten there. Raw slugs: the names are the project names the gate and
+  the hook record (cwd folder or Orca project); renaming them is not
+  possible without inventing names, so left as recorded. #14 panels spec
+  "W6 #14" (RED first) and the L6 grouping test changed: one live row per
+  project (its latest branch, "+N ramas", sessions), two fixed lines (name,
+  state, time / branch, sessions) at 390, the branch as quiet text and state
+  pills drawn in --ring. #15 "W6 #15" (RED first): the line above the table
+  counts only asked and blocked; the advice to the model is its own
+  sentence.
 - [ ] W7 Evidence: re-run the audit render against the owner's real
   `storage.json`, 4 tabs at 1440 and 390, dark (8 images), and read each.
 

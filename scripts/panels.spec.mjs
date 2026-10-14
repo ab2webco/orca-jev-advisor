@@ -2937,6 +2937,49 @@ for (const locale of ['es', 'en']) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// odd/tasks/board-global-window.md W6 -- Actividad's live rows and the
+// interventions footnote (audit #14, #15).
+// ---------------------------------------------------------------------------
+
+test('W6 #14: at 390px every live row reads the same way: name, state and time on one line, branch and sessions under it, pills that show', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS['live-busy'], 'es', 'dark', { viewport: { width: 390, height: 900 } })
+  try {
+    await page.click('#tab-activity')
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('#cards .live-row')).map((row) => {
+      const top = (selector) => { const node = row.querySelector(selector); return node ? Math.round(node.getBoundingClientRect().top) : null }
+      const state = row.querySelector('.tag.state')
+      return {
+        name: top('.name'), state: top('.tag.state'), when: top('.when'), branch: top('.branch'),
+        stateBorder: getComputedStyle(state).borderTopColor,
+        cardBorder: getComputedStyle(document.getElementById('card-live')).borderTopColor
+      }
+    }))
+    assert.ok(rows.length > 3)
+    for (const row of rows) {
+      assert.ok(Math.abs(row.state - row.name) <= 4 && Math.abs(row.when - row.name) <= 4, `name, state and time share the first line: ${JSON.stringify(row)}`)
+      if (row.branch !== null) assert.ok(row.branch > row.name + 4, `the branch sits under the name: ${JSON.stringify(row)}`)
+      assert.notEqual(row.stateBorder, row.cardBorder, 'a state pill is drawn in a stronger line than the card hairline')
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W6 #15: the interventions line counts only what the table shows; advice to the model is its own sentence', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready, 'es')
+  try {
+    const text = await page.evaluate(() => document.getElementById('interventions-body').innerText)
+    const day = SCENARIOS.ready.measurementsSummary.gate.windows.day
+    assert.doesNotMatch(text.split('\n')[0], /avisadas/)
+    assert.match(text, new RegExp(`${day.byVerdict.advise} veces se avisó al modelo sin detener a nadie`))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('the board opens on Gate, and clicking a tab shows only its own panel', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
   try {
@@ -3999,8 +4042,9 @@ async function liveList (page) {
       branch: row.querySelector('.tag.branch')?.textContent ?? null,
       state: row.querySelector('.tag.state')?.textContent ?? null,
       stateClass: row.querySelector('.tag.state')?.className ?? null,
-      count: row.querySelector('.count')?.textContent ?? null,
+      count: row.querySelector('.count:not(.branches)')?.textContent ?? null,
       when: row.querySelector('.when')?.textContent ?? null,
+      text: row.innerText,
       title: row.title
     })),
     toggle: (() => {
@@ -4030,7 +4074,10 @@ test('L6: live rows run newest first overall, never grouped by status', { skip: 
   }
 })
 
-test('L6: one row per project and branch, with its latest state, last-seen time and a session count', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+// odd/tasks/board-global-window.md W6 (#14): one row per project now -- a
+// second branch of the same project made the owner read it twice. The row
+// shows the latest branch and counts the others.
+test('L6 + W6: one row per project, with its latest state, branch, last-seen time, session count and other branches counted', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const entries = []
   for (let i = 0; i < 12; i += 1) {
     entries.push(liveEntry({ worktreeId: `wt-project-a-${i}`, projectName: 'project-a', project: 'github:example/project-a', rama: 'main', state: i === 0 ? 'working' : 'done', paneKey: `pane-project-a-${i}` }, (5 + i * 30) * MINUTE_MS))
@@ -4039,14 +4086,13 @@ test('L6: one row per project and branch, with its latest state, last-seen time 
   const { browser, page, errors } = await openBoardPanel({ board: { entries } })
   try {
     const { rows } = await liveList(page)
-    const main = rows.filter((row) => row.name === 'project-a' && row.branch === 'main')
-    assert.equal(main.length, 1, `expected one project-a/main row: ${JSON.stringify(rows)}`)
-    assert.equal(main[0].state, 'working', 'the group shows its latest entry\'s state')
-    assert.equal(main[0].when, '5 min ago', 'the group shows its latest entry\'s time')
-    assert.equal(main[0].count, '×12 sessions')
-    const feat = rows.filter((row) => row.name === 'project-a' && row.branch === 'feat/x')
-    assert.equal(feat.length, 1, 'another branch of the same project is its own row')
-    assert.equal(feat[0].count, null, 'a single session shows no count')
+    const projectA = rows.filter((row) => row.name === 'project-a')
+    assert.equal(projectA.length, 1, `expected one project-a row: ${JSON.stringify(rows)}`)
+    assert.equal(projectA[0].branch, 'main', 'the latest entry\'s branch')
+    assert.equal(projectA[0].state, 'working', 'the group shows its latest entry\'s state')
+    assert.equal(projectA[0].when, '5 min ago', 'the group shows its latest entry\'s time')
+    assert.equal(projectA[0].count, '×13 sessions')
+    assert.match(projectA[0].text, /\+1 branch/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

@@ -318,7 +318,14 @@
                            overflow-wrap: anywhere; white-space: pre-wrap; }
       .recent-list li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; font-size: 12px; }
       .live-list { display: grid; gap: 6px; }
-      .live-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+      .live-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: baseline; font-size: 12px; }
+      .live-row .live-main { display: flex; gap: 6px; align-items: baseline; min-width: 0; flex-wrap: wrap; }
+      .live-row .live-sub { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; min-width: 0; }
+      .live-row .when { margin-left: 0; }
+      /* W6 (#14): the branch is quiet text, not a pill; a state pill gets a
+         line that shows in both themes (--ring, not the card hairline). */
+      .live-row .tag.branch { border: 0; padding: 0; font-size: 11px; overflow-wrap: anywhere; }
+      .live-row .tag.state { border-color: var(--ring, var(--fb-ring)); }
       .live-row .name { font-weight: 600; overflow-wrap: anywhere; }
       /* odd/tasks/board-leftovers.md L6. How many sessions one project and
          branch row stands for, and a working or waiting row that has been
@@ -567,7 +574,8 @@
           'toll.avoided': 'Las reglas locales y la caché resolvieron {{n}} sin llamar a la red.',
           'gate.source.jevMedian': 'Jev (con red, mediana {{ms}} ms)',
           'interv.heading': '¿Dónde interviene?',
-          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas · {{advise}} avisadas al modelo, de {{total}} decisiones',
+          'interv.sub': '{{ask}} con pregunta · {{deny}} bloqueadas, de {{total}} decisiones',
+          'interv.advised': 'Además, {{n}} veces se avisó al modelo sin detener a nadie; no son filas de esta tabla.',
           'interv.family': 'Familia',
           'interv.ask': 'Pregunta',
           'interv.deny': 'Bloqueó',
@@ -667,6 +675,7 @@
           'live.updating': 'Actualizando…',
           'live.noSignal': 'sin señal',
           'live.sessions': '×{{n}} sesiones',
+          'live.otherBranches': '+{{n}} rama(s)',
           'live.showMore': 'ver más ({{n}})',
           'live.showLess': 'ver menos',
           'live.none24h': 'Nada visto en las últimas 24 h.',
@@ -833,7 +842,8 @@
           'toll.avoided': 'Local rules and the cache settled {{n}} of them without a network call.',
           'gate.source.jevMedian': 'Jev (network, median {{ms}} ms)',
           'interv.heading': 'Where does it step in?',
-          'interv.sub': '{{ask}} asked · {{deny}} blocked · {{advise}} advised the model, out of {{total}} decisions',
+          'interv.sub': '{{ask}} asked · {{deny}} blocked, out of {{total}} decisions',
+          'interv.advised': 'Also, the model was advised {{n}} times without stopping anyone; those are not rows in this table.',
           'interv.family': 'Family',
           'interv.ask': 'Asked',
           'interv.deny': 'Blocked',
@@ -933,6 +943,7 @@
           'live.updating': 'Updating…',
           'live.noSignal': 'no signal',
           'live.sessions': '×{{n}} sessions',
+          'live.otherBranches': '+{{n}} branch(es)',
           'live.showMore': 'show more ({{n}})',
           'live.showLess': 'show less',
           'live.none24h': 'Nothing seen in the last 24 h.',
@@ -1736,9 +1747,11 @@
         var verdict = w.byVerdict || {}
         var table = w.interventions || {}
         var rows = table.rows || []
+        // W6 (#15): the line counts only what the table has columns for; the
+        // advice to the model is its own sentence, never a phantom column.
         var sub = line(t('interv.sub', {
-          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), advise: num(verdict.advise || 0), total: num(w.totalDecisions || 0)
-        }), 'kpi-sub')
+          ask: num(verdict.ask || 0), deny: num(verdict.deny || 0), total: num(w.totalDecisions || 0)
+        }), 'kpi-sub') + ((verdict.advise || 0) > 0 ? line(t('interv.advised', { n: num(verdict.advise) })) : '')
         if (rows.length === 0) {
           el('interventions-body').innerHTML = sub + line(t('interv.none'), 'empty-line')
           return
@@ -2640,7 +2653,8 @@
        *  floating pane shares that one worktree id). */
       function liveGroupKey (e) {
         var project = presentText(e.projectName) || presentText(e.project)
-        if (project !== null) return 'p\u0000' + project + '\u0000' + (presentText(e.rama) || '')
+        // W6 (#14): one row per project; its other branches are counted on it.
+        if (project !== null) return 'p\u0000' + project
         var worktree = presentText(e.worktreeId)
         if (worktree !== null && worktree !== FLOATING_TERMINAL_WORKTREE_ID) return 'w\u0000' + worktree
         return 'k\u0000' + String(e.paneKey)
@@ -2663,13 +2677,14 @@
           var key = liveGroupKey(e)
           var group = byKey[key]
           if (!group) {
-            group = byKey[key] = { latest: e, lastSeen: entryTime(e), count: 0 }
+            group = byKey[key] = { latest: e, lastSeen: entryTime(e), count: 0, branches: {} }
             order.push(group)
           } else if (newerFirst(entryTime(e), e.receivedAt, group.lastSeen, group.latest.receivedAt) < 0) {
             group.latest = e
             group.lastSeen = entryTime(e)
           }
           group.count += 1
+          if (presentText(e.rama) !== null) group.branches[e.rama] = true
         })
         return order.sort(function (a, b) { return newerFirst(a.lastSeen, a.latest.receivedAt, b.lastSeen, b.latest.receivedAt) })
       }
@@ -2678,14 +2693,21 @@
         var view = liveEntryView(entry)
         var silent = group.lastSeen === null || nowMs - group.lastSeen > LIVE_STALE_AFTER_MS
         var noSignal = LIVE_ACTIVE_STATES.indexOf(entry.state) !== -1 && silent
-        return '<div class="live-row" title="' + esc(view.title) + '">' +
-          '<span class="name">' + esc(view.name) + '</span>' +
-          (view.branch ? '<span class="tag branch">' + esc(view.branch) + '</span>' : '') +
+        var branches = Object.keys(group.branches || {})
+        var others = branches.filter(function (b) { return b !== view.branch }).length
+        var title = view.title + (branches.length > 1 ? ' · ' + branches.join(', ') : '')
+        // W6 (#14): two lines, the same on every row -- name, state and time;
+        // then branch, other branches and sessions, quiet.
+        var sub = (view.branch ? '<span class="tag branch">' + esc(view.branch) + '</span>' : '') +
+          (others > 0 ? '<span class="count branches">' + esc(t('live.otherBranches', { n: num(others) })) + '</span>' : '') +
+          (group.count > 1 ? '<span class="count">' + esc(t('live.sessions', { n: num(group.count) })) + '</span>' : '')
+        return '<div class="live-row" title="' + esc(title) + '">' +
+          '<span class="live-main"><span class="name">' + esc(view.name) + '</span>' +
           (noSignal
             ? '<span class="tag state nosignal">' + esc(t('live.noSignal')) + '</span>'
             : '<span class="' + tagClass(entry.state) + ' state">' + esc(LIVE_STATE_WORDS.indexOf(entry.state) !== -1 ? t('state.' + entry.state) : (entry.state || '?')) + '</span>') +
-          (group.count > 1 ? '<span class="count">' + esc(t('live.sessions', { n: String(group.count) })) + '</span>' : '') +
-          '<span class="when">' + esc(ago(entry.updatedAt)) + '</span></div>'
+          '</span><span class="when">' + esc(ago(entry.updatedAt)) + '</span>' +
+          (sub ? '<span class="live-sub">' + sub + '</span>' : '') + '</div>'
       }
       function render (board) {
         lastBoard = board
