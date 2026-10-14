@@ -17,7 +17,7 @@ Run on 2026-10-14 against `fix/router-find-symlink`, from `main` at 3a42d62 (0.1
 | `npm test` | 4333/4333 |
 | `npm run typecheck` | Clean |
 | Panels | Not run: no UI change |
-| Live | See scenarios 5 to 8 |
+| Live | 5, 6, 7 PASS; 8 PENDING (needs use) |
 
 ## Scenarios
 
@@ -28,8 +28,8 @@ Run on 2026-10-14 against `fix/router-find-symlink`, from `main` at 3a42d62 (0.1
 | 3 | A new index line past 200 lines or 25,000 bytes goes above the first entry; under a heading it stays under it | `src/core/memory_draft.test.ts` | first entry line; nothing dropped | as expected | PASS |
 | 4 | A replaced line past the window moves up; one inside stays in place | `src/core/memory_draft.test.ts` | as stated | as expected | PASS |
 | 5 | Live: GNU `find` on the partner's Fedora (read-only) | his symlinked `projects` folders | without `-H` 0 hits, with it 1 | 2 symlinked accounts: 0 and 1 each | PASS |
-| 6 | Live: the installed 0.10.1 finds the owner's moved `orca-oss` transcript | marketplace install, the Koombea account's `projects` | the transcript path | Pending the release | PENDING |
-| 7 | Live: the installed 0.10.1 places a line in the owner's `orca-oss` index inside the window | a copy of that index | the line above the first entry | Pending the release | PENDING |
+| 6 | Live: the installed 0.10.1 finds the owner's moved `orca-oss` transcript | marketplace install, the Koombea account's `projects` | the transcript path | Install root `0f0a8b7b` (0.10.1; 8 hooks on it in `~/.claude` and all 4 accounts): its `transcriptFindArgv` gives `find -H <account>/auth/projects …` for the Koombea account, which finds the moved session's transcript under its removed worktree's folder (0.10.0: nothing) | PASS |
+| 7 | Live: the installed 0.10.1 places a line in the owner's `orca-oss` index inside the window | a copy of that index | the line above the first entry | Installed `upsertIndexLine` on a copy of the 203-line index: the mirrored rule moves from line 203 to line 1, still 203 lines; a new line lands at line 1. Applying it to the real index was refused by the Jev gate (`never_write_to_main`, the shell was on `main`); left to the owner | PASS (copy) |
 | 8 | Live: no `tail-failed` from moved sessions after the update | `model-router-decisions-*.jsonl` | none, or a reason other than the symlink | Pending use | PENDING |
 
 ## Not covered
