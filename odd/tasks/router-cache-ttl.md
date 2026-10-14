@@ -38,6 +38,7 @@ Out of scope: deferring upgrades to a cold cache; Windows (`tail` is not there; 
   - RED: jev_call.test.ts and gate_unreachable_notice.test.ts failed to load (no `isJevPaymentFailure`, `unreachableNoticeKey`); i18n_catalogs "G8: the no-credit gate notice …" failed (no `jevNoCredit`); hooks.test.ts "G8: a Jev answer of 402 (no credit) names the router rows jev-payment, …" (`[start, jev-failed], [stage, jev-failed]`) and "G8: a subagent judged into a 402 …" (`jev-failed`); steward.test.ts "G8: a Jev answer of 402 is logged jev-payment, …" (`jev-failed`); subagent_status and module_cost reader assertions for `jev-payment` failed.
   - GREEN: those seven files 358/358; typecheck clean.
 - [x] Release 0.8.3 (docs, version, QA)
+- [x] R8 (0.10.1) `find -H` for the moved-transcript lookup: `projects` is a symlink on Orca accounts, so a moved session said `tail-failed` on every stage row. RED: real-filesystem test in `src/core/cache_warmth.test.ts`; GREEN 18/18, suite 4333/4333 (`odd/qa/qa-0.10.1.md`).
 - [ ] Live: a Team-account session gives `cacheWarm` true/false (PASS, qa-0.8.3 #10); the partner's Linux shows the 402 notice text (read-only check, waits for his update)
 
 ## Acceptance

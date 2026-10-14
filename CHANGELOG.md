@@ -2,6 +2,11 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.10.1
+
+- **Model router: the cache is known after a session's folder moves** (odd/tasks/router-cache-ttl.md, R5 follow-up). When the session's own transcript path no longer matches (a worktree that was removed, a session root other than where it started), the router looks the transcript up by session id with `find`. On every Orca account `projects` is a symlink to the shared transcript store, and `find` without `-H` lists the link and never descends, so the lookup found nothing and every stage row of such a session said `cacheUnknown: tail-failed` (an owner session on a Koombea account: 10 of 10). `transcriptFindArgv` now passes `-H`. Proven on macOS (BSD `find`) and on the partner's Fedora (GNU `find`): without `-H` 0 hits, with it 1. Unknown still counts as warm, as before.
+- **Memory: a saved rule always lands where Claude Code reads it.** Claude Code loads `MEMORY.md` only up to its first 200 lines and 25,000 bytes (2.1.299: `ZN=200`, `tie=25000`). The module appended its index line at the end, so in an index already past either limit (the owner's `orca-oss` index: 203 lines, 27,539 bytes) a mirrored feedback rule was written but never read. `upsertIndexLine` now puts a new line that would fall past the window above the first entry, and moves a replaced line that sits past it the same way; an index inside the window is appended to as before. The entry that slips past the window is an older one; nothing is dropped.
+
 ## 0.10.0
 
 - **Memory module: Active writes to Engram** (odd/tasks/memory-active-engram.md, track M9). With Engram usable (`engramUsable`: live, a server named, the health check not refused), Active now drafts every UPDATE turn and saves the draft to Engram. Rows read `mode: active, effective: active, backend: live`. A refused check (`permission: refused`) keeps Active measuring as Shadow (`effective: shadow`), as in 0.9.0.

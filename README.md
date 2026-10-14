@@ -16,6 +16,13 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.10.1
+
+- **The model router knows your cache in moved sessions too.** When a session's folder changed after it started (a worktree you removed, say), the router could not find its transcript on Orca accounts and treated the cache as warm. It now finds it, so a switch after a long break is again counted as free there.
+- **Memory saves always land where Claude Code reads them.** Claude Code reads only the first 200 lines (and 25,000 bytes) of a project's `MEMORY.md`. In a longer index, a rule the Memory module saved went to the end and was never read. It now goes above the first entry, so the next session sees it.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.10.0
 
 - **Memory in Active now saves to Engram.** In 0.9.0, Active wrote only when you had no Engram; with Engram live it just measured. Now, with the Memory module on Active and Engram live, what is worth remembering is saved to Engram.

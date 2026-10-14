@@ -53,6 +53,7 @@ Strict TDD: a test written and observed failing, then green, then refactor and o
 - [x] E4 Card (es/en): per backend, what Active does now; the week's Engram figures and the pending line; `panels.spec.mjs` cases; screenshots.
 - [x] E5 `measure-module-cost` memory line: the Engram counts.
 - [x] E6 Release 0.10.0: README and CHANGELOG, version, `odd/qa/qa-0.10.0.md`.
+- [x] E7 (0.10.1) Index line inside Claude Code's load window (200 lines, 25,000 bytes): live qa-0.10.0 #15 found a mirrored rule at line 203 of a 203-line index. RED: three `upsertIndexLine` tests in `src/core/memory_draft.test.ts`; GREEN 31/31, suite 4333/4333 (`odd/qa/qa-0.10.1.md`).
 
 ## Acceptance criteria
 
