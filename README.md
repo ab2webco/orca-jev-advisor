@@ -16,6 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.11.0
+
+- **One time window for the whole board.** The 24 h / 7 days / this version / all chips now sit above the tabs and every tab follows them, not only Gate. They start at 24 h, so the board is no longer near-empty right after an update. Every card says which window it shows; a card that cannot follow it (live states, account quota, the last 10 decisions) says so. Usage, router and steward logs are kept for 8 days, so under "all" those cards say they show the 8 days that are kept.
+- **Your modules are on the board.** The last tab is now Modules: Memory (state, where it saves, turns evaluated, saves to Engram, files written, conflicts pending), the CI watcher (watches, `gh` calls, agent polls avoided) and verify-done, each with its Off / Shadow / Active state, beside the skills mod.
+- **Cards read right.** Per-project router savings and the Consumption total come from the same calculation, so they add up. Token usage shows totals per model; calibration, Jev latency, steward and recommendations say what they measure; the header counts agents active in the last 24 h. Numbers, money, verdicts and live states follow the board's language, and labels no longer get cut on a phone.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.10.1
 
 - **The model router knows your cache in moved sessions too.** When a session's folder changed after it started (a worktree you removed, say), the router could not find its transcript on Orca accounts and treated the cache as warm. It now finds it, so a switch after a long break is again counted as free there.
