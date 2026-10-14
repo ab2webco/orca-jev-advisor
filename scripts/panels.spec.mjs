@@ -2461,7 +2461,9 @@ const BOARD_TAB_SECTIONS = {
   gate: ['card-calibration', 'card-empty', 'card-interventions', 'card-recent', 'card-speed', 'card-status', 'card-toll', 'card-unmeasured', 'card-waiting'],
   activity: ['card-live', 'card-projects'],
   consumption: ['card-consumption'],
-  skills: ['card-skills']
+  // W3: the last tab is the modules' -- the skills mod, memory, the CI
+  // watcher and verify-done -- under its old id, so a remembered tab holds.
+  skills: ['card-ciwatch', 'card-memory', 'card-skills', 'card-verifydone']
 }
 
 async function boardTabState (page) {
@@ -2570,7 +2572,7 @@ test('W2: every card heading names the window it shows, or says it does not foll
   const { browser, page, errors } = await openBoardPanel(SCENARIOS['board-full'])
   try {
     const labels = await boardWindowLabels(page)
-    for (const id of ['card-status', 'card-toll', 'card-interventions', 'card-calibration', 'card-projects', 'card-consumption', 'card-skills']) {
+    for (const id of ['card-status', 'card-toll', 'card-interventions', 'card-calibration', 'card-projects', 'card-consumption', 'card-skills', 'card-memory', 'card-ciwatch', 'card-verifydone']) {
       assert.equal(labels[id], '24 h', `${id} does not name its window: ${JSON.stringify(labels)}`)
     }
     for (const id of ['card-recent', 'card-speed', 'card-live', 'card-waiting']) {
@@ -2657,6 +2659,99 @@ test('W2: a stored window that is not a window, or a localStorage that throws, s
   }
 })
 
+// ---------------------------------------------------------------------------
+// odd/tasks/board-global-window.md W3 -- the owner turned memory (Active,
+// Engram), the CI watcher and verify-done on, and the board never showed
+// them. The Modules tab does, each with its state and its window's figures,
+// straight from measurementsSummary.modules.
+// ---------------------------------------------------------------------------
+
+async function moduleCardText (page, id) {
+  await page.click('#tab-skills')
+  return page.evaluate((id) => document.getElementById(id).innerText, id)
+}
+
+test('W3: the Modules tab shows memory, the CI watcher and verify-done with their state and the window\'s own figures', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['board-full']
+  const modules = scenario.measurementsSummary.modules
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    assert.equal(await page.textContent('#tab-skills'), 'Modules')
+    const memory = await moduleCardText(page, 'card-memory')
+    const day = modules.memory.windows.day
+    assert.equal(await page.evaluate(() => document.querySelector('#card-memory h2').textContent), 'Memory24 h', 'heading and its window')
+    assert.match(memory, /Active/)
+    assert.match(memory, /Saves to: Engram, running · right now/)
+    for (const [label, value] of [['Turns weighed', day.decisions], ['Saved to Engram', day.engramSaved], ['Memory files written', day.written], ['Saved by your main thread', day.mainEngramSaves], ['Conflicts waiting to be judged', day.judgePending]]) {
+      assert.ok(memory.includes(`${value.toLocaleString('en')}\n${label}`) || memory.includes(`${label}\n${value.toLocaleString('en')}`), `memory: ${label} ${value} in ${JSON.stringify(memory)}`)
+    }
+    assert.match(memory, new RegExp(`Agrees with your main thread on ${Math.round(day.agreementRate * 100)}% of turns`))
+
+    const ci = await moduleCardText(page, 'card-ciwatch')
+    const ciDay = modules.ciWatch.windows.day
+    assert.equal(await page.evaluate(() => document.querySelector('#card-ciwatch h2').textContent), 'CI watcher24 h')
+    assert.match(ci, /Active/)
+    for (const [label, value] of [['Watches', ciDay.watches], ['gh calls', ciDay.ghCalls], ['Agent polls replaced', ciDay.pollsReplaced]]) {
+      assert.ok(ci.includes(`${value}\n${label}`) || ci.includes(`${label}\n${value}`), `ci: ${label} ${value} in ${JSON.stringify(ci)}`)
+    }
+
+    const verify = await moduleCardText(page, 'card-verifydone')
+    const vDay = modules.verifyDone.windows.day
+    assert.equal(await page.evaluate(() => document.querySelector('#card-verifydone h2').textContent), 'Verify done24 h')
+    assert.match(verify, /Shadow/)
+    for (const [label, value] of [['Turns checked', vDay.decisions], ['Said done', vDay.claims], ['Would have been stopped', vDay.wouldBlock]]) {
+      assert.ok(verify.includes(`${value}\n${label}`) || verify.includes(`${label}\n${value}`), `verify: ${label} ${value} in ${JSON.stringify(verify)}`)
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W3: the module cards follow the chip', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = SCENARIOS['board-full']
+  const { browser, page, errors } = await openBoardPanel(scenario)
+  try {
+    await page.click('#windows button[data-window="week"]')
+    const memory = await moduleCardText(page, 'card-memory')
+    assert.equal(await page.evaluate(() => document.querySelector('#card-memory h2 .win').textContent), '7 days')
+    assert.ok(memory.includes(String(scenario.measurementsSummary.modules.memory.windows.week.decisions)), memory)
+    const verify = await moduleCardText(page, 'card-verifydone')
+    assert.ok(verify.includes(String(scenario.measurementsSummary.modules.verifyDone.windows.week.decisions)), verify)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W3: a module that is off says so; one with nothing in the window says that, never a column of zeros', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const scenario = { ...SCENARIOS['modules-mixed'], measurementsSummary: SCENARIOS.empty.measurementsSummary }
+  const { browser, page, errors } = await openBoardPanel(scenario, 'es')
+  try {
+    const verify = await moduleCardText(page, 'card-verifydone')
+    assert.match(verify, /Apagado/)
+    const ci = await moduleCardText(page, 'card-ciwatch')
+    assert.match(ci, /Sin actividad en esta ventana/)
+    assert.doesNotMatch(ci, /Llamadas a gh/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('W3: a summary from a worker that does not publish modules yet says so in each card', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+  const { modules: _modules, ...older } = SCENARIOS.ready.measurementsSummary
+  const { browser, page, errors } = await openBoardPanel({ ...SCENARIOS.ready, measurementsSummary: older })
+  try {
+    for (const id of ['card-memory', 'card-ciwatch', 'card-verifydone']) {
+      assert.match(await moduleCardText(page, id), /No figures yet/, id)
+    }
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test('the board opens on Gate, and clicking a tab shows only its own panel', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openBoardPanel(SCENARIOS.ready)
   try {
@@ -2729,6 +2824,7 @@ test('the board\'s tab labels exist in both languages', { skip: chromium ? false
     const esKeys = Object.keys(catalog.es).filter((key) => key.indexOf('tabs.') === 0).sort()
     const enKeys = Object.keys(catalog.en).filter((key) => key.indexOf('tabs.') === 0).sort()
     assert.deepEqual(esKeys, ['tabs.activity', 'tabs.consumption', 'tabs.gate', 'tabs.groupLabel', 'tabs.skills'])
+    assert.equal(catalog.es['tabs.skills'], 'Módulos', 'W3: the last tab holds every module')
     assert.deepEqual(enKeys, esKeys)
     const labels = await page.evaluate(() => ({
       tabs: Array.from(document.querySelectorAll('#board-tabbar [role=tab]')).map((t) => t.textContent),

@@ -261,6 +261,8 @@
       /* W2: the window a card shows, after its heading, in the heading's own
          quiet colour but not shouted in capitals. */
       h2 .win { text-transform: none; letter-spacing: 0; font-weight: 400; }
+      /* W3: a module's state, in the config panel's own words. */
+      .mod-state { margin: 0 0 8px; font-size: 12px; }
       h2 .win:not(:empty)::before { content: " · "; }
 
       .strip { margin: 0 12px; padding: 8px 12px; border: 1px solid var(--border, var(--fb-border));
@@ -488,9 +490,27 @@
     </div>
     </div>
 
+    <!--
+      odd/tasks/board-global-window.md W3: the modules' tab (id `skills`
+      kept, so a remembered tab still opens it). Memory, the CI watcher and
+      verify-done, each with its state from the integration status and its
+      window's figures from measurementsSummary.modules; then the skills mod.
+    -->
     <div class="tab-panel" id="panel-skills" role="tabpanel" aria-labelledby="tab-skills" hidden>
     <div class="cards">
-      <section class="card wide" id="card-skills">
+      <section class="card" id="card-memory">
+        <h2><span data-i18n="modules.memory"></span><span class="win" id="win-memory"></span></h2>
+        <div id="memory-body"></div>
+      </section>
+      <section class="card" id="card-ciwatch">
+        <h2><span data-i18n="modules.ciWatch"></span><span class="win" id="win-ciwatch"></span></h2>
+        <div id="ciwatch-body"></div>
+      </section>
+      <section class="card" id="card-verifydone">
+        <h2><span data-i18n="modules.verifyDone"></span><span class="win" id="win-verifydone"></span></h2>
+        <div id="verifydone-body"></div>
+      </section>
+      <section class="card" id="card-skills">
         <h2><span data-i18n="skills.heading"></span><span class="win" id="win-skills"></span></h2>
         <div id="skills-body"></div>
         <div id="skills-typing"></div>
@@ -558,7 +578,7 @@
           'tabs.gate': 'Gate',
           'tabs.activity': 'Actividad',
           'tabs.consumption': 'Consumo',
-          'tabs.skills': 'Skills',
+          'tabs.skills': 'Módulos',
           'stats.skillsEmpty': 'El mod de skills todavía no ha registrado ninguna decisión.',
           'stats.skillSuggestions': 'Skills sugeridas',
           'stats.skillMatchRate': 'Acierto en modo medición',
@@ -652,6 +672,38 @@
           'speed.tokensBig': '{{model}}: {{in}} de entrada · {{out}} de salida · {{cache}} de contexto cargado',
           'speed.tokensNote': 'Cada deliberación del modelo se midió en frío: «claude -p» carga su propio contexto cada vez. En una sesión viva ese contexto ya está cargado, así que esa cifra es el coste de decidir en frío, no el de cada decisión dentro de la sesión.',
           'skills.heading': 'Mod de skills',
+          'modules.memory': 'Memoria',
+          'modules.ciWatch': 'Vigilante de CI',
+          'modules.verifyDone': 'Verificar «hecho»',
+          'modules.state': 'Estado: {{state}}',
+          'modules.state.off': 'Apagado',
+          'modules.state.shadow': 'Sombra, solo mide',
+          'modules.state.active': 'Activo',
+          'modules.notYet': 'Sin cifras todavía: el proceso del plugin las publica en su próxima lectura.',
+          'modules.quiet': 'Sin actividad en esta ventana.',
+          'modules.memory.where': 'Guarda en: {{where}} · ahora',
+          'modules.memory.where.live': 'Engram, en marcha',
+          'modules.memory.where.down': 'tus archivos de auto-memoria (Engram no responde)',
+          'modules.memory.where.absent': 'tus archivos de auto-memoria (sin Engram)',
+          'modules.memory.where.refused': 'ningún sitio todavía: falta un permiso de Engram',
+          'modules.memory.where.unknown': 'todavía sin detectar',
+          'modules.memory.decisions': 'Turnos evaluados',
+          'modules.memory.engramSaved': 'Guardadas en Engram',
+          'modules.memory.written': 'Archivos de memoria escritos',
+          'modules.memory.mainEngramSaves': 'Guardadas por tu hilo principal',
+          'modules.memory.judgePending': 'Conflictos por juzgar',
+          'modules.memory.agreement': 'Coincide con tu hilo principal en el {{percent}}% de los turnos.',
+          'modules.memory.engramFailed': 'No llegaron a Engram y quedaron como archivo: {{n}}.',
+          'modules.memory.shadowNote': 'En sombra no guarda nada: solo mide.',
+          'modules.ciWatch.watches': 'Vigilancias',
+          'modules.ciWatch.ghCalls': 'Llamadas a gh',
+          'modules.ciWatch.pollsReplaced': 'Sondeos del agente evitados',
+          'modules.ciWatch.outcomes': '{{finished}} terminadas · {{failed}} con fallo',
+          'modules.verifyDone.decisions': 'Turnos revisados',
+          'modules.verifyDone.claims': 'Dicen «hecho»',
+          'modules.verifyDone.wouldBlock': 'Se habrían detenido',
+          'modules.verifyDone.jevFailed': 'Sin respuesta de Jev: {{n}}.',
+          'modules.verifyDone.note': 'Turnos que editaron archivos sin un test que pasara. Solo mide: no detiene nada.',
           // K0 (odd/tasks/typing-lead-time.md): from consumptionSummary.typing.
           'skills.typing': 'Escritura antes de enviar: p50 {{p50}} s · p90 {{p90}} s · {{typed}} prompts escritos · {{injected}} inyectados',
           'skills.typingNoneTyped': 'Escritura antes de enviar: todavía sin prompts escritos · {{injected}} inyectados',
@@ -774,7 +826,7 @@
           'tabs.gate': 'Gate',
           'tabs.activity': 'Activity',
           'tabs.consumption': 'Consumption',
-          'tabs.skills': 'Skills',
+          'tabs.skills': 'Modules',
           'stats.skillsEmpty': 'The skills mod has not recorded any decision yet.',
           'stats.skillSuggestions': 'Skills suggested',
           'stats.skillMatchRate': 'Measurement-mode match rate',
@@ -868,6 +920,38 @@
           'speed.tokensBig': '{{model}}: {{in}} in · {{out}} out · {{cache}} of context loaded',
           'speed.tokensNote': 'Every model deliberation was measured cold: "claude -p" loads its own context each time. Inside a live session that context is already resident, so this figure is the cost of deciding cold, not the cost of each in-session decision.',
           'skills.heading': 'Skills mod',
+          'modules.memory': 'Memory',
+          'modules.ciWatch': 'CI watcher',
+          'modules.verifyDone': 'Verify done',
+          'modules.state': 'State: {{state}}',
+          'modules.state.off': 'Off',
+          'modules.state.shadow': 'Shadow, measuring only',
+          'modules.state.active': 'Active',
+          'modules.notYet': "No figures yet: the plugin's background process publishes them on its next read.",
+          'modules.quiet': 'No activity in this window.',
+          'modules.memory.where': 'Saves to: {{where}} · right now',
+          'modules.memory.where.live': 'Engram, running',
+          'modules.memory.where.down': 'your auto-memory files (Engram not answering)',
+          'modules.memory.where.absent': 'your auto-memory files (no Engram)',
+          'modules.memory.where.refused': 'nowhere yet: an Engram permission is missing',
+          'modules.memory.where.unknown': 'not detected yet',
+          'modules.memory.decisions': 'Turns weighed',
+          'modules.memory.engramSaved': 'Saved to Engram',
+          'modules.memory.written': 'Memory files written',
+          'modules.memory.mainEngramSaves': 'Saved by your main thread',
+          'modules.memory.judgePending': 'Conflicts waiting to be judged',
+          'modules.memory.agreement': 'Agrees with your main thread on {{percent}}% of turns.',
+          'modules.memory.engramFailed': 'Did not reach Engram, kept as a file: {{n}}.',
+          'modules.memory.shadowNote': 'In shadow it saves nothing: it only measures.',
+          'modules.ciWatch.watches': 'Watches',
+          'modules.ciWatch.ghCalls': 'gh calls',
+          'modules.ciWatch.pollsReplaced': 'Agent polls replaced',
+          'modules.ciWatch.outcomes': '{{finished}} finished · {{failed}} failed',
+          'modules.verifyDone.decisions': 'Turns checked',
+          'modules.verifyDone.claims': 'Said done',
+          'modules.verifyDone.wouldBlock': 'Would have been stopped',
+          'modules.verifyDone.jevFailed': 'No answer from Jev: {{n}}.',
+          'modules.verifyDone.note': 'Turns that edited files with no test passing. It only measures: it stops nothing.',
           'skills.typing': 'Typing before send: p50 {{p50}} s · p90 {{p90}} s · {{typed}} typed prompts · {{injected}} injected',
           'skills.typingNoneTyped': 'Typing before send: no typed prompts yet · {{injected}} injected',
           'unmeasured.heading': 'What these numbers do not measure',
@@ -1749,6 +1833,77 @@
           : line(t('skills.typingNoneTyped', { injected: num(typing.injected) }))
       }
 
+      // ---------- render: modules (odd/tasks/board-global-window.md W3) -----
+      // measurementsSummary.modules (read-measurements.mjs moduleWindows):
+      // per module, one entry per window with the figures its card shows.
+      // The state is the integration status's (claudeIntegrationStatus
+      // .modules[id].state, what the config panel's switch shows): off,
+      // shadow or active.
+      var lastIntegrationStatus = null
+      function moduleStateLine (id) {
+        var modules = lastIntegrationStatus && lastIntegrationStatus.modules
+        var state = modules && modules[id] && modules[id].state
+        if (state !== 'off' && state !== 'shadow' && state !== 'active') return ''
+        return '<p class="mod-state">' + esc(t('modules.state', { state: t('modules.state.' + state) })) + '</p>'
+      }
+      function moduleWindow (name) {
+        var ok = !!(lastStats && lastStats.ok)
+        var part = ok && lastStats.modules ? lastStats.modules[name] : null
+        return { part: part, w: windowOf(part) }
+      }
+      /** One module card: its state, then its window's figures, or one line
+       *  saying why there are none (no summary yet, the version window
+       *  unavailable, or nothing in this window). `figuresOf(w)` returns the
+       *  `figures()` rows and the lines under them; `count(w)` is whether
+       *  anything happened at all. */
+      function renderModuleCard (bodyId, labelId, id, name, count, figuresOf, before) {
+        var found = moduleWindow(name)
+        setWindowLabel(labelId, windowLabel(found.w))
+        var parts = [moduleStateLine(id)]
+        if (before) parts.push(before(found.part))
+        if (!found.part) parts.push(line(t('modules.notYet'), 'empty-line'))
+        else if (!found.w || found.w.available === false) parts.push(line(t('window.unavailableCard'), 'empty-line'))
+        else if (count(found.w) <= 0) parts.push(line(t('modules.quiet'), 'empty-line'))
+        else parts.push(figuresOf(found.w))
+        el(bodyId).innerHTML = parts.join('')
+      }
+      function memoryWhere (part) {
+        var latest = part && part.latest
+        var key = !latest ? 'unknown' : latest.permission === 'refused' ? 'refused' : ['live', 'down', 'absent'].indexOf(latest.backend) !== -1 ? latest.backend : 'unknown'
+        return line(t('modules.memory.where', { where: t('modules.memory.where.' + key) }), 'kpi-sub')
+      }
+      function renderModules () {
+        var memoryState = lastIntegrationStatus && lastIntegrationStatus.modules && lastIntegrationStatus.modules.memory && lastIntegrationStatus.modules.memory.state
+        renderModuleCard('memory-body', 'win-memory', 'memory', 'memory', function (w) { return w.decisions || 0 }, function (w) {
+          var parts = [figures([
+            { label: t('modules.memory.decisions'), value: w.decisions || 0 },
+            { label: t('modules.memory.engramSaved'), value: w.engramSaved || 0 },
+            { label: t('modules.memory.written'), value: w.written || 0 },
+            { label: t('modules.memory.mainEngramSaves'), value: w.mainEngramSaves || 0 },
+            { label: t('modules.memory.judgePending'), value: w.judgePending || 0 }
+          ])]
+          if (typeof w.agreementRate === 'number') parts.push(line(t('modules.memory.agreement', { percent: String(Math.round(w.agreementRate * 100)) })))
+          if ((w.engramFailed || 0) > 0) parts.push(line(t('modules.memory.engramFailed', { n: num(w.engramFailed) })))
+          if (memoryState === 'shadow') parts.push(line(t('modules.memory.shadowNote'), 'empty-line'))
+          return parts.join('')
+        }, memoryWhere)
+        renderModuleCard('ciwatch-body', 'win-ciwatch', 'ci-watch', 'ciWatch', function (w) { return w.watches || 0 }, function (w) {
+          return figures([
+            { label: t('modules.ciWatch.watches'), value: w.watches || 0 },
+            { label: t('modules.ciWatch.ghCalls'), value: w.ghCalls || 0 },
+            { label: t('modules.ciWatch.pollsReplaced'), value: w.pollsReplaced || 0 }
+          ]) + line(t('modules.ciWatch.outcomes', { finished: num(w.finished || 0), failed: num(w.failed || 0) }))
+        })
+        renderModuleCard('verifydone-body', 'win-verifydone', 'verify-done', 'verifyDone', function (w) { return w.decisions || 0 }, function (w) {
+          return figures([
+            { label: t('modules.verifyDone.decisions'), value: w.decisions || 0 },
+            { label: t('modules.verifyDone.claims'), value: w.claims || 0 },
+            { label: t('modules.verifyDone.wouldBlock'), value: w.wouldBlock || 0 }
+          ]) + ((w.jevFailed || 0) > 0 ? line(t('modules.verifyDone.jevFailed', { n: num(w.jevFailed) })) : '') +
+            line(t('modules.verifyDone.note'), 'empty-line')
+        })
+      }
+
       // ---------- render: consumption (JEV-060 slice 1, T5) -----------------
       // Three honest states, never two -- same convention config.html's own
       // modelsRenderMeasurements already uses for modelMeasurements: no
@@ -2506,6 +2661,7 @@
         renderConsumption(lastConsumption)
         renderSkillsTyping(lastConsumption)
         renderActivityProjects(lastActivitySummary)
+        renderModules()
       }
 
       function reload (usuario) {
@@ -2517,9 +2673,11 @@
           read(POLICIES_WITHOUT_KIND_STATUS_KEY, false).catch(function () { return null }),
           read('consumptionSummary', usuario),
           read('activityByProjectSummary', usuario),
-          read(MODELS_KEY, false).catch(function () { return null })
+          read(MODELS_KEY, false).catch(function () { return null }),
+          read('claudeIntegrationStatus', false).catch(function () { return null })
         ]).then(function (results) {
           modelLabels = modelLabelsFromCatalog(results[6])
+          lastIntegrationStatus = results[7]
           render(results[0] || { entries: [] })
           renderWorkerNote(results[2])
           lastStats = results[1]

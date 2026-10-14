@@ -56,6 +56,7 @@ import { HUMAN_QUEUE_FILE, parseHumanQueue, waitingItems } from '../../src/core/
 import { measurementFilesToRead } from '../../src/core/measurement_files.ts'
 import { CI_WATCH_DECISIONS_FILE_PATTERN, summarizeCiWatchRows } from '../../src/core/ci_watch.ts'
 import { MEMORY_DECISIONS_FILE_PATTERN, summarizeMemoryDecisions } from '../../src/core/memory_shadow.ts'
+import { summarizeVerifyDoneDecisions, VERIFY_DONE_DECISIONS_FILE_PATTERN } from '../../src/core/verify_done.ts'
 
 const CACHE_DIR = resolveCacheDir(normalizePlatform(process.platform), { home: homedir(), appDataDir: process.env.APPDATA, localAppDataDir: process.env.LOCALAPPDATA, xdgCacheHome: process.env.XDG_CACHE_HOME })
 const APPROVALS_LOG_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
@@ -332,14 +333,10 @@ async function aggregateNotRunByCommandFamily () {
 
 const MEMORY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
 
-/**
- * The memory module's week (odd/tasks/memory-shadow.md, M14): the hourly
- * memory-decisions files the mod writes, summarized for the Modules card.
- * Only the files whose hour can hold a row of the window are read; the rows
- * carry counts and types, never memory content.
- */
-async function aggregateMemory () {
-  const now = Date.now()
+/** Every row of one module's hourly log (`pattern`, e.g. memory-decisions-*),
+ *  oldest file first. These logs are never pruned, so the board's "all"
+ *  window reads them whole; a missing cache dir is no rows. */
+async function readModuleRows (pattern) {
   let names
   try {
     names = await readdir(CACHE_DIR)
@@ -347,14 +344,42 @@ async function aggregateMemory () {
     if (error?.code !== 'ENOENT') throw error
     names = []
   }
-  const sinceHour = new Date(now - MEMORY_WINDOW_MS).toISOString().slice(0, 13)
   const rows = []
-  for (const name of names.sort()) {
-    const match = MEMORY_DECISIONS_FILE_PATTERN.exec(name)
-    if (match === null || match[1] < sinceHour) continue
+  for (const name of names.filter((file) => pattern.test(file)).sort()) {
     rows.push(...(await readJsonl(join(CACHE_DIR, name))).rows)
   }
-  return summarizeMemoryDecisions(rows, now, MEMORY_WINDOW_MS)
+  return rows
+}
+
+function pick (summary, keys) {
+  const figures = {}
+  for (const key of keys) figures[key] = summary[key]
+  return figures
+}
+
+/**
+ * odd/tasks/board-global-window.md W3: the memory, CI watcher and verify-done
+ * modules for the board's Modules tab, one entry per board window holding
+ * only the figures its card shows (the same summarizers the config panel's
+ * weekly lines use, src/core/memory_shadow.ts, ci_watch.ts, verify_done.ts).
+ * `memory.latest` is where the module last saw itself save: right now, not a
+ * window. These logs are never pruned, so every window covers all it asks.
+ */
+function moduleWindows (windows, now, rows) {
+  const memoryFigures = ['decisions', 'engramSaved', 'engramFailed', 'written', 'mainEngramSaves', 'agreementRate', 'judgePending']
+  const ciFigures = ['watches', 'finished', 'failed', 'ghCalls', 'pollsReplaced']
+  return {
+    memory: {
+      latest: summarizeMemoryDecisions(rows.memory, now, Number.POSITIVE_INFINITY).latest,
+      windows: perBoardWindow(windows, now, null, (_window, spanMs) => pick(summarizeMemoryDecisions(rows.memory, now, spanMs), memoryFigures)),
+    },
+    ciWatch: {
+      windows: perBoardWindow(windows, now, null, (_window, spanMs) => pick(summarizeCiWatchRows(rows.ciWatch, now, spanMs), ciFigures)),
+    },
+    verifyDone: {
+      windows: perBoardWindow(windows, now, null, (_window, spanMs) => summarizeVerifyDoneDecisions(rows.verifyDone, now, spanMs)),
+    },
+  }
 }
 
 /** The skill-selection log across the legacy single file and its hourly files (src/core/measurement_files.ts). */
@@ -376,33 +401,8 @@ async function readModSkillsRows () {
   return { rows, corrupt }
 }
 
-/** The CI watcher's card shows a week (odd/tasks/ci-watcher.md C6). */
+/** The CI watcher's card in the config panel shows a week (odd/tasks/ci-watcher.md C6). */
 const CI_WATCH_WINDOW_MS = 7 * 24 * 3_600_000
-
-/**
- * What the CI watcher did in the last seven days, from its hourly decision
- * files (src/core/ci_watch.ts summarizeCiWatchRows). A day more of files is
- * opened than the window needs, since a file is named for its hour; the rows
- * decide what counts. No file at all is a summary of nothing, which the panel
- * shows as "no watches yet", never as zeros.
- */
-async function aggregateCiWatch () {
-  let names
-  try {
-    names = await readdir(CACHE_DIR)
-  } catch (error) {
-    if (error?.code === 'ENOENT') names = []
-    else throw error
-  }
-  const now = Date.now()
-  const earliestDay = new Date(now - CI_WATCH_WINDOW_MS - 24 * 3_600_000).toISOString().slice(0, 10)
-  const rows = []
-  for (const name of names.filter((file) => CI_WATCH_DECISIONS_FILE_PATTERN.test(file)).sort()) {
-    if (name.slice('ci-watch-decisions-'.length, 'ci-watch-decisions-'.length + 10) < earliestDay) continue
-    rows.push(...(await readJsonl(join(CACHE_DIR, name))).rows)
-  }
-  return summarizeCiWatchRows(rows, now, CI_WATCH_WINDOW_MS)
-}
 
 /**
  * odd/tasks/board-global-window.md W1: the figures the board's skills card
@@ -742,15 +742,20 @@ async function main () {
     const now = Date.now()
     const gateLog = await readGateDecisionLog(CACHE_DIR)
     const windows = boardWindowsOfGateLog(gateLog, now)
-    const [gate, modSkills, approvals, abBenchmark, ciWatch, memory] = await Promise.all([
+    const [gate, modSkills, approvals, abBenchmark, memoryRows, ciWatchRows, verifyDoneRows] = await Promise.all([
       aggregateGate(gateLog, now),
       aggregateModSkills(windows, now),
       aggregateApprovals(),
       aggregateAbBenchmark(),
-      aggregateCiWatch(),
-      aggregateMemory(),
+      readModuleRows(MEMORY_DECISIONS_FILE_PATTERN),
+      readModuleRows(CI_WATCH_DECISIONS_FILE_PATTERN),
+      readModuleRows(VERIFY_DONE_DECISIONS_FILE_PATTERN),
     ])
-    result = { ok: true, gate, modSkills, approvals, abBenchmark, ciWatch, memory }
+    // The config panel's weekly lines (unchanged), and the board's windows.
+    const ciWatch = summarizeCiWatchRows(ciWatchRows, now, CI_WATCH_WINDOW_MS)
+    const memory = summarizeMemoryDecisions(memoryRows, now, MEMORY_WINDOW_MS)
+    const modules = moduleWindows(windows, now, { memory: memoryRows, ciWatch: ciWatchRows, verifyDone: verifyDoneRows })
+    result = { ok: true, gate, modSkills, approvals, abBenchmark, ciWatch, memory, modules }
   } catch (error) {
     result = { ok: false, reason: 'excepcion', detail: String(error?.message ?? error).slice(0, 300) }
   }

@@ -179,6 +179,7 @@ test('the empty fixture is exactly what read-measurements.mjs publishes for an e
       ...summary,
       gate: { ...summary.gate, windows: unbound(summary.gate.windows) },
       modSkills: { ...summary.modSkills, windows: unbound(summary.modSkills.windows) },
+      modules: Object.fromEntries(Object.entries(summary.modules).map(([name, part]) => [name, { ...part, windows: unbound(part.windows) }])),
     })
     assert.deepEqual(withoutBounds(SCENARIOS.empty.measurementsSummary), withoutBounds(real))
   } finally {

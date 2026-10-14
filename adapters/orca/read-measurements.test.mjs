@@ -865,3 +865,46 @@ test('W1: modSkills.windows count each window\'s own prompts, and the all-time r
   assert.equal(modSkills.totalDecisions, 2)
   assert.equal(modSkills.readiness.comparableShortfall > 0, true)
 })
+
+// odd/tasks/board-global-window.md W3: the memory, CI watcher and verify-done
+// modules on the board, each card following the window. Only the figures the
+// cards show are kept per window; these logs are never pruned, so every
+// window speaks for all it asks.
+function verifyRow (at, overrides = {}) {
+  return { at, account: 'acct', project: 'app', mode: 'shadow', sessionId: 's', decision: 'would-block', claim: 'claimed-done', confidence: 0.9, wouldBlock: true, filesEdited: 2, testsRun: 0, testsPassed: null, latencyMs: 300, ...overrides }
+}
+
+test('W3: modules.memory, .ciWatch and .verifyDone carry each window\'s card figures, from every file kept', () => {
+  const home = makeHome()
+  const dir = join(home, '.cache', 'orca-supervisor')
+  mkdirSync(dir, { recursive: true })
+  const at = (hours) => new Date(Date.now() - hours * 3_600_000).toISOString()
+  const write = (prefix, iso, rows) => writeFileSync(join(dir, `${prefix}-${iso.slice(0, 13)}.jsonl`), rows.map((row) => `${JSON.stringify(row)}\n`).join(''))
+  const latestAt = at(2)
+  write('memory-decisions', latestAt, [memoryRow(latestAt, { engramSaved: 1, written: 1, judgePending: 1 })])
+  write('memory-decisions', at(24 * 20), [memoryRow(at(24 * 20), { agreement: 'neither' })])
+  write('ci-watch-decisions', at(3), [ciRow(at(3))])
+  write('ci-watch-decisions', at(24 * 3), [ciRow(at(24 * 3), { outcome: 'failure' })])
+  write('verify-done-decisions', at(1), [verifyRow(at(1)), verifyRow(at(1), { decision: 'jev-failed', claim: null, wouldBlock: false })])
+  write('verify-done-decisions', at(24 * 30), [verifyRow(at(24 * 30), { decision: 'not-claimed', claim: 'not-claimed', wouldBlock: false })])
+  const { modules } = run(home)
+  const strip = ({ available, sinceMs, coverageSinceMs, pluginVersion, ...figures }) => figures
+  assert.equal(strip(modules.memory.windows.day).decisions, 1)
+  assert.equal(strip(modules.memory.windows.all).decisions, 2, 'all reads every file, not only the last week')
+  assert.deepEqual(Object.keys(strip(modules.memory.windows.day)).sort(), ['agreementRate', 'decisions', 'engramFailed', 'engramSaved', 'judgePending', 'mainEngramSaves', 'written'])
+  assert.deepEqual(modules.memory.latest, { at: latestAt, backend: 'live', decidedBy: 'tools+health', permission: 'ok' }, 'what was last detected: right now, not a window')
+  assert.deepEqual(strip(modules.ciWatch.windows.day), { watches: 1, finished: 1, failed: 0, ghCalls: 9, pollsReplaced: 4 })
+  assert.equal(modules.ciWatch.windows.week.watches, 2)
+  assert.deepEqual(strip(modules.verifyDone.windows.day), { decisions: 2, claims: 1, wouldBlock: 1, jevFailed: 1 })
+  assert.equal(modules.verifyDone.windows.all.decisions, 3)
+  assert.equal(modules.verifyDone.windows.all.coverageSinceMs, null, 'never pruned: all speaks for all')
+  assert.equal(modules.verifyDone.windows.version.available, false)
+})
+
+test('W3: with no module log at all, every window counts zero, never a missing card', () => {
+  const { modules } = run(makeHome())
+  assert.equal(modules.memory.windows.day.decisions, 0)
+  assert.equal(modules.memory.latest, null)
+  assert.equal(modules.ciWatch.windows.all.watches, 0)
+  assert.equal(modules.verifyDone.windows.week.decisions, 0)
+})

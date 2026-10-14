@@ -137,11 +137,29 @@ Retention is out of scope here; worth a follow-up.
   (`jevAdvisor.boardPanel.window`) and reopens on it; a bad stored value or a
   throwing localStorage opens on 24 h. The T2 grouping test now lists cards
   only. New scenario `board-full` (screenshot-panels.mjs) populates every card.
-- [ ] W3 Modules on the board: memory (mode, backend, decisions, Engram saves,
+- [x] W3 Modules on the board: memory (mode, backend, decisions, Engram saves,
   files written, agreement, pending judge), ci-watch (watches, gh calls, polls
   replaced), verify-done (mode and its key numbers), each with its Off /
   Shadow / Active state, following the chip. Numbers match
   `measurementsSummary.memory` / `.ciWatch`. RED, GREEN, one commit.
+  Proof: `read-measurements.test.mjs` "W3: modules.memory, .ciWatch and
+  .verifyDone carry each window's card figures, from every file kept" and
+  "W3: with no module log at all..." (RED first; 45 pass); panels spec "W3:
+  ..." (4, RED first): the cards show state, backend ("right now") and the
+  window's figures equal to `measurementsSummary.modules`; they follow the
+  chip; an Off module says so and a quiet window says "No activity", never
+  zeros; a summary from an older worker says "No figures yet". The grouping
+  and W2 heading tests now include the three cards. Placement: the last tab,
+  relabelled "Módulos" / "Modules" (id `skills` kept so a remembered tab
+  holds); it still fits one row at 320 (existing test). State comes from the
+  stored integration status (`claudeIntegrationStatus.modules[id].state`, the
+  board reads only `.modules`). verify-done had no reader: added
+  (`summarizeVerifyDoneDecisions` over its hourly files). The config panel's
+  weekly `memory` / `ciWatch` stay as they were. On the owner's real cache
+  copy, all-time memory reads 252 decisions and 38 main-thread Engram saves,
+  the same as the stored weekly summary; ci-watch 58 watches, 742 gh calls,
+  36 polls replaced; verify-done 44 turns, 10 claims, 6 would-block.
+  Storage after W3 on the same copy: 304,869 bytes.
 - [ ] W4 Meaning fixes: audit #5, #6, #7, #8, #10, #11, plus #3's "measured
   only" wording and #4's totals and small-model threshold. RED, GREEN, one
   commit.

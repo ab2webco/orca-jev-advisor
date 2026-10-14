@@ -512,6 +512,27 @@ const READY = {
       forkTokens: { input: 96, output: 1610, cacheRead: 1496000 },
       latest: { at: '2026-09-24T17:40:00.000Z', backend: 'live', decidedBy: 'tools+health', permission: 'ok' },
     },
+    // odd/tasks/board-global-window.md W3: the Modules tab's cards, one entry
+    // per window with only the figures each card shows (read-measurements.mjs
+    // moduleWindows). Illustrative figures, as the weekly ones above.
+    modules: {
+      memory: {
+        latest: { at: '2026-09-24T17:40:00.000Z', backend: 'live', decidedBy: 'tools+health', permission: 'ok' },
+        windows: everyWindow((key) => (key === 'day'
+          ? { decisions: 41, engramSaved: 6, engramFailed: 0, written: 2, mainEngramSaves: 9, agreementRate: 0.82, judgePending: 1 }
+          : { decisions: 212, engramSaved: 29, engramFailed: 1, written: 7, mainEngramSaves: 63, agreementRate: 179 / 209, judgePending: 3 }), { kept: null }),
+      },
+      ciWatch: {
+        windows: everyWindow((key) => (key === 'day'
+          ? { watches: 3, finished: 3, failed: 0, ghCalls: 61, pollsReplaced: 7 }
+          : { watches: 14, finished: 12, failed: 2, ghCalls: 310, pollsReplaced: 38 }), { kept: null }),
+      },
+      verifyDone: {
+        windows: everyWindow((key) => (key === 'day'
+          ? { decisions: 5, claims: 2, wouldBlock: 1, jevFailed: 0 }
+          : { decisions: 23, claims: 9, wouldBlock: 4, jevFailed: 1 }), { kept: null }),
+      },
+    },
     approvals: {
       asked: 43,
       approved: 27,
@@ -601,6 +622,11 @@ const EMPTY = {
     abBenchmark: { ...foldAbResults([]), corruptLines: 0 },
     ciWatch: summarizeCiWatchRows([], 0, 0),
     memory: summarizeMemoryDecisions([], 0, 1),
+    modules: {
+      memory: { latest: null, windows: everyWindow(() => ({ decisions: 0, engramSaved: 0, engramFailed: 0, written: 0, mainEngramSaves: 0, agreementRate: null, judgePending: 0 }), { kept: null }) },
+      ciWatch: { windows: everyWindow(() => ({ watches: 0, finished: 0, failed: 0, ghCalls: 0, pollsReplaced: 0 }), { kept: null }) },
+      verifyDone: { windows: everyWindow(() => ({ decisions: 0, claims: 0, wouldBlock: 0, jevFailed: 0 }), { kept: null }) },
+    },
   },
 }
 
@@ -1197,6 +1223,8 @@ SCENARIOS['board-full'] = {
   measurementsSummary: SCENARIOS['skills-ready'].measurementsSummary,
   consumptionSummary: { ...SCENARIOS['router-ready'].consumptionSummary, typing: SCENARIOS['skills-ready'].consumptionSummary.typing },
   activityByProjectSummary: SCENARIOS['activity-ready'].activityByProjectSummary,
+  // W3: memory and the CI watcher on, verify-done measuring, as on the owner's machine.
+  claudeIntegrationStatus: { ...READY.claudeIntegrationStatus, modules: moduleStatus({ memory: 'active', 'ci-watch': 'active' }) },
 }
 
 /** A scenario may need one click before the shot -- see SEEDS. `baseline`
