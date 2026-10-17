@@ -158,3 +158,78 @@ test('Clef mode with no Cloudflare credentials takes the no-key path and names C
   assert.equal(requests.length, 0)
   assert.ok(stdout.includes(GATE_CATALOG.en.noProviderKey) || stdout.includes(GATE_CATALOG.es.noProviderKey), stdout)
 })
+
+// C1 (odd/tasks/clef-decides-policies.md): with a command-scoped policy, Clef
+// answers first in both mode, and its own policy answers decide whether Jev
+// is asked: a non-none choice on violation or needs_person at 0.2 or more.
+const POLICIES = [
+  { id: 'never_rewrite_shared_history', rule: 'Never rewrite history that others share.', kind: 'prohibits', scope: 'command' },
+  { id: 'client_always_asks', rule: 'Anything touching a client is confirmed with a human.', kind: 'requires_human', scope: 'command' }
+]
+
+function writePolicies (home) {
+  writeFileSync(join(home, '.config', 'orca-supervisor', 'policies.json'), JSON.stringify(POLICIES))
+}
+
+const choice = (probabilities) => {
+  const [top] = Object.entries(probabilities).sort((a, b) => b[1] - a[1])
+  return { type: 'choice', choice: top[0], probabilities, confidence: top[1] }
+}
+function policyAnswers (consequence, { violation = { none: 1 }, needsPerson = { none: 1 } } = {}) {
+  return { ...answers(consequence), violation: choice(violation), needs_person: choice(needsPerson) }
+}
+const clefPolicyBody = (consequence, options) => JSON.stringify({ result: { model: 'clef', answers: policyAnswers(consequence, options), usage: { input_tokens: 480, output_tokens: 0 } }, success: true, errors: [], messages: [] })
+const jevPolicyBody = (consequence) => JSON.stringify({ model: 'jev-latest', answers: policyAnswers(consequence), usage: { input_tokens: 480, output_tokens: 10 } })
+
+test('both mode with a policy: Clef answers, and a clean policy answer leaves the decision to Clef', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  writePolicies(home)
+  const { requests, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2, { violation: { none: 0.81, policy_1: 0.19 }, needsPerson: { none: 0.9, policy_2: 0.1 } }) }, 'api.typesafe.ai': { status: 200, body: jevPolicyBody(0.2) } } })
+  const clefRequests = requests.filter((r) => r.host === 'api.cloudflare.com')
+  assert.equal(clefRequests.length, 1)
+  assert.ok('violation' in clefRequests[0].body.questions && 'needs_person' in clefRequests[0].body.questions)
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].provider, 'clef')
+  assert.equal('escalation' in rows[0], false)
+  assert.equal(rows[0].verdict, 'allow')
+})
+
+test('both mode with a policy: a Clef policy probability of 0.2 sends it to Jev, marked policy', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  writePolicies(home)
+  const { requests, rows, cache } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2, { violation: { none: 0.8, policy_1: 0.2 } }) }, 'api.typesafe.ai': { status: 200, body: jevPolicyBody(0.2) } } })
+  assert.ok(requests.some((r) => r.host === 'api.cloudflare.com'))
+  assert.ok(requests.some((r) => r.host === 'api.typesafe.ai'))
+  assert.equal(rows[0].provider, 'jev')
+  assert.equal(rows[0].escalation, 'policy')
+  // The Clef call that escalated still spent its neurons.
+  const ledger = readFileSync(join(cache, neuronLedgerFileName(new Date())), 'utf8').trim().split('\n').map((line) => JSON.parse(line))
+  assert.equal(ledger.length, 1)
+})
+
+test('both mode with a policy: a Clef failure still escalates as a failure', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  writePolicies(home)
+  const { rows } = run(home, { script: { 'api.cloudflare.com': { status: 503, body: '' }, 'api.typesafe.ai': { status: 200, body: jevPolicyBody(0.2) } } })
+  assert.equal(rows[0].provider, 'jev')
+  assert.equal(rows[0].escalation, 'failure')
+})
+
+test('both mode with a policy: a spent day still goes straight to Jev as budget', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  writePolicies(home)
+  const cache = join(home, '.cache', 'orca-supervisor')
+  mkdirSync(cache, { recursive: true })
+  writeFileSync(join(cache, neuronLedgerFileName(new Date())), serializeNeuronLedgerEntry({ type: 'neurons', at: new Date().toISOString(), model: 'clef', neurons: 9000 }))
+  const { requests, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2) }, 'api.typesafe.ai': { status: 200, body: jevPolicyBody(0.2) } } })
+  assert.deepEqual(requests.map((r) => r.host), ['api.typesafe.ai'])
+  assert.equal(rows[0].escalation, 'budget')
+})
+
+test('Jev-only mode with a policy: Jev alone is asked, the row carries no provider keys', () => {
+  const home = makeHome({ settings: { mode: 'jev' } })
+  writePolicies(home)
+  const { requests, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2) }, 'api.typesafe.ai': { status: 200, body: jevPolicyBody(0.2) } } })
+  assert.deepEqual(requests.map((r) => r.host), ['api.typesafe.ai'])
+  assert.equal('provider' in rows[0], false)
+})

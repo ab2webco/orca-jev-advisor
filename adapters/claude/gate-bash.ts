@@ -116,7 +116,7 @@ import { jevFailureOf, JevRequestError, type Answer } from '../../src/core/jev.t
 import { resolveApiKey, resolveClefCredentials } from '../../src/core/secrets.ts'
 import { createJevProvider, type DecisionProvider, type ProviderId } from '../../src/core/decision_provider.ts'
 import { ClefError, clefFailureOf, createClefProvider, type ClefProvider } from '../../src/core/clef.ts'
-import { CascadeBudgetError, gateConsequenceDoubt, runCascade, type CascadeBudget, type Escalation } from '../../src/core/provider_cascade.ts'
+import { CascadeBudgetError, gateConsequenceDoubt, gatePolicyHit, runCascade, type CascadeBudget, type Escalation } from '../../src/core/provider_cascade.ts'
 import { appendNeuronLedger, budgetOpen, readNeuronBudget } from '../../src/core/neuron_budget.ts'
 import { PROVIDER_SETTINGS_MIRROR_FILE, parseProviderSettings, type ProviderSettings } from '../../src/core/provider_settings.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
@@ -1935,9 +1935,11 @@ async function askJev(providers: GateProviders, command: string, jevContext: str
       localAllowQualifies: localAllow.qualifies,
     })
     // Multi-provider: in Jev-only mode this is callJev with BUDGET_MS, exactly
-    // as before. In both mode, a command-scoped policy question always goes
-    // to Jev (review note 7), and Clef's answer escalates when its consequence
+    // as before. In both mode Clef answers first, policy questions included,
+    // and its answer escalates to Jev when it shows a possible policy hit
+    // (gatePolicyHit, odd/tasks/clef-decides-policies.md) or its consequence
     // sits near this destination's own line.
+    const policyQuestionIds = Object.keys(questions)
     const multiProvider = providers.settings.mode !== 'jev'
     const cascade = await runCascade({
       mode: providers.settings.mode,
@@ -1949,7 +1951,7 @@ async function askJev(providers: GateProviders, command: string, jevContext: str
       doubt: (answers) => gateConsequenceDoubt(answers, consequenceCeiling),
       totalBudgetMs: BUDGET_MS,
       clefBudgetMs: CLEF_BUDGET_MS,
-      skipClef: commandScopedPolicies.length > 0 ? 'policy' : null,
+      policyHit: commandScopedPolicies.length > 0 ? (answers) => gatePolicyHit(answers, policyQuestionIds) : null,
       shadow: multiProvider ? { sampled: Math.random() < GATE_SHADOW_SHARE, verdictOf: (answers) => decideGateAction(gateInput(answers)).verdict } : null,
     })
     if (multiProvider) providerStamp = { provider: cascade.provider, escalation: cascade.escalation, shadowAgrees: cascade.shadowAgrees }

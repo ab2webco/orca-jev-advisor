@@ -7,8 +7,8 @@
 //   both -- Clef first, spending the free daily allowance. Jev answers when
 //           Clef is in doubt (a predicate each caller supplies), fails, is
 //           rate-limited, cannot take the question set, has spent the day's
-//           budget, or when the caller already knows Clef must not decide
-//           (the gate: a command-scoped policy question). With no Jev key,
+//           budget, or when Clef's own answers show a possible policy hit
+//           (a second predicate; the gate's is gatePolicyHit). With no Jev key,
 //           Clef's answer stands; with no Clef credentials, Jev answers.
 //
 // One provider's answers per decision (review note 6): an escalation re-asks
@@ -24,7 +24,7 @@
 // rate; if Clef escalates instead, Jev's answer is already on its way.
 
 import { getScoreAnswer, type Answer, type CallJevOptions, type JevResponse, type JsonValue, type Question } from "./jev.ts";
-import { CONSEQUENCE_NOISE_MARGIN, GATE_CONSEQUENCE_CEILING } from "./decisions.ts";
+import { CONSEQUENCE_NOISE_MARGIN, GATE_CONSEQUENCE_CEILING, POLICY_EFFECT_QUESTIONS } from "./decisions.ts";
 import type { DecisionProvider, ProviderId } from "./decision_provider.ts";
 import { clefFailureOf, neuronsFor, type ClefFailure, type ClefProvider } from "./clef.ts";
 
@@ -44,7 +44,7 @@ export function isProviderMode(value: unknown): value is ProviderMode {
  *   rate-limit   -- Clef's per-moment limit (a 429 that is not the daily allowance).
  *   budget       -- the day's neuron budget is spent, by our ledger or Cloudflare's 3036.
  *   unsupported  -- the question set is outside Clef's limits (more than 64 questions, ...).
- *   policy       -- the caller sent it to Jev before Clef was asked (a command-scoped policy).
+ *   policy       -- Clef answered, but the caller's policy-hit predicate held (a possible command-scoped policy hit).
  *   unconfigured -- no Clef credentials, so Jev is all there is.
  */
 export const ESCALATIONS = ["doubt", "failure", "rate-limit", "budget", "unsupported", "policy", "unconfigured"] as const;
@@ -68,6 +68,30 @@ export function gateConsequenceDoubt(answers: Record<string, Answer>, consequenc
   if (consequence === null) return true;
   const line = (consequenceCeiling ?? GATE_CONSEQUENCE_CEILING) - CONSEQUENCE_NOISE_MARGIN;
   return Math.abs(consequence.score - line) < GATE_DOUBT_BAND;
+}
+
+/**
+ * The floor for a possible policy hit, measured on 56 real commands against
+ * 24 policies (odd/tasks/clef-decides-policies.md): with it, Clef's verdicts
+ * matched Jev's on every command; at 0.5, one did not.
+ */
+export const GATE_POLICY_HIT_FLOOR = 0.2;
+
+/**
+ * Whether Clef's answers show a possible policy hit: on any of `asked` that is
+ * a policy question asked on effect (POLICY_EFFECT_QUESTIONS), an option other
+ * than its none option has a probability of GATE_POLICY_HIT_FLOOR or more. A
+ * policy question that was asked and has no choice answer cannot be read, so
+ * it counts as a hit and Jev answers.
+ */
+export function gatePolicyHit(answers: Record<string, Answer>, asked: readonly string[]): boolean {
+  return asked.some((id) => {
+    const none = POLICY_EFFECT_QUESTIONS[id];
+    if (none === undefined) return false;
+    const answer = answers[id];
+    if (answer === undefined || answer.type !== "choice") return true;
+    return Object.entries(answer.probabilities).some(([option, probability]) => option !== none && probability >= GATE_POLICY_HIT_FLOOR);
+  });
 }
 
 /**
@@ -99,8 +123,8 @@ export interface CascadeInput {
   readonly totalBudgetMs: number;
   /** Clef's share in both mode; the rest is kept for a whole Jev call. */
   readonly clefBudgetMs: number;
-  /** A reason the caller already has to skip Clef in both mode. */
-  readonly skipClef?: Extract<Escalation, "policy"> | null;
+  /** Both mode: Clef's answer shows a possible policy hit, so Jev answers (escalation policy). Read after Clef's neurons are spent. */
+  readonly policyHit?: ((answers: Record<string, Answer>) => boolean) | null;
   readonly shadow?: { readonly sampled: boolean; readonly verdictOf: (answers: Record<string, Answer>) => string } | null;
   /** Transport for both providers (fetchImpl/sleepImpl); budgetMs is set here. */
   readonly callOptions?: Omit<CallJevOptions, "budgetMs">;
@@ -155,7 +179,6 @@ export async function runCascade(input: CascadeInput): Promise<CascadeAnswer> {
     if (fallback === null) throw new Error("runCascade: no provider to ask");
     return viaJev(fallback, "unconfigured");
   }
-  if (fallback !== null && input.skipClef === "policy") return viaJev(fallback, "policy");
   if (!budget.isOpen()) {
     if (fallback === null) throw new CascadeBudgetError();
     return viaJev(fallback, "budget");
@@ -183,6 +206,9 @@ export async function runCascade(input: CascadeInput): Promise<CascadeAnswer> {
   const neurons = neuronsFor(clef.model, response.usage);
   budget.spend(neurons, clef.model);
 
+  if (fallback !== null && input.policyHit != null && input.policyHit(response.answers)) {
+    return viaJev(fallback, "policy", shadowCall ?? undefined, remaining());
+  }
   if (fallback !== null && input.doubt(response.answers)) {
     return viaJev(fallback, "doubt", shadowCall ?? undefined, remaining());
   }

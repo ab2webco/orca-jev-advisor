@@ -201,6 +201,13 @@ export function buildPolicyQuestions(policies: readonly Policy[], names: JevName
   };
 }
 
+/**
+ * The policy questions asked on effect, each with the option that means no
+ * rule applies (violation and needs_person). The provider cascade reads them
+ * to tell whether Clef saw a possible policy hit (gatePolicyHit).
+ */
+export const POLICY_EFFECT_QUESTIONS: Readonly<Record<string, string>> = { violation: "none", needs_person: "none" };
+
 const VIOLATION = "violation";
 const NO_VIOLATION = "none";
 // Measured, not picked (odd/tasks/release-0.6.13.md T2): on the labelled

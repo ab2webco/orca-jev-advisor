@@ -1,7 +1,8 @@
 // P4 (odd/tasks/multi-provider.md): Jev, Clef or both. In both mode Clef
 // answers first; Jev answers on doubt, on Clef's failure, once the day's
-// budget is spent, for a question set Clef cannot take, or when the caller
-// says so (a command-scoped policy). One provider's answers per decision.
+// budget is spent, for a question set Clef cannot take, or when
+// Clef's own answers say a command-scoped policy may apply. One provider's
+// answers per decision.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
@@ -13,8 +14,10 @@ import {
   DEFAULT_PROVIDER_MODE,
   GATE_DOUBT_BAND,
   CascadeBudgetError,
+  GATE_POLICY_HIT_FLOOR,
   defaultDoubt,
   gateConsequenceDoubt,
+  gatePolicyHit,
   isProviderMode,
   runCascade,
   type CascadeBudget,
@@ -192,14 +195,94 @@ test("both mode: each Clef failure escalates with its own reason", async () => {
   }
 });
 
-test("both mode: a closed budget or a caller's reason skips Clef entirely", async () => {
+test("both mode: a closed budget skips Clef entirely", async () => {
   const clefCalls: FakeCall[] = [];
-  const spent = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef(reply("clef", clear), clefCalls), budget: budget(false) }));
+  const spent = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef(reply("clef", clear), clefCalls), budget: budget(false), policyHit: () => true }));
   assert.equal(spent.escalation, "budget");
-  const policy = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef(reply("clef", clear), clefCalls), skipClef: "policy" }));
-  assert.equal(policy.escalation, "policy");
-  assert.equal(policy.provider, "jev");
+  assert.equal(spent.provider, "jev");
   assert.equal(clefCalls.length, 0);
+});
+
+const policyChoice = (probabilities: Record<string, number>): Answer => {
+  const [choice] = Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0] ?? ["none"];
+  return { type: "choice", choice, probabilities, confidence: probabilities[choice] ?? 0 };
+};
+const POLICY_IDS = ["violation", "needs_person"] as const;
+
+test("gate policy hit: a non-none choice on a policy question at 0.2 or more", () => {
+  assert.equal(GATE_POLICY_HIT_FLOOR, 0.2);
+  assert.equal(gatePolicyHit({ ...clear, violation: policyChoice({ none: 0.81, policy_1: 0.19 }) }, POLICY_IDS.slice(0, 1)), false);
+  assert.equal(gatePolicyHit({ ...clear, violation: policyChoice({ none: 0.8, policy_1: 0.2 }) }, POLICY_IDS.slice(0, 1)), true);
+  assert.equal(gatePolicyHit({ ...clear, needs_person: policyChoice({ none: 0.7, policy_2: 0.1, policy_3: 0.2 }) }, ["needs_person"]), true);
+  // Only "none" carries weight: nothing to escalate.
+  assert.equal(gatePolicyHit({ ...clear, violation: policyChoice({ none: 1 }), needs_person: policyChoice({ none: 1 }) }, POLICY_IDS), false);
+  // Spread thin across several rules, none reaching the floor.
+  assert.equal(gatePolicyHit({ ...clear, violation: policyChoice({ none: 0.43, policy_1: 0.19, policy_2: 0.19, policy_3: 0.19 }) }, POLICY_IDS.slice(0, 1)), false);
+  // A policy question that was asked and not answered as a choice cannot be read: Jev answers.
+  assert.equal(gatePolicyHit({ ...clear, violation: policyChoice({ none: 1 }) }, POLICY_IDS), true);
+  assert.equal(gatePolicyHit({ ...clear, violation: { type: "noul", noul: 0.1 } }, ["violation"]), true);
+  // A question that was not asked is not read; no policy questions, no hit.
+  assert.equal(gatePolicyHit({ ...clear, violation: policyChoice({ none: 0.5, policy_1: 0.5 }) }, []), false);
+  // Coverage (a permits topic) is not one of the policy-hit questions.
+  assert.equal(gatePolicyHit({ ...clear, coverage: policyChoice({ no_policy: 0.5, policy_4: 0.5 }) }, POLICY_IDS.slice(0, 0)), false);
+});
+
+test("both mode: a Clef policy hit re-asks Jev every question, marked policy, and Clef's neurons are still spent", async () => {
+  const jevCalls: FakeCall[] = [];
+  const clefCalls: FakeCall[] = [];
+  const b = budget();
+  const jevAnswers = consequence(0.1);
+  const result = await runCascade(input({ jev: fakeJev(reply("jev-latest", jevAnswers), jevCalls), clef: fakeClef(reply("clef", clear), clefCalls), budget: b, policyHit: () => true }));
+  assert.equal(clefCalls.length, 1);
+  assert.equal(result.provider, "jev");
+  assert.equal(result.escalation, "policy");
+  assert.deepEqual(result.response.answers, jevAnswers);
+  assert.deepEqual(jevCalls[0]?.questions, QUESTIONS);
+  assert.equal(b.spent.length, 1);
+  assert.ok((b.spent[0]?.neurons ?? 0) > 0);
+});
+
+test("both mode: a policy question Clef answers clean leaves the decision to Clef", async () => {
+  const jevCalls: FakeCall[] = [];
+  const result = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear), jevCalls), clef: fakeClef(reply("clef", clear)), policyHit: () => false }));
+  assert.equal(result.provider, "clef");
+  assert.equal(result.escalation, null);
+  assert.equal(jevCalls.length, 0);
+});
+
+test("both mode: a policy hit is named before doubt", async () => {
+  const result = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef(reply("clef", nearLine)), policyHit: () => true }));
+  assert.equal(result.escalation, "policy");
+});
+
+test("both mode: a Clef failure on a policy command escalates as a failure, never asking the predicate", async () => {
+  let asked = 0;
+  const result = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef({ kind: "timeout" }), policyHit: () => (asked += 1) > 0 }));
+  assert.equal(result.provider, "jev");
+  assert.equal(result.escalation, "failure");
+  assert.equal(asked, 0);
+});
+
+test("both mode: a sampled shadow call is the Jev answer a policy hit uses (no second Jev call)", async () => {
+  const jevCalls: FakeCall[] = [];
+  const result = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear), jevCalls), clef: fakeClef(reply("clef", clear)), policyHit: () => true, shadow: { sampled: true, verdictOf: () => "x" } }));
+  assert.equal(result.escalation, "policy");
+  assert.equal(result.shadowAgrees, null);
+  assert.equal(jevCalls.length, 1);
+});
+
+test("Jev mode and Clef mode never read the policy predicate", async () => {
+  let asked = 0;
+  const policyHit = (): boolean => (asked += 1) > 0;
+  const jevOnly = await runCascade(input({ mode: "jev", jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef(reply("clef", clear)), policyHit }));
+  assert.equal(jevOnly.provider, "jev");
+  assert.equal(jevOnly.escalation, null);
+  const clefOnly = await runCascade(input({ mode: "clef", jev: fakeJev(reply("jev-latest", clear)), clef: fakeClef(reply("clef", clear)), policyHit }));
+  assert.equal(clefOnly.provider, "clef");
+  assert.equal(clefOnly.escalation, null);
+  const noJevKey = await runCascade(input({ jev: null, clef: fakeClef(reply("clef", clear)), policyHit }));
+  assert.equal(noJevKey.provider, "clef");
+  assert.equal(asked, 0);
 });
 
 test("both mode with no Clef credentials is Jev, marked unconfigured", async () => {
