@@ -19,7 +19,13 @@ Orca Lab sets `ORCA_AGENT_MODEL_PINNED=1` and/or `ORCA_AGENT_EFFORT_PINNED=1` in
 - [x] T2 mod wiring: start, stage, subagent and teammate decisions read the pins in a game pane only.
 - [x] T3 legacy Agent hook: no model rewrite under a model pin in a game pane (`rewriteReason: "orca-pin"`).
 - [x] T4 env proof: the variables reach the hook processes.
-- [ ] T5 release 0.13.1: version, README, CHANGELOG.
+- [x] T5 release 0.13.1: `orca-plugin.json` and `package.json` (the only files 0.12.1 and 0.13.0 bumped), README section, CHANGELOG entry.
+
+## Evidence
+- RED then GREEN: `orca_pins.test.ts` failed to load (module missing), then 17 of 23 failing against the parse-only module; GREEN 23/23. `hooks.test.ts`: 6 new tests failing (game + model pin start, effort pin, both, stage, subagent model pin, subagent effort pin), GREEN 287/287. The three "changes nothing" hook tests (no game, HUD off, value `true`) passed before the wiring as characterization; a mutation that ignored the game turned the first two red, and one that took any value as a pin turned the third red. Agent hook: 1 unit test and 1 subprocess test red, GREEN; `model_measurement` round trip red, GREEN.
+- Env reaches the hooks: the Agent CLI subprocess test sets the pins in the child's process env and the rewrite stops; the real `claude plugin validate` lists `ORCA_GAME_MODE`, `ORCA_GAME_HUD`, `ORCA_AGENT_MODEL_PINNED` and `ORCA_AGENT_EFFORT_PINNED` among the mod's env reads (`mod_skills_validate.test.mjs`, red when one read is removed). Live: the mod in an Orca-launched session logs `account` from `$.env.get('CLAUDE_CONFIG_DIR')`, a variable Orca puts in the launch env.
+- `npm run check`: typecheck clean, `npm test` 4500/4500, shots without overflow or script errors, `test:panels` 274/274.
+- Visual: no panel changed. The new status text and band reason only appear in a game pane, where Jev draws neither and publishes `advisor` to orca-game (orca-oss); not photographed here.
 
 ## Acceptance criteria
 - Strict TDD: RED observed, then GREEN, per case: game + model pin, game + effort pin, both, no game with pins, HUD off with pins, value other than `1`.

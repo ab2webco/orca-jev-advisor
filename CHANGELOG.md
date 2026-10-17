@@ -2,6 +2,14 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.1
+
+- **The router honors Orca's launch pins in a game pane** (odd/tasks/router-honor-orca-pins.md, JEVADV-105). Orca Lab sets `ORCA_AGENT_MODEL_PINNED=1` and/or `ORCA_AGENT_EFFORT_PINNED=1` in an agent's env when its launch asked for that model or effort and it took effect (the Agent Teams game launches members with `orchestrator.model` / `orchestrator.effort`). In a game pane (`parseOrcaGameMode`, so a pane with `ORCA_GAME_HUD` `0`/`false` is no game) a pin of exactly `1` holds its dimension (`src/core/orca_pins.ts`):
+  - **Model pinned.** Start and stage decisions are made again over tiers that all resolve to the pinned model, so only the effort follows Jev (an upgrade becomes an effort raise; no model downgrade is ever queued). Subagents and teammates keep the model they would run without the router, and their effort target is read off that model. The legacy Agent PreToolUse hook does not rewrite (`rewriteReason: "orca-pin"`).
+  - **Effort pinned.** The session's own effort is sent (none on a model that takes none), no effort lowering is queued, and subagents' steps keep the effort they carry (no tier or work-kind effort).
+  - **Visible.** A decision row whose pin held something carries `orcaPin` (`["model"]`, `["effort"]` or both) and keeps Jev's `tier` and `proposed`; with nothing else changed its `reason` is `held-by-orca-pin` and `applied` is false, so the board counts no switch. The status line reads "kept: pinned by Orca" / "se mantiene: fijado por Orca", and a held subagent's band row "kept: pinned by Orca" (`kept-pinned`).
+  - Outside a game pane, with no variable, or with any other value: nothing changes.
+
 ## 0.13.0
 
 - **Decision providers: Jev, Clef or both** (odd/tasks/multi-provider.md, P1-P7). The gate can now ask Cloudflare's Clef models (Workers AI, `@cf/cloudflare/clef`, `clef-flash`, `clef-omni`) as well as Jev. Clef speaks the same System One contract; named noul criteria are mapped to `criteria.true` because Clef rejects them (HTTP 422). The config panel's "Decision provider" section chooses the mode (Jev only, the default after an upgrade; Both; Clef only) and the Clef model, stores the Cloudflare account id and token in Orca's secret store (shown masked) and tests the connection. The worker mirrors them to the same `0600` env file as the Jev key, so the gate hook reads them the same way. `api.cloudflare.com` is added to the manifest's network hosts.

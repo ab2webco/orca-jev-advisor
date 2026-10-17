@@ -16,6 +16,13 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.1
+
+- **Jev leaves alone the model and effort Orca's agent game launched an agent with.** When a game member is started with a model or an effort (from the project's `orchestrator.model` / `orchestrator.effort`, or a launch that names one), Jev's model router no longer switches it. A pinned model stays, and Jev still adjusts the effort unless that is pinned too; a pinned effort stays, and Jev still picks the model unless that is pinned too. The same holds for the subagents that agent starts. The status line says "kept: pinned by Orca" instead of claiming a switch.
+- **Only inside Orca's game panes.** In plain Claude Code, or an Orca pane without the game (or with the game's band hidden), Jev routes exactly as before.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.13.0
 
 - **Choose who judges your commands: Jev, Clef or both.** Clef is Cloudflare's model on Workers AI, with a free daily allowance. In Both, Clef answers first and Jev answers whenever Clef is unsure, fails or has spent the day's free allowance. Set it in Configuration → Decision provider with your Cloudflare account id and a Workers AI token. Nothing changes until you choose it: after updating, Jev still judges everything.
