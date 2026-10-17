@@ -3751,8 +3751,7 @@ function repoNamedBranch (branch) {
   return root
 }
 
-function seedBothPolicySets (home, command, repo) {
-  const repoContext = computeRepoContextForTest(repo)
+function seedBothPolicySets (home, command, repo, repoContext = computeRepoContextForTest(repo)) {
   const without = computeCacheKey(command, repo, home, { repoContext })
   const withPolicy = computeCacheKey(command, repo, home, { repoContext, policies: [NEVER_WRITE_TO_MAIN], seedScopeById: SHIPPED_SEED_SCOPES })
   assert.notEqual(without, withPolicy)
@@ -3802,6 +3801,47 @@ test('T1: a push naming develop from a working branch is never allowed locally',
   const repo = repoNamedBranch('feat/x')
   writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
   assertNotAllowedByOwnBranchPush(home, 'git push origin develop', repo)
+})
+
+// odd/tasks/branch-reach-places.md B2: in a session on main, `pgrep`, `ps |
+// grep`, `mkdir -p /tmp/x` and `rm -rf ~/Library/a && ln -s ~/b ~/Library/a`
+// were judged against never_write_to_main and denied, though none of them
+// writes into the checkout. A write that may land in it still is.
+
+/** The policy set the hook judged `command` against, read from the seeded verdict it served. */
+function judgedPolicySet (home, command, repo) {
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  // A move out of the checkout acts in /tmp, and the hook says so in the context its key folds in.
+  const repoContext = command === MOVE_OUT
+    ? `${computeRepoContextForTest('/tmp')} The command acts on files outside any repository, not in the session's current repository (${repo} on ${branchNameOf(repo)}).`
+    : computeRepoContextForTest(repo)
+  seedBothPolicySets(home, command, repo, repoContext)
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  const message = payload.systemMessage ?? ''
+  if (/judged with never_write_to_main/.test(message)) return 'with-policy'
+  if (/judged with no branch policy/.test(message)) return 'without-policy'
+  return `not judged: ${payload.hookSpecificOutput?.permissionDecision} ${payload.hookSpecificOutput?.permissionDecisionReason ?? ''}`
+}
+
+const OUTSIDE_THE_CHECKOUT = ['pgrep -f x', 'ps aux | grep node', 'rm -rf ~/Library/a && ln -s ~/b ~/Library/a', 'mkdir -p /tmp/x']
+const MOVE_OUT = 'mv src/a.ts /tmp/a.ts'
+const INTO_THE_CHECKOUT = ['mkdir src/x', 'touch src/x', MOVE_OUT, 'sed -i s/a/b/ src/x', 'echo hi | tee src/x', 'python3 x.py', 'find . -delete', 'git commit -m x', 'ln -s /tmp/a']
+
+test('B2: on main, a command that writes nothing into the checkout is not judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(OUTSIDE_THE_CHECKOUT.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('main'))]))
+  // `mkdir -p /tmp/x` only writes in a temp root, so it may be allowed as contained before any policy.
+  assert.deepEqual(judged, Object.fromEntries(OUTSIDE_THE_CHECKOUT.map((command) => [command, command === 'mkdir -p /tmp/x' && judged[command] !== 'with-policy' ? judged[command] : 'without-policy'])))
+})
+
+test('B2: on main, a command that may write into the checkout is still judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(INTO_THE_CHECKOUT.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('main'))]))
+  assert.deepEqual(judged, Object.fromEntries(INTO_THE_CHECKOUT.map((command) => [command, 'with-policy'])))
+})
+
+test('B2: on a working branch, none of these commands is judged against never_write_to_main', () => {
+  const commands = [...OUTSIDE_THE_CHECKOUT, ...INTO_THE_CHECKOUT]
+  const judged = Object.fromEntries(commands.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('feat/x')) !== 'with-policy']))
+  assert.deepEqual(judged, Object.fromEntries(commands.map((command) => [command, true])))
 })
 
 // ---------------------------------------------------------------------------

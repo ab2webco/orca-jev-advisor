@@ -55,6 +55,12 @@ test("find with a mutating action is never safe, only plain search/list is", () 
   assert.equal(isObviouslySafeCommand("find . -delete"), false);
   assert.equal(isObviouslySafeCommand("find . -name '*.tmp' -delete"), false);
   assert.equal(isObviouslySafeCommand("find . -exec rm {} \\;"), false);
+  // -fls writes its listing to the file it names, like -fprint.
+  assert.equal(isObviouslySafeCommand("find . -fls out.txt"), false);
+  // rg --pre runs the program it names on every file it searches.
+  assert.equal(isObviouslySafeCommand("rg --pre ./run.sh foo"), false);
+  assert.equal(isObviouslySafeCommand("rg --pre=./run.sh foo"), false);
+  assert.equal(isObviouslySafeCommand("rg foo src"), true);
   assert.equal(isObviouslySafeCommand("find . -type f"), true);
 });
 

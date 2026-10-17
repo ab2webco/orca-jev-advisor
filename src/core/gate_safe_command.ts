@@ -45,7 +45,9 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
   /^(ls|pwd|cat|head|tail|wc|which|echo|date|whoami)\b/,
   // Bare `cd`: changing directory alone can't be dangerous, whatever the target.
   /^cd(\s|$)/,
-  /^(jq|rg|grep)\b/,
+  /^(jq|grep)\b/,
+  // `rg --pre cmd` runs `cmd` on every file it searches.
+  /^rg\b(?!.*\s--pre)/,
   /^git\s+(status|diff|log|show|remote|rev-parse|blame)\b/,
   // `git branch` only in its read-only forms -- anything else (creating a
   // branch with a bare name, deleting with -d/-D, renaming with -m/-M) is
@@ -110,7 +112,7 @@ function withoutGitDashC(segment: string): string | null {
 }
 
 /** `find`'s destructive flags -- everything else is a plain search/list. */
-const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprintf?\b|-fprint0?\b/
+const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprintf?\b|-fprint0?\b|-fls\b/
 
 function isSafeFindSegment(segment: string): boolean {
   return /^find\b/.test(segment) && !FIND_DANGEROUS_FLAGS.test(segment)
