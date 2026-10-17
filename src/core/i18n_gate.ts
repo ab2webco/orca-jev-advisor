@@ -272,3 +272,40 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     "effect.uncertain": "Jev isn't sure it's harmless",
   },
 };
+
+/**
+ * Who judged the command a line reports (odd/tasks/clef-decides-policies.md,
+ * C2). Jev unless Clef's answer decided it; a local rule, a cache replay or a
+ * provider failure is reported as it always was, in Jev's catalog.
+ */
+export type GateJudge = "jev" | "clef";
+
+/** The keys whose text names the provider that judged the command; every other key reads the same whoever judged. */
+export const JUDGED_GATE_KEYS: readonly GateKey[] = [
+  "advisedLine",
+  "advisedRetryLine",
+  "authorizedLine",
+  "policyBlockedLine",
+  "policyAskLine",
+  "queuedLine",
+  "reason.incompleteAnswers",
+  "effect.uncertain",
+];
+
+/** A judged key's template with Clef named in place of Jev: the `jev · ` lead and the name. Applied to templates only, never to text a command or a rule brought in. */
+function namingClef(template: string): string {
+  return template.replace(/^jev · /, "clef · ").replace(/\bJev\b/g, "Clef");
+}
+
+function clefLocale(entries: Record<GateKey, string>): Record<GateKey, string> {
+  const judged = { ...entries };
+  for (const key of JUDGED_GATE_KEYS) judged[key] = namingClef(entries[key]);
+  return judged;
+}
+
+const GATE_CATALOG_CLEF: Catalog<GateKey> = { es: clefLocale(GATE_CATALOG.es), en: clefLocale(GATE_CATALOG.en) };
+
+/** The catalog a judged line is rendered from: GATE_CATALOG itself for Jev, so Jev's text never changes. */
+export function gateCatalogFor(judge: GateJudge): Catalog<GateKey> {
+  return judge === "clef" ? GATE_CATALOG_CLEF : GATE_CATALOG;
+}

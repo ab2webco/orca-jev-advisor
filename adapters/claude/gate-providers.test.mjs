@@ -233,3 +233,78 @@ test('Jev-only mode with a policy: Jev alone is asked, the row carries no provid
   assert.deepEqual(requests.map((r) => r.host), ['api.typesafe.ai'])
   assert.equal('provider' in rows[0], false)
 })
+
+// C2 (odd/tasks/clef-decides-policies.md): the person's line and the model's
+// text name whoever decided. Jev's stay byte-identical to what they were.
+function setLocale (home, locale) {
+  writeFileSync(join(home, '.config', 'orca-supervisor', 'locale'), locale)
+}
+const SEGMENT = COMMAND
+
+test('both mode: a Clef advice names Clef to the person and to the model (es)', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  setLocale(home, 'es')
+  const { stdout, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefBody(2.5) }, 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } } })
+  assert.equal(rows[0].provider, 'clef')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.systemMessage, 'clef · avisó al modelo antes de `' + SEGMENT + '`: Clef no está seguro de que sea inofensivo')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^Clef advice \(not a refusal\): /)
+  assert.doesNotMatch(payload.hookSpecificOutput.permissionDecisionReason, /\bJev\b/)
+})
+
+test('both mode: an advice Jev decided after Clef doubted still names Jev, exactly as before', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  setLocale(home, 'es')
+  const { stdout, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefBody(LINE + 0.05) }, 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } } })
+  assert.equal(rows[0].provider, 'jev')
+  const payload = JSON.parse(stdout)
+  assert.ok(payload.systemMessage.startsWith('jev · avisó al modelo antes de `' + SEGMENT + '`: '), payload.systemMessage)
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^Jev advice \(not a refusal\): /)
+})
+
+test('Jev-only mode: the advice is byte-identical to the one an unset mode gives', () => {
+  const jevOnly = makeHome({ settings: { mode: 'jev' } })
+  const unset = makeHome({})
+  const script = { 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } }
+  const a = run(jevOnly, { script }).stdout
+  const b = run(unset, { script }).stdout
+  assert.equal(a, b)
+  assert.ok(JSON.parse(a).systemMessage.startsWith('jev · advised the model before `'))
+  assert.match(JSON.parse(a).hookSpecificOutput.permissionDecisionReason, /^Jev advice \(not a refusal\): /)
+})
+
+test('Clef mode: a policy block Clef decided names Clef; the REFUSED text is unchanged', () => {
+  const home = makeHome({ settings: { mode: 'clef' } })
+  setLocale(home, 'es')
+  writePolicies(home)
+  const { stdout, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2, { violation: { none: 0.04, policy_1: 0.96 } }) } } })
+  assert.equal(rows[0].provider, 'clef')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(payload.systemMessage, 'clef · bloqueó `' + SEGMENT + '`: lo prohíbe la política never_rewrite_shared_history')
+  assert.ok(payload.hookSpecificOutput.permissionDecisionReason.startsWith('REFUSED: forbidden by the team policy never_rewrite_shared_history ('))
+})
+
+test('both mode: a policy block Jev decided after a Clef policy hit names Jev', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  setLocale(home, 'en')
+  writePolicies(home)
+  const jevDeny = JSON.stringify({ model: 'jev-latest', answers: policyAnswers(0.2, { violation: { none: 0.04, policy_1: 0.96 } }), usage: { input_tokens: 480, output_tokens: 10 } })
+  const { stdout, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2, { violation: { none: 0.04, policy_1: 0.96 } }) }, 'api.typesafe.ai': { status: 200, body: jevDeny } } })
+  assert.equal(rows[0].provider, 'jev')
+  assert.equal(rows[0].escalation, 'policy')
+  assert.equal(JSON.parse(stdout).systemMessage, 'jev · blocked `' + SEGMENT + '`: forbidden by the policy never_rewrite_shared_history')
+})
+
+// Captured from 0.13.3 (384e242) before C2: Jev-only output must never change.
+const GOLDEN_JEV_ADVICE = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Jev advice (not a refusal): this command would affect something worth a second look before it runs.\\nIt would run: `some-unmeasured-tool --flag`.\\nWhy: if it is wrong, it breaks something that matters to someone; this directory doesn\'t match any catalog destination, so the global thresholds were used.\\nThis session could not be identified, so repeating the command will NOT be recognized as the same request and will be judged fresh. If the user explicitly asked for exactly this, say so plainly and proceed deliberately; otherwise, change course."},"systemMessage":"jev · advised the model before `some-unmeasured-tool --flag`: Jev isn\'t sure it\'s harmless"}'
+const GOLDEN_JEV_DENY_ES = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"REFUSED: forbidden by the team policy never_rewrite_shared_history (Never rewrite history that others share.). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work."},"systemMessage":"jev · bloqueó `some-unmeasured-tool --flag`: lo prohíbe la política never_rewrite_shared_history"}'
+
+test('Jev-only mode: an advice and a policy block are byte-identical to 0.13.3', () => {
+  assert.equal(run(makeHome({ settings: { mode: 'jev' } }), { script: { 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } } }).stdout, GOLDEN_JEV_ADVICE)
+  const home = makeHome({ settings: { mode: 'jev' } })
+  setLocale(home, 'es')
+  writePolicies(home)
+  const deny = JSON.stringify({ model: 'jev-latest', answers: policyAnswers(0.2, { violation: { none: 0.04, policy_1: 0.96 } }), usage: { input_tokens: 480, output_tokens: 10 } })
+  assert.equal(run(home, { script: { 'api.typesafe.ai': { status: 200, body: deny } } }).stdout, GOLDEN_JEV_DENY_ES)
+})

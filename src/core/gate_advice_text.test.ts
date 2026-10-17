@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { affectedSegments, composeAdviceText, MODEL_RISK_REASON } from "./gate_advice_text.ts";
+import { affectedSegments, composeAdviceText, MODEL_RISK_REASON, modelRiskReasonFor } from "./gate_advice_text.ts";
 import type { RecoverabilitySegmentResult } from "./git_recoverability.ts";
 
 test("never contains the word REFUSED -- the model must be able to tell an advice apart from a hard stop", () => {
@@ -159,4 +159,21 @@ test("MODEL_RISK_REASON covers the near-limit case with model-appropriate text",
 test("affectedSegments never names a line of a heredoc body", () => {
   const segments = affectedSegments(`node - <<'EOF'\nconst fs = require("fs")\nfs.writeFileSync("notes.md", "x")\nEOF`);
   assert.ok(!segments.some((segment) => segment.includes("require")), segments.join(" | "));
+});
+
+test("C2: the header names Clef when Clef judged, and stays Jev's otherwise", () => {
+  const input = { command: "rm -rf dist", reasons: ["it can't be undone"], sessionEligibleForRetry: true };
+  const jev = composeAdviceText(input).modelText;
+  assert.equal(composeAdviceText({ ...input, judge: "jev" }).modelText, jev);
+  assert.match(jev, /^Jev advice \(not a refusal\): /);
+  const clef = composeAdviceText({ ...input, judge: "clef" }).modelText;
+  assert.match(clef, /^Clef advice \(not a refusal\): /);
+  assert.equal(clef.replace(/^Clef advice/, "Jev advice"), jev);
+});
+
+test("C2: the model-facing risk reason names the judge", () => {
+  assert.equal(modelRiskReasonFor("reason.tooCloseToTheLine", "jev"), MODEL_RISK_REASON["reason.tooCloseToTheLine"]);
+  assert.equal(modelRiskReasonFor("reason.tooCloseToTheLine", "clef"), "Clef's risk score for this command is right at its limit");
+  assert.equal(modelRiskReasonFor("reason.cannotUndo", "clef"), MODEL_RISK_REASON["reason.cannotUndo"]);
+  assert.equal(modelRiskReasonFor("reason.allowClear", "clef"), undefined);
 });

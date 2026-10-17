@@ -69,7 +69,7 @@ import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQ
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
-import { affectedSegments, composeAdviceText, MODEL_RISK_REASON } from '../../src/core/gate_advice_text.ts'
+import { affectedSegments, composeAdviceText, modelRiskReasonFor } from '../../src/core/gate_advice_text.ts'
 import { assessDiscard, stashCommandFor } from '../../src/core/discard_loss.ts'
 import type { DiscardLossDetail } from '../../src/core/discard_loss.ts'
 import { resolveRecoverabilityTargets } from '../../src/core/git_recoverability.ts'
@@ -121,8 +121,8 @@ import { appendNeuronLedger, budgetOpen, readNeuronBudget } from '../../src/core
 import { PROVIDER_SETTINGS_MIRROR_FILE, parseProviderSettings, type ProviderSettings } from '../../src/core/provider_settings.ts'
 import { DEFAULT_LOCALE, parseLocaleFile, translate, translateReason } from '../../src/core/i18n.ts'
 import type { Locale } from '../../src/core/i18n.ts'
-import { GATE_CATALOG } from '../../src/core/i18n_gate.ts'
-import type { GateKey } from '../../src/core/i18n_gate.ts'
+import { GATE_CATALOG, gateCatalogFor } from '../../src/core/i18n_gate.ts'
+import type { GateJudge, GateKey } from '../../src/core/i18n_gate.ts'
 import { DESTINATION_CATALOG } from '../../src/core/i18n_destination.ts'
 import type { DestinationKey } from '../../src/core/i18n_destination.ts'
 import { buildGateDecisionRecord, commandFamily, serializeGateRecord } from '../../src/core/gate_measurement.ts'
@@ -279,6 +279,18 @@ function resolveLocale(): Locale {
 
 const LOCALE = resolveLocale()
 const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(GATE_CATALOG, LOCALE, key, params)
+/**
+ * C2 (odd/tasks/clef-decides-policies.md): who judged the command a line
+ * reports. Clef only when Clef's answer decided it (providerStamp, set by
+ * askJev after the cascade); Jev in Jev-only mode, after an escalation, and
+ * for anything decided before a provider was asked (a local rule, a cache
+ * replay), so those lines read exactly as before.
+ */
+const decidedBy = (): GateJudge => (providerStamp?.provider === 'clef' ? 'clef' : 'jev')
+/** `t` for a line that names the judge: GATE_CATALOG itself when Jev judged. */
+const tJudged = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(gateCatalogFor(decidedBy()), LOCALE, key, params)
+/** The judge's name in model-facing English. */
+const judgeName = (): string => (decidedBy() === 'clef' ? 'Clef' : 'Jev')
 
 /** For text the MODEL reads rather than a person: always English, whatever
  *  locale the developer picked. A refusal is an instruction to the model, and
@@ -344,7 +356,7 @@ function resolveGateActionReason(reason: GateActionReason): string {
   if (isDestinationReasonKey(reason.key)) {
     return translateReason(DESTINATION_CATALOG, LOCALE, { key: reason.key, params: reason.params })
   }
-  return translateReason(GATE_CATALOG, LOCALE, { key: reason.key as GateKey, params: reason.params })
+  return translateReason(gateCatalogFor(decidedBy()), LOCALE, { key: reason.key as GateKey, params: reason.params })
 }
 
 /**
@@ -363,7 +375,7 @@ function resolveGateActionReasonEnglish(reason: GateActionReason): string {
   if (isDestinationReasonKey(reason.key)) {
     return translateReason(DESTINATION_CATALOG, 'en', { key: reason.key, params: reason.params })
   }
-  return MODEL_RISK_REASON[reason.key as GateKey] ?? translateReason(GATE_CATALOG, 'en', { key: reason.key as GateKey, params: reason.params })
+  return modelRiskReasonFor(reason.key as GateKey, decidedBy()) ?? translateReason(gateCatalogFor(decidedBy()), 'en', { key: reason.key as GateKey, params: reason.params })
 }
 
 /**
@@ -1026,7 +1038,7 @@ function jevSegmentFor(command: string): string {
 /** Resolves a concrete person-facing effect (gate_person_effect.ts) through GATE_CATALOG's own effect.* keys, in the active locale. */
 function localizePersonEffect(input: ResolvePersonEffectInput): string {
   const effect = resolvePersonEffect(input)
-  return effect.key === 'effect.namedFiles' ? t('effect.namedFiles', { files: (effect.files ?? []).join(', ') }) : t(effect.key)
+  return effect.key === 'effect.namedFiles' ? t('effect.namedFiles', { files: (effect.files ?? []).join(', ') }) : tJudged(effect.key)
 }
 
 /**
@@ -1043,7 +1055,7 @@ function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: rea
   const repoRoot = getRepoRootForAdvice(cwd)
   const recoverability = repoRoot === null ? undefined : resolveRecoverabilityTargets(command, cwd, repoRoot, getGitStatusSetsForAdvice(repoRoot))
   const personEffectSummary = localizePersonEffect({ ...effectSource, recoverability })
-  return composeAdviceText({ command, reasons: reasonsEnglish, recoverability, sessionEligibleForRetry, personEffectSummary })
+  return composeAdviceText({ command, reasons: reasonsEnglish, recoverability, sessionEligibleForRetry, personEffectSummary, judge: decidedBy() })
 }
 
 /**
@@ -1060,7 +1072,7 @@ function buildAdviceForCommand(command: string, cwd: string, reasonsEnglish: rea
 function emitAdvice(segment: string, effect: string, modelText: string): void {
   const payload = {
     hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: modelText },
-    systemMessage: t('advisedLine', { segment, effect }),
+    systemMessage: tJudged('advisedLine', { segment, effect }),
   }
   writeSync(1, JSON.stringify(payload))
 }
@@ -1092,7 +1104,7 @@ function tryAdviceRetryPass(command: string, sessionCwd: string, cwd: string, se
   // only the risk stage's advice may ever be relaxed later.
   if (source !== 'local-rule') learnAuthorization(command, sessionCwd, cwd)
   appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal)
-  emit('allow', 'Jev: identical retry within the advice window; proceeding.', t('advisedRetryLine', { segment: jevSegmentFor(command) }))
+  emit('allow', `${judgeName()}: identical retry within the advice window; proceeding.`, tJudged('advisedRetryLine', { segment: jevSegmentFor(command) }))
   return true
 }
 
@@ -1180,10 +1192,10 @@ function tryAuthorizedPass(input: {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'allow',
-      permissionDecisionReason: 'Jev: this delivery was already confirmed in this repository; proceeding.',
-      additionalContext: `Jev advice (not a block; this delivery was already confirmed in this repository, so it runs): ${advice.length > 0 ? advice : 'it may affect something worth a second look'}`,
+      permissionDecisionReason: `${judgeName()}: this delivery was already confirmed in this repository; proceeding.`,
+      additionalContext: `${judgeName()} advice (not a block; this delivery was already confirmed in this repository, so it runs): ${advice.length > 0 ? advice : 'it may affect something worth a second look'}`,
     },
-    systemMessage: t('authorizedLine', { segment: jevSegmentFor(input.command) }),
+    systemMessage: tJudged('authorizedLine', { segment: jevSegmentFor(input.command) }),
   }
   writeSync(1, JSON.stringify(payload))
   return true
@@ -1502,7 +1514,7 @@ function tryQueueForPerson(input: {
   if (!queued) return false
   appendGateRecord(cwd, command, input.source, 'advise', input.latencyMs, 'queue', policyId, input.teamInternal)
   const segment = jevSegmentFor(command)
-  emit('deny', tEnglish('queuedReason', { policyId, segment }), t('queuedLine', { policyId, segment }))
+  emit('deny', tEnglish('queuedReason', { policyId, segment }), tJudged('queuedLine', { policyId, segment }))
   return true
 }
 
@@ -2861,9 +2873,9 @@ async function main(): Promise<void> {
   const finalReason = resolved.decision === 'ask' ? t('policyAskReason', { policyId: resolved.policyId ?? '', segment: finalSegment }) : resolved.reason
   const finalSystemMessage =
     resolved.decision === 'deny'
-      ? t('policyBlockedLine', { segment: finalSegment, policyId: resolved.policyId ?? '' })
+      ? tJudged('policyBlockedLine', { segment: finalSegment, policyId: resolved.policyId ?? '' })
       : resolved.decision === 'ask'
-        ? t('policyAskLine', { policyId: resolved.policyId ?? '', segment: finalSegment })
+        ? tJudged('policyAskLine', { policyId: resolved.policyId ?? '', segment: finalSegment })
         : undefined
   emit(resolved.decision, finalReason, finalSystemMessage)
 }

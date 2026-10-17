@@ -29,7 +29,7 @@ import { splitOnCommandSeparators } from "./git_discard.ts";
 import { isSafeSegment } from "./gate_safe_command.ts";
 import { isProtectedRecoverabilityWhy } from "./git_recoverability.ts";
 import type { ClassifiedPath, RecoverabilitySegmentResult } from "./git_recoverability.ts";
-import type { GateKey } from "./i18n_gate.ts";
+import type { GateJudge, GateKey } from "./i18n_gate.ts";
 
 const SEGMENT_MAX_CHARS = 80;
 const MAX_SEGMENTS_NAMED = 2;
@@ -60,6 +60,12 @@ export const MODEL_RISK_REASON: Readonly<Partial<Record<GateKey, string>>> = {
   "reason.breaksSomethingImportant": "if it is wrong, it breaks something that matters to someone",
   "reason.needsCleanupAfter": "if it is wrong, it needs cleanup afterwards",
 };
+
+/** MODEL_RISK_REASON's phrasing for `key` with the judge named (C2: Clef's own risk score when Clef judged), or undefined for a key it does not cover. */
+export function modelRiskReasonFor(key: GateKey, judge: GateJudge): string | undefined {
+  const reason = MODEL_RISK_REASON[key];
+  return reason === undefined || judge === "jev" ? reason : reason.replace(/\bJev\b/g, "Clef");
+}
 
 function truncateSegment(text: string): string {
   const trimmed = text.trim();
@@ -141,6 +147,8 @@ export interface AdviceCompositionInput {
    * affected segment, same as before this field existed.
    */
   readonly personEffectSummary?: string;
+  /** Who judged the command (C2); the header names it. Jev when omitted, as before this field existed. */
+  readonly judge?: GateJudge;
 }
 
 export interface ComposedAdvice {
@@ -166,7 +174,7 @@ export function composeAdviceText(input: AdviceCompositionInput): ComposedAdvice
     .filter((s): s is string => s !== null);
 
   const lines = [
-    "Jev advice (not a refusal): this command would affect something worth a second look before it runs.",
+    `${input.judge === "clef" ? "Clef" : "Jev"} advice (not a refusal): this command would affect something worth a second look before it runs.`,
     affectedLine,
     reasonsLine,
     ...recoverabilitySentences,
