@@ -184,7 +184,7 @@ export function resolveRequestedEntry(requested: string | null, catalog: readonl
  */
 export const DEFAULT_MODEL_REWRITE_CONFIDENCE = 0.7;
 
-export type ModelRewriteReason = "measurement" | "not-ready" | "permission-mode" | "low-confidence" | "same-model" | "rewrite";
+export type ModelRewriteReason = "measurement" | "not-ready" | "permission-mode" | "orca-pin" | "low-confidence" | "same-model" | "rewrite";
 
 // An active rewrite has to return `permissionDecision: "allow"` for
 // `updatedInput` to apply (https://code.claude.com/docs/en/hooks#pretooluse-decision-control),
@@ -213,6 +213,8 @@ export interface DecideModelRewriteInput {
   readonly minConfidence: number;
   /** permissionModeAllowsRewrite of the PreToolUse payload's `permission_mode`. */
   readonly permissionAllowsRewrite: boolean;
+  /** JEVADV-105: Orca pinned the session's model in a game pane (orca_pins.ts). */
+  readonly orcaModelPinned?: boolean;
 }
 
 /**
@@ -230,6 +232,7 @@ export function decideModelRewrite(input: DecideModelRewriteInput): { rewrite: b
   if (input.mode === "measurement") return { rewrite: false, reason: "measurement" };
   if (!input.ready) return { rewrite: false, reason: "not-ready" };
   if (!input.permissionAllowsRewrite) return { rewrite: false, reason: "permission-mode" };
+  if (input.orcaModelPinned === true) return { rewrite: false, reason: "orca-pin" };
   if (input.recommendation.confidence < input.minConfidence) return { rewrite: false, reason: "low-confidence" };
   const { entry } = input.recommendation;
   if (input.requestedModel !== null && (input.requestedModel === entry.agentModel || input.requestedModel === entry.id)) {

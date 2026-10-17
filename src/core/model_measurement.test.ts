@@ -375,3 +375,8 @@ test("a decision row with a malformed complexity reading is rejected", () => {
   const bad = { ...judgedDecision(), complexity: { tier: "enormous", tierIndex: 9, score: 1 } };
   assert.equal(parseModelRecord(JSON.stringify(bad)), null);
 });
+
+test("JEVADV-105: a decision row a launch pin held (rewriteReason orca-pin) survives a round trip", () => {
+  const row = judgedDecision({ mode: "active", rewriteReason: "orca-pin", permissionMode: "bypassPermissions" });
+  assert.deepEqual(parseModelRecord(serializeModelRecord(row)), row);
+});

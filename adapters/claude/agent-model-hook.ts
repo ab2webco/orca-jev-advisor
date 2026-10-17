@@ -81,6 +81,8 @@ export interface AgentModelHookDeps {
    * supports every model. A model it cannot run is left off the ladder.
    */
   readonly engineVersion?: string | null;
+  /** JEVADV-105: Orca pinned the session's model and this is a game pane; no rewrite then. */
+  readonly orcaModelPinned?: boolean;
 }
 
 export interface AgentModelHookResult {
@@ -209,6 +211,7 @@ async function handlePreToolUse(payload: Record<string, unknown>, id: string, de
     requestedModel: input.model,
     minConfidence: DEFAULT_MODEL_REWRITE_CONFIDENCE,
     permissionAllowsRewrite: permissionModeAllowsRewrite(permissionMode),
+    orcaModelPinned: deps.orcaModelPinned === true,
   });
 
   const entry = recommendation.entry;

@@ -154,7 +154,7 @@ const FAIL_OPEN_REASONS: readonly ModelFailOpenReason[] = [
   "unparseable-answer",
   "invalid-input",
 ];
-const REWRITE_REASONS: readonly ModelRewriteReason[] = ["measurement", "not-ready", "permission-mode", "low-confidence", "same-model", "rewrite"];
+const REWRITE_REASONS: readonly ModelRewriteReason[] = ["measurement", "not-ready", "permission-mode", "orca-pin", "low-confidence", "same-model", "rewrite"];
 const COMPLEXITY_TIERS: readonly string[] = ["trivial", "standard", "advanced", "critical"];
 
 function isComplexityReading(value: unknown): value is ComplexityReading {

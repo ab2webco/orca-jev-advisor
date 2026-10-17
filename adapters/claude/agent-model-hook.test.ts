@@ -375,3 +375,15 @@ test("engine too old: Jev recommends from the models the engine can run", async 
   const modern = await handleAgentModelHook(preToolUsePayload(), baseDeps({ mirror, engineVersion: "2.1.296", askJev: async () => jevResponse(0) }));
   assert.equal(decisionRecord(modern).recommended?.id, "claude-haiku-5-5");
 });
+
+test("JEVADV-105: a model Orca pinned in a game pane is never rewritten -- reason orca-pin", async () => {
+  const payload = preToolUsePayload({ permission_mode: "bypassPermissions" });
+  const deps = { mirror: { active: true, ready: true, models: LADDER } };
+  assert.ok(typeof (await handleAgentModelHook(payload, baseDeps(deps))).stdout === "string", "without the pin it rewrites");
+  const result = await handleAgentModelHook(payload, baseDeps({ ...deps, orcaModelPinned: true }));
+  assert.equal(result.stdout, null);
+  const record = decisionRecord(result);
+  assert.equal(record.applied, false);
+  assert.equal(record.rewriteReason, "orca-pin");
+  assert.equal(record.source, "jev", "Jev's recommendation is still recorded");
+});

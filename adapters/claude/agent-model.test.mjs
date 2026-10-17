@@ -253,3 +253,62 @@ test('no engine version file, or one that cannot be read, leaves the ladder whol
   assert.deepEqual(ladderOf(makeHome(), '{not json'), { ladderSize: 1, failOpen: 'no-key' })
   assert.deepEqual(ladderOf(makeHome(), { version: 5 }), { ladderSize: 1, failOpen: 'no-key' })
 })
+
+// JEVADV-105: the pins reach this hook the only way they can, through the
+// process env Claude Code hands it; Jev's answer comes from the scripted fetch
+// gate-providers.test.mjs already uses, so the decision runs end to end.
+const FETCH_PRELOAD = join(__dirname, 'fixtures', 'system-one-fetch-preload.mjs')
+const TWO_MODEL_MIRROR = {
+  active: true,
+  ready: true,
+  models: [
+    { id: 'claude-opus-5-5', provider: 'anthropic', label: 'Opus', rank: 1, agentModel: 'opus', source: '', available: true },
+    { id: 'claude-haiku-4-5-20251001', provider: 'anthropic', label: 'Haiku', rank: 2, agentModel: 'haiku', source: '', available: true }
+  ]
+}
+
+function runJudged (extraEnv) {
+  const home = makeHome()
+  const dir = join(home, '.config', 'orca-supervisor')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'models-catalog.json'), JSON.stringify(TWO_MODEL_MIRROR))
+  const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home }
+  for (const name of ['XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'ORCA_GAME_MODE', 'ORCA_GAME_HUD', 'ORCA_AGENT_MODEL_PINNED', 'ORCA_AGENT_EFFORT_PINNED']) delete env[name]
+  env.ORCA_SUPERVISOR_CONFIG_DIR = dir
+  env.ORCA_SUPERVISOR_CACHE_DIR = cacheDir(home)
+  env.ORCA_USER_DATA_PATH = join(home, 'orca-userdata-does-not-exist')
+  env.TYPESAFE_API_KEY = 'test-key'
+  // Scored against the smallest-first ladder: 1 is Opus, the requested model is Haiku.
+  const answer = { model: 'jev-latest', usage: { input_tokens: 1, output_tokens: 1 }, answers: { model_tier: { type: 'score', score: 1, legend: {}, probabilities: {}, confidence: 0.95 } } }
+  env.SYSTEM_ONE_FETCH_SCRIPT = JSON.stringify({ 'api.typesafe.ai': { status: 200, body: JSON.stringify(answer) } })
+  Object.assign(env, extraEnv)
+  const stdout = execFileSync(process.execPath, ['--experimental-strip-types', '--import', FETCH_PRELOAD, SCRIPT_PATH], {
+    env,
+    input: JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'toolu_pin', permission_mode: 'bypassPermissions', tool_input: { prompt: 'design the migration', description: 'Design', subagent_type: 'general-purpose', model: 'haiku' } }),
+    encoding: 'utf8'
+  })
+  const decision = readLogRecords(home).find((row) => row.type === 'model-decision')
+  return { stdout, decision }
+}
+
+const PINNED_ENV = { ORCA_AGENT_MODEL_PINNED: '1', ORCA_AGENT_EFFORT_PINNED: '1' }
+
+test('JEVADV-105: without pins the CLI rewrites the Agent call to Jev\'s model', () => {
+  const { stdout, decision } = runJudged({})
+  assert.equal(JSON.parse(stdout).hookSpecificOutput.updatedInput.model, 'opus')
+  assert.equal(decision.rewriteReason, 'rewrite')
+})
+
+test('JEVADV-105: the pins in its process env stop the rewrite in a game pane', () => {
+  const { stdout, decision } = runJudged({ ORCA_GAME_MODE: 'on', ...PINNED_ENV })
+  assert.equal(stdout, '')
+  assert.equal(decision.applied, false)
+  assert.equal(decision.rewriteReason, 'orca-pin')
+})
+
+test('JEVADV-105: the same pins outside a game pane, or with its HUD off, change nothing', () => {
+  for (const extra of [PINNED_ENV, { ORCA_GAME_MODE: 'on', ORCA_GAME_HUD: '0', ...PINNED_ENV }, { ORCA_GAME_MODE: 'on', ORCA_AGENT_MODEL_PINNED: 'true' }]) {
+    const { decision } = runJudged(extra)
+    assert.equal(decision.rewriteReason, 'rewrite', JSON.stringify(extra))
+  }
+})

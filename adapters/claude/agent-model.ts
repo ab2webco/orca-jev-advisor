@@ -43,6 +43,8 @@ import { MODELS_MIRROR_FILE } from '../../src/core/model_mirror.ts'
 import { FEATURE_MODULES_FILE, moduleState, parseFeatureModules, type ModuleState } from '../../src/core/feature_modules.ts'
 import { routerModeFromSettings } from '../../src/core/model_router_mode.ts'
 import { normalizePlatform, resolveCacheDir, resolveConfigDir } from '../../src/core/paths.ts'
+import { parseOrcaGameMode } from '../../src/core/advisor_state.ts'
+import { orcaPinsOf } from '../../src/core/orca_pins.ts'
 import { handleAgentModelHook } from './agent-model-hook.ts'
 
 // Same resolution as gate-bash.ts's own CACHE_DIR/CONFIG_DIR -- see its
@@ -228,6 +230,7 @@ async function main(): Promise<void> {
     routerActive,
     moduleState: routerModule,
     engineVersion: readEngineVersion(),
+    orcaModelPinned: orcaPinsOf(parseOrcaGameMode(process.env.ORCA_GAME_MODE, process.env.ORCA_GAME_HUD), process.env.ORCA_AGENT_MODEL_PINNED, process.env.ORCA_AGENT_EFFORT_PINNED).model,
   })
 
   if (result.record !== null) appendRecord(result.record)

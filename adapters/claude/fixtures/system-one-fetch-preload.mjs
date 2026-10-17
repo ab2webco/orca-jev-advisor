@@ -1,4 +1,4 @@
-// Test-only preload for adapters/claude/gate-providers.test.mjs: replaces the
+// Test-only preload for adapters/claude/gate-providers.test.mjs and agent-model.test.mjs: replaces the
 // global fetch of a spawned gate hook with a scripted one, so the hook's
 // real provider wiring runs end to end with no network. Each request is
 // logged (host and parsed body only) to SYSTEM_ONE_FETCH_LOG; the answer for
