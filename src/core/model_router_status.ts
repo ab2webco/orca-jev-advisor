@@ -17,7 +17,7 @@ import type { RouterEffort, RouterGuard, SessionEffort, StartReason } from "./mo
 import type { StageReason } from "./model_router_stage.ts";
 
 /** Why a model was kept: a held decision's own reason, or the guard that held it. */
-export type RouterKeptWhy = "low-confidence" | "break-even" | "hysteresis" | "prices-unknown" | "unknown-savings" | "pointer-prompt" | "context-window";
+export type RouterKeptWhy = "low-confidence" | "break-even" | "hysteresis" | "prices-unknown" | "unknown-savings" | "pointer-prompt" | "context-window" | "orca-pin";
 
 export interface RouterStatusInput {
   /** The model's short label ("Sonnet 5"), or its id when it has none. */
@@ -61,6 +61,8 @@ export function keptWhy(decision: KeptDecision): RouterKeptWhy | null {
       return "unknown-savings";
     case "held-by-guard":
       return decision.guard;
+    case "held-by-orca-pin":
+      return "orca-pin";
     case "low-confidence":
     case "hysteresis":
     case "break-even":

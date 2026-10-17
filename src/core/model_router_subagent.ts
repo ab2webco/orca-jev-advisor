@@ -32,6 +32,8 @@
 import { FABLE_ID, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { activeGuards, mentionsSensitiveTopic, shiftForPressure } from "./model_router_decide.ts";
+import { hasOrcaPin } from "./orca_pins.ts";
+import type { OrcaPins, PinnedDimension } from "./orca_pins.ts";
 import type { DestinationKind, GuardContext, QuotaBand, RouterGuard, SessionEffort, TierEffort, TierJudgment } from "./model_router_decide.ts";
 
 const ALIAS_TIER: Readonly<Record<string, RouterTier>> = { haiku: "simple", sonnet: "standard", opus: "complex", fable: "frontier" };
@@ -46,7 +48,7 @@ export function explicitModelRank(tiers: ResolvedTiers, model: string): number |
   return modelRank(tiers, model);
 }
 
-export type SubagentReason = "jev-failed" | "jev-payment" | "same" | "switch" | "held-by-guard" | "explicit" | "explicit-upgrade" | "explicit-lowered";
+export type SubagentReason = "jev-failed" | "jev-payment" | "same" | "switch" | "held-by-guard" | "held-by-orca-pin" | "explicit" | "explicit-upgrade" | "explicit-lowered";
 
 /** 0.6.8 T7: what the router does with a model the spawn already fixed. */
 export type ExplicitModelsPolicy = "judge" | "keep";
@@ -62,6 +64,8 @@ export interface SubagentDecision {
   readonly changed: boolean;
   readonly reason: SubagentReason;
   readonly guard: RouterGuard | null;
+  /** JEVADV-105: what an Orca launch pin held; present whenever a pin applies. */
+  readonly orcaPin?: readonly PinnedDimension[];
 }
 
 export interface SubagentDecisionInput {
@@ -76,6 +80,8 @@ export interface SubagentDecisionInput {
   readonly explicitModels?: ExplicitModelsPolicy;
   /** The session's destination kind; in a client's site an explicit model is never lowered below the parent's. */
   readonly destinationKind?: DestinationKind | null;
+  /** JEVADV-105: Orca's launch pins in a game pane; none when absent. */
+  readonly pins?: OrcaPins;
 }
 
 /**
@@ -100,7 +106,15 @@ function loweredExplicitModel(input: SubagentDecisionInput, guards: readonly Rou
   return targetId;
 }
 
+/** JEVADV-105: a pinned model keeps the subagent on what it would run without the router; the effort is the caller's. */
 export function decideSubagent(input: SubagentDecisionInput): SubagentDecision {
+  const free = decideSubagentFree(input);
+  if (!hasOrcaPin(input.pins)) return free;
+  if (!input.pins.model || !free.changed) return { ...free, orcaPin: [] };
+  return { ...free, model: free.current, changed: false, reason: "held-by-orca-pin", orcaPin: ["model"] };
+}
+
+function decideSubagentFree(input: SubagentDecisionInput): SubagentDecision {
   const explicit = input.explicitModel !== undefined && input.explicitModel !== "inherit" ? input.explicitModel : null;
   const current = explicit ?? input.parentModel;
   const stay = { current, model: current, changed: false } as const;

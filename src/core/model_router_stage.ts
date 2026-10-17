@@ -17,6 +17,8 @@ import { ratesForPrompt } from "./model_cost.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
 import { CONFIDENCE_FLOOR, TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
+import { hasOrcaPin, heldDimensions, modelPinnedTiers, pinnedEffort } from "./orca_pins.ts";
+import type { OrcaPins } from "./orca_pins.ts";
 import type { GuardContext, QuotaBand, QuotaSource, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
 
 export { shiftForPressure };
@@ -402,6 +404,8 @@ export interface StageDecisionInput {
   readonly effortOutput?: EffortOutputs | null;
   /** Track R: false only when the prompt cache is known cold, which makes a switch's rewrite free; absent or true: warm (unknown counts as warm). */
   readonly cacheWarm?: boolean;
+  /** JEVADV-105: Orca's launch pins in a game pane; none when absent. */
+  readonly pins?: OrcaPins;
 }
 
 export type StageReason =
@@ -412,6 +416,7 @@ export type StageReason =
   | "low-confidence"
   | "floor-restore"
   | "held-by-guard"
+  | "held-by-orca-pin"
   | "prices-unknown"
   | "hysteresis"
   | "break-even"
@@ -451,7 +456,34 @@ function withContextGuard(decision: StageDecision, floored: boolean): StageDecis
   return floored && decision.guard === null ? { ...decision, guard: "context-window" } : decision;
 }
 
+/** JEVADV-105: the pins as decideStart applies them; a pinned effort also never queues a lowering. */
 export function decideStage(input: StageDecisionInput): StageDecision {
+  const free = decideStageFree(input);
+  if (!hasOrcaPin(input.pins)) return free;
+  const pins = input.pins;
+  let routed = free;
+  if (pins.model) {
+    const tiers = modelPinnedTiers(input.tiers, input.configuredModel);
+    routed = tiers === null ? { ...free, model: input.currentModel, effort: input.currentEffort, changed: false, pending: null, breakEven: null, effortTarget: null } : decideStageFree({ ...input, tiers });
+  }
+  const effort = pins.effort ? pinnedEffort(input.tiers, routed.model, input.configuredModel, input.configuredEffort) : routed.effort;
+  const changed = routed.model !== input.currentModel || effort !== input.currentEffort;
+  const aimed = routed.effortTarget ?? routed.effort;
+  const orcaPin = heldDimensions(pins, { model: free.proposed !== null && baseModelId(routed.model) !== free.proposed, effort: aimed !== effort });
+  return {
+    ...routed,
+    tier: free.tier,
+    proposed: free.proposed,
+    effort,
+    changed,
+    reason: !changed && orcaPin.length > 0 ? "held-by-orca-pin" : routed.reason,
+    pending: pins.effort && routed.pending?.effort !== undefined ? null : routed.pending,
+    effortTarget: orcaPin.includes("effort") ? aimed : routed.effortTarget,
+    orcaPin,
+  };
+}
+
+function decideStageFree(input: StageDecisionInput): StageDecision {
   const current = input.currentModel;
   const stay = { current, model: current, effort: input.currentEffort, changed: false, breakEven: null, effortTarget: null } as const;
   // Guards first, Jev or not: a Jev failure is itself a guard (confidence

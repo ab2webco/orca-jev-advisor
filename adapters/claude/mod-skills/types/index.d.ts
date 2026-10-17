@@ -204,7 +204,7 @@ export type AdvisorState = {
     model: string | null
     effort: RouterStickyEffort | null
     status: 'running'
-    why: 'explicit' | 'lowered' | 'raised' | 'chosen' | 'same' | 'kept-unsure' | 'kept-pointer' | 'measuring' | 'inherited' | 'no-jev' | 'teammate' | 'teammate-routed' | 'before-load' | 'unseen'
+    why: 'explicit' | 'lowered' | 'raised' | 'chosen' | 'same' | 'kept-unsure' | 'kept-pointer' | 'kept-pinned' | 'measuring' | 'inherited' | 'no-jev' | 'teammate' | 'teammate-routed' | 'before-load' | 'unseen'
     /** The short reason, translated (`Jev duda`). */
     verdict: string
   }[]

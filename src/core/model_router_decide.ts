@@ -18,6 +18,8 @@ import { answerMargin, getChoiceAnswer } from "./jev.ts";
 import type { Answer, JsonValue, Question } from "./jev.ts";
 import { baseModelId, collapseTier, modelRank, ROUTER_TIERS, tierOfModel } from "./model_router_accounts.ts";
 import type { EngineFallbackReason, EngineNotes, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
+import { hasOrcaPin, heldDimensions, modelPinnedTiers, pinnedEffort } from "./orca_pins.ts";
+import type { OrcaPins, PinnedDimension } from "./orca_pins.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
 import type { WorkKindRecord } from "./work_kind.ts";
 import type { CacheUnknown } from "./cache_warmth.ts";
@@ -303,7 +305,7 @@ export function shiftForPressure(tier: RouterTier, band: QuotaBand, guards: read
 // §6.3 session start (point A)
 // ---------------------------------------------------------------------------
 
-export type StartReason = "jev-failed" | "jev-payment" | "held-by-guard" | "same" | "switch";
+export type StartReason = "jev-failed" | "jev-payment" | "held-by-guard" | "held-by-orca-pin" | "same" | "switch";
 
 /**
  * G8 (odd/tasks/router-cache-ttl.md): a decision made without Jev because
@@ -332,6 +334,10 @@ export interface RouterDecision {
   readonly reason: StartReason;
   /** The first guard that held the floor, when one did. */
   readonly guard: RouterGuard | null;
+  /** JEVADV-105: what an Orca launch pin held; present whenever a pin applies. */
+  readonly orcaPin?: readonly PinnedDimension[];
+  /** JEVADV-105: the effort the router aimed for when a pin held it. */
+  readonly effortTarget?: SessionEffort | null;
 }
 
 export interface StartDecisionInput {
@@ -346,6 +352,8 @@ export interface StartDecisionInput {
   readonly band?: QuotaBand;
   /** The effort each tier asks for (0.6.2 E3); TIER_EFFORT when absent. */
   readonly tierEffort?: TierEffortMap;
+  /** JEVADV-105: Orca's launch pins in a game pane; none when absent. */
+  readonly pins?: OrcaPins;
 }
 
 /** The session's exact id (a `[1m]` context suffix included) when `targetId` is the same base model, else `targetId`. */
@@ -377,7 +385,29 @@ export function tierEffortOn(tiers: ResolvedTiers, modelId: string, judged: Rout
   return tier !== null && tiers[tier].supportsEffort ? (efforts ?? TIER_EFFORT)[judged] : null;
 }
 
+/**
+ * JEVADV-105: a pinned model is decided again over tiers that all resolve to
+ * it, so only the effort follows Jev; a pinned effort stays the session's own.
+ * The row keeps Jev's own tier and the model it names.
+ */
 export function decideStart(input: StartDecisionInput): RouterDecision {
+  const free = decideStartFree(input);
+  if (!hasOrcaPin(input.pins)) return free;
+  const pins = input.pins;
+  const own = { model: input.configuredModel, effort: input.configuredEffort };
+  let routed = free;
+  if (pins.model) {
+    const tiers = modelPinnedTiers(input.tiers, own.model);
+    routed = tiers === null ? { ...free, model: own.model, effort: own.effort, changed: false } : decideStartFree({ ...input, tiers });
+  }
+  const effort = pins.effort ? pinnedEffort(input.tiers, routed.model, own.model, own.effort) : routed.effort;
+  const changed = routed.model !== own.model || effort !== own.effort;
+  const orcaPin = heldDimensions(pins, { model: free.proposed !== null && baseModelId(routed.model) !== free.proposed, effort: routed.effort !== effort });
+  const reason = !changed && orcaPin.length > 0 ? "held-by-orca-pin" : routed.reason;
+  return { ...routed, tier: free.tier, proposed: free.proposed, effort, changed, reason, orcaPin, ...(orcaPin.includes("effort") ? { effortTarget: routed.effort } : {}) };
+}
+
+function decideStartFree(input: StartDecisionInput): RouterDecision {
   const current = input.configuredModel;
   const unchanged = { current, model: current, effort: input.configuredEffort, changed: false } as const;
   if (input.jev === null) {
@@ -479,6 +509,8 @@ export interface RouterDecisionRecord {
   readonly wouldApplyCold?: true;
   /** Track R, active mode: a switch only the cold cache made pay, applied. */
   readonly appliedCold?: true;
+  /** JEVADV-105: the dimensions an Orca launch pin held; absent when none did. */
+  readonly orcaPin?: readonly PinnedDimension[];
 }
 
 export interface RouterDecisionRecordInput {
@@ -549,5 +581,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     ...(input.cacheWarm === undefined ? {} : { cacheWarm: input.cacheWarm }),
     ...(input.cacheWarm === null && input.cacheUnknown !== undefined && input.cacheUnknown !== null ? { cacheUnknown: input.cacheUnknown } : {}),
     ...(input.coldSwitch !== true ? {} : input.applied ? { appliedCold: true as const } : { wouldApplyCold: true as const }),
+    ...(input.decision.orcaPin === undefined || input.decision.orcaPin.length === 0 ? {} : { orcaPin: input.decision.orcaPin }),
   };
 }

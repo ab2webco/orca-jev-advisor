@@ -32,6 +32,7 @@ export type ModelRouterKey =
   | "why.unknown-savings"
   | "why.pointer-prompt"
   | "why.context-window"
+  | "why.orca-pin"
   | "agents.count"
   | "agents.heading"
   | "agents.effort.withSource"
@@ -48,6 +49,7 @@ export type ModelRouterKey =
   | "agents.why.same"
   | "agents.why.kept-unsure"
   | "agents.why.kept-pointer"
+  | "agents.why.kept-pinned"
   | "agents.why.measuring"
   | "agents.why.inherited"
   | "agents.why.no-jev"
@@ -62,6 +64,7 @@ export type ModelRouterKey =
   | "agents.short.same"
   | "agents.short.kept-unsure"
   | "agents.short.kept-pointer"
+  | "agents.short.kept-pinned"
   | "agents.short.measuring"
   | "agents.short.inherited"
   | "agents.short.no-jev"
@@ -100,6 +103,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.unknown-savings": "ahorro aún sin medir",
     "why.pointer-prompt": "el mensaje remite a un documento",
     "why.context-window": "el contexto no cabe en un modelo menor",
+    "why.orca-pin": "fijado por Orca",
     // 0.6.8 T6: the subagents running now (subagent_status.ts).
     // 0.6.14 T2: the line only counts them; the band above the prompt has a
     // row for each (subagent_band.ts).
@@ -120,6 +124,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.same": "Jev coincide",
     "agents.why.kept-unsure": "se mantiene: Jev no está seguro",
     "agents.why.kept-pointer": "se mantiene: remite a un documento",
+    "agents.why.kept-pinned": "se mantiene: fijado por Orca",
     "agents.why.measuring": "heredado, midiendo",
     "agents.why.inherited": "heredado",
     "agents.why.no-jev": "heredado, sin respuesta de Jev",
@@ -137,6 +142,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.short.same": "igual",
     "agents.short.kept-unsure": "Jev duda",
     "agents.short.kept-pointer": "documento",
+    "agents.short.kept-pinned": "fijado",
     "agents.short.measuring": "midiendo",
     "agents.short.inherited": "heredado",
     "agents.short.no-jev": "sin Jev",
@@ -174,6 +180,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.unknown-savings": "saving not measured yet",
     "why.pointer-prompt": "the prompt points to a document",
     "why.context-window": "the context does not fit a smaller model",
+    "why.orca-pin": "pinned by Orca",
     "agents.count": "agents: {{n}}",
     "agents.heading": "Running agents: {{n}}",
     "agents.effort.withSource": "{{level}} ({{source}})",
@@ -190,6 +197,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.why.same": "Jev agrees",
     "agents.why.kept-unsure": "kept: Jev is unsure",
     "agents.why.kept-pointer": "kept: points to a document",
+    "agents.why.kept-pinned": "kept: pinned by Orca",
     "agents.why.measuring": "inherited, measuring",
     "agents.why.inherited": "inherited",
     "agents.why.no-jev": "inherited, no answer from Jev",
@@ -204,6 +212,7 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "agents.short.same": "same",
     "agents.short.kept-unsure": "unsure",
     "agents.short.kept-pointer": "document",
+    "agents.short.kept-pinned": "pinned",
     "agents.short.measuring": "measuring",
     "agents.short.inherited": "inherited",
     "agents.short.no-jev": "no Jev",

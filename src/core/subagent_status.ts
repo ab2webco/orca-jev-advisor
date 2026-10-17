@@ -39,9 +39,9 @@ export function subagentEffortSource(carried: SessionEffort | null, sent: Sessio
  * `unseen` (neither can be shown). A reload is never guessed. 0.6.20 T3:
  * `teammate-routed`, a teammate the router judged at its first step.
  */
-export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "measuring" | "inherited" | "no-jev" | "teammate" | "teammate-routed" | "before-load" | "unseen";
+export type SubagentWhy = "explicit" | "lowered" | "raised" | "chosen" | "same" | "kept-unsure" | "kept-pointer" | "kept-pinned" | "measuring" | "inherited" | "no-jev" | "teammate" | "teammate-routed" | "before-load" | "unseen";
 
-const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "measuring", "inherited", "no-jev", "teammate", "teammate-routed", "before-load", "unseen"];
+const WHYS: readonly SubagentWhy[] = ["explicit", "lowered", "raised", "chosen", "same", "kept-unsure", "kept-pointer", "kept-pinned", "measuring", "inherited", "no-jev", "teammate", "teammate-routed", "before-load", "unseen"];
 
 /** The engine's type for an in-process agent-team teammate (`$.agent.list()`). */
 export const TEAMMATE_TYPE = "teammate";
@@ -215,6 +215,8 @@ export function subagentWhy(input: SubagentWhyInput): SubagentWhy {
       return applied ? "chosen" : explicit ? "explicit" : "measuring";
     case "held-by-guard":
       return decision.guard === "pointer-prompt" ? "kept-pointer" : "kept-unsure";
+    case "held-by-orca-pin":
+      return "kept-pinned";
     case "same":
       return "same";
   }
