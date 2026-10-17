@@ -13,7 +13,7 @@ In 0.12.0, Jev stopped drawing its status line and band in an Orca game pane and
 | `npm test` (on PR #78) | 4377/4377 |
 | CI on PRs #76, #77, #78 and on `main` (93a2c41, a2262df) | Pass |
 | Live | 1-6 PASS; 7 PENDING (no qualifying turn yet); 8 NOT VERIFIED (the game is not released) |
-| Finding | Router and steward Jev calls failed 17:22Z-02:20Z (see Findings) |
+| Finding | The mod had no TypeSafe key from 17:22Z to about 02:24Z; it was logged as `jev-failed` (see Findings) |
 
 ## Method
 
@@ -40,12 +40,12 @@ In 0.12.0, Jev stopped drawing its status line and band in an Orca game pane and
 
 ## Findings
 
-1. **Jev calls from the mod failed for about 9 hours (open, cause not found).**
-   - **Router.** `model-router-decisions-*.jsonl` shows 0-1 `jev-failed` per day from 2026-10-12 to 10-15. Then 136/359 on 10-16 and 30/42 on 10-17. From 18Z to 01Z almost every ask failed (for example 43/43 at 21Z). The first failures came at 17:22:47Z, 4 minutes after Orca installed 0.12.1 (17:18Z). Asks succeeded again from 02:24Z, before 0.12.2 was installed.
-   - **Steward.** It failed in the same window.
-   - **Gate.** The gate (a separate Node process with the same key) answered from Jev at 00Z-02Z with normal latency (p50 ~330 ms). So TypeSafe was up while the mod's asks failed. That points at the mod's path (`$.http.fetch`, an 800 ms router budget) rather than at TypeSafe.
-   - **Code.** 0.12.0 and 0.12.1 did not touch `callJev` or the router's ask. The only new work on `turn.step` is one memoized env read.
-   - **Why it is still open.** The rows do not say which failure it was (timeout, network, HTTP status). Next step: record `jevFailureOf(error)` in the router and steward rows, so the next window says why.
+1. **For about 9 hours the mod's Jev asks had no TypeSafe key.**
+   - **Router.** `model-router-decisions-*.jsonl` shows 0-1 `jev-failed` per day from 2026-10-12 to 10-15. Then 136/359 on 10-16 and 30/42 on 10-17. From 18Z to 01Z almost every ask failed (for example 43/43 at 21Z). The first failures came at 17:22:47Z, 4 minutes after Orca installed 0.12.1 (17:18Z). Asks succeeded again from 02:24Z.
+   - **Steward and gate.** The steward failed in the same window. The gate had no `source: "jev"` rows from 18:02Z to 00Z.
+   - **Cause.** Another session found it (Engram #5455, 2026-10-16). The owner's `~/.config/orca-supervisor/env` was gone: the worker's secret mirror (`write-secret-mirror.mjs` `clear()`) removes the key when Orca's secret store has none, and deletes the file when nothing else is left. A plugin update re-runs the mirror, which fits the 17:18Z install. The file was rewritten at 02:31:57Z with the 0.12.2 install. The fix is in that session's work: clear is per name, with a pin test. The owner should save the key in Config → TypeSafe key, not in the plaintext file.
+   - **Gap this check found.** With no key, the router writes `tier: null` and logs `jev-failed`. That is indistinguishable from a real Jev failure, which is why this read first as a Jev outage. Next step: log `no-key` apart, and record `jevFailureOf(error)` for real failures.
+   - **0.12.x code.** Not involved: 0.12.0-0.12.2 do not touch the key or `callJev`.
 2. **orca-game review** (sent to the orca-oss agent on 2026-10-17): Jev cannot follow `/quest off` or a live config change, because it reads the env once. The ask is for orca-game to publish its effective absorbing state. Details: `odd/tasks/game-mode-advisor-state.md` G6.
 
 ## Notes
