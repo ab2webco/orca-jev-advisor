@@ -563,7 +563,7 @@
           'providers.jev': 'Jev',
           'providers.doubt': 'Clef dudó {{n}} veces; esas las respondió Jev.',
           'providers.failovers': 'Pasaron a Jev por falla de Clef: {{n}} (error {{failure}}, límite por minuto {{rate}}, cuota del día {{budget}}, demasiado grande {{unsupported}}).',
-          'providers.policy': 'Preguntas de política enviadas directo a Jev: {{n}}.',
+          'providers.policy': 'Clef vio que podía aplicar una política, así que respondió Jev: {{n}}.',
           'providers.unanswered': 'Se le preguntó a Clef y nadie respondió {{n}} veces: esos comandos pasaron sin juicio.',
           'providers.shadow': 'Errores con confianza: Jev no estuvo de acuerdo con {{n}} de {{total}} respuestas de Clef muestreadas ({{pct}}).',
           'providers.shadowNone': 'Errores con confianza: todavía no hay respuestas de Clef muestreadas.',
@@ -653,6 +653,7 @@
           'stats.recentCached': 'caché',
           'stats.recentLocalRule': 'regla local',
           'stats.recentJev': 'jev',
+          'stats.recentClef': 'clef',
           'stats.recentNone': 'sin respuesta',
           'stats.recentAdvise': 'aviso al modelo',
           'verdict.allow': 'permitido',
@@ -845,7 +846,7 @@
           'providers.jev': 'Jev',
           'providers.doubt': 'Clef was in doubt {{n}} times; Jev answered those.',
           'providers.failovers': 'Sent to Jev because Clef failed: {{n}} (error {{failure}}, per-minute limit {{rate}}, spent day {{budget}}, too large {{unsupported}}).',
-          'providers.policy': 'Policy questions sent straight to Jev: {{n}}.',
+          'providers.policy': 'Clef saw a possible policy hit, so Jev answered: {{n}}.',
           'providers.unanswered': 'Clef was asked and nobody answered {{n}} times: those commands passed unjudged.',
           'providers.shadow': 'Confident errors: Jev disagreed with {{n}} of {{total}} sampled Clef answers ({{pct}}).',
           'providers.shadowNone': 'Confident errors: no sampled Clef answer yet.',
@@ -935,6 +936,7 @@
           'stats.recentCached': 'cache',
           'stats.recentLocalRule': 'local rule',
           'stats.recentJev': 'jev',
+          'stats.recentClef': 'clef',
           'stats.recentNone': 'no answer',
           'stats.recentAdvise': 'advised the model',
           'verdict.allow': 'allowed',
@@ -2604,15 +2606,28 @@
         ].map(function (key) { return '<li>' + esc(t(key)) + '</li>' }).join('')
       }
 
+      /**
+       * The catalog key naming who decided a recent row, or null for a source
+       * this board does not know. A model-judged row (source `jev`) names the
+       * provider that answered it: Clef when its row says so (C3,
+       * odd/tasks/clef-decides-policies.md), Jev otherwise. Pure, so it is
+       * tested from the panel's own source (board_html_providers.test.mjs).
+       */
+      function recentSourceKey (r) {
+        if (r.source === 'jev') return r.provider === 'clef' ? 'stats.recentClef' : 'stats.recentJev'
+        var keys = { 'local-rule': 'stats.recentLocalRule', cache: 'stats.recentCached', none: 'stats.recentNone' }
+        return Object.prototype.hasOwnProperty.call(keys, r.source) ? keys[r.source] : null
+      }
+
       function renderRecent (gate) {
         var recent = gate.recent || []
         if (recent.length === 0) {
           el('stats-recent').innerHTML = line(t('stats.recentEmpty'), 'empty-line')
           return
         }
-        var sourceLabel = {
-          'local-rule': t('stats.recentLocalRule'), cache: t('stats.recentCached'),
-          jev: t('stats.recentJev'), none: t('stats.recentNone')
+        var sourceLabel = function (r) {
+          var key = recentSourceKey(r)
+          return key !== null ? t(key) : (r.source || '')
         }
         // 'advise' (the advise-model release): the model was refused this
         // one attempt and handed a reason, but nobody was interrupted --
@@ -2628,7 +2643,7 @@
           var latency = r.latencyMs != null ? ' · ' + ms(r.latencyMs) + ' ms' : ''
           return '<li title="' + esc(projectLabel(r.project)) + '">' +
             '<span class="tag">' + esc(r.commandFamily || '') + '</span>' +
-            '<span class="tag">' + esc((sourceLabel[r.source] || r.source || '') + latency) + '</span>' +
+            '<span class="tag">' + esc(sourceLabel(r) + latency) + '</span>' +
             '<span class="' + tagClass(verdictState[r.verdict] || 'done') + '">' +
             esc(verdictLabel[r.verdict] || r.verdict || '') + '</span>' +
             '<span class="when">' + esc(ago(r.at)) + '</span></li>'

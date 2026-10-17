@@ -69,3 +69,24 @@ test('the card and every string it uses exist, in both languages', () => {
     for (const key of keys) assert.ok(block.includes(`'${key}':`), `${locale} is missing ${key}`)
   }
 })
+
+// C3 (odd/tasks/clef-decides-policies.md): the latest decisions name the
+// provider that answered, and the policy line says what a policy escalation
+// now means.
+test('a recent decision Clef answered reads clef; Jev or an untagged row reads jev; the rest as before', () => {
+  const recentSourceKey = new Function(`${extractFunction(boardHtml, 'recentSourceKey')}; return recentSourceKey`)()
+  assert.equal(recentSourceKey({ source: 'jev', provider: 'clef' }), 'stats.recentClef')
+  assert.equal(recentSourceKey({ source: 'jev', provider: 'jev' }), 'stats.recentJev')
+  assert.equal(recentSourceKey({ source: 'jev' }), 'stats.recentJev')
+  assert.equal(recentSourceKey({ source: 'cache' }), 'stats.recentCached')
+  assert.equal(recentSourceKey({ source: 'local-rule' }), 'stats.recentLocalRule')
+  assert.equal(recentSourceKey({ source: 'none', provider: 'clef' }), 'stats.recentNone')
+  assert.equal(recentSourceKey({ source: 'mystery' }), null)
+  for (const locale of ['es', 'en']) assert.ok(catalogBlock(locale).includes("'stats.recentClef': 'clef'"), locale)
+})
+
+test('the policy line says Clef saw a possible policy hit and Jev answered', () => {
+  assert.ok(catalogBlock('es').includes("'providers.policy': 'Clef vio que podía aplicar una política, así que respondió Jev: {{n}}.'"))
+  assert.ok(catalogBlock('en').includes("'providers.policy': 'Clef saw a possible policy hit, so Jev answered: {{n}}.'"))
+  assert.doesNotMatch(boardHtml, /directo a Jev|straight to Jev/)
+})

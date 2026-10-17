@@ -30,6 +30,7 @@ import type { GateDecisionRecord, GateSource, GateVerdict } from "./gate_measure
 import { emptyGateTally, emptyProviderCounts, tallyGateDecisions } from "./gate_stats.ts";
 import type { GateFamilyTally, GateProviderCounts, GateTally, GateVerdictCounts } from "./gate_stats.ts";
 import { ESCALATIONS } from "./provider_cascade.ts";
+import type { ProviderId } from "./decision_provider.ts";
 
 export const GATE_DECISION_TOTALS_FILE = "gate-decisions-totals.json";
 /** Held while a fold runs, so two folds never write the totals from the same starting point. */
@@ -51,6 +52,8 @@ export interface GateRecentDecision {
   readonly source: GateSource;
   readonly verdict: GateVerdict;
   readonly latencyMs: number | null;
+  /** Who answered a model-judged decision (C3: the board names Clef). Absent for a row that carries none, as every Jev-only row does. */
+  readonly provider?: ProviderId;
 }
 
 export interface GateVersionTotals {
@@ -207,6 +210,7 @@ export function addGateDecisions(totals: GateDecisionTotals, batch: GateDecision
       source: d.source,
       verdict: d.verdict,
       latencyMs: d.latencyMs,
+      ...(d.provider !== undefined ? { provider: d.provider } : {}),
     })),
   ].slice(-GATE_RECENT_KEPT);
 
@@ -409,9 +413,10 @@ function parseRecent(raw: unknown): GateRecentDecision[] | null {
   const recent: GateRecentDecision[] = [];
   for (const item of raw) {
     if (!isObject(item)) return null;
-    const { at, project, commandFamily, source, verdict, latencyMs } = item;
+    const { at, project, commandFamily, source, verdict, latencyMs, provider } = item;
     if (typeof at !== "string" || !isNullableString(project) || typeof commandFamily !== "string" || !isSource(source) || !isVerdict(verdict) || !isNullableNumber(latencyMs)) return null;
-    recent.push({ at, project, commandFamily, source, verdict, latencyMs });
+    if (provider !== undefined && provider !== "jev" && provider !== "clef") return null;
+    recent.push({ at, project, commandFamily, source, verdict, latencyMs, ...(provider !== undefined ? { provider } : {}) });
   }
   return recent;
 }
