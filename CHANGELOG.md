@@ -2,6 +2,23 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.5
+
+- **Branch policies follow where a command writes, not where it runs** (odd/tasks/branch-reach-places.md, `src/core/branch_reach.ts`). A `protected-branch` policy such as `never_write_to_main` was asked about any command run from a checkout on a protected branch unless the program was obviously safe or one of `rm`, `cp`, `echo` and `printf`. So `pgrep`, `ps | grep`, `mkdir`, `ln` and `rm -rf ~/Library/...` were refused as writes to main: 18 denies on 2026-10-16 and 10-17. `branchReachPlaces` now counts:
+  - **No place except redirect targets** for programs that write no file: `pgrep`, `ps`, `lsof`, `kill`, `pkill` and readers. `sed` counts as a reader only as `-n`/`-E`/`-r` with one script of line addresses followed by `p` or `d`; `find`, `sort` and `uniq` count as readers only without their write options.
+  - **Only the files they name** for `mkdir`, `touch`, `ln`, `mv` (sources and destination), `chmod`, `chown` and `tee`, as for `rm` and `cp`. A file that names a directory holding the checkout still reaches it.
+  - **Paths:** `~`, `$HOME` and `${HOME}` resolve to home. A quoted or escaped `~` is literal, as in the shell. An operand the gate cannot read (`$X`, a glob, a substitution, a quoted option, an ambiguous long-option prefix) counts the directory, as before. A process substitution is walked as its own command, not as a file. `cd -` is an unknown place.
+  
+  Every write that may land in the checkout is still asked: `git commit`, `mkdir src/x`, `sed -i`, `tee src/x`, `python3 x.py` and `find . -delete`. Off protected branches, nothing changes.
+- **Tier 1a no longer waves through forms it cannot read** (`src/core/gate_safe_command.ts`, new `src/core/shell_words.ts`):
+  - `find` with `-fls`, an escaped or quoted option (`-de''lete`), or a `$`, `{` or substitution in its arguments;
+  - `sort` with `-T` or an output option prefix (`--o=`, `--out`);
+  - `uniq` with an output operand or `-`;
+  - `rg` with `--pre` in any spelling, or with a `--pre` prefix;
+  - a `sed` or `awk` operand with an escape, a brace or a glob, which can expand to `-i` for GNU sed.
+  
+  These now go through the normal path to Jev, and the common forms stay obviously safe.
+
 ## 0.13.4
 
 - **Clef answers policy commands in Both mode** (odd/tasks/clef-decides-policies.md, `src/core/provider_cascade.ts`, `adapters/claude/gate-bash.ts`). Since 0.13.0 any command with a command-scoped policy skipped Clef and went to Jev; with 23 policies that was almost every command, so Clef answered none. Clef is now asked first for these too, and Jev answers, alone and for every question, when Clef's answers show a possible policy hit: on `violation` or `needs_person`, an option other than `none` with probability 0.2 or more, a non-`none` choice, a non-finite probability, or no choice answer at all (`gatePolicyHit`, `GATE_POLICY_HIT_FLOOR`). That escalation is recorded as `policy`. The floor was measured on 56 real commands against 24 policies: 0 verdict changes against Jev, while "doubt only" missed a `never_write_to_main` deny. Doubt, failure, rate limit, budget and timeout escalate as before. Measured cost with policies is about 50 neurons per Clef call, about 180 calls a day under the 9,000 stop; Jev answers the rest.

@@ -16,6 +16,13 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.5
+
+- **Jev no longer stops ordinary work in a checkout on main.** The `never_write_to_main` policy was asked about any command run from such a checkout. So looking up a process (`pgrep`, `ps | grep`), or creating, linking or deleting files outside the repository, was refused as if it wrote to main. Now the policy is asked only when the command can write inside that checkout: a commit, a file created or edited in the repo, a script run there. Commands that only read, or that write only to `/tmp` or your home folder, go ahead.
+- **A few forms that used to skip Jev entirely are now judged.** For example, a `find` whose delete option is written with quotes, or a `sort` that writes its output to a file.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.13.4
 
 - **Clef now decides, Jev takes over when needed.** In «Ambos», Clef answers first for every command, including the ones your policies apply to, until its free daily quota runs out; then Jev answers as before. When Clef sees that one of your policies might apply, when it is unsure or when it fails, Jev answers that command. This uses both credits.
