@@ -16,7 +16,7 @@ Orca Lab sets `ORCA_AGENT_MODEL_PINNED=1` and/or `ORCA_AGENT_EFFORT_PINNED=1` in
 
 ## Checklist
 - [x] T1 core: pins parsing, pinned decisions, record field, status reason, subagent why.
-- [ ] T2 mod wiring: start, stage, subagent and teammate decisions read the pins in a game pane only.
+- [x] T2 mod wiring: start, stage, subagent and teammate decisions read the pins in a game pane only.
 - [ ] T3 legacy Agent hook: no model rewrite under a model pin in a game pane (`rewriteReason: "orca-pin"`).
 - [ ] T4 env proof: the variables reach the hook processes.
 - [ ] T5 release 0.13.1: version, README, CHANGELOG.

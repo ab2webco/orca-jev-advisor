@@ -202,6 +202,8 @@ import type { FileOp, MemSaveOutcome, SpoolItem } from '../../../../src/core/mem
 import { lockPid } from '../../../../src/core/memory_tidy.ts'
 import { buildAdvisorState, parseOrcaGameMode, withNotice } from '../../../../src/core/advisor_state.ts'
 import type { AdvisorMain, AdvisorNotice, GameMode } from '../../../../src/core/advisor_state.ts'
+import { NO_ORCA_PINS, orcaPinsOf } from '../../../../src/core/orca_pins.ts'
+import type { OrcaPins } from '../../../../src/core/orca_pins.ts'
 import { isRecord } from '../../../../src/guards.ts'
 
 const DEFAULT_BUDGET_MS = 800
@@ -1298,6 +1300,16 @@ function sessionUsageOf(stats: RouterSessionStats): SessionUsage | null {
   return { contextTokens: stats.lastContext, avgOutput: stats.outputTotal / stats.outputSteps, medianStepsPerTurn: medianOf(turns) }
 }
 
+/** JEVADV-105: Orca's launch pins, which hold only in a game pane; a failed read pins nothing. */
+async function readOrcaPins($: EngineInterface): Promise<OrcaPins> {
+  try {
+    const [mode, hud, model, effort] = await Promise.all([$.env.get('ORCA_GAME_MODE'), $.env.get('ORCA_GAME_HUD'), $.env.get('ORCA_AGENT_MODEL_PINNED'), $.env.get('ORCA_AGENT_EFFORT_PINNED')])
+    return orcaPinsOf(parseOrcaGameMode(mode, hud), model, effort)
+  } catch {
+    return NO_ORCA_PINS
+  }
+}
+
 /**
  * The router's part of one MAIN-loop step (§3): point A on a fresh
  * session's first step, point C on the first step of every later turn, the
@@ -1390,6 +1402,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
       configuredEffort: stickyEffort(e.effort),
       guards: { text: promptText, activity: null, confidence: jev?.confidence ?? null },
       band,
+      pins: await readOrcaPins($),
     }),
     payment,
   )
@@ -1458,6 +1471,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
     usage: sessionUsageOf(sticky.stats),
     // Track R: a known cold cache makes the switch's rewrite free; unknown counts as warm.
     cacheWarm: cacheWarm ?? true,
+    pins: await readOrcaPins($),
   }
   let decided: StageDecisionInput = stageInput
   let decision: StageDecision = withJevPayment(decideStage(stageInput), payment)
@@ -1639,6 +1653,8 @@ interface SubagentEffortTarget {
   readonly destinationKind: DestinationKind | null
   readonly effortEligible: boolean
   readonly logged: boolean
+  /** JEVADV-105: Orca pinned the session's effort in a game pane, so no step effort is set here. */
+  readonly effortPinned: boolean
   readonly account: string
   readonly decision: SubagentDecision
   readonly applied: boolean
@@ -1694,6 +1710,7 @@ async function decideAgentRoute($: EngineInterface, task: AgentRouteTask, mode: 
   const jev = judged.tier
   const keywordKind = workKindMode === 'off' ? null : keywordWorkKind(task.description)
   const kind: WorkKindJudgment | null = workKindMode === 'off' ? null : (judged.kind ?? (keywordKind === null ? null : { kind: keywordKind, confidence: null, source: 'keywords' }))
+  const pins = await readOrcaPins($)
   const decision: SubagentDecision = withJevPayment(decideSubagent({
     tiers,
     jev,
@@ -1706,15 +1723,18 @@ async function decideAgentRoute($: EngineInterface, task: AgentRouteTask, mode: 
     // active mode, like every other router decision.
     explicitModels: await readExplicitModels($),
     destinationKind: destination.destinationKind,
+    pins,
   }), judged.payment)
   // A guard no longer makes the effort ineligible: it only stops it from
   // falling (0.6.2 F0, review finding 2).
   const guarded = decision.guard !== null
-  const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null
+  const effortEligible = mode === 'active' && !modelFixed && decision.tier !== null && !pins.effort
+  // A pinned model is the one whose effort support counts.
+  const runsOn = pins.model ? tierOfModel(tiers, decision.model) : decision.tier
   // 0.6.16 T1: the router's own low only on confident read or execute work, with the switch active.
-  const targetEffort = effortEligible && decision.tier !== null ? (tiers[decision.tier].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
+  const targetEffort = effortEligible && decision.tier !== null ? (runsOn !== null && tiers[runsOn].supportsEffort ? readWorkTierEffort(decision.tier, tierEffort[decision.tier], personTiers.has(decision.tier), workKindMode === 'active' ? kind : null) : null) : null
   const applied = mode === 'active' && decision.changed
-  const pending = { effort: targetEffort, guarded, declared: task.declared, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project, engine: engineNotesOf(tiers, decision.proposed), ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(judged.kind?.margin === undefined ? {} : { workKindMargin: judged.kind.margin }) }
+  const pending = { effort: targetEffort, guarded, declared: task.declared, effortPinned: pins.effort, workKindMode, kind, keywordKind, text, destinationKind: destination.destinationKind, effortEligible, account, decision, applied, quotaBand: band, quotaSource, project, engine: engineNotesOf(tiers, decision.proposed), ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(judged.kind?.margin === undefined ? {} : { workKindMargin: judged.kind.margin }) }
   const wouldUse = mode === 'measure' && decision.changed ? subagentModelLabel(decision.model, tiers) : null
   return { pending, why: subagentWhy({ decision, applied, explicit: modelFixed }), wouldUse, tiers }
 }
@@ -1797,7 +1817,7 @@ async function routeTeammate($: EngineInterface, e: Frozen<TurnStepInput>, mode:
     const account = await resolveAccountId($)
     const { tiers, band, quotaSource } = await resolveRouterAccount($, account)
     const decision = decideSubagent({ tiers, jev: null, parentModel: e.model, explicitModel: undefined, guards: { text: '', activity: null, confidence: null }, band })
-    targets.set(agentId, { effort: null, guarded: false, declared: null, workKindMode: 'off', kind: null, keywordKind: null, text: '', destinationKind: null, effortEligible: false, logged: false, account, decision, applied: false, quotaBand: band, quotaSource, engine: engineNotesOf(tiers, decision.proposed), project, point: 'teammate', model: null, teammateTask: 'missing' })
+    targets.set(agentId, { effort: null, guarded: false, declared: null, workKindMode: 'off', kind: null, keywordKind: null, text: '', destinationKind: null, effortEligible: false, logged: false, effortPinned: false, account, decision, applied: false, quotaBand: band, quotaSource, engine: engineNotesOf(tiers, decision.proposed), project, point: 'teammate', model: null, teammateTask: 'missing' })
     return
   }
   teammates.tasks = teammates.tasks.filter((kept) => kept !== task)
@@ -1857,7 +1877,7 @@ async function* handleTurnStep($: EngineInterface, e: Frozen<TurnStepInput>, nex
         // 0.6.16 T2: the work kind's effort, set from the step it would send; the same on every step of the run.
         // 0.6.20 T3: a routed teammate runs on its own model; its step event names the lead's.
         const outcome = kindStepEffort({ kind: target.kind, model: target.model ?? e.model, effort: tiered, declared: target.declared, guard: target.decision.guard, text: target.text, destinationKind: target.destinationKind })
-        const kindActs = target.workKindMode === 'active' && outcome.hold === null
+        const kindActs = target.workKindMode === 'active' && outcome.hold === null && !target.effortPinned
         const sent = kindActs ? outcome.effort : tiered
         if (target.workKindMode !== 'off') {
           workKind = { mode: target.workKindMode, kind: target.kind?.kind ?? null, confidence: target.kind?.confidence ?? null, source: target.kind?.source ?? null, keywords: target.keywordKind, effort: outcome.hold === null ? (outcome.effort ?? null) : null, hold: outcome.hold, applied: kindActs && sent !== tiered }

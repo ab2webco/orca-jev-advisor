@@ -6353,3 +6353,116 @@ test("game mode: ORCA_GAME_HUD=0 hides the game's band, so Jev draws its line an
   assert.match(await bandText(handlers, engine), /Reading the spec/);
   assert.equal(advisorOf(host), undefined);
 });
+
+// ---------------------------------------------------------------------------
+// JEVADV-105: Orca's launch pins (ORCA_AGENT_MODEL_PINNED / ORCA_AGENT_EFFORT_PINNED)
+// hold the router only in a game pane; anywhere else they change nothing.
+// ---------------------------------------------------------------------------
+
+/** A fresh session's first step on Opus at high effort, with `env` set, routed in active mode on `models`. */
+async function pinnedStart(env: Record<string, string>, tier: string, models: readonly unknown[] = SEED_MODELS): Promise<{ host: FakeHost; seen: Record<string, unknown> }> {
+  const host = makeFakeHost();
+  seedRouterAccount(host, {}, models);
+  for (const [name, value] of Object.entries(env)) host.env.set(name, value);
+  host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
+  host.fetchQueue.push(tierAnswer(tier));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
+  await settle();
+  return { host, seen };
+}
+
+const GAME = { ORCA_GAME_MODE: "on" } as const;
+const BOTH_PINNED = { ORCA_AGENT_MODEL_PINNED: "1", ORCA_AGENT_EFFORT_PINNED: "1" } as const;
+
+test("pins, game pane, model pinned: the session stays on its model and the effort still follows Jev", async () => {
+  const { host, seen } = await pinnedStart({ ...GAME, ORCA_AGENT_MODEL_PINNED: "1" }, "simple");
+  assert.equal(seen.model, "claude-opus-5-5");
+  assert.equal(seen.effort, "medium");
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.reason, "switch");
+  assert.deepEqual(decision?.orcaPin, ["model"]);
+  assert.equal(decision?.proposed, "claude-haiku-4-5-20251001");
+  assert.equal(advisorOf(host)?.line, "jev · model: Opus 5.5 · medium effort");
+});
+
+test("pins, game pane, effort pinned: the model still switches and keeps the session's effort", async () => {
+  const { host, seen } = await pinnedStart({ ...GAME, ORCA_AGENT_EFFORT_PINNED: "1" }, "simple", DEFAULT_MODELS);
+  assert.equal(seen.model, "claude-haiku-5-5");
+  assert.equal(seen.effort, "high");
+  assert.deepEqual(routerDecisionLines(host)[0]?.orcaPin, ["effort"]);
+});
+
+test("pins, game pane, both pinned: the step goes as it came, the row and the line say Orca pinned it", async () => {
+  const { host, seen } = await pinnedStart({ ...GAME, ...BOTH_PINNED }, "simple");
+  assert.deepEqual(seen, turnStepEvent(FRESH_START));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.reason, "held-by-orca-pin");
+  assert.equal(decision?.applied, false);
+  assert.deepEqual(decision?.orcaPin, ["model", "effort"]);
+  assert.equal(advisorOf(host)?.line, "jev · model: Opus 5.5 · high effort · kept: pinned by Orca (Jev: ask)");
+});
+
+test("pins outside a game pane change nothing: the router switches as always", async () => {
+  const { host, seen } = await pinnedStart(BOTH_PINNED, "simple");
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+  assert.equal("orcaPin" in (routerDecisionLines(host)[0] ?? {}), false);
+});
+
+test("pins in a game pane with its HUD off change nothing: that pane is no game", async () => {
+  const { seen } = await pinnedStart({ ...GAME, ORCA_GAME_HUD: "0", ...BOTH_PINNED }, "simple");
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+});
+
+test("pins: a value other than 1 is no pin, even in a game pane", async () => {
+  const { seen } = await pinnedStart({ ...GAME, ORCA_AGENT_MODEL_PINNED: "true", ORCA_AGENT_EFFORT_PINNED: "0" }, "simple");
+  assert.equal(seen.model, "claude-haiku-4-5-20251001");
+});
+
+test("pins, game pane, model pinned: later turns never downgrade the model", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.env.set("ORCA_GAME_MODE", "on");
+  host.env.set("ORCA_AGENT_MODEL_PINNED", "1");
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("simple"), tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await playTurn(host, handlers, engine, 1, "design the cache invalidation across both services", 4);
+  await playTurn(host, handlers, engine, 2, "thanks, now list the files you touched", 4);
+  const turn3 = await playTurn(host, handlers, engine, 3, "and summarise them in one line", 4);
+  assert.equal(turn3.model, "claude-opus-5-5", "without the pin this turn downgrades to Haiku");
+  const stages = routerDecisionLines(host).filter((row) => row.point === "stage");
+  assert.deepEqual(stages.map((row) => row.reason), ["held-by-orca-pin", "held-by-orca-pin"]);
+  assert.ok(stages.every((row) => row.applied === false));
+});
+
+test("pins, game pane, model pinned: a subagent keeps its parent's model and the row says why", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.env.set("ORCA_GAME_MODE", "on");
+  host.env.set("ORCA_AGENT_MODEL_PINNED", "1");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent());
+  assert.equal(seen.model, undefined, "the spawn goes as it came");
+  await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-opus-5-5", effort: "high" }));
+  const [decision] = routerDecisionLines(host);
+  assert.equal(decision?.point, "subagent");
+  assert.equal(decision?.reason, "held-by-orca-pin");
+  assert.equal(decision?.applied, false);
+  assert.deepEqual(decision?.orcaPin, ["model"]);
+  await settle();
+  assert.equal(advisorOf(host)?.subagents[0]?.verdict, "pinned");
+});
+
+test("pins, game pane, effort pinned: a subagent's steps keep the effort they carry", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.env.set("ORCA_GAME_MODE", "on");
+  host.env.set("ORCA_AGENT_EFFORT_PINNED", "1");
+  host.fetchQueue.push(tierAnswer("standard"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await spawnThrough(handlers, engine, spawnEvent());
+  assert.equal(seen.model, "claude-sonnet-5-5", "the model is still routed");
+  const first = await stepThrough(handlers, engine, turnStepEvent({ agentId: "agent-1", turnId: "sub-1", index: 0, model: "claude-sonnet-5-5", effort: "xhigh" }));
+  assert.equal(first.effort, "xhigh", "without the pin the tier's medium is sent");
+});
