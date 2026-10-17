@@ -24,6 +24,7 @@
 import { commandFamily, splitSegments } from './gate_measurement.ts'
 import { hasCommandSubstitution } from './command_shape.ts'
 import { tokenize } from './git_discard.ts'
+import { isLongOptionPrefix, isUnreadableWord, rawWords } from './shell_words.ts'
 
 /**
  * The one command family gate_measurement.ts already judges by looking at
@@ -46,8 +47,6 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
   // Bare `cd`: changing directory alone can't be dangerous, whatever the target.
   /^cd(\s|$)/,
   /^(jq|grep)\b/,
-  // `rg --pre cmd` runs `cmd` on every file it searches.
-  /^rg\b(?!.*\s--pre)/,
   /^git\s+(status|diff|log|show|remote|rev-parse|blame)\b/,
   // `git branch` only in its read-only forms -- anything else (creating a
   // branch with a bare name, deleting with -d/-D, renaming with -m/-M) is
@@ -84,16 +83,52 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
 function isSafeTextToolSegment(segment: string): boolean {
   const tokens = tokenize(segment)
   const args = tokens.slice(1)
+  if ((tokens[0] === 'sort' || tokens[0] === 'uniq' || tokens[0] === 'rg') && hasUnreadableArgument(segment)) return false
   switch (tokens[0]) {
     case 'sort':
-      return !args.some((arg) => /^-[^-]*o/.test(arg) || arg.startsWith('--output') || arg.startsWith('--compress-program'))
+      return sortWritesNothing(args)
     case 'uniq':
-      return args.filter((arg) => !arg.startsWith('-')).length <= 1
+      return uniqWritesNothing(args)
+    case 'rg':
+      return rgRunsNothing(args)
     case 'file':
       return !args.some((arg) => /^-[^-]*C/.test(arg) || arg === '--compile')
     default:
       return false
   }
+}
+
+/**
+ * SF-2 (odd/tasks/branch-reach-places.md): an argument whose value the text
+ * does not hold -- a `$`, a backtick or a brace the shell expands, or an
+ * option spelled with quotes (`-de''lete`, `'--pre'`) -- may be the very
+ * option that writes or runs something.
+ */
+function hasUnreadableArgument(segment: string): boolean {
+  return rawWords(segment).slice(1).some(isUnreadableWord)
+}
+
+/** A long option's name (`--out` of `--out=x`) when it is GNU getopt's spelling of `option` or a prefix of it at least `minimum` long. */
+function namesLongOption(arg: string, option: string, minimum: number): boolean {
+  if (!arg.startsWith('--')) return false
+  const name = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg
+  return name.startsWith(option) || isLongOptionPrefix(name, option, minimum)
+}
+
+/** sort with none of `-o FILE` (also in a cluster), `-T DIR`, `--output`, `--temporary-directory` or `--compress-program`, nor a GNU prefix of one (`--o`, `--out`). */
+export function sortWritesNothing(args: readonly string[]): boolean {
+  return !args.some((arg) => /^-[^-]*[oT]/.test(arg) || namesLongOption(arg, '--output', 3) || namesLongOption(arg, '--temporary-directory', 3) || namesLongOption(arg, '--compress-program', 4))
+}
+
+/** uniq with at most one operand, and that one not `-`: a second operand is the file it writes. */
+export function uniqWritesNothing(args: readonly string[]): boolean {
+  const operands = args.filter((arg) => arg === '-' || !arg.startsWith('-'))
+  return operands.length <= 1 && !operands.includes('-')
+}
+
+/** rg without `--pre CMD` (which runs CMD on every file), `--pre-glob`, or a prefix of them (`--pr`); `--pretty` only prints. */
+export function rgRunsNothing(args: readonly string[]): boolean {
+  return !args.some((arg) => !namesLongOption(arg, '--pretty', 99) && namesLongOption(arg, '--pre', 4))
 }
 
 /**
@@ -115,7 +150,7 @@ function withoutGitDashC(segment: string): string | null {
 const FIND_DANGEROUS_FLAGS = /-delete\b|-exec\b|-execdir\b|-ok\b|-okdir\b|-fprintf?\b|-fprint0?\b|-fls\b/
 
 function isSafeFindSegment(segment: string): boolean {
-  return /^find\b/.test(segment) && !FIND_DANGEROUS_FLAGS.test(segment)
+  return /^find\b/.test(segment) && !FIND_DANGEROUS_FLAGS.test(segment) && !hasUnreadableArgument(segment)
 }
 
 /**
@@ -134,9 +169,12 @@ function isSafeFindSegment(segment: string): boolean {
  * Jev -- the cost of a false "unsafe" is one round-trip.
  */
 const SED_ADDRESS = String.raw`(?:\d+|\$|/[^/']*/I?)`
-const SED_PRINT_SCRIPT = String.raw`${SED_ADDRESS}(?:,${SED_ADDRESS})?p(?:;${SED_ADDRESS}(?:,${SED_ADDRESS})?p)*`
-const SED_SCRIPT_ARG = String.raw`(?:'${SED_PRINT_SCRIPT}'|${SED_PRINT_SCRIPT})`
-const OPERAND = String.raw`(?:\s+[^-\s'"][^\s'"]*)`
+// SF-2: unquoted, a `$` is the shell's (`sed -n $p f` reads the variable p).
+const SED_BARE_ADDRESS = String.raw`(?:\d+|/[^/'$\x60]*/I?)`
+const printScript = (address: string): string => String.raw`${address}(?:,${address})?p(?:;${address}(?:,${address})?p)*`
+const SED_SCRIPT_ARG = String.raw`(?:'${printScript(SED_ADDRESS)}'|${printScript(SED_BARE_ADDRESS)})`
+// An operand holding a `$` or a backtick may expand to an option (`-i`).
+const OPERAND = String.raw`(?:\s+[^-\s'"$\x60][^\s'"$\x60]*)`
 const SAFE_SED = new RegExp(String.raw`^sed\s+-n(?:\s+-e)?\s+${SED_SCRIPT_ARG}(?:\s+-e\s+${SED_SCRIPT_ARG})*${OPERAND}*\s*$`)
 const AWK_OPTION = String.raw`(?:\s+(?:-F\s*(?:'[^']*'|"[^"]*"|[^\s'"]+)|-v\s*[A-Za-z_][A-Za-z0-9_]*=[^\s'"]*))`
 const SAFE_AWK = new RegExp(String.raw`^awk${AWK_OPTION}*\s+'([^']*)'${OPERAND}*\s*$`)

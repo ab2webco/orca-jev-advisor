@@ -11,13 +11,14 @@
 //     side or a remote branch (`main`, `HEAD:main`, `origin/main`).
 // Both fail toward keeping the policy: an unknown place is null, a gh command
 // that writes counts as naming one (its base branch is not in the text).
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
-import { afterHome, gitInvocation, locateCommandSegments, resolveDirectory, substitutionSpans } from "./command_locations.ts";
+import { gitInvocation, locateCommandSegments, substitutionSpans } from "./command_locations.ts";
 import { resolveCommandTargetDirs } from "./command_targets.ts";
-import { isObviouslySafeCommand } from "./gate_safe_command.ts";
+import { isObviouslySafeCommand, rgRunsNothing, sortWritesNothing, uniqWritesNothing } from "./gate_safe_command.ts";
 import { splitOnCommandSeparators, tokenize } from "./git_discard.ts";
 import { outputRedirectionTargets } from "./redirections.ts";
+import { hasExpansion, hasUnquotedRedirect, isLongOptionPrefix, isUnreadableWord, rawWords, wordText } from "./shell_words.ts";
 
 // odd/tasks/branch-reach-places.md B1: on 2026-10-17, in a session on main,
 // `pgrep`, `head`, `mkdir -p /tmp/x` and `rm -rf ~/Library/a && ln -s ...`
@@ -25,6 +26,10 @@ import { outputRedirectionTargets } from "./redirections.ts";
 // counted its own directory, and `~` was read as a folder of the checkout.
 // Two strict lists decide instead. Any program on neither may write where it
 // runs (`node edit.mjs > /tmp/log` edits the checkout), so its directory counts.
+// Every word is read as the shell writes it: a word the text cannot settle
+// (a `$`, a backtick, a brace, an option spelled with quotes, a GNU prefix
+// that could be two options) sends the segment back to that rule, or counts
+// the directory, never fewer places than before.
 
 /**
  * Programs that write no file except their redirect targets. A program that
@@ -39,87 +44,63 @@ const WRITES_NO_FILE: ReadonlySet<string> = new Set([
   "echo", "printf", "find", "sed", "sort",
 ]);
 
+/** Tools that are obviously safe only for some arguments (`find -delete`, `sort -o`, `sed -i`, `rg --pre`, `awk system()`). */
+const ARGUMENT_DEPENDENT: ReadonlySet<string> = new Set(["find", "sed", "sort", "uniq", "rg", "awk", "file", "env"]);
+
 /** find actions that write or run something: `-delete`, `-exec`, `-fprint out`... */
 const FIND_WRITES: ReadonlySet<string> = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]);
 
-/** sed's `s` command, with any delimiter, and its flags (`w file` writes, `e` runs). */
-const SED_SUBSTITUTE = /s([^\\\s\w])(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1([a-zA-Z0-9]*)/g;
-/** sed's `y/abc/xyz/`, and `/re/` or `\cREc` addresses: text, not commands. */
-const SED_TEXT = /y([^\\\s\w])(?:\\.|(?!\1).)*\1(?:\\.|(?!\1).)*\1|\/(?:\\.|[^/])*\/|\\(.)(?:\\.|(?!\2).)*\2/g;
+/**
+ * sed is not parsed: GNU and BSD sed differ (`-I` edits in place on macOS,
+ * `-l` takes a value only in GNU sed, GNU accepts `--exp=` for
+ * `--expression`), and a script can write (`w`, `W`, `s///w`) or run (`e`)
+ * in more shapes than a reader can follow. It writes nothing only in one
+ * shape: options among `-n`, `-E`, `-r` (`-nE`, `-En`), one script of line
+ * addresses or ranges printing or deleting (`1,40p`, `$p`, `10,$p`, `1d`,
+ * joined by `;`), and plain file operands.
+ */
+const SED_OPTIONS = /^-(?:n|E|r|nE|En)$/;
+const SED_LINE_SCRIPT = /^(?:\d+|\$)(?:,(?:\d+|\$))?[pd](?:;(?:\d+|\$)(?:,(?:\d+|\$))?[pd])*$/;
+const PLAIN_OPERAND = /^[^-$`{}*?[\]][^$`{}*?[\]]*$/;
 
-/** A sed script that reads and prints only: no `w`/`W` file, no `e` command, in the commands or the `s` flags. */
-function sedScriptWritesNothing(script: string): boolean {
-  // One script line only: a filename runs to the end of its line, so a span read across lines could hide a `w`.
-  if (script.includes("\n")) return false;
-  let writes = false;
-  const rest = script.replace(SED_SUBSTITUTE, (_match: string, _delimiter: string, flags: string) => {
-    if (/[we]/.test(flags)) writes = true;
-    return ";";
-  });
-  return !writes && !/[wWe]/.test(rest.replace(SED_TEXT, ";"));
-}
-
-/** sed without `-i`/`--in-place` (also `-i''`, `-i.bak`, `-ni`), without `-f`, and with print-only scripts. */
-function sedWritesNoFile(args: readonly string[]): boolean {
-  const scripts: string[] = [];
-  let explicit = false;
-  let firstOperand: string | null = null;
-  for (let at = 0; at < args.length; at += 1) {
-    const arg = args[at] ?? "";
-    if (arg === "--") {
-      firstOperand ??= args[at + 1] ?? null;
+function sedReadsOnly(args: readonly string[]): boolean {
+  let at = 0;
+  for (; at < args.length; at += 1) {
+    const raw = args[at] ?? "";
+    if (raw === "--") {
+      at += 1;
       break;
     }
-    if (arg.startsWith("--")) {
-      const name = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
-      if (name.startsWith("--in-place") || name === "--file") return false;
-      if (name === "--expression") {
-        explicit = true;
-        if (arg.includes("=")) scripts.push(arg.slice(arg.indexOf("=") + 1));
-        else scripts.push(args[(at += 1)] ?? "");
-      }
-      continue;
-    }
-    if (arg.startsWith("-") && arg.length > 1) {
-      for (let letter = 1; letter < arg.length; letter += 1) {
-        const flag = arg[letter] ?? "";
-        if (flag === "i" || flag === "f") return false;
-        if (flag === "e" || flag === "l") {
-          const value = arg.length > letter + 1 ? arg.slice(letter + 1) : (args[(at += 1)] ?? "");
-          if (flag === "e") {
-            explicit = true;
-            scripts.push(value);
-          }
-          break;
-        }
-      }
-      continue;
-    }
-    firstOperand ??= arg;
+    const text = wordText(raw);
+    if (!text.startsWith("-")) break;
+    if (raw !== text || !SED_OPTIONS.test(text)) return false;
   }
-  if (!explicit && firstOperand !== null) scripts.push(firstOperand);
-  return scripts.every(sedScriptWritesNothing);
+  const script = args[at];
+  if (script === undefined) return false;
+  const text = wordText(script);
+  if (!SED_LINE_SCRIPT.test(text)) return false;
+  // `$p` unquoted, or in double quotes, is the shell's variable `p`.
+  if (text.includes("$") && script !== `'${text}'`) return false;
+  return args.slice(at + 1).every((raw) => !hasExpansion(raw) && PLAIN_OPERAND.test(wordText(raw)));
 }
 
-/** Whether `program` with `args` writes no file but its redirect targets. */
+/** Whether `program` with the raw words `args` writes no file but its redirect targets. */
 function writesNoFile(program: string, args: readonly string[]): boolean {
   if (!WRITES_NO_FILE.has(program)) return false;
+  if (program === "sed") return sedReadsOnly(args);
+  if (args.some(isUnreadableWord)) return false;
+  const texts = args.map(wordText);
   switch (program) {
     case "find":
-      return !args.some((arg) => FIND_WRITES.has(arg));
-    case "sed":
-      return sedWritesNoFile(args);
+      return !texts.some((arg) => FIND_WRITES.has(arg));
     case "sort":
-      // `-o out` (also in a cluster, `-uo out`) writes, `-T dir` keeps temp files there, `--compress-program` runs one.
-      return !args.some((arg) => /^-[^-]*[oT]/.test(arg) || arg.startsWith("--output") || arg.startsWith("--temporary-directory") || arg.startsWith("--compress-program"));
+      return sortWritesNothing(texts);
     case "uniq":
-      // A second operand is the file uniq writes.
-      return args.filter((arg) => !arg.startsWith("-")).length <= 1;
+      return uniqWritesNothing(texts);
     case "file":
-      return !args.some((arg) => /^-[^-]*C/.test(arg) || arg === "--compile");
+      return !texts.some((arg) => /^-[^-]*C/.test(arg) || arg === "--compile");
     case "rg":
-      // `--pre cmd` runs a program on every file.
-      return !args.some((arg) => arg.startsWith("--pre"));
+      return rgRunsNothing(texts);
     default:
       return true;
   }
@@ -129,53 +110,72 @@ function writesNoFile(program: string, args: readonly string[]): boolean {
 interface OptionShape {
   /** Short letters that take a value, glued (`-m755`) or as the next word. */
   readonly short: string;
-  /** Long options that take the next word as their value when written without `=`. */
-  readonly long: ReadonlySet<string>;
+  /** Long options that take a value, `=`-joined or as the next word; GNU getopt also accepts an unambiguous prefix of each. */
+  readonly long: readonly string[];
 }
 
 const NAMED_FILE_WRITERS: ReadonlyMap<string, OptionShape> = new Map([
-  ["rm", { short: "", long: new Set<string>() }],
-  ["cp", { short: "tS", long: new Set(["--target-directory", "--suffix"]) }],
-  ["mv", { short: "tS", long: new Set(["--target-directory", "--suffix"]) }],
-  ["ln", { short: "tS", long: new Set(["--target-directory", "--suffix"]) }],
-  ["mkdir", { short: "m", long: new Set(["--mode"]) }],
-  ["touch", { short: "tdrA", long: new Set(["--date", "--reference", "--time"]) }],
-  ["chmod", { short: "", long: new Set(["--reference"]) }],
-  ["chown", { short: "", long: new Set(["--reference", "--from"]) }],
-  ["tee", { short: "", long: new Set<string>() }],
+  ["rm", { short: "", long: [] }],
+  ["cp", { short: "tS", long: ["--target-directory", "--suffix"] }],
+  ["mv", { short: "tS", long: ["--target-directory", "--suffix"] }],
+  ["ln", { short: "tS", long: ["--target-directory", "--suffix"] }],
+  ["mkdir", { short: "m", long: ["--mode"] }],
+  ["touch", { short: "tdrA", long: ["--date", "--reference", "--time"] }],
+  ["chmod", { short: "", long: ["--reference"] }],
+  ["chown", { short: "", long: ["--reference", "--from"] }],
+  ["tee", { short: "", long: [] }],
 ]);
 
 interface ParsedArgs {
-  /** Every option by name (`-t`, `--target-directory`), with its value when it takes one. */
+  /** Every option by name (`-t`, `--target-directory`), with its raw value when it takes one. */
   readonly options: ReadonlyMap<string, string>;
+  /** The operands, as written. */
   readonly operands: readonly string[];
 }
 
-function parseArgs(args: readonly string[], shape: OptionShape, modeFlag: (arg: string) => boolean): ParsedArgs {
+/** The value-taking long option `name` spells (itself or an unambiguous prefix); undefined for none, null when it could be two. */
+function longOption(name: string, longs: readonly string[]): string | null | undefined {
+  if (longs.includes(name)) return name;
+  const matches = longs.filter((long) => isLongOptionPrefix(name, long, 3));
+  if (matches.length > 1) return null;
+  return matches[0];
+}
+
+/** `args` read as getopt reads them; null when an option is spelled in a way the text cannot settle. */
+function parseArgs(args: readonly string[], shape: OptionShape, modeFlag: (text: string) => boolean): ParsedArgs | null {
   const options = new Map<string, string>();
   const operands: string[] = [];
   for (let at = 0; at < args.length; at += 1) {
-    const arg = args[at] ?? "";
-    if (arg === "--") {
+    const raw = args[at] ?? "";
+    const text = wordText(raw);
+    if (raw === "--") {
       operands.push(...args.slice(at + 1));
       break;
     }
-    if (arg.startsWith("--")) {
-      const eq = arg.indexOf("=");
-      const name = eq === -1 ? arg : arg.slice(0, eq);
-      options.set(name, eq !== -1 ? arg.slice(eq + 1) : shape.long.has(name) ? (args[(at += 1)] ?? "") : "");
-    } else if (modeFlag(arg)) {
+    if (!text.startsWith("-") || text === "-") {
+      operands.push(raw);
       continue;
-    } else if (arg.startsWith("-") && arg.length > 1) {
-      for (let letter = 1; letter < arg.length; letter += 1) {
-        const flag = arg[letter] ?? "";
-        if (shape.short.includes(flag)) {
-          options.set(`-${flag}`, arg.length > letter + 1 ? arg.slice(letter + 1) : (args[(at += 1)] ?? ""));
-          break;
-        }
-        options.set(`-${flag}`, "");
+    }
+    // An option spelled with quotes (`'-t'`, `-t''src`) is still the option.
+    if (raw !== text) return null;
+    if (modeFlag(text)) continue;
+    if (text.startsWith("--")) {
+      const eq = text.indexOf("=");
+      const name = eq === -1 ? text : text.slice(0, eq);
+      const long = longOption(name, shape.long);
+      if (long === null) return null;
+      if (long === undefined) options.set(name, eq === -1 ? "" : text.slice(eq + 1));
+      else options.set(long, eq !== -1 ? text.slice(eq + 1) : (args[(at += 1)] ?? ""));
+      continue;
+    }
+    for (let letter = 1; letter < text.length; letter += 1) {
+      const flag = text[letter] ?? "";
+      if (shape.short.includes(flag)) {
+        options.set(`-${flag}`, text.length > letter + 1 ? text.slice(letter + 1) : (args[(at += 1)] ?? ""));
+        break;
       }
-    } else operands.push(arg);
+      options.set(`-${flag}`, "");
+    }
   }
   return { options, operands };
 }
@@ -186,7 +186,7 @@ const CHMOD_MODE = /^(?:[0-7]{1,4}|[ugoa]*(?:[-+=][rwxXstugo]*)+(?:,[ugoa]*(?:[-
 const CHMOD_MODE_FLAG = /^-[rwxXst]+$/;
 
 interface NamedWrites {
-  /** The words naming the files written. */
+  /** The raw words naming the files written. */
   readonly files: readonly string[];
   /** It also writes the directory it runs in (`ln -s /a`, one operand). */
   readonly writesDir: boolean;
@@ -194,12 +194,14 @@ interface NamedWrites {
   readonly parentsCount: boolean;
 }
 
-/** The files `program` writes, read from `args`, or null when it is not one whose only writes are files it names. */
+/** The files `program` writes, read from its raw words, or null when it is not one whose only writes are files it names, or its options cannot be read. */
 function namedWrites(program: string, args: readonly string[]): NamedWrites | null {
   const shape = NAMED_FILE_WRITERS.get(program);
   if (shape === undefined) return null;
-  const modeFlag = (arg: string): boolean => program === "chmod" && CHMOD_MODE_FLAG.test(arg);
-  const { options, operands } = parseArgs(args, shape, modeFlag);
+  const modeFlag = (text: string): boolean => program === "chmod" && CHMOD_MODE_FLAG.test(text);
+  const parsed = parseArgs(args, shape, modeFlag);
+  if (parsed === null) return null;
+  const { options, operands } = parsed;
   const targetDir = options.get("-t") ?? options.get("--target-directory");
   switch (program) {
     case "rm":
@@ -217,7 +219,7 @@ function namedWrites(program: string, args: readonly string[]): NamedWrites | nu
       return { files: [], writesDir: true, parentsCount: false };
     }
     case "chmod": {
-      const modeFirst = !options.has("--reference") && !args.some(modeFlag) && CHMOD_MODE.test(operands[0] ?? "");
+      const modeFirst = !options.has("--reference") && !args.some((raw) => modeFlag(wordText(raw))) && CHMOD_MODE.test(wordText(operands[0] ?? ""));
       return { files: modeFirst ? operands.slice(1) : operands, writesDir: false, parentsCount: true };
     }
     default: {
@@ -232,85 +234,44 @@ function namedWrites(program: string, args: readonly string[]): NamedWrites | nu
 /** A redirection at the start of a shell word: `>`, `2>>`, `&>`, `<<`, `<<<`, `>|`, `2>&1`, alone or glued to its target. */
 const REDIRECT_WORD = /^(?:\d+|&)?(?:>>|>\||>&|>|<<<|<<-|<<|<>|<&|<)/;
 
-/** The shell words of `text` as written, quotes kept, split on unquoted blanks. */
-function rawWords(text: string): readonly string[] {
-  const words: string[] = [];
-  let current = "";
-  let single = false;
-  let double = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index] ?? "";
-    if (char === "\\" && !single) {
-      current += text.slice(index, index + 2);
-      index += 1;
-      continue;
-    }
-    if (char === "'" && !double) single = !single;
-    else if (char === '"' && !single) double = !double;
-    if (/\s/.test(char) && !single && !double) {
-      if (current.length > 0) words.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  if (current.length > 0) words.push(current);
-  return words;
-}
+/** Stands for a `<(...)` or `>(...)` process substitution: not a file, and its command is walked as its own segment. */
+const PROCESS_SUBSTITUTION = "\u0000";
 
-/** Whether a word as written holds a `<` or `>` outside quotes, where the shell would split it. */
-function hasUnquotedRedirect(raw: string): boolean {
-  let single = false;
-  let double = false;
-  for (let index = 0; index < raw.length; index += 1) {
-    const char = raw[index] ?? "";
-    if (char === "\\" && !single) index += 1;
-    else if (char === "'" && !double) single = !single;
-    else if (char === '"' && !single) double = !double;
-    else if (!single && !double && (char === "<" || char === ">")) return true;
-  }
-  return false;
-}
-
-/**
- * The words of a command, quotes removed, with leading `NAME=value`
- * assignments and redirections left out (redirect targets are read by
- * outputRedirectionTargets). A word the shell would split at a `<` or `>`
- * (`hi>x`) is an unknown word, `$?`, that never resolves to a path.
- */
-function programWords(text: string): readonly string[] {
-  const raws = rawWords(text);
-  let at = 0;
-  while (at < raws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(raws[at] ?? "")) at += 1;
-  const words: string[] = [];
-  for (; at < raws.length; at += 1) {
-    const raw = raws[at] ?? "";
-    const redirect = REDIRECT_WORD.exec(raw);
-    if (redirect !== null) {
-      if (redirect[0].length === raw.length) at += 1;
-      continue;
-    }
-    words.push(hasUnquotedRedirect(raw) ? "$?" : tokenize(raw).join(""));
-  }
-  return words;
-}
-
-/** `segment` with each `$(...)`, backtick and `<(...)` written as a variable, so no path built from one resolves. */
-function substitutionsAsVariables(segment: string): string {
+/** `segment` with each `$(...)` and backtick written as a variable (no path built from one resolves), and each process substitution as one inert word. */
+function markSubstitutions(segment: string): string {
   let out = "";
   let from = 0;
   for (const span of substitutionSpans(segment)) {
-    out += `${segment.slice(from, span.start)}$SUBST`;
+    const opener = segment[span.start];
+    out += `${segment.slice(from, span.start)}${opener === "<" || opener === ">" ? PROCESS_SUBSTITUTION : "$SUBST"}`;
     from = span.end + 1;
   }
   return out + segment.slice(from);
 }
 
-/** `raw` as an absolute path seen from `dir`, `~` and `$HOME` read as home; null when it cannot be known without running anything. */
-function resolveNamedPath(raw: string, dir: string, home: string): string | null {
-  // A brace expansion (`src/{a,b}`) names paths the text does not spell; `${HOME}` is home.
-  if (raw.length === 0 || /[{}]/.test(afterHome(raw, home) ?? raw)) return null;
-  return resolveDirectory(raw, dir, home);
+/** The raw rest of a word after a home prefix the shell expands (`~`, `$HOME`, `${HOME}`, also in double quotes), or null. A quoted or escaped `~` is literal. */
+function homeRest(raw: string): string | null {
+  if (raw === "~" || raw.startsWith("~/")) return raw.slice(1);
+  for (const prefix of ['"${HOME}"', '"$HOME"', "${HOME}", "$HOME"]) {
+    const rest = raw.slice(prefix.length);
+    if (raw.startsWith(prefix) && (rest.length === 0 || rest.startsWith("/"))) return rest;
+  }
+  for (const prefix of ['"${HOME}', '"$HOME']) {
+    const rest = raw.slice(prefix.length);
+    if (raw.startsWith(prefix) && rest.startsWith("/")) return `"${rest}`;
+  }
+  return null;
+}
+
+/** A raw word as the absolute path the shell hands the program, seen from `dir`; null when the text does not settle it (an expansion, a glob, a brace). */
+function resolveWord(raw: string, dir: string, home: string): string | null {
+  const rest = homeRest(raw);
+  const body = rest ?? raw;
+  if (hasExpansion(body)) return null;
+  const text = wordText(body);
+  if ((rest === null && text.length === 0) || /[*?[\]{}$`]/.test(text)) return null;
+  if (rest !== null) return resolve(home, `.${text}`);
+  return isAbsolute(text) ? resolve(text) : resolve(dir, text);
 }
 
 /** Whether `path` is `inner` itself or a directory holding it. */
@@ -318,24 +279,66 @@ function holds(path: string, inner: string): boolean {
   return inner === path || inner.startsWith(path.endsWith("/") ? path : `${path}/`);
 }
 
+/** A segment's program words and output redirect targets, as written; null when a redirection cannot be read with confidence. */
+function splitRedirections(marked: string): { readonly words: readonly string[]; readonly targets: readonly string[] } | null {
+  const raws = rawWords(marked);
+  let at = 0;
+  while (at < raws.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(raws[at] ?? "")) at += 1;
+  const words: string[] = [];
+  const targets: string[] = [];
+  for (; at < raws.length; at += 1) {
+    const raw = raws[at] ?? "";
+    if (raw === PROCESS_SUBSTITUTION) continue;
+    const operator = REDIRECT_WORD.exec(raw)?.[0];
+    if (operator === undefined) {
+      // `hi>x`: the shell splits the word at the `>`.
+      if (hasUnquotedRedirect(raw)) return null;
+      words.push(raw);
+      continue;
+    }
+    // `<>` opens a file to write; `>& word` writes word unless it is a descriptor.
+    if (operator.endsWith("<>")) return null;
+    const target = operator.length === raw.length ? raws[(at += 1)] : raw.slice(operator.length);
+    if (target === undefined) return null;
+    if (operator.endsWith("&")) {
+      if (!/^(?:\d+|-)$/.test(target)) return null;
+      continue;
+    }
+    if (operator.includes(">") && target !== PROCESS_SUBSTITUTION) targets.push(target);
+  }
+  // redirections.ts reads the same text quote by quote; both must find the same files.
+  if (targets.length !== outputRedirectionTargets(marked).filter((target) => target !== PROCESS_SUBSTITUTION).length) return null;
+  return { words, targets };
+}
+
 /**
  * The places a segment of a program on the two lists writes: its redirect
- * targets and the files it names. Null when the program is on neither, so
- * its directory counts.
+ * targets and the files it names. A file the text does not settle counts
+ * the directory, as every write did before (rm and cp keep an unknown place
+ * beside the files they name, as before). Null when the program is on
+ * neither list, or a word cannot be read, so its directory counts.
  */
 function listedProgramPlaces(segment: string, dir: string, cwd: string, home: string): readonly (string | null)[] | null {
-  const marked = substitutionsAsVariables(segment);
-  const [program, ...args] = programWords(marked);
-  if (program === undefined) return null;
-  const named = writesNoFile(program, args) ? { files: [], writesDir: false, parentsCount: false } : namedWrites(program, args);
+  const marked = markSubstitutions(segment);
+  const split = splitRedirections(marked);
+  if (split === null) return null;
+  const [program, ...args] = split.words;
+  if (program === undefined || program !== wordText(program)) return null;
+  const named = WRITES_NO_FILE.has(program) ? (writesNoFile(program, args) ? { files: [], writesDir: false, parentsCount: false } : null) : namedWrites(program, args);
   if (named === null) return null;
   const places: (string | null)[] = named.writesDir ? [dir] : [];
-  for (const raw of named.files) {
-    const path = resolveNamedPath(raw, dir, home);
+  // A variable may hold an option (`cp $OPTS a b` may be `cp -t src a b`).
+  let unknown = !WRITES_NO_FILE.has(program) && args.some((raw) => hasExpansion(homeRest(raw) ?? raw));
+  for (const raw of [...named.files, ...split.targets]) {
+    const path = resolveWord(raw, dir, home);
+    if (path === null) {
+      unknown = true;
+      continue;
+    }
     places.push(path);
-    if (path !== null && named.parentsCount) for (const inner of [dir, cwd]) if (holds(path, inner)) places.push(inner);
+    if (named.parentsCount && named.files.includes(raw)) for (const inner of [dir, cwd]) if (holds(path, inner)) places.push(inner);
   }
-  for (const raw of outputRedirectionTargets(marked)) places.push(resolveNamedPath(raw, dir, home));
+  if (unknown) places.push((program === "rm" || program === "cp") && places.length > 0 ? null : dir);
   return places;
 }
 
@@ -345,15 +348,16 @@ function listedProgramPlaces(segment: string, dir: string, cwd: string, home: st
  * obviously safe segment writes nowhere and adds nothing. A git segment
  * always counts its own directory (after `cd`, `-C`), even when it also
  * writes a file (`git commit > /tmp/log`): that file says nothing about the
- * branch the commit lands on.
+ * branch the commit lands on. `cd -` goes to a directory the text does not name.
  */
 export function branchReachPlaces(command: string, cwd: string, home: string): readonly (string | null)[] {
   const places: (string | null)[] = [];
   const add = (place: string | null): void => {
     if (!places.includes(place)) places.push(place);
   };
-  for (const { segment, outer, dir } of locateCommandSegments(command, cwd, home)) {
-    if (isObviouslySafeCommand(outer)) continue;
+  for (const { segment, outer, dir } of locateCommandSegments(command, cwd, home, { dashUnknown: true })) {
+    // `outer` reads each substitution as one inert word; for a tool whose safety hangs on its arguments that word may be `-delete`.
+    if (isObviouslySafeCommand(outer) && (segment === outer || !ARGUMENT_DEPENDENT.has(tokenize(outer)[0] ?? ""))) continue;
     const git = gitInvocation(outer, dir, home);
     const base = git?.dir ?? dir;
     if (base === null) {

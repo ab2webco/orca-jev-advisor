@@ -69,11 +69,16 @@ export function commandWords(words: readonly string[]): readonly string[] {
 /**
  * Where a `cd`/`pushd`/`popd` segment moves to: a directory, null when it
  * cannot be known, or undefined when the segment is not a directory change.
+ * `cd -` returns to a directory the text does not name; it reads as home
+ * unless `dashUnknown` asks for null (branch_reach.ts does: home is a guess
+ * that could hide a checkout; the deny-rule and own-file readers keep the
+ * stricter home reading they were built on).
  */
-export function directoryChange(words: readonly string[], from: string | null, home: string): string | null | undefined {
+export function directoryChange(words: readonly string[], from: string | null, home: string, dashUnknown = false): string | null | undefined {
   const program = words[0];
   if (program === "popd") return null;
   if (program !== "cd" && program !== "pushd") return undefined;
+  if (dashUnknown && words.slice(1).includes("-")) return null;
   const args = words.slice(1).filter((word, at, all) => !word.startsWith("-") && !REDIRECTION.test(word) && !/^\d*[<>]+$/.test(all[at - 1] ?? ""));
   const target = args[0];
   if (target === undefined) return program === "cd" ? home : null;
@@ -172,26 +177,26 @@ function withoutSubstitutions(segment: string, spans: readonly SubstitutionSpan[
   return out + segment.slice(from);
 }
 
-function walk(command: string, start: string | null, home: string, depth: number, out: LocatedSegment[], substituted = false, viaScript = false): string | null {
+function walk(command: string, start: string | null, home: string, depth: number, out: LocatedSegment[], substituted = false, viaScript = false, dashUnknown = false): string | null {
   let dir = start;
   for (const segment of splitOnCommandSeparators(command)) {
     const body = depth < MAX_DEPTH ? subshellBody(segment) : null;
     if (body !== null) {
-      walk(body, dir, home, depth + 1, out, substituted, viaScript);
+      walk(body, dir, home, depth + 1, out, substituted, viaScript, dashUnknown);
       continue;
     }
     const spans = depth < MAX_DEPTH ? substitutionSpans(segment) : [];
-    for (const span of spans) walk(span.body, dir, home, depth + 1, out, true, viaScript);
+    for (const span of spans) walk(span.body, dir, home, depth + 1, out, true, viaScript, dashUnknown);
     const outer = withoutSubstitutions(segment, spans);
     const words = tokenize(outer);
-    const moved = directoryChange(words, dir, home);
+    const moved = directoryChange(words, dir, home, dashUnknown);
     if (moved !== undefined) {
       dir = moved;
       continue;
     }
     const script = depth < MAX_DEPTH ? innerScript(words) : null;
     if (script !== null) {
-      walk(script, dir, home, depth + 1, out, substituted, true);
+      walk(script, dir, home, depth + 1, out, substituted, true, dashUnknown);
       continue;
     }
     out.push({ segment, outer, dir, substituted, viaScript });
@@ -199,10 +204,10 @@ function walk(command: string, start: string | null, home: string, depth: number
   return dir;
 }
 
-/** Every simple command in `command`, with the directory it starts in when run from `cwd`. */
-export function locateCommandSegments(command: string, cwd: string, home: string): readonly LocatedSegment[] {
+/** Every simple command in `command`, with the directory it starts in when run from `cwd`; `dashUnknown` reads `cd -` as an unknown directory. */
+export function locateCommandSegments(command: string, cwd: string, home: string, { dashUnknown = false }: { readonly dashUnknown?: boolean } = {}): readonly LocatedSegment[] {
   const out: LocatedSegment[] = [];
-  walk(command, resolve(cwd), resolve(home), 0, out);
+  walk(command, resolve(cwd), resolve(home), 0, out, false, false, dashUnknown);
   return out;
 }
 

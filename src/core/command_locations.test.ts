@@ -28,3 +28,9 @@ test("gitInvocation reads past wrappers and global options to the subcommand and
   assert.deepEqual(gitInvocation("GIT_AUTHOR_NAME=qa time git -C /srv/a -C b commit", CWD, HOME), { subcommand: "commit", args: [], dir: "/srv/a/b" });
   assert.equal(gitInvocation("echo git push", CWD, HOME), null);
 });
+
+test("SF-3: cd - is an unknown directory when asked, and keeps the home reading the deny and own-file rules were built on", () => {
+  assert.equal(locateCommandSegments("cd - && touch x", "/work/repo", "/home/u", { dashUnknown: true })[0]?.dir, null);
+  assert.equal(locateCommandSegments("cd - && touch x", "/work/repo", "/home/u")[0]?.dir, "/home/u");
+  assert.equal(locateCommandSegments("cd src && touch x", "/work/repo", "/home/u", { dashUnknown: true })[0]?.dir, "/work/repo/src");
+});

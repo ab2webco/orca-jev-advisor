@@ -32,6 +32,14 @@ On 2026-10-17 the owner reported that the gate stops ordinary git-workflow work.
   - Found on the way, fixed in `gate_safe_command.ts` with RED tests: `find -fls FILE` and `rg --pre CMD` were obviously safe (tier 1a) though one writes a file and the other runs a program.
 - [x] B2 Gate level: in a checkout on main, these commands are not asked about `never_write_to_main`. A write inside the checkout (`mkdir src/x`, `mv src/a.ts /tmp/`, `sed -i`, `tee src/x`, `python3 x.py`, `find . -delete`) still is.
   - Proof: `adapters/claude/gate-bash.test.mjs` B2 tests through the real hook and a real repository on `main`. RED with the old `branch_reach.ts`: `pgrep -f x`, `ps aux | grep node` and `rm -rf ~/Library/a && ln -s ~/b ~/Library/a` were judged with never_write_to_main. GREEN after; `mkdir src/x`, `touch src/x`, `mv src/a.ts /tmp/a.ts`, `sed -i`, `tee src/x`, `python3 x.py`, `find . -delete`, `git commit -m x` and `ln -s /tmp/a` still are. On `feat/x` none is. `mkdir -p /tmp/x` was already allowed as contained before the policy stage, before and after.
+- [x] B1/B2 verifier follow-up: every blocker the independent verifier found in the first cut is asked again, with a RED test each.
+  - sed is a reader only on an allowlist (`-n`, `-E`, `-r`, `--`; one script of line addresses printing or deleting; plain operands): `/s/w`, `-I`, `-l`, `--exp=`, `--in`, `--fi=`, `$FLAG` and `$(echo -i)` keep the directory.
+  - A quoted or escaped `~` or `$HOME` is literal (`touch '~/x'` writes the checkout); `"$HOME"/x` is still home.
+  - GNU long-option prefixes (`--target`, `--t`) name `--target-directory`; an ambiguous one keeps the directory.
+  - An unresolvable operand counts the directory exactly as before (rm and cp keep an unknown place beside the files they name); a process substitution is not a file; `cd -` is an unknown place for branch reach only (the deny and own-file rules keep their home reading).
+  - A substitution in the arguments of find, sed, sort, uniq, rg, awk, file or env keeps the directory.
+  - Tier 1a (`gate_safe_command.ts`): find, sort, uniq and rg with an expansion or a quoted option, GNU prefixes of `--output`, `--temporary-directory`, `--compress-program` and `--pre`, `sort -T`, `uniq -` or a second operand, and `sed -n $p` / `sed -n 1p $F` are no longer obviously safe; `rg --pretty`, `grep 'foo bar' file`, `find . -name '*.ts'` and `sort -u f` still are.
+  - Proof: the verifier's probe files (`probes.txt`, `probes2.txt`, `ml.ts`) re-run: every blocker row asks again; every row that 23d1818 asked and this does not writes only outside the checkout.
 - [ ] B3 Release 0.13.5: CHANGELOG, README block, version bump, release, catalog, `odd/qa/qa-0.13.5.md`
 
 ## Acceptance
