@@ -293,7 +293,12 @@ test('both mode: a policy block Jev decided after a Clef policy hit names Jev', 
   const { stdout, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2, { violation: { none: 0.04, policy_1: 0.96 } }) }, 'api.typesafe.ai': { status: 200, body: jevDeny } } })
   assert.equal(rows[0].provider, 'jev')
   assert.equal(rows[0].escalation, 'policy')
-  assert.equal(JSON.parse(stdout).systemMessage, 'jev · blocked `' + SEGMENT + '`: forbidden by the policy never_rewrite_shared_history')
+  assert.equal(rows[0].verdict, 'deny')
+  const payload = JSON.parse(stdout)
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.ok(payload.hookSpecificOutput.permissionDecisionReason.startsWith('REFUSED: forbidden by the team policy never_rewrite_shared_history ('))
+  assert.equal(payload.systemMessage, 'jev · blocked `' + SEGMENT + '`: forbidden by the policy never_rewrite_shared_history')
+  assert.doesNotMatch(stdout, /\bclef\b/i)
 })
 
 // Captured from 0.13.3 (384e242) before C2: Jev-only output must never change.

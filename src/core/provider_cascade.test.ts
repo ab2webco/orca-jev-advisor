@@ -337,3 +337,23 @@ test("shadow: when the sampled call escalates, the shadow Jev answer is the one 
   assert.equal(result.shadowAgrees, null);
   assert.equal(jevCalls.length, 1);
 });
+
+test("S1: a non-none choice, or an unreadable probability, is a policy hit whatever the probabilities say", () => {
+  const choice = (answer: Partial<Extract<Answer, { type: "choice" }>>): Answer => ({ type: "choice", choice: "none", probabilities: { none: 1 }, confidence: 1, ...answer });
+  assert.equal(gatePolicyHit({ violation: choice({ choice: "policy_1", confidence: 0.6, probabilities: {} }) }, ["violation"]), true);
+  assert.equal(gatePolicyHit({ needs_person: choice({ choice: "policy_2", probabilities: { none: 0.95, policy_2: 0.05 } }) }, ["needs_person"]), true);
+  assert.equal(gatePolicyHit({ violation: choice({ probabilities: { none: 0.9, policy_1: Number.NaN } }) }, ["violation"]), true);
+  assert.equal(gatePolicyHit({ violation: choice({ probabilities: { none: Number.POSITIVE_INFINITY } }) }, ["violation"]), true);
+  // The 0.2 floor is unchanged for a clean none.
+  assert.equal(gatePolicyHit({ violation: choice({ probabilities: { none: 0.81, policy_1: 0.19 } }) }, ["violation"]), false);
+  assert.equal(gatePolicyHit({ violation: choice({ probabilities: { none: 0.8, policy_1: 0.2 } }) }, ["violation"]), true);
+});
+
+test("S2: in both mode any Clef error escalates to Jev as a failure; in Clef mode it is rethrown", async () => {
+  const broken: ClefProvider = { id: "clef", model: "clef", ask: async () => { throw new TypeError("body is not JSON"); } };
+  const result = await runCascade(input({ jev: fakeJev(reply("jev-latest", clear)), clef: broken }));
+  assert.equal(result.provider, "jev");
+  assert.equal(result.escalation, "failure");
+  await assert.rejects(runCascade(input({ mode: "clef", jev: fakeJev(reply("jev-latest", clear)), clef: broken })), TypeError);
+  await assert.rejects(runCascade(input({ jev: null, clef: broken })), TypeError);
+});

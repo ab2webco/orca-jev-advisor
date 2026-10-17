@@ -80,17 +80,18 @@ export const GATE_POLICY_HIT_FLOOR = 0.2;
 /**
  * Whether Clef's answers show a possible policy hit: on any of `asked` that is
  * a policy question asked on effect (POLICY_EFFECT_QUESTIONS), an option other
- * than its none option has a probability of GATE_POLICY_HIT_FLOOR or more. A
- * policy question that was asked and has no choice answer cannot be read, so
- * it counts as a hit and Jev answers.
+ * than its none option has a probability of GATE_POLICY_HIT_FLOOR or more, or
+ * Clef's own choice is not the none option. A policy question that was asked
+ * and has no choice answer, or a probability that is not a finite number,
+ * cannot be read, so it counts as a hit and Jev answers.
  */
 export function gatePolicyHit(answers: Record<string, Answer>, asked: readonly string[]): boolean {
   return asked.some((id) => {
     const none = POLICY_EFFECT_QUESTIONS[id];
     if (none === undefined) return false;
     const answer = answers[id];
-    if (answer === undefined || answer.type !== "choice") return true;
-    return Object.entries(answer.probabilities).some(([option, probability]) => option !== none && probability >= GATE_POLICY_HIT_FLOOR);
+    if (answer === undefined || answer.type !== "choice" || answer.choice !== none) return true;
+    return Object.entries(answer.probabilities).some(([option, probability]) => !Number.isFinite(probability) || (option !== none && probability >= GATE_POLICY_HIT_FLOOR));
   });
 }
 
@@ -199,8 +200,9 @@ export async function runCascade(input: CascadeInput): Promise<CascadeAnswer> {
   } catch (error) {
     const failure = clefFailureOf(error);
     if (failure?.kind === "daily-allowance") budget.markExhausted();
-    if (fallback === null || failure === null) throw error;
-    return viaJev(fallback, escalationFor(failure), shadowCall ?? undefined, remaining());
+    if (fallback === null) throw error;
+    // Any Clef error, classified or not, is Jev's to answer while Jev is there (S2).
+    return viaJev(fallback, failure === null ? "failure" : escalationFor(failure), shadowCall ?? undefined, remaining());
   }
 
   const neurons = neuronsFor(clef.model, response.usage);
