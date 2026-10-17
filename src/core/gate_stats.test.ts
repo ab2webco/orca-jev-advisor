@@ -325,3 +325,23 @@ test("a Jev-only log has no provider-tagged decision", () => {
   assert.equal(summary.providers.tagged, 0);
   assert.deepEqual(summary.providers.answeredBy, { jev: 0, clef: 0 });
 });
+
+test("SF1: Jev's latency is built only from rows Jev answered; Clef's is its own", () => {
+  const summary = foldGateDecisions([
+    record({ source: "jev", verdict: "allow", latencyMs: 900 }),
+    record({ source: "jev", verdict: "allow", latencyMs: 1100, provider: "jev", escalation: "doubt" }),
+    record({ source: "jev", verdict: "allow", latencyMs: 200, provider: "clef" }),
+    record({ source: "jev", verdict: "advise", latencyMs: 300, provider: "clef" }),
+    record({ source: "jev", verdict: "allow", latencyMs: 400, provider: "clef" }),
+  ]);
+  assert.equal(summary.jevLatency.sampleCount, 2);
+  assert.equal(summary.jevLatency.maxMs, 1100);
+  assert.equal(summary.clefLatency.sampleCount, 3);
+  assert.equal(summary.clefLatency.medianMs, 300);
+  assert.equal(summary.clefLatency.maxMs, 400);
+  // A Jev-only log has no Clef latency at all.
+  const jevOnly = foldGateDecisions([record({ source: "jev", verdict: "allow", latencyMs: 700 })]);
+  assert.equal(jevOnly.clefLatency.sampleCount, 0);
+  assert.equal(jevOnly.clefLatency.medianMs, null);
+  assert.equal(jevOnly.jevLatency.medianMs, 700);
+});

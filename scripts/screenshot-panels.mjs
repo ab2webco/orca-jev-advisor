@@ -171,7 +171,10 @@ const READY_DAY = {
   // 2320 that used to be a plain 'allow' are now this new bucket.
   byVerdict: { allow: 2280, ask: 77, deny: 12, advise: 40 },
   bySource: { 'local-rule': 23, cache: 240, jev: 2101, none: 45 },
-  jevLatency: { sampleCount: 2101, medianMs: 577, p95Ms: 1243, maxMs: 1809 },
+  // SF1: Jev's latency covers only the 1,401 rows Jev answered; Clef's 700
+  // answers have their own. Clef's figures are illustrative, not measured.
+  jevLatency: { sampleCount: 1401, medianMs: 577, p95Ms: 1243, maxMs: 1809 },
+  clefLatency: { sampleCount: 700, medianMs: 412, p95Ms: 960, maxMs: 1490 },
   interventions: {
     rows: [
       { commandFamily: 'cd', total: 769, ask: 22, deny: 2, notRun: 2 },
@@ -215,7 +218,8 @@ const READY_ALL = {
   totalDecisions: 3711,
   byVerdict: { allow: 3323, ask: 316, deny: 12, advise: 60 },
   bySource: { 'local-rule': 126, cache: 278, jev: 3262, none: 45 },
-  jevLatency: { sampleCount: 3262, medianMs: 530, p95Ms: 1131, maxMs: 1809 },
+  jevLatency: { sampleCount: 2562, medianMs: 530, p95Ms: 1131, maxMs: 1809 },
+  clefLatency: { sampleCount: 700, medianMs: 412, p95Ms: 960, maxMs: 1490 },
   interventions: {
     rows: [
       { commandFamily: 'cd', total: 1207, ask: 56, deny: 2, notRun: 2 },
@@ -257,6 +261,7 @@ function emptyWindow (key) {
     byVerdict: { allow: 0, ask: 0, deny: 0, advise: 0 },
     bySource: { 'local-rule': 0, cache: 0, jev: 0, none: 0 },
     jevLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
+    clefLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
     interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
     approvals: {
       asked: 0, approved: 0, rejected: 0, notRun: 0, awaiting: 0,

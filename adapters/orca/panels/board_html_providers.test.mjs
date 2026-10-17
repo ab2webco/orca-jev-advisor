@@ -96,14 +96,15 @@ const sourceFacts = new Function(`${extractFunction(boardHtml, 'sourceFacts')}; 
 
 test('the sources bar: a Jev-only window is what it always was', () => {
   const facts = sourceFacts({ bySource: { jev: 40, cache: 10, 'local-rule': 5, none: 2 }, jevLatency: { medianMs: 820 } })
-  assert.deepEqual(facts, { jev: 40, clef: 0, cache: 10, localRule: 5, noneJev: 2, noneClef: 0, jevMedianMs: 820 })
-  assert.deepEqual(sourceFacts({}), { jev: 0, clef: 0, cache: 0, localRule: 0, noneJev: 0, noneClef: 0, jevMedianMs: null })
+  assert.deepEqual(facts, { jev: 40, clef: 0, cache: 10, localRule: 5, noneJev: 2, noneClef: 0, jevMedianMs: 820, clefMedianMs: null })
+  assert.deepEqual(sourceFacts({}), { jev: 0, clef: 0, cache: 0, localRule: 0, noneJev: 0, noneClef: 0, jevMedianMs: null, clefMedianMs: null })
 })
 
-test('the sources bar: Clef answers and Clef failures leave Jev\'s figures', () => {
+test('the sources bar: Clef answers and Clef failures leave Jev\'s figures, each with its own median', () => {
   const w = {
     bySource: { jev: 100, cache: 4, 'local-rule': 3, none: 5 },
-    jevLatency: { medianMs: 600 },
+    jevLatency: { sampleCount: 30, medianMs: 600 },
+    clefLatency: { sampleCount: 70, medianMs: 380 },
     providers: { tagged: 105, answeredBy: { jev: 30, clef: 70 }, escalations: escalations({ doubt: 10 }), clefUnanswered: 3, shadow: { agree: 0, disagree: 0 } }
   }
   const facts = sourceFacts(w)
@@ -111,13 +112,28 @@ test('the sources bar: Clef answers and Clef failures leave Jev\'s figures', () 
   assert.equal(facts.clef, 70)
   assert.equal(facts.noneJev, 2)
   assert.equal(facts.noneClef, 3)
-  // The median folds Clef's answers in with Jev's, so it is not shown under Jev's name.
-  assert.equal(facts.jevMedianMs, null)
+  // SF1: jevLatency holds only Jev's rows now, so its median is Jev's own.
+  assert.equal(facts.jevMedianMs, 600)
+  assert.equal(facts.clefMedianMs, 380)
   // Counts never go negative on an inconsistent reading.
   const odd = sourceFacts({ bySource: { jev: 1, none: 0 }, providers: { answeredBy: { clef: 5 }, clefUnanswered: 2 } })
   assert.equal(odd.jev, 0)
   assert.equal(odd.clef, 1)
   assert.equal(odd.noneClef, 0)
+})
+
+test('SF1: the status latency chips: Jev\'s as before, and Clef\'s beside it when Clef answered', () => {
+  const statusLatency = new Function(`${extractFunction(boardHtml, 'statusLatency')}; return statusLatency`)()
+  assert.deepEqual(statusLatency({ jevLatency: { sampleCount: 4, medianMs: 500, p95Ms: 900 } }), [{ key: 'status.latency', p50: 500, p95: 900 }])
+  assert.deepEqual(statusLatency({}), [{ key: 'status.latencyNone' }])
+  assert.deepEqual(statusLatency({ jevLatency: { sampleCount: 4, medianMs: 500, p95Ms: 900 }, clefLatency: { sampleCount: 7, medianMs: 300, p95Ms: 700 } }),
+    [{ key: 'status.latency', p50: 500, p95: 900 }, { key: 'status.latencyClef', p50: 300, p95: 700 }])
+  assert.deepEqual(statusLatency({ jevLatency: { sampleCount: 0 }, clefLatency: { sampleCount: 7, medianMs: 300, p95Ms: 700 } }),
+    [{ key: 'status.latencyNone' }, { key: 'status.latencyClef', p50: 300, p95: 700 }])
+  assert.ok(catalogBlock('es').includes("'status.latencyClef': 'Clef en esta ventana: p50 {{p50}} ms · p95 {{p95}} ms'"))
+  assert.ok(catalogBlock('en').includes("'status.latencyClef': 'Clef in this window: p50 {{p50}} ms · p95 {{p95}} ms'"))
+  assert.ok(catalogBlock('es').includes("'gate.source.clefMedian': 'Clef (con red, mediana {{ms}} ms)'"))
+  assert.ok(catalogBlock('en').includes("'gate.source.clefMedian': 'Clef (network, median {{ms}} ms)'"))
 })
 
 test('the sources bar labels exist in both languages', () => {

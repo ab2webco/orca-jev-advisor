@@ -102,3 +102,12 @@ test('C3b: the intro says Jev also answers when Clef sees a possible policy hit,
   assert.ok(catalogBlock('es').includes("'provider.intro': 'Jev (TypeSafe) juzga cada comando hoy. Clef (Cloudflare Workers AI) habla el mismo contrato y tiene una cuota gratis diaria. En «Ambos», Clef responde primero y Jev responde cuando Clef duda, ve que podría aplicar una política, falla o se acaba la cuota del día.'"))
   assert.ok(catalogBlock('en').includes("'provider.intro': 'Jev (TypeSafe) judges every command today. Clef (Cloudflare Workers AI) speaks the same contract and has a free daily allowance. In Both, Clef answers first and Jev answers when Clef is in doubt, sees a possible policy hit, fails, or the day\\u2019s allowance is spent.'"))
 })
+
+test('C3c: the neuron estimate stays true once policies are sent, in both languages', () => {
+  const es = catalogBlock('es')
+  const en = catalogBlock('en')
+  assert.ok(es.includes('sin políticas') && es.includes('180'), 'es names the no-policy figures and the ~180 calls with about 20 policies')
+  assert.ok(/without policies/i.test(en) && en.includes('180'), 'en names the no-policy figures and the ~180 calls with about 20 policies')
+  assert.doesNotMatch(es, /alcanza para unas 950 llamadas del gate con clef, 1\.500 con clef-omni y 6\.000 con clef-flash\./)
+  assert.doesNotMatch(es, /\b(tenés|podés|mirá|elegí)\b/)
+})

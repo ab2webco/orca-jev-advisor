@@ -153,6 +153,8 @@ function continueHealth(health: GateHealthTotals, records: readonly GateDecision
   const failures: number[] = [];
   for (const record of records) {
     if (record.source !== "jev" && record.source !== "none") continue;
+    // SF2: Jev's health -- a row Clef answered, or Clef left unanswered, is not Jev's.
+    if (record.provider === "clef") continue;
     const ms = atMs(record.at);
     if (ms === null) continue;
     if (record.source === "jev") {
@@ -373,11 +375,13 @@ function parseTally(raw: unknown): GateTally | null {
   const projects = parsePairs(raw.projects, isNullableString, (v) => (isCount(v) ? v : null));
   const pluginVersions = parsePairs(raw.pluginVersions, isString, (v) => (isCount(v) ? v : null));
   const jevLatencies = parsePairs(raw.jevLatencies, isFiniteNumber, countOrNull);
+  // SF1: absent in a totals file written before Clef's latencies were kept apart.
+  const clefLatencies = raw.clefLatencies === undefined ? [] : parsePairs(raw.clefLatencies, isFiniteNumber, countOrNull);
   if (
     !isCount(raw.totalDecisions) ||
     byVerdict === null ||
     !isCount(localRule) || !isCount(cache) || !isCount(jev) || !isCount(none) ||
-    families === null || projects === null || pluginVersions === null || jevLatencies === null ||
+    families === null || projects === null || pluginVersions === null || jevLatencies === null || clefLatencies === null ||
     !isCount(raw.noPluginVersionCount)
   ) {
     return null;
@@ -392,6 +396,7 @@ function parseTally(raw: unknown): GateTally | null {
     pluginVersions,
     noPluginVersionCount: raw.noPluginVersionCount,
     jevLatencies,
+    clefLatencies,
   };
 }
 
@@ -415,7 +420,8 @@ function parseRecent(raw: unknown): GateRecentDecision[] | null {
     if (!isObject(item)) return null;
     const { at, project, commandFamily, source, verdict, latencyMs, provider } = item;
     if (typeof at !== "string" || !isNullableString(project) || typeof commandFamily !== "string" || !isSource(source) || !isVerdict(verdict) || !isNullableNumber(latencyMs)) return null;
-    if (provider !== undefined && provider !== "jev" && provider !== "clef") return null;
+    // Only this row is dropped: a provider this build does not know never costs the rest of the list.
+    if (provider !== undefined && provider !== "jev" && provider !== "clef") continue;
     recent.push({ at, project, commandFamily, source, verdict, latencyMs, ...(provider !== undefined ? { provider } : {}) });
   }
   return recent;

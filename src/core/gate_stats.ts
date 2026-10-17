@@ -128,8 +128,10 @@ export interface GateStatsSummary {
   readonly totalDecisions: number;
   readonly byVerdict: GateVerdictCounts;
   readonly bySource: GateSourceCounts;
-  /** Latency is only ever meaningful for the `jev` source -- see gate_measurement.ts. */
+  /** Latency is only ever meaningful for the `jev` source -- see gate_measurement.ts. SF1: only the rows Jev answered. */
   readonly jevLatency: GateLatencyStats;
+  /** SF1: the latency of the rows Clef answered (sampleCount 0 in a Jev-only log). */
+  readonly clefLatency: GateLatencyStats;
   /** Sorted by total, descending -- "donde se ha usado mas". The fold stays complete; a caller sorts or filters for "where it actually intervened" itself. */
   readonly byCommandFamily: readonly GateCommandFamilyStat[];
   /** How many entries in {@link byCommandFamily} have `interventions === 0` -- everything the gate ever saw for them, it allowed. */
@@ -222,8 +224,10 @@ export interface GateTally {
   readonly projects: readonly (readonly [string | null, number])[];
   readonly pluginVersions: readonly (readonly [string, number])[];
   readonly noPluginVersionCount: number;
-  /** `[latencyMs, how many jev records had it]`, ascending by latency. */
+  /** `[latencyMs, how many jev records had it]`, ascending by latency -- the rows Jev answered (no provider, or provider jev). */
   readonly jevLatencies: readonly (readonly [number, number])[];
+  /** SF1: the same for the rows Clef answered (provider clef); empty in a tally read from a totals file written before it existed. */
+  readonly clefLatencies: readonly (readonly [number, number])[];
   /** Multi-provider; zero in a tally read from a totals file written before it existed. */
   readonly providers: GateProviderCounts;
 }
@@ -238,6 +242,7 @@ export function emptyGateTally(): GateTally {
     pluginVersions: [],
     noPluginVersionCount: 0,
     jevLatencies: [],
+    clefLatencies: [],
     providers: emptyProviderCounts(),
   };
 }
@@ -251,6 +256,7 @@ export function tallyGateDecisions(tally: GateTally, records: readonly GateDecis
   const pluginVersions = new Map<string, number>(tally.pluginVersions);
   let noPluginVersionCount = tally.noPluginVersionCount;
   const latencies = new Map<number, number>(tally.jevLatencies);
+  const clefLatencies = new Map<number, number>(tally.clefLatencies);
   let providers = tally.providers;
 
   for (const record of records) {
@@ -267,7 +273,8 @@ export function tallyGateDecisions(tally: GateTally, records: readonly GateDecis
     else pluginVersions.set(record.pluginVersion, (pluginVersions.get(record.pluginVersion) ?? 0) + 1);
 
     if (record.source === "jev" && record.latencyMs !== null && Number.isFinite(record.latencyMs)) {
-      latencies.set(record.latencyMs, (latencies.get(record.latencyMs) ?? 0) + 1);
+      const ofProvider = record.provider === "clef" ? clefLatencies : latencies;
+      ofProvider.set(record.latencyMs, (ofProvider.get(record.latencyMs) ?? 0) + 1);
     }
   }
 
@@ -280,8 +287,14 @@ export function tallyGateDecisions(tally: GateTally, records: readonly GateDecis
     pluginVersions: [...pluginVersions.entries()],
     noPluginVersionCount,
     jevLatencies: [...latencies.entries()].sort((a, b) => a[0] - b[0]),
+    clefLatencies: [...clefLatencies.entries()].sort((a, b) => a[0] - b[0]),
     providers,
   };
+}
+
+function latencyStats(pairs: readonly (readonly [number, number])[]): GateLatencyStats {
+  const last = pairs[pairs.length - 1];
+  return { sampleCount: sampleCount(pairs), medianMs: median(pairs), p95Ms: percentile(pairs, 95), maxMs: last !== undefined ? last[0] : null };
 }
 
 /** The summary the board renders, from a tally. Pure. */
@@ -305,18 +318,13 @@ export function summarizeGateTally(tally: GateTally): GateStatsSummary {
     .map(([pluginVersion, total]) => ({ pluginVersion, total }))
     .sort((a, b) => b.total - a.total);
 
-  const last = tally.jevLatencies[tally.jevLatencies.length - 1];
 
   return {
     totalDecisions: tally.totalDecisions,
     byVerdict: tally.byVerdict,
     bySource: tally.bySource,
-    jevLatency: {
-      sampleCount: sampleCount(tally.jevLatencies),
-      medianMs: median(tally.jevLatencies),
-      p95Ms: percentile(tally.jevLatencies, 95),
-      maxMs: last !== undefined ? last[0] : null,
-    },
+    jevLatency: latencyStats(tally.jevLatencies),
+    clefLatency: latencyStats(tally.clefLatencies),
     byCommandFamily,
     familiesWithNoInterventions,
     byProject,

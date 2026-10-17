@@ -282,6 +282,7 @@ function gateWindow (fields, summary, pending, outcomes, now, neurons = { spent:
     byVerdict: summary.byVerdict,
     bySource: summary.bySource,
     jevLatency: summary.jevLatency,
+    clefLatency: summary.clefLatency,
     providers: summary.providers,
     neurons,
     interventions: interventionsTable(summary, pending, outcomes, now),

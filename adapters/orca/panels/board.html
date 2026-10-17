@@ -593,6 +593,7 @@
           'status.unjudged': '{{n}} pasaron sin juicio en esta ventana',
           'status.latency': 'Jev en esta ventana: p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'sin latencia de Jev medida en esta ventana',
+          'status.latencyClef': 'Clef en esta ventana: p50 {{p50}} ms · p95 {{p95}} ms',
           'status.policiesWithoutKind': '{{n}} políticas del equipo no tienen tipo y no se aplican: {{ids}}. Abre Configuración → Políticas del equipo y elige un tipo.',
           'status.appendFailures': '{{n}} decisiones sin registrar, la última {{age}}',
           'status.appendFailuresTitle': 'El gate no pudo escribir estas decisiones en su registro; las cifras de este tablero no las cuentan.',
@@ -669,6 +670,7 @@
           'gate.source.cache': 'Caché (sin red)',
           'gate.source.jev': 'Jev (con red)',
           'gate.source.clef': 'Clef (con red)',
+          'gate.source.clefMedian': 'Clef (con red, mediana {{ms}} ms)',
           'gate.source.none': 'Nadie: Jev no contestó',
           'gate.source.noneClef': 'Nadie: Clef no contestó',
           'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso — fallar abierto es lo correcto — pero nadie lo revisó, así que no cuentan arriba.',
@@ -879,6 +881,7 @@
           'status.unjudged': '{{n}} passed unjudged in this window',
           'status.latency': 'Jev in this window: p50 {{p50}} ms · p95 {{p95}} ms',
           'status.latencyNone': 'no Jev latency measured in this window',
+          'status.latencyClef': 'Clef in this window: p50 {{p50}} ms · p95 {{p95}} ms',
           'status.policiesWithoutKind': '{{n}} team policies have no kind and are not applied: {{ids}}. Open Settings → Team policies and pick a kind.',
           'status.appendFailures': '{{n}} decisions not logged, the last {{age}}',
           'status.appendFailuresTitle': 'The gate could not write these decisions to its log; the figures on this board do not count them.',
@@ -955,6 +958,7 @@
           'gate.source.cache': 'Cache (no network)',
           'gate.source.jev': 'Jev (network)',
           'gate.source.clef': 'Clef (network)',
+          'gate.source.clefMedian': 'Clef (network, median {{ms}} ms)',
           'gate.source.none': 'Nobody: Jev did not answer',
           'gate.source.noneClef': 'Nobody: Clef did not answer',
           'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead — failing open is correct — but nobody reviewed it, so they are not counted above.',
@@ -1749,10 +1753,9 @@
           : chip(t('status.noFailures'), ''))
         var unjudged = (w.bySource && w.bySource.none) || 0
         chips.push(chip(t('status.unjudged', { n: num(unjudged) }), unjudged > 0 ? 'alarm' : ''))
-        var latency = w.jevLatency || {}
-        chips.push(latency.sampleCount > 0
-          ? chip(t('status.latency', { p50: ms(latency.medianMs), p95: ms(latency.p95Ms) }), '')
-          : chip(t('status.latencyNone'), ''))
+        statusLatency(w).forEach(function (l) {
+          chips.push(chip(l.key === 'status.latencyNone' ? t(l.key) : t(l.key, { p50: ms(l.p50), p95: ms(l.p95) }), ''))
+        })
         // JEVADV-49: a stored team policy with no kind is invisible to the
         // gate (store.ts's getPolicies excludes it) and, until now, invisible
         // to the owner too -- see main.mjs's publishPoliciesWithoutKindStatus.
@@ -1767,6 +1770,20 @@
         }
         el('status-body').innerHTML = chips.join('')
       }
+      /**
+       * The status card's latency chips (SF1): Jev's own, from the rows Jev
+       * answered, exactly as before; and Clef's beside it when Clef answered
+       * in this window, so the two can be compared. Pure, so it is tested
+       * from the panel's own source (board_html_providers.test.mjs).
+       */
+      function statusLatency (w) {
+        var jev = (w && w.jevLatency) || {}
+        var clef = (w && w.clefLatency) || {}
+        var out = [jev.sampleCount > 0 ? { key: 'status.latency', p50: jev.medianMs, p95: jev.p95Ms } : { key: 'status.latencyNone' }]
+        if (clef.sampleCount > 0) out.push({ key: 'status.latencyClef', p50: clef.medianMs, p95: clef.p95Ms })
+        return out
+      }
+
       function chip (text, cls, title) {
         return '<span class="chip' + (cls ? ' ' + cls : '') + '"' +
           (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>'
@@ -1777,8 +1794,8 @@
        * every model-judged decision under the name of the provider that
        * answered it, and every unanswered one under the provider that was
        * asked, from the window's provider counts. A window with no provider
-       * counts (every Jev-only install) reads exactly as before. Jev's median
-       * is shown only when no Clef answer is folded into it. Pure, so it is
+       * counts (every Jev-only install) reads exactly as before. Each median
+       * is its own provider's (SF1: jevLatency holds Jev's rows only). Pure, so it is
        * tested from the panel's own source (board_html_providers.test.mjs).
        */
       function sourceFacts (w) {
@@ -1789,7 +1806,7 @@
         var unanswered = count(source.none)
         var clef = Math.min(count(p && p.answeredBy && p.answeredBy.clef), judged)
         var noneClef = Math.min(count(p && p.clefUnanswered), unanswered)
-        var median = w && w.jevLatency ? w.jevLatency.medianMs : null
+        var median = function (latency) { return latency && typeof latency.medianMs === 'number' ? latency.medianMs : null }
         return {
           jev: judged - clef,
           clef: clef,
@@ -1797,7 +1814,8 @@
           localRule: count(source['local-rule']),
           noneJev: unanswered - noneClef,
           noneClef: noneClef,
-          jevMedianMs: clef === 0 && typeof median === 'number' ? median : null
+          jevMedianMs: median(w && w.jevLatency),
+          clefMedianMs: clef > 0 ? median(w && w.clefLatency) : null
         }
       }
 
@@ -1810,7 +1828,7 @@
         var f = sourceFacts(w)
         var segments = [
           { value: f.jev, cls: 'v1', label: f.jevMedianMs != null ? t('gate.source.jevMedian', { ms: ms(f.jevMedianMs) }) : t('gate.source.jev') },
-          { value: f.clef, cls: 'v1', label: t('gate.source.clef') },
+          { value: f.clef, cls: 'v1', label: f.clefMedianMs != null ? t('gate.source.clefMedian', { ms: ms(f.clefMedianMs) }) : t('gate.source.clef') },
           { value: f.cache, cls: 'v2', label: t('gate.source.cache') },
           { value: f.localRule, cls: 'v3', label: t('gate.source.localRule') },
           { value: f.noneJev, cls: 'vd', label: t('gate.source.none') },
