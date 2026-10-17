@@ -454,3 +454,20 @@ test("SF-2: an unquoted or double-quoted $ in a sed -n script is the shell's var
   assert.equal(isObviouslySafeCommand("sed -n 1,5p f"), true);
   assert.equal(isObviouslySafeCommand("sed -n 1p $F"), false);
 });
+
+test("N-1: a sed or awk operand that the shell may expand into an option is never obviously safe", () => {
+  // GNU sed reads a `-i` that reaches it after the script as an option and edits in place.
+  for (const command of [
+    "sed -n 1p f \\-i",
+    "sed -n 1p {-i,f}",
+    "sed -n 1p *",
+    "sed -n '1,5p' src/*.ts",
+    "sed -n 1p f?",
+    "sed -n 1p [-]i",
+    "awk '{print}' \\-i",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), false, command);
+  }
+  assert.equal(isObviouslySafeCommand("sed -n '1,40p' src/core/x.ts"), true);
+  assert.equal(isObviouslySafeCommand("awk '{print $1}' notes.md"), true);
+});

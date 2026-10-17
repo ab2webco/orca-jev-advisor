@@ -173,8 +173,9 @@ const SED_ADDRESS = String.raw`(?:\d+|\$|/[^/']*/I?)`
 const SED_BARE_ADDRESS = String.raw`(?:\d+|/[^/'$\x60]*/I?)`
 const printScript = (address: string): string => String.raw`${address}(?:,${address})?p(?:;${address}(?:,${address})?p)*`
 const SED_SCRIPT_ARG = String.raw`(?:'${printScript(SED_ADDRESS)}'|${printScript(SED_BARE_ADDRESS)})`
-// An operand holding a `$` or a backtick may expand to an option (`-i`).
-const OPERAND = String.raw`(?:\s+[^-\s'"$\x60][^\s'"$\x60]*)`
+// An operand holding a `$`, a backtick, an escape, a brace or a glob may
+// expand to an option (`-i`), which GNU sed reads even after the script.
+const OPERAND = String.raw`(?:\s+[^-\s'"$\x60\\{}*?[][^\s'"$\x60\\{}*?[]*)`
 const SAFE_SED = new RegExp(String.raw`^sed\s+-n(?:\s+-e)?\s+${SED_SCRIPT_ARG}(?:\s+-e\s+${SED_SCRIPT_ARG})*${OPERAND}*\s*$`)
 const AWK_OPTION = String.raw`(?:\s+(?:-F\s*(?:'[^']*'|"[^"]*"|[^\s'"]+)|-v\s*[A-Za-z_][A-Za-z0-9_]*=[^\s'"]*))`
 const SAFE_AWK = new RegExp(String.raw`^awk${AWK_OPTION}*\s+'([^']*)'${OPERAND}*\s*$`)
