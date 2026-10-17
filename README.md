@@ -16,6 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.4
+
+- **Clef now decides, Jev takes over when needed.** In «Ambos», Clef answers first for every command, including the ones your policies apply to, until its free daily quota runs out; then Jev answers as before. When Clef sees that one of your policies might apply, when it is unsure or when it fails, Jev answers that command. This uses both credits.
+- **You can see who decided.** The gate's message starts with `clef ·` or `jev ·`, the advice the coding model gets names Clef or Jev, and the board shows the provider of each recent decision, Clef's and Jev's answers separately, and each one's response time. With «Solo Jev» everything reads exactly as before.
+- **The quota estimate is honest.** Configuration says that with about 20 policies Clef's free quota covers about 180 gate calls a day, not 950.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.13.3
 
 - **Your saved settings can no longer be wiped by a slow read.** When Orca was slow to answer, the Configuration panel could show a section as empty and Save would then write that empty value over what you had saved; that is how a list of policies disappeared. Now the panel only saves a section it has actually read: it shows "Leyendo lo guardado…" while it tries again, says so if it cannot read it, and Save tells you which sections it left alone. While a section has not loaded, its controls stay disabled, so a late answer cannot overwrite what you typed, and an older answer never replaces something you just saved. It also never saves an empty policies list or destination list over stored ones unless you removed the rows yourself.
