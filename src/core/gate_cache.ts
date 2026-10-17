@@ -74,6 +74,12 @@ export interface GateCacheEntry {
   readonly policyRule?: string;
   /** Present only on an `"advise"` entry written by the deploy/publish floor (gate-bash.ts's own detectDeployPublish call): which of the two person-facing effect phrasings ("dispara un deploy" / "publica un paquete") a cache hit should use. Absent for a risk-stage `"advise"` entry, which carries `reasonKey` instead. */
   readonly deployPublishKind?: "deploy" | "publish";
+  /**
+   * The provider whose answer decided this entry (C3b, odd/tasks/clef-decides-policies.md),
+   * so a hit names it. gate-bash.ts writes it only for Clef; an entry without
+   * it (every Jev decision, and every entry written before this field) is Jev's.
+   */
+  readonly provider?: "jev" | "clef";
   readonly at: number;
 }
 
@@ -110,6 +116,7 @@ export function isValidGateCacheEntry(value: unknown): value is GateCacheEntry {
     (record.policyId === undefined || typeof record.policyId === "string") &&
     (record.policyRule === undefined || typeof record.policyRule === "string") &&
     (record.deployPublishKind === undefined || record.deployPublishKind === "deploy" || record.deployPublishKind === "publish") &&
+    (record.provider === undefined || record.provider === "jev" || record.provider === "clef") &&
     typeof record.at === "number" &&
     Number.isFinite(record.at)
   );

@@ -668,8 +668,11 @@
           'gate.source.localRule': 'Regla local (~1ms, sin red)',
           'gate.source.cache': 'Caché (sin red)',
           'gate.source.jev': 'Jev (con red)',
+          'gate.source.clef': 'Clef (con red)',
           'gate.source.none': 'Nadie: Jev no contestó',
+          'gate.source.noneClef': 'Nadie: Clef no contestó',
           'load.unjudged': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Jev y no contestó. El comando siguió su curso — fallar abierto es lo correcto — pero nadie lo revisó, así que no cuentan arriba.',
+          'load.unjudgedClef': '{{n}} comando(s) pasaron sin juicio: se le preguntó a Clef y no contestó. El comando siguió su curso — fallar abierto es lo correcto — pero nadie lo revisó, así que no cuentan arriba.',
           'approvals.heading': '¿Cómo va la calibración?',
           'approvals.empty': 'El gate no ha detenido ningún comando en esta ventana. Esta sección se llena cuando se pregunte y la persona responda.',
           'approvals.approved': 'Aprobadas',
@@ -951,8 +954,11 @@
           'gate.source.localRule': 'Local rule (~1ms, no network)',
           'gate.source.cache': 'Cache (no network)',
           'gate.source.jev': 'Jev (network)',
+          'gate.source.clef': 'Clef (network)',
           'gate.source.none': 'Nobody: Jev did not answer',
+          'gate.source.noneClef': 'Nobody: Clef did not answer',
           'load.unjudged': '{{n}} command(s) passed unjudged: Jev was asked and did not answer. The command went ahead — failing open is correct — but nobody reviewed it, so they are not counted above.',
+          'load.unjudgedClef': '{{n}} command(s) passed unjudged: Clef was asked and did not answer. The command went ahead — failing open is correct — but nobody reviewed it, so they are not counted above.',
           'approvals.heading': 'How is calibration going?',
           'approvals.empty': 'The gate stopped no command in this window. This section fills in when it asks and the person answers.',
           'approvals.approved': 'Approved',
@@ -1766,31 +1772,61 @@
           (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>'
       }
 
+      /**
+       * The sources bar's figures (C3b, odd/tasks/clef-decides-policies.md):
+       * every model-judged decision under the name of the provider that
+       * answered it, and every unanswered one under the provider that was
+       * asked, from the window's provider counts. A window with no provider
+       * counts (every Jev-only install) reads exactly as before. Jev's median
+       * is shown only when no Clef answer is folded into it. Pure, so it is
+       * tested from the panel's own source (board_html_providers.test.mjs).
+       */
+      function sourceFacts (w) {
+        var source = (w && w.bySource) || {}
+        var p = (w && w.providers) || null
+        var count = function (value) { return typeof value === 'number' && isFinite(value) && value > 0 ? value : 0 }
+        var judged = count(source.jev)
+        var unanswered = count(source.none)
+        var clef = Math.min(count(p && p.answeredBy && p.answeredBy.clef), judged)
+        var noneClef = Math.min(count(p && p.clefUnanswered), unanswered)
+        var median = w && w.jevLatency ? w.jevLatency.medianMs : null
+        return {
+          jev: judged - clef,
+          clef: clef,
+          cache: count(source.cache),
+          localRule: count(source['local-rule']),
+          noneJev: unanswered - noneClef,
+          noneClef: noneClef,
+          jevMedianMs: clef === 0 && typeof median === 'number' ? median : null
+        }
+      }
+
       function renderToll (w) {
         var total = w.totalDecisions || 0
-        var source = w.bySource || {}
-        // A `none` record is a command that reached the point of asking Jev
-        // and got no answer -- it passed UNJUDGED. It stays in the bar, in
-        // red, and gets its own sentence; it is never folded into what the
-        // gate settled.
-        var unjudged = source.none || 0
-        var median = w.jevLatency && w.jevLatency.medianMs
+        // A `none` record is a command that reached the point of asking a
+        // model and got no answer -- it passed UNJUDGED. It stays in the bar,
+        // in red, and gets its own sentence; it is never folded into what the
+        // gate settled. Each provider's share sits under its own name (C3b).
+        var f = sourceFacts(w)
         var segments = [
-          { value: source.jev || 0, cls: 'v1', label: median != null ? t('gate.source.jevMedian', { ms: ms(median) }) : t('gate.source.jev') },
-          { value: source.cache || 0, cls: 'v2', label: t('gate.source.cache') },
-          { value: source['local-rule'] || 0, cls: 'v3', label: t('gate.source.localRule') },
-          { value: unjudged, cls: 'vd', label: t('gate.source.none') }
+          { value: f.jev, cls: 'v1', label: f.jevMedianMs != null ? t('gate.source.jevMedian', { ms: ms(f.jevMedianMs) }) : t('gate.source.jev') },
+          { value: f.clef, cls: 'v1', label: t('gate.source.clef') },
+          { value: f.cache, cls: 'v2', label: t('gate.source.cache') },
+          { value: f.localRule, cls: 'v3', label: t('gate.source.localRule') },
+          { value: f.noneJev, cls: 'vd', label: t('gate.source.none') },
+          { value: f.noneClef, cls: 'vd', label: t('gate.source.noneClef') }
         ]
         // A count, not minutes: minutes saved would be this count times a
         // median, an extrapolation the unmeasured card says this board does
         // not make.
-        var avoided = (source.cache || 0) + (source['local-rule'] || 0)
+        var avoided = f.cache + f.localRule
         el('toll-body').innerHTML =
           '<div class="kpi"><span class="kpi-n">' + esc(num(total)) + '</span>' +
           '<span class="kpi-unit">' + esc(t('toll.unit')) + '</span></div>' +
           '<p class="kpi-sub">' + esc(t('toll.avoided', { n: num(avoided) })) + '</p>' +
           stackedBar(segments, total) + legendList(segments, total) +
-          (unjudged > 0 ? line(t('load.unjudged', { n: num(unjudged) })) : '')
+          (f.noneJev > 0 ? line(t('load.unjudged', { n: num(f.noneJev) })) : '') +
+          (f.noneClef > 0 ? line(t('load.unjudgedClef', { n: num(f.noneClef) })) : '')
       }
 
       // ---------- who decides (multi-provider P7) ------------------------------

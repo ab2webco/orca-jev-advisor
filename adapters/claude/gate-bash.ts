@@ -286,7 +286,11 @@ const t = (key: GateKey, params?: Readonly<Record<string, string>>): string => t
  * for anything decided before a provider was asked (a local rule, a cache
  * replay), so those lines read exactly as before.
  */
-const decidedBy = (): GateJudge => (providerStamp?.provider === 'clef' ? 'clef' : 'jev')
+const decidedBy = (): GateJudge => (providerStamp?.provider === 'clef' || cacheHitJudge === 'clef' ? 'clef' : 'jev')
+/** C3b: the provider a replayed cache entry names (its `provider`), set on a hit; null otherwise. */
+let cacheHitJudge: GateJudge | null = null
+/** C3b: what a cache entry written now records about who decided it -- nothing for Jev, so Jev's entries are as before. */
+const cacheProvider = (): { readonly provider?: 'clef' } => (decidedBy() === 'clef' ? { provider: 'clef' } : {})
 /** `t` for a line that names the judge: GATE_CATALOG itself when Jev judged. */
 const tJudged = (key: GateKey, params?: Readonly<Record<string, string>>): string => translate(gateCatalogFor(decidedBy()), LOCALE, key, params)
 /** The judge's name in model-facing English. */
@@ -2641,6 +2645,7 @@ async function main(): Promise<void> {
     return
   }
   if (hit !== undefined) {
+    cacheHitJudge = hit.provider === 'clef' ? 'clef' : null
     // An 'advise' hit is never replayed as a canned line: recoverability
     // depends on the CURRENT git status, which the shape-only cache key
     // knows nothing about, and an identical retry must still be checked
@@ -2700,9 +2705,9 @@ async function main(): Promise<void> {
     const cacheHitReason = hit.decision === 'ask' ? t('policyAskReason', { policyId: hit.policyId ?? '', segment: cacheHitSegment }) : hit.reason
     const cacheHitSystemMessage =
       hit.decision === 'deny'
-        ? t('policyBlockedLine', { segment: cacheHitSegment, policyId: hit.policyId ?? '' })
+        ? tJudged('policyBlockedLine', { segment: cacheHitSegment, policyId: hit.policyId ?? '' })
         : hit.decision === 'ask'
-          ? t('policyAskLine', { policyId: hit.policyId ?? hit.reason, segment: cacheHitSegment })
+          ? tJudged('policyAskLine', { policyId: hit.policyId ?? hit.reason, segment: cacheHitSegment })
           : undefined
     emit(hit.decision, cacheHitReason, cacheHitSystemMessage)
     return
@@ -2796,6 +2801,7 @@ async function main(): Promise<void> {
         decision: 'advise',
         reason: resolved.riskAdviceReasonsEnglish.join(' · '),
         reasonKeys: resolved.riskAdviceReasonKeys.length > 0 ? resolved.riskAdviceReasonKeys : undefined,
+        ...cacheProvider(),
         at: Date.now(),
       }
       writeCache(cache)
@@ -2821,7 +2827,7 @@ async function main(): Promise<void> {
   // (`resolved.deployPublishAdvice`) stays model-facing only.
   if (resolved.decision === 'allow' && resolved.deployPublishAdvice !== null) {
     if (key !== null) {
-      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, deployPublishKind: resolved.deployPublishKind ?? undefined, at: Date.now() }
+      cache[key] = { decision: 'advise', reason: resolved.deployPublishAdvice, deployPublishKind: resolved.deployPublishKind ?? undefined, ...cacheProvider(), at: Date.now() }
       writeCache(cache)
     }
     resolveAdviceOutcome({
@@ -2839,6 +2845,7 @@ async function main(): Promise<void> {
       decision: resolved.decision,
       reason: resolved.reason,
       ...(resolved.policyId !== null ? { policyId: resolved.policyId, policyRule: resolved.policyRule ?? undefined } : {}),
+      ...cacheProvider(),
       at: Date.now(),
     }
     writeCache(cache)

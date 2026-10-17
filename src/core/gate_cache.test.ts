@@ -120,3 +120,12 @@ test("pruneGateCache on an empty object returns an empty, unchanged cache", () =
   assert.deepEqual(result.fresh, {});
   assert.equal(result.changed, false);
 });
+
+test("C3b: an entry may name the provider that decided it; an old entry without one stays valid", () => {
+  const base = { decision: "advise", reason: "x", at: 1 };
+  assert.equal(isValidGateCacheEntry(base), true);
+  assert.equal(isValidGateCacheEntry({ ...base, provider: "clef" }), true);
+  assert.equal(isValidGateCacheEntry({ ...base, provider: "jev" }), true);
+  assert.equal(isValidGateCacheEntry({ ...base, provider: "gpt" }), false);
+  assert.equal(isValidGateCacheEntry({ ...base, provider: 1 }), false);
+});

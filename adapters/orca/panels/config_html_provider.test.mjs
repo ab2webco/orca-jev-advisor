@@ -97,3 +97,8 @@ test('the masked status shows at most the last four characters', () => {
   assert.match(body, /endsWith/)
   assert.doesNotMatch(body, /\.value\b/)
 })
+
+test('C3b: the intro says Jev also answers when Clef sees a possible policy hit, in both languages', () => {
+  assert.ok(catalogBlock('es').includes("'provider.intro': 'Jev (TypeSafe) juzga cada comando hoy. Clef (Cloudflare Workers AI) habla el mismo contrato y tiene una cuota gratis diaria. En «Ambos», Clef responde primero y Jev responde cuando Clef duda, ve que podría aplicar una política, falla o se acaba la cuota del día.'"))
+  assert.ok(catalogBlock('en').includes("'provider.intro': 'Jev (TypeSafe) judges every command today. Clef (Cloudflare Workers AI) speaks the same contract and has a free daily allowance. In Both, Clef answers first and Jev answers when Clef is in doubt, sees a possible policy hit, fails, or the day\\u2019s allowance is spent.'"))
+})

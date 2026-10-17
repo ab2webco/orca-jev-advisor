@@ -308,3 +308,63 @@ test('Jev-only mode: an advice and a policy block are byte-identical to 0.13.3',
   const deny = JSON.stringify({ model: 'jev-latest', answers: policyAnswers(0.2, { violation: { none: 0.04, policy_1: 0.96 } }), usage: { input_tokens: 480, output_tokens: 10 } })
   assert.equal(run(home, { script: { 'api.typesafe.ai': { status: 200, body: deny } } }).stdout, GOLDEN_JEV_DENY_ES)
 })
+
+// C3b: a cache hit names whoever decided the entry it replays. Captured
+// before C3b: a Jev-only cache hit must never change.
+const GOLDEN_JEV_CACHE_ADVICE = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Jev advice (not a refusal): this command would affect something worth a second look before it runs.\\nIt would run: `some-unmeasured-tool --flag`.\\nWhy: if it is wrong, it breaks something that matters to someone · this directory doesn\'t match any catalog destination, so the global thresholds were used.\\nThis session could not be identified, so repeating the command will NOT be recognized as the same request and will be judged fresh. If the user explicitly asked for exactly this, say so plainly and proceed deliberately; otherwise, change course."},"systemMessage":"jev · advised the model before `some-unmeasured-tool --flag`: Jev isn\'t sure it\'s harmless"}'
+const GOLDEN_JEV_CACHE_DENY_ES = GOLDEN_JEV_DENY_ES
+const policyDenyAnswers = () => policyAnswers(0.2, { violation: { none: 0.04, policy_1: 0.96 } })
+
+function cacheEntries (home) {
+  return Object.values(JSON.parse(readFileSync(join(home, '.cache', 'orca-supervisor', 'gate-bash.json'), 'utf8')))
+}
+
+test('Jev-only mode: a cache hit is byte-identical to before, and its entry carries no provider', () => {
+  const advise = makeHome({ settings: { mode: 'jev' } })
+  const script = { 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } }
+  run(advise, { script })
+  const second = run(advise, { script })
+  assert.deepEqual(second.rows.map((r) => r.source), ['jev', 'cache'])
+  assert.equal(second.stdout, GOLDEN_JEV_CACHE_ADVICE)
+  assert.ok(cacheEntries(advise).every((entry) => !('provider' in entry)))
+  const home = makeHome({ settings: { mode: 'jev' } })
+  setLocale(home, 'es')
+  writePolicies(home)
+  const deny = JSON.stringify({ model: 'jev-latest', answers: policyDenyAnswers(), usage: { input_tokens: 480, output_tokens: 10 } })
+  run(home, { script: { 'api.typesafe.ai': { status: 200, body: deny } } })
+  assert.equal(run(home, { script: { 'api.typesafe.ai': { status: 200, body: deny } } }).stdout, GOLDEN_JEV_CACHE_DENY_ES)
+})
+
+test('both mode: a cache hit of a Clef advice names Clef, to the person and the model', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  setLocale(home, 'es')
+  const script = { 'api.cloudflare.com': { status: 200, body: clefBody(2.5) }, 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } }
+  run(home, { script })
+  assert.ok(cacheEntries(home).some((entry) => entry.provider === 'clef'))
+  const second = run(home, { script })
+  assert.equal(second.rows.at(-1).source, 'cache')
+  const payload = JSON.parse(second.stdout)
+  assert.equal(payload.systemMessage, 'clef · avisó al modelo antes de `' + SEGMENT + '`: Clef no está seguro de que sea inofensivo')
+  assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^Clef advice \(not a refusal\): /)
+})
+
+test('both mode: a cache hit of a Jev advice (after Clef doubted) still names Jev', () => {
+  const home = makeHome({ settings: { mode: 'both' } })
+  const script = { 'api.cloudflare.com': { status: 200, body: clefBody(LINE + 0.05) }, 'api.typesafe.ai': { status: 200, body: jevBody(2.5) } }
+  run(home, { script })
+  assert.ok(cacheEntries(home).every((entry) => !('provider' in entry)))
+  const second = run(home, { script })
+  assert.equal(second.rows.at(-1).source, 'cache')
+  assert.equal(second.stdout, GOLDEN_JEV_CACHE_ADVICE)
+})
+
+test('Clef mode: a cache hit of a Clef policy block names Clef', () => {
+  const home = makeHome({ settings: { mode: 'clef' } })
+  setLocale(home, 'es')
+  writePolicies(home)
+  const script = { 'api.cloudflare.com': { status: 200, body: clefPolicyBody(0.2, { violation: { none: 0.04, policy_1: 0.96 } }) } }
+  run(home, { script })
+  const second = run(home, { script })
+  assert.equal(second.rows.at(-1).source, 'cache')
+  assert.equal(JSON.parse(second.stdout).systemMessage, 'clef · bloqueó `' + SEGMENT + '`: lo prohíbe la política never_rewrite_shared_history')
+})
