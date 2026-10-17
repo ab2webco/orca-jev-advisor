@@ -58,6 +58,11 @@ test('the installed copy validates cleanly with the real `claude` binary -- the 
   const raw = execFileSync(claudeBinary, ['plugin', 'validate', '--json', destination], { encoding: 'utf8' })
   const result = JSON.parse(raw)
   assert.equal(result.success, true, `claude plugin validate reported failure: ${JSON.stringify(result)}`)
+  // JEVADV-105: the engine lists what `$.env.get` reads off the process env; Orca's pins and game mode must be among them.
+  const envReads = JSON.stringify(result).match(/env reads: [^"]*/)?.[0] ?? ''
+  for (const name of ['ORCA_GAME_MODE', 'ORCA_GAME_HUD', 'ORCA_AGENT_MODEL_PINNED', 'ORCA_AGENT_EFFORT_PINNED']) {
+    assert.match(envReads, new RegExp(`\\b${name}\\b`), `${name} is read from the process env`)
+  }
 })
 
 // Memory in Shadow (odd/tasks/memory-shadow.md, M8): the hooks module now
