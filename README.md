@@ -16,6 +16,12 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.6
+
+- **Jev no longer leaves git locked.** When Jev checked a git command in a large repository, it could leave an empty `index.lock` file behind. Then the next git command in that folder failed with "Unable to create index.lock" until someone deleted the file by hand. Jev's own git reads now never lock the repository.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.13.5
 
 - **Jev no longer stops ordinary work in a checkout on main.** The `never_write_to_main` policy was asked about any command run from such a checkout. So looking up a process (`pgrep`, `ps | grep`), or creating, linking or deleting files outside the repository, was refused as if it wrote to main. Now the policy is asked only when the command can write inside that checkout: a commit, a file created or edited in the repo, a script run there. Commands that only read, or that write only to `/tmp` or your home folder, go ahead.

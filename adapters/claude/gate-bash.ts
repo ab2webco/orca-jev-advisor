@@ -960,12 +960,18 @@ const GIT_TIMEOUT_MS = 1500
 
 /**
  * Runs git and returns its stdout, or null when it fails, exits non-zero or
- * runs past GIT_TIMEOUT_MS (killed with SIGKILL). Null means "unknown": every
- * caller already reads a failed call that way, never as a reason to stop.
+ * runs past GIT_TIMEOUT_MS. Null means "unknown": every caller already reads
+ * a failed call that way, never as a reason to stop.
+ *
+ * Every call only reads, so none may leave the checkout's index.lock behind
+ * (odd/tasks/hook-git-locks.md): GIT_OPTIONAL_LOCKS=0 keeps `status` and
+ * `diff` from taking it to refresh the index, and an overrun gets SIGTERM,
+ * on which git removes the lock files it holds (`add --dry-run` still takes
+ * one). SIGKILL left a 0-byte lock in a large worktree whose status overran.
  */
 function gitOutput(args: readonly string[], cwd: string): string | null {
   try {
-    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: GIT_TIMEOUT_MS, killSignal: 'SIGKILL' })
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: GIT_TIMEOUT_MS, killSignal: 'SIGTERM' })
   } catch {
     return null
   }

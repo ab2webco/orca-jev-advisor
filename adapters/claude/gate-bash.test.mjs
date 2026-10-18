@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -4531,4 +4531,30 @@ test('secret guard G0: a cached allow for the push shape is never replayed over 
   writePoliciesMirror(home, [QUEUE_POLICY])
   seedOwnBranchPushVerdict(home, repo, command, [QUEUE_POLICY], { decision: 'allow', reason: 'clean', at: Date.now() })
   assertSecretAsk(home, keyedAnswerFor(home, command, repo, 'secret-cache'), '.env')
+})
+
+// odd/tasks/hook-git-locks.md L1: on 2026-10-18 the orca-oss lead found a
+// 0-byte index.lock left in a worktree three times in one session. The hook's
+// `git status` refreshes the index, which takes the index lock, and a status
+// that overruns GIT_TIMEOUT_MS is killed before git can remove it. Git the
+// hook runs only reads: it never takes the index lock at all.
+test('L1: the hook never writes or locks the index of the checkout it judges', () => {
+  const repo = realpathSync(mkdtempSync(join(tmpdir(), 'orca-jev-index-lock-test-')))
+  tempDirs.push(repo)
+  initRepo(repo)
+  writeFileSync(join(repo, 'tracked.txt'), 'same\n')
+  git(['add', 'tracked.txt'], repo)
+  git(['commit', '-q', '-m', 'tracked'], repo)
+  const index = join(repo, '.git', 'index')
+  // A tracked file whose stat no longer matches the index: any `git status`
+  // that may take the optional lock refreshes the entry and rewrites the index.
+  const past = new Date(Date.now() - 60_000)
+  utimesSync(index, past, past)
+  writeFileSync(join(repo, 'tracked.txt'), 'same\n')
+  const before = statSync(index).mtimeMs
+
+  run(makeHome(), MIDDLE_TIER_COMMAND, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' })
+
+  assert.equal(statSync(index).mtimeMs, before, 'the index is unchanged, so git never took its lock')
+  assert.equal(existsSync(join(repo, '.git', 'index.lock')), false)
 })

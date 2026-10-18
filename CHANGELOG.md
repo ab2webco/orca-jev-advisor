@@ -2,6 +2,10 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.6
+
+- **The gate never leaves a git `index.lock` behind** (odd/tasks/hook-git-locks.md, `adapters/claude/gate-bash.ts`). To read a checkout, the hook runs `git status`, which refreshes the index and takes the optional index lock to do so. A call that ran past its 1.5 s limit was stopped with SIGKILL, so git could not remove the lock. That left a 0-byte `index.lock`, and the next git command in that worktree failed on it. This happened three times in one orca-oss session, in a worktree where `git status --porcelain --ignored -uall` takes 1.8 s. Every hook git call now runs with `GIT_OPTIONAL_LOCKS=0`, so `status` and `diff` take no lock. A call that overruns gets SIGTERM, on which git removes the lock files it holds; `git add --dry-run` still takes one.
+
 ## 0.13.5
 
 - **Branch policies follow where a command writes, not where it runs** (odd/tasks/branch-reach-places.md, `src/core/branch_reach.ts`). A `protected-branch` policy such as `never_write_to_main` was asked about any command run from a checkout on a protected branch unless the program was obviously safe or one of `rm`, `cp`, `echo` and `printf`. So `pgrep`, `ps | grep`, `mkdir`, `ln` and `rm -rf ~/Library/...` were refused as writes to main: 18 denies on 2026-10-16 and 10-17. `branchReachPlaces` now counts:
