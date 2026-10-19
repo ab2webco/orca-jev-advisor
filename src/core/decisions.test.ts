@@ -27,6 +27,7 @@ import {
   filterPoliciesForDestination,
   GATE_CONSEQUENCE_CEILING,
   GATE_DECISION_RULES_VERSION,
+  gateJudgedPolicies,
   interpretDestinationPolicy,
   isPolicyScope,
   resolvePolicyScope,
@@ -480,6 +481,32 @@ test("decideGateAction: a permits policy can NEVER turn an ask into an allow", (
 
   const withPolicy = decideGateAction({ action: ACTION, policies: [permits], answers: highRisk });
   assert.equal(withPolicy.verdict, "ask", "a permissive rule must not overrule the risk judgement");
+});
+
+test("gateJudgedPolicies: only the kinds that can change the gate's verdict are asked, legacy spellings included (odd/tasks/gate-model-spend.md T1)", () => {
+  const all: Policy[] = [
+    { id: "a", rule: "reads are fine", kind: "permits" },
+    { id: "b", rule: "never on main", kind: "prohibits" },
+    { id: "c", rule: "prod needs a person", kind: "requires_human" },
+    { id: "d", rule: "legacy permit", kind: "permite" as Policy["kind"] },
+    { id: "e", rule: "legacy prohibition", kind: "prohibe" as Policy["kind"] },
+    { id: "f", rule: "legacy ask", kind: "pregunta" as Policy["kind"] },
+  ];
+  assert.deepEqual(gateJudgedPolicies(all).map((p) => p.id), ["b", "c", "e", "f"]);
+  const questions = buildPolicyQuestions(gateJudgedPolicies(all));
+  assert.equal("coverage" in questions, false);
+  assert.equal("same_kind" in questions, false);
+});
+
+test("gateJudgedPolicies: whatever the permits answers were, dropping them never changes decideGateAction's verdict", () => {
+  const permits: Policy = { id: "rule", rule: "a permissive rule", kind: "permits" };
+  for (const risk of [{ reversible: 0.1, external: 0.9, consequence: 2.5 }, { reversible: 0.9, external: 0.1, consequence: 0.2 }]) {
+    for (const match of [0.1, 0.9]) {
+      const full = combinedAnswers({ choice: "rule", confidence: 0.95, match }, risk);
+      const asked = decideGateAction({ action: ACTION, policies: gateJudgedPolicies([permits]), answers: riskAnswers(risk.reversible, risk.external, risk.consequence) });
+      assert.equal(asked.verdict, decideGateAction({ action: ACTION, policies: [permits], answers: full }).verdict);
+    }
+  }
 });
 
 test("decideGateAction: a permits policy leaves an already-safe command alone", () => {

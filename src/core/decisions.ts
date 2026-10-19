@@ -531,6 +531,22 @@ export function filterPoliciesForCommandScope(policies: readonly Policy[], seedS
   });
 }
 
+/**
+ * The policies the gate asks Jev or Clef about: the kinds whose answer can
+ * change decideGateAction's verdict, `prohibits` and `requires_human`. A
+ * `permits` match falls through to the risk stage there, so its questions
+ * (`coverage`, `same_kind`) were paid for and never read: 27% of a gate
+ * request, measured on 3,987 real ones (odd/tasks/gate-model-spend.md T1).
+ * advisor.decide still asks them through interpretDestinationPolicy, where a
+ * permits match does decide.
+ */
+export function gateJudgedPolicies(policies: readonly Policy[]): readonly Policy[] {
+  return policies.filter((policy) => {
+    const kind = migratePolicyKind(policy.kind);
+    return kind === "prohibits" || kind === "requires_human";
+  });
+}
+
 /** What a command can reach, as filterPoliciesForBranchReach reads it. */
 export interface BranchReach {
   /**

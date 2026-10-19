@@ -65,7 +65,7 @@ import { accessSync, appendFileSync, closeSync, constants as fsConstants, mkdirS
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, migratePolicyKind } from '../../src/core/decisions.ts'
+import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQuestions, buildActionGateState, buildPolicyQuestions, buildSeedScopeIndex, decideGateAction, filterPoliciesForBranchReach, filterPoliciesForCommandScope, filterPoliciesForDestination, gateJudgedPolicies, migratePolicyKind } from '../../src/core/decisions.ts'
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
@@ -1898,8 +1898,9 @@ interface GateProviders {
  * policy (no_force_push, discard_uncommitted_work) is already enforced by
  * one of this file's own NEVER_SILENTLY rules before this function ever
  * runs, so a real instance never reaches here at all -- neither must ever
- * reach the coverage question. When at least one policy survives both, its two
- * extra policy-stage questions fold into the SAME callJev call the gate
+ * reach the policy questions. When at least one prohibits or requires_human
+ * policy survives both, its policy-stage questions (violation, needs_person;
+ * permits are not asked, see gateJudgedPolicies) fold into the SAME call the gate
  * already makes (no second network round trip). decideGateAction then
  * composes "does a policy already resolve this" with the existing
  * consequence-ceiling risk rule, substituting the matched destination's own
@@ -1911,8 +1912,8 @@ interface GateProviders {
  * command-scoped policy survives filtering (the ONLY reason this function
  * gets called for a qualifying command at all -- see main()'s own
  * short-circuit for the no-policies case), `localAllowQualifies` tells
- * decideGateAction to let the policy stage's coverage question keep
- * deciding while the risk axes never do. `qualifies: false` (the ordinary
+ * decideGateAction to let the policy stage's violation and needs_person
+ * questions keep deciding while the risk axes never do. `qualifies: false` (the ordinary
  * case) changes nothing here.
  *
  * `commandScopedPolicies` is resolved once in main() (the same
@@ -1923,9 +1924,13 @@ interface GateProviders {
  */
 async function askJev(providers: GateProviders, command: string, jevContext: string, jevNames: JevNames, localAllow: LocalAllow, matched: MirroredDestination | null, commandScopedPolicies: readonly Policy[], cwd: string): Promise<JevOutcome> {
   try {
+    // T1 (odd/tasks/gate-model-spend.md): only the policies whose answer can
+    // change the verdict are asked; the neutral keys follow this list, so
+    // decideGateAction reads the answers against the same one.
+    const judgedPolicies = gateJudgedPolicies(commandScopedPolicies)
     const questions = {
       ...buildActionGateQuestions(),
-      ...(commandScopedPolicies.length > 0 ? buildPolicyQuestions(commandScopedPolicies, jevNames) : {}),
+      ...(judgedPolicies.length > 0 ? buildPolicyQuestions(judgedPolicies, jevNames) : {}),
     }
     const destination = matched !== null ? mirroredDestinationContext(matched) : undefined
     // The advise-model release, Part 3(a): a local, no-network fact ("this
@@ -1950,7 +1955,7 @@ async function askJev(providers: GateProviders, command: string, jevContext: str
     const consequenceCeiling = matched?.autonomy?.consequenceCeiling
     const gateInput = (answers: Record<string, Answer>) => ({
       action: command,
-      policies: commandScopedPolicies,
+      policies: judgedPolicies,
       answers,
       consequenceCeiling,
       noDestinationMatched: matched === null,
@@ -1973,7 +1978,7 @@ async function askJev(providers: GateProviders, command: string, jevContext: str
       doubt: (answers) => gateConsequenceDoubt(answers, consequenceCeiling),
       totalBudgetMs: BUDGET_MS,
       clefBudgetMs: CLEF_BUDGET_MS,
-      policyHit: commandScopedPolicies.length > 0 ? (answers) => gatePolicyHit(answers, policyQuestionIds) : null,
+      policyHit: judgedPolicies.length > 0 ? (answers) => gatePolicyHit(answers, policyQuestionIds) : null,
       shadow: multiProvider ? { sampled: Math.random() < GATE_SHADOW_SHARE, verdictOf: (answers) => decideGateAction(gateInput(answers)).verdict } : null,
     })
     if (multiProvider) providerStamp = { provider: cascade.provider, escalation: cascade.escalation, shadowAgrees: cascade.shadowAgrees }

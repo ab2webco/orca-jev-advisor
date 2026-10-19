@@ -234,6 +234,34 @@ test('Jev-only mode with a policy: Jev alone is asked, the row carries no provid
   assert.equal('provider' in rows[0], false)
 })
 
+// T1 (odd/tasks/gate-model-spend.md): a permits answer never changes the
+// gate's verdict (decideGateAction lets it fall through to risk), so the gate
+// stops paying for it: no coverage or same_kind question and no permits rule
+// in the request, to Jev or to Clef. The neutral keys follow the list that
+// was asked, so a violation still names the real prohibition.
+const POLICIES_WITH_PERMITS = [
+  { id: 'read_and_test', rule: 'Reading code and running tests happens without asking.', kind: 'permits', scope: 'command' },
+  ...POLICIES
+]
+
+for (const mode of ['jev', 'both']) {
+  test(`${mode} mode: a permits policy is not asked, and a violation still names the real prohibition`, () => {
+    const home = makeHome({ settings: { mode } })
+    writeFileSync(join(home, '.config', 'orca-supervisor', 'policies.json'), JSON.stringify(POLICIES_WITH_PERMITS))
+    const violates = (body) => JSON.stringify({ ...body, answers: { ...policyAnswers(0.2), violation: choice({ policy_1: 0.95, none: 0.05 }) } })
+    const jev = violates({ model: 'jev-latest', usage: { input_tokens: 480, output_tokens: 10 } })
+    const clef = JSON.stringify({ result: JSON.parse(violates({ model: 'clef', usage: { input_tokens: 480, output_tokens: 0 } })), success: true, errors: [], messages: [] })
+    const { requests, rows } = run(home, { script: { 'api.cloudflare.com': { status: 200, body: clef }, 'api.typesafe.ai': { status: 200, body: jev } } })
+    assert.ok(requests.length > 0)
+    for (const request of requests) {
+      assert.deepEqual(Object.keys(request.body.questions).sort(),['consequence', 'external', 'needs_person', 'reversible', 'violation'])
+      assert.equal(JSON.stringify(request.body).includes('running tests happens without asking'), false)
+    }
+    assert.equal(rows[0].verdict, 'deny')
+    assert.equal(rows[0].policyId, 'never_rewrite_shared_history')
+  })
+}
+
 // C2 (odd/tasks/clef-decides-policies.md): the person's line and the model's
 // text name whoever decided. Jev's stay byte-identical to what they were.
 function setLocale (home, locale) {

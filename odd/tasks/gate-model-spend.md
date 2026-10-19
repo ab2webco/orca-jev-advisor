@@ -101,7 +101,7 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
 
 ## Scope
 
-- **C1.** The gate stops sending the permits policies to Jev and Clef: `coverage`, `same_kind`, and the permits rule text. The dead code that read them goes too: the `coverage` branch of `interpretDestinationPolicy`, and `policy.allowed`. Permits policies stay in the panel and the policies file. They also stay in `commandScopedPolicies`, so the cache key and the local-allow shortcut behave exactly as before.
+- **C1.** The gate stops sending the permits policies to Jev and Clef: `coverage`, `same_kind`, and the permits rule text. The gate builds its questions and reads its answers through `gateJudgedPolicies`, which keeps only `prohibits` and `requires_human`. The `coverage` branch of `interpretDestinationPolicy` stays: `advisor.decide` (`adapters/orca/main.mjs`) still asks it, and there a permits match does decide. Permits policies stay in the panel and the policies file. They also stay in `commandScopedPolicies`, so the cache key and the local-allow shortcut behave exactly as before.
 - **C2.** Tier 1a (`isSafeSegment`) changes in three ways:
   - A `<` or `>` inside single or double quotes is not a redirection. A segment with `$'...'` or an unclosed quote keeps the old character test.
   - `git grep` (without `-O`/`--open-files-in-pager`), `ls-files`, `rev-list`, `merge-base`, `for-each-ref`, `ls-tree` and `describe` are safe.
@@ -113,7 +113,9 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
 
 ## Checklist
 
-- [ ] T1 C1: the gate asks no permits question. RED: `buildPolicyQuestions` with a permits policy has no `coverage` question. Dead `coverage` branch and `policy.allowed` removed.
+- [x] T1 C1: the gate asks no permits question.
+  - RED: `gate-providers.test.mjs` "a permits policy is not asked", in Jev and Both modes. The request carried `coverage` and `same_kind`. `decisions.test.ts` `gateJudgedPolicies` failed on the missing export.
+  - GREEN: both tests pass. A violation answer keyed `policy_1` still resolves to the real prohibition behind a permits policy listed first. `decisions.test.ts`, `gate-bash.test.mjs` and `provider_cascade.test.ts`: 494 of 494 pass.
 - [ ] T2 C2: tier 1a takes the quoted `<`/`>`, the read-only git subcommands and `pgrep`/`ps`/`lsof`, and refuses git `--output`. RED tests for each form, and for the forms that must stay out (`$'…'`, an unclosed quote, `git grep -O`, `git diff --output=x`, `git log --out=x`).
 - [ ] T3 Replay: every captured command through the new hook vs the old. Zero commands whose real or replayed verdict was deny, ask or advise become allow or tier 1a. Model calls before vs after.
 - [ ] T4 Release 0.13.8: CHANGELOG, version bump, `npm run typecheck`, `npm test`, PR to main (no merge, tag or release).
