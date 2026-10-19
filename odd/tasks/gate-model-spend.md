@@ -126,7 +126,18 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
     - a git word with an expansion or a quoted option name;
     - `pgrep "$X"`.
   - `gate-bash.test.mjs` B2 now expects `pgrep -f x` and `ps aux | grep node` to pass as tier 1a, before any policy. `pkill -f x` takes their place as a program that writes nothing and still reaches the policy stage. `npm test`: 4,591 of 4,591.
-- [ ] T3 Replay: every captured command through the new hook vs the old. Zero commands whose real or replayed verdict was deny, ask or advise become allow or tier 1a. Model calls before vs after.
+- [x] T3 Replay. All results are in scratchpad `spend/out/`.
+  - **Corpus.** All 9,250 real commands were run through the new hook and compared with the old.
+    - Model calls: 3,987 → 3,853 (−134, −3.4%). 137 moved from model to tier 1a. 3 moved from tier 1a to model: `git log -S'...'`, where a quoted value glued to a short option is not read.
+    - Mean request size for the commands that still reach a model: 7,573 → 5,545 characters (−27%). Outside the permits questions, the question set changed on 6 commands, and `never_write_to_main` was dropped on 3. Each one is a read segment that is tier 1a now: `git grep … origin/main` no longer names `main`, and such a segment counts as `internal` for client reach.
+    - None of the 357 real stops and advices whose text was recovered became tier 1a. None of the 11 real `never_write_to_main` denies lost the policy.
+  - **Deterministic.** 260 recorded answer sets (37 deny, 49 advise), with and without the permits answers, through the real hook: 0 changes.
+  - **Live.** 122 commands: every real deny with text, 60 real advices and the 60-command sample. Each was asked to Jev with the old request on the old code and with the new request on the new code.
+    - Verdicts: old deny 13 / advise 48 / allow 61; new deny 12 / advise 50 / allow 59 / tier 1a 1.
+    - Changes: 3 advise → allow, 1 deny → advise, 4 allow → advise.
+    - Each of the first four was asked 6 more times both ways. The verdict counts were identical on three: advise 4 / allow 2, advise 4 / allow 2, and advise 5 / deny 1. The fourth was stricter with the new request: allow 6 old vs allow 4 / advise 2 new. The consequence scores sit at the 1.66 line in both requests, so this is Jev's noise at the line, not the change.
+    - Jev input tokens: 2,090 → 1,640 (−21.5%).
+    - Result: no verdict loosened by the change.
 - [ ] T4 Release 0.13.8: CHANGELOG, version bump, `npm run typecheck`, `npm test`, PR to main (no merge, tag or release).
 
 ## Acceptance
