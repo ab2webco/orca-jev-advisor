@@ -59,6 +59,12 @@ test('the copy says what Clef receives and how far the free tier goes', () => {
   assert.match(en, /'provider\.allowance': '[^']*950[^']*'/)
 })
 
+test('the allowance with policies is the one measured for 0.13.8, which no longer sends the permits rules', () => {
+  // odd/tasks/gate-model-spend.md: about 1,680 input tokens a call with 20 policies.
+  assert.match(catalogBlock('en'), /'provider\.allowance': '[^']*with about 20, clef reaches about 245 calls a day and clef-omni about 390[^']*'/)
+  assert.match(catalogBlock('es'), /'provider\.allowance': '[^']*con unas 20, clef llega a unas 245 llamadas al día y clef-omni a unas 390[^']*'/)
+})
+
 test('Save writes decisionProvider from the two groups, Jev and clef by default', () => {
   assert.match(configHtml, /if \(providerSettingsLoaded\) namedWrites\.push\(\{ label: t\('save\.whichProvider'\), promise: write\('decisionProvider', readProviderSettings\(\)\) \}\)/)
   const read = extractFunction(configHtml, 'readProviderSettings')
@@ -106,8 +112,9 @@ test('C3b: the intro says Jev also answers when Clef sees a possible policy hit,
 test('C3c: the neuron estimate stays true once policies are sent, in both languages', () => {
   const es = catalogBlock('es')
   const en = catalogBlock('en')
-  assert.ok(es.includes('sin políticas') && es.includes('180'), 'es names the no-policy figures and the ~180 calls with about 20 policies')
-  assert.ok(/without policies/i.test(en) && en.includes('180'), 'en names the no-policy figures and the ~180 calls with about 20 policies')
+  // 0.13.8 (odd/tasks/gate-model-spend.md): ~180 became ~245 once the permits rules stopped being sent.
+  assert.ok(es.includes('sin políticas') && es.includes('245'), 'es names the no-policy figures and the ~245 calls with about 20 policies')
+  assert.ok(/without policies/i.test(en) && en.includes('245'), 'en names the no-policy figures and the ~245 calls with about 20 policies')
   assert.doesNotMatch(es, /alcanza para unas 950 llamadas del gate con clef, 1\.500 con clef-omni y 6\.000 con clef-flash\./)
   assert.doesNotMatch(es, /\b(tenés|podés|mirá|elegí)\b/)
 })
