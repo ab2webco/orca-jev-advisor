@@ -44,8 +44,8 @@ const WRITES_NO_FILE: ReadonlySet<string> = new Set([
   "echo", "printf", "find", "sed", "sort",
 ]);
 
-/** Tools that are obviously safe only for some arguments (`find -delete`, `sort -o`, `sed -i`, `rg --pre`, `awk system()`). */
-const ARGUMENT_DEPENDENT: ReadonlySet<string> = new Set(["find", "sed", "sort", "uniq", "rg", "awk", "file", "env"]);
+/** Tools that are obviously safe only for some arguments (`find -delete`, `sort -o`, `sed -i`, `rg --pre`, `awk system()`, an unreadable word for the process listings). */
+const ARGUMENT_DEPENDENT: ReadonlySet<string> = new Set(["find", "sed", "sort", "uniq", "rg", "awk", "file", "env", "pgrep", "ps", "lsof"]);
 
 /** find actions that write or run something: `-delete`, `-exec`, `-fprint out`... */
 const FIND_WRITES: ReadonlySet<string> = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]);

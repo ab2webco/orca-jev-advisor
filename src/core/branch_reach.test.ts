@@ -298,6 +298,8 @@ test("SF-1: an operand that cannot be resolved counts the directory, exactly as 
     ["cp a $X", [REPO]],
     ["kill $(pgrep node)", [REPO]],
     ['pgrep "$X"', [REPO]],
+    // odd/tasks/gate-model-spend.md T2: process listings are tier 1a, and a substitution in their arguments still counts the directory.
+    ["ps -o pid -p $(pgrep node)", [REPO]],
   ];
   for (const [command, places] of cases) assert.deepEqual(branchReachPlaces(command, REPO, HOME), places, command);
 });
