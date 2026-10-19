@@ -144,7 +144,7 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
   - The config panel said about 180 Clef calls a day with ~20 policies. It now says about 245 with `clef` and about 390 with `clef-omni` (`config_html_provider.test.mjs`: RED, then GREEN).
   - Screenshots: `node scripts/screenshot-panels.mjs --scenario ready` wrote 80 images, with no overflow and no script errors. I looked at the provider section on the General tab at 1440, 768, 390 and 320, in light and dark. The English copy shows the new figures with no clipping. The Spanish copy is checked by the test only, because the script renders English.
   - `npm run typecheck`: clean. `npm test`: 4,597 of 4,597 pass.
-  - PR to main is open (no merge, tag or release).
+  - PR to main: https://github.com/ab2webco/orca-jev-advisor/pull/89 (no merge, tag or release).
 
 ## Acceptance
 
