@@ -262,6 +262,15 @@ for (const mode of ['jev', 'both']) {
   })
 }
 
+test('jev mode: behind a permits policy, a needs_person answer still names the real requires_human policy', () => {
+  const home = makeHome({ settings: { mode: 'jev' } })
+  writeFileSync(join(home, '.config', 'orca-supervisor', 'policies.json'), JSON.stringify(POLICIES_WITH_PERMITS))
+  const body = JSON.stringify({ model: 'jev-latest', answers: policyAnswers(0.2, { needsPerson: { policy_2: 0.95, none: 0.05 } }), usage: { input_tokens: 480, output_tokens: 10 } })
+  const { rows } = run(home, { script: { 'api.typesafe.ai': { status: 200, body } } })
+  assert.equal(rows[0].verdict, 'ask')
+  assert.equal(rows[0].policyId, 'client_always_asks')
+})
+
 // C2 (odd/tasks/clef-decides-policies.md): the person's line and the model's
 // text name whoever decided. Jev's stay byte-identical to what they were.
 function setLocale (home, locale) {

@@ -9,7 +9,8 @@ Every release of Jev Advisor, newest first.
   - **Cost.** Measured live on 60 real commands: Clef `clef-omni` goes from 30.5 to 22.9 neurons a call, so about 390 Clef calls a day fit under the 9,000 stop instead of about 295. Jev input tokens go from 2,084 to 1,638 a call.
   - **Verdicts.** Unchanged:
     - 260 recorded answer sets (37 deny, 49 advise), replayed through the hook with and without the permits answers, gave 0 changes.
-    - On 122 real commands asked live both ways, the 4 changes toward allow were Jev's noise at the consequence line. Asked 6 more times, the old and new requests gave the same verdict counts.
+    - On 122 real commands asked live both ways, 4 verdicts changed toward allow. All 4 were Jev's noise at the consequence line. Each was asked 6 more times both ways: on three, the old and new requests gave the same verdict counts; on the fourth, the new request was the stricter one.
+  - **Panel.** The config panel's estimate with about 20 policies now reads about 245 Clef calls a day with `clef` and about 390 with `clef-omni`, instead of about 180.
   - **Unchanged.** `advisor.decide` still asks coverage, because there a permits match does decide. Permits policies stay in the panel, in the cache key and in the local-allow shortcut.
 - **Tier 1a passes more commands that only read** (`src/core/gate_safe_command.ts`, `src/core/shell_words.ts`). These now pass with no model call:
   - a `<` or `>` inside quotes (`grep -n "call<"`, `git log --format="<%an>"`);

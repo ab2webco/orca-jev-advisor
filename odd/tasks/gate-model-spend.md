@@ -109,7 +109,8 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
 - **Hole closed in C2.** `--output` (in any GNU prefix spelling) is refused on every safe git subcommand: `git diff --output=f` writes `f` and was tier 1a before.
 - **Out of scope.**
   - `src/core/gate_advice_text.ts` (0.13.7).
-  - The floor, the doubt band, `branch_reach.ts`.
+  - The floor and the doubt band.
+  - `branch_reach.ts`, except one line: `pgrep`, `ps` and `lsof` join its argument-dependent list. They are tier 1a now, and without that line a substitution in their arguments (`ps -p $(...)`) would stop counting the directory, against 0.13.5's SF-1 rule.
 
 ## Checklist
 
@@ -138,7 +139,12 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
     - Each of the first four was asked 6 more times both ways. The verdict counts were identical on three: advise 4 / allow 2, advise 4 / allow 2, and advise 5 / deny 1. The fourth was stricter with the new request: allow 6 old vs allow 4 / advise 2 new. The consequence scores sit at the 1.66 line in both requests, so this is Jev's noise at the line, not the change.
     - Jev input tokens: 2,090 → 1,640 (−21.5%).
     - Result: no verdict loosened by the change.
-- [ ] T4 Release 0.13.8: CHANGELOG, version bump, `npm run typecheck`, `npm test`, PR to main (no merge, tag or release).
+- [x] T4 Release 0.13.8.
+  - CHANGELOG, README and the version bump are done. The 0.13.7 rebase was clean.
+  - The config panel said about 180 Clef calls a day with ~20 policies. It now says about 245 with `clef` and about 390 with `clef-omni` (`config_html_provider.test.mjs`: RED, then GREEN).
+  - Screenshots: `node scripts/screenshot-panels.mjs --scenario ready` wrote 80 images, with no overflow and no script errors. I looked at the provider section on the General tab at 1440, 768, 390 and 320, in light and dark. The English copy shows the new figures with no clipping. The Spanish copy is checked by the test only, because the script renders English.
+  - `npm run typecheck`: clean. `npm test`: 4,597 of 4,597 pass.
+  - PR to main is open (no merge, tag or release).
 
 ## Acceptance
 
