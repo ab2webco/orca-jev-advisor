@@ -2,6 +2,13 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.9
+
+- **Jev reports its state to Orca from member panes** (odd/tasks/orca-member-report.md, `src/core/orca_report.ts`, `adapters/claude/mod-skills/hooks/index.ts` `reportToOrca`). A pane that runs inside Orca but is not drawn by the game now sends its model, effort and pins to Orca with `orca game state --json` and `ORCA_GAME_ADVISOR`. When known, it also sends the line Jev draws, the skill and tool it picked, the routed and session models, its confidence and the reason it kept a model. Orca keeps the report for that terminal and shows it on the member's card.
+  - **Only an absolute path runs.** The executable comes from `ORCA_GAME_CLI`, else `ORCA_CLI_COMMAND`. A bare `orca` is never run, because on Linux it is the GNOME screen reader.
+  - **Quiet and cheap.** A report is sent only when it differs from the last one, with a 2-second timeout and no wait in Jev's turn. A failure is ignored, and game panes send nothing.
+  - **Older Orca is unaffected.** Contract v1 keeps its meaning, and the new keys are extras an older Orca ignores. Until Orca exports `ORCA_GAME_CLI` to member panes, the path is empty and the reporter does nothing.
+
 ## 0.13.8
 
 - **The gate stops paying for questions whose answers it never reads** (odd/tasks/gate-model-spend.md, `src/core/decisions.ts` `gateJudgedPolicies`, `adapters/claude/gate-bash.ts`).
