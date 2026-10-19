@@ -2,6 +2,31 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.8
+
+- **The gate stops paying for questions whose answers it never reads** (odd/tasks/gate-model-spend.md, `src/core/decisions.ts` `gateJudgedPolicies`, `adapters/claude/gate-bash.ts`).
+  - **What changed.** Every gate request sent the `permits` policies to Jev and to Clef, as the `coverage` and `same_kind` questions with their rule text. `decideGateAction` lets a permits match fall through to the risk stage, so those answers never changed a verdict. They were 27% of every request, measured on 3,987 real ones. The gate now asks only the `prohibits` and `requires_human` policies, and the neutral `policy_N` keys follow the list it asked.
+  - **Cost.** Measured live on 60 real commands: Clef `clef-omni` goes from 30.5 to 22.9 neurons a call, so about 390 Clef calls a day fit under the 9,000 stop instead of about 295. Jev input tokens go from 2,084 to 1,638 a call.
+  - **Verdicts.** Unchanged:
+    - 260 recorded answer sets (37 deny, 49 advise), replayed through the hook with and without the permits answers, gave 0 changes.
+    - On 122 real commands asked live both ways, the 4 changes toward allow were Jev's noise at the consequence line. Asked 6 more times, the old and new requests gave the same verdict counts.
+  - **Unchanged.** `advisor.decide` still asks coverage, because there a permits match does decide. Permits policies stay in the panel, in the cache key and in the local-allow shortcut.
+- **Tier 1a passes more commands that only read** (`src/core/gate_safe_command.ts`, `src/core/shell_words.ts`). These now pass with no model call:
+  - a `<` or `>` inside quotes (`grep -n "call<"`, `git log --format="<%an>"`);
+  - `git grep`, `ls-files`, `rev-list`, `merge-base`, `for-each-ref`, `ls-tree` and `describe`;
+  - `pgrep`, `ps` and `lsof`.
+  
+  On the 9,250 real Bash commands of 2026-10-17 to 10-19, model calls go from 3,987 to 3,853 (−3.4%). None of the 357 real stops and advices whose text was recovered is among them. These still go on to the model:
+  - `$'...'` quoting or an unclosed quote;
+  - a `>` in an awk program, which may be awk's own output redirection;
+  - `git grep -O`/`--open-files-in-pager` and its prefixes;
+  - a git word with an expansion or a quoted option name;
+  - `pgrep "$X"`.
+- **`git diff`, `log` and `show` with `--output` are no longer obviously safe.** `git diff --output=src/x.ts` writes that file, and tier 1a waved it through. `--output` is now refused on every safe git subcommand, in any prefix spelling git accepts (`--out=x`).
+- **Measured, not shipped.**
+  - Clef escalates 77% of policy commands to Jev (46 of 60). 45 of those 46 trips are on `never_write_to_main`, and Jev agrees with Clef's verdict on only 17 of 46: Clef would have denied `gh pr view`, `orca plane issue` and similar commands run from a main checkout.
+  - Lowering the 0.2 floor, or skipping Jev when Clef says `none`, would let those wrong answers decide, so neither is done.
+
 ## 0.13.7
 
 - **The advice to the model says only what the model does not already know** (odd/tasks/advice-no-repeat.md, `src/core/gate_advice_text.ts`). The model-facing advice repeated the command the model had just written ("It would run: `gh workflow run ...`"), the effect that command obviously has ("triggers a deployment workflow on GitHub Actions", "it cannot be undone and its effect leaves this machine") and an internal config note ("this directory doesn't match any catalog destination, so the global thresholds were used"). The owner flagged it as tokens wasted on every advice. On 2026-10-18 the gate gave 296 advices and 253 of them were retried unchanged, so that text was read once per advice and changed nothing. The advice now drops the deploy/publish descriptions, the "leaves this machine" reason and the catalog note, also from a cached `·`-joined reason; names the affected segments only when the command has more than one; and has a shorter header ("Jev advice (not a refusal): worth a second look before it runs."). Specific reasons, recoverability sentences, the retry clause and the judge name stay. The person-facing line (`systemMessage`) is byte for byte unchanged.

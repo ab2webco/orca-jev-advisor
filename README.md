@@ -16,6 +16,13 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.8
+
+- **The gate costs less per command.** Every check used to send Jev and Clef the rules that only permit things, and those answers never changed the verdict. They are no longer sent, so each check is about a quarter smaller. Clef's free daily allowance now covers about a third more checks.
+- **More read-only commands skip the check.** `git grep`, `git ls-files`, `git merge-base` and similar git reads, `ps`, `pgrep` and `lsof`, and searches with a `<` or `>` inside quotes are no longer sent to Jev or Clef at all. `git diff --output=file` writes a file, so it now goes to Jev or Clef, where before it skipped the check.
+
+To update: Settings → Plugins → Refresh → Jev Advisor → Check for update.
+
 ## What changed in 0.13.7
 
 - **Shorter advice to the coding model.** When Jev advised the model to take a second look, it repeated the command the model had just written and what that command obviously does, such as "triggers a deployment workflow". Now it says only what the model does not already know, which costs fewer tokens on every advice. The line you see in the session is the same as before.
