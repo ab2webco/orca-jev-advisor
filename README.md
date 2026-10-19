@@ -16,6 +16,10 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.9
+
+- **Jev reports its state to Orca from member panes.** A pane that runs inside Orca but is not drawn by the game sends its model, effort, pins and what Jev is doing to Orca, so the lead's Panel can show it on each member's card. Nothing runs unless Orca gives the pane an absolute path to its CLI, and older Orca builds ignore the report.
+
 ## What changed in 0.13.8
 
 - **The gate costs less per command.** Every check used to send Jev and Clef the rules that only permit things, and those answers never changed the verdict. They are no longer sent, so each check is about a quarter smaller. Clef's free daily allowance now covers about a third more checks.
