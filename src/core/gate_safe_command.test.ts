@@ -471,3 +471,74 @@ test("N-1: a sed or awk operand that the shell may expand into an option is neve
   assert.equal(isObviouslySafeCommand("sed -n '1,40p' src/core/x.ts"), true);
   assert.equal(isObviouslySafeCommand("awk '{print $1}' notes.md"), true);
 });
+
+// odd/tasks/gate-model-spend.md T2: forms that read only and still reached a
+// model, measured on 3,987 real commands (42 + 71 + 29 of them).
+test("T2: a < or > inside quotes is not a redirection", () => {
+  for (const command of [
+    'grep -n "class RuntimeClientError<T>" src/cli/runtime/types.ts',
+    "grep -n \"  async call<\\|  call<\" -A6 src/cli/runtime/client.ts | head -12",
+    "echo '<b>done</b>'",
+    'git log --format="<%an> %s" -3',
+    "jq '.items | length > 0' data.json",
+    "test \"$a\" \\> \"$b\"",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+});
+
+test("T2: a redirection the quotes do not hide, or that the text cannot settle, still is one", () => {
+  for (const command of [
+    'echo "x" > out',
+    "grep 'a' f >out",
+    "echo \"a\">out",
+    "echo $'it\\'s' > out",
+    "echo 'unclosed > out",
+    "awk '{ print > \"out\" }' f",
+    "awk 'NR>=2' f",
+    "cat <<'EOF'",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), false, command);
+  }
+});
+
+test("T2: git's read-only subcommands are obviously safe, also through -C", () => {
+  for (const command of [
+    "git grep -n shouldRefresh -- src",
+    "git ls-files --error-unmatch orca.yaml",
+    "git rev-list --count origin/main..HEAD",
+    "git merge-base --is-ancestor origin/main 87e5c58",
+    "git for-each-ref --format='%(refname:short)' refs/heads",
+    "git ls-tree -r HEAD src",
+    "git describe --tags --abbrev=0",
+    "git -C /tmp/repo grep -n foo",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+});
+
+test("T2: a git option that writes a file or runs a program, or a word the text cannot settle, is never obviously safe", () => {
+  for (const command of [
+    "git grep -O foo",
+    "git grep -nOvim foo",
+    "git grep --open-files-in-pager=vim foo",
+    "git grep --open foo",
+    "git diff --output=src/x.ts",
+    "git diff --output src/x.ts",
+    "git log --out=notes.txt",
+    "git show --outp=x HEAD",
+    "git diff $OPTS",
+    "git log '--output=x'",
+  ]) {
+    assert.equal(isObviouslySafeCommand(command), false, command);
+  }
+  assert.equal(isObviouslySafeCommand("git log --oneline -5"), true);
+});
+
+test("T2: process listings are obviously safe", () => {
+  for (const command of ['pgrep -fl "git "', "ps -Ao pid,command | grep orca", "lsof /repo/.git/index.lock 2>/dev/null", "ps aux"]) {
+    assert.equal(isObviouslySafeCommand(command), true, command);
+  }
+  assert.equal(isObviouslySafeCommand("pkill -f node"), false);
+  assert.equal(isObviouslySafeCommand('pgrep "$X"'), false);
+});

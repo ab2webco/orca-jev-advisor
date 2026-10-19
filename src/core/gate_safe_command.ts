@@ -24,7 +24,7 @@
 import { commandFamily, splitSegments } from './gate_measurement.ts'
 import { hasCommandSubstitution } from './command_shape.ts'
 import { tokenize } from './git_discard.ts'
-import { isLongOptionPrefix, isUnreadableWord, rawWords } from './shell_words.ts'
+import { hasExpansion, hasUnquotedRedirect, isLongOptionPrefix, isUnreadableWord, quotingUnreadable, rawWords, wordText } from './shell_words.ts'
 
 /**
  * The one command family gate_measurement.ts already judges by looking at
@@ -48,6 +48,8 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
   /^cd(\s|$)/,
   /^(jq|grep)\b/,
   /^git\s+(status|diff|log|show|remote|rev-parse|blame)\b/,
+  // odd/tasks/gate-model-spend.md T2: read-only subcommands, measured reaching a model.
+  /^git\s+(grep|ls-files|rev-list|merge-base|for-each-ref|ls-tree|describe)\b/,
   // `git branch` only in its read-only forms -- anything else (creating a
   // branch with a bare name, deleting with -d/-D, renaming with -m/-M) is
   // excluded by the trailing `$`, which requires the segment to end here.
@@ -74,6 +76,13 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
 ]
 
 /**
+ * T2 (odd/tasks/gate-model-spend.md): process listings write nothing and
+ * signal nothing (kill and pkill are not here). A word the text does not
+ * settle sends them on, as for the text tools below.
+ */
+const PROCESS_LISTINGS: ReadonlySet<string> = new Set(['pgrep', 'ps', 'lsof'])
+
+/**
  * 0.6.28 T3: `sort` writes a file with `-o`/`--output` (also folded into a
  * short cluster, `-uo out`) and runs a program with `--compress-program`;
  * `uniq` writes its second operand; `file -C` compiles a magic file. Each is
@@ -83,8 +92,12 @@ const SAFE_SEGMENT_PATTERNS: readonly RegExp[] = [
 function isSafeTextToolSegment(segment: string): boolean {
   const tokens = tokenize(segment)
   const args = tokens.slice(1)
-  if ((tokens[0] === 'sort' || tokens[0] === 'uniq' || tokens[0] === 'rg') && hasUnreadableArgument(segment)) return false
+  if ((tokens[0] === 'sort' || tokens[0] === 'uniq' || tokens[0] === 'rg' || PROCESS_LISTINGS.has(tokens[0] ?? '')) && hasUnreadableArgument(segment)) return false
   switch (tokens[0]) {
+    case 'pgrep':
+    case 'ps':
+    case 'lsof':
+      return true
     case 'sort':
       return sortWritesNothing(args)
     case 'uniq':
@@ -139,6 +152,21 @@ export function rgRunsNothing(args: readonly string[]): boolean {
  */
 const GIT_DASH_C = /^git\s+-C\s+(?:"[^"]*"|'[^']*'|[^\s'"-][^\s'"]*)\s+(\S.*)$/s
 
+/**
+ * T2 (odd/tasks/gate-model-spend.md): the safe git subcommands only read,
+ * except through options that write a file (`--output`, which `diff`, `log`
+ * and `show` take) or run a program (`grep -O`, `--open-files-in-pager`).
+ * git accepts an unambiguous prefix of a long option (`--out`), and a word the
+ * text does not settle (`$OPTS`, `'--output=x'`) may be either.
+ */
+function gitRunsOrWritesNothing(segment: string): boolean {
+  const words = rawWords(segment).slice(1)
+  // A quoted option value (`--format="<%an>"`) is read as written; a quoted option name is not.
+  const quotedName = (raw: string): boolean => /['"\\]/.test(raw.split('=')[0] ?? '') && wordText(raw).startsWith('-')
+  if (words.some((raw) => hasExpansion(raw) || quotedName(raw))) return false
+  return !words.map(wordText).some((arg) => /^-[^-]*O/.test(arg) || namesLongOption(arg, '--output', 3) || namesLongOption(arg, '--open-files-in-pager', 3))
+}
+
 /** `git -C <dir> <rest>` as `git <rest>`, or null when it is not exactly that shape. */
 function withoutGitDashC(segment: string): string | null {
   const rest = GIT_DASH_C.exec(segment)?.[1]
@@ -179,7 +207,8 @@ const OPERAND = String.raw`(?:\s+[^-\s'"$\x60\\{}*?[][^\s'"$\x60\\{}*?[]*)`
 const SAFE_SED = new RegExp(String.raw`^sed\s+-n(?:\s+-e)?\s+${SED_SCRIPT_ARG}(?:\s+-e\s+${SED_SCRIPT_ARG})*${OPERAND}*\s*$`)
 const AWK_OPTION = String.raw`(?:\s+(?:-F\s*(?:'[^']*'|"[^"]*"|[^\s'"]+)|-v\s*[A-Za-z_][A-Za-z0-9_]*=[^\s'"]*))`
 const SAFE_AWK = new RegExp(String.raw`^awk${AWK_OPTION}*\s+'([^']*)'${OPERAND}*\s*$`)
-const AWK_RUNS_OR_LOADS = /\bsystem\b|\bgetline\b|\||@/
+// T2: a `>` in an awk program may be its output redirection (`print > "f"`).
+const AWK_RUNS_OR_LOADS = /\bsystem\b|\bgetline\b|\||@|>/
 
 function isReadOnlySedOrAwkSegment(segment: string): boolean {
   const text = stripSafeRedirections(segment).trim()
@@ -248,7 +277,10 @@ function stripSafeRedirections(segment: string): string {
  * this check itself runs against the stripped copy.
  */
 function hasRedirection(segment: string): boolean {
-  return /[<>]/.test(stripSafeRedirections(segment))
+  const rest = stripSafeRedirections(segment)
+  // T2: a `<` or `>` inside quotes is text (`grep "call<"`), unless the
+  // quoting is something this reader may misread.
+  return quotingUnreadable(rest) ? /[<>]/.test(rest) : hasUnquotedRedirect(rest)
 }
 
 /**
@@ -306,7 +338,8 @@ export function isSafeSegment(segment: string): boolean {
   if (isReadOnlySedOrAwkSegment(segment)) return true
   if (isSafeTextToolSegment(segment)) return true
   const plainGit = withoutGitDashC(segment)
-  if (plainGit !== null) return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.source.startsWith('^git') && pattern.test(plainGit))
+  if (plainGit !== null) return gitRunsOrWritesNothing(plainGit) && SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.source.startsWith('^git') && pattern.test(plainGit))
+  if (/^git\s/.test(segment) && !gitRunsOrWritesNothing(segment)) return false
   return SAFE_SEGMENT_PATTERNS.some((pattern) => pattern.test(segment))
 }
 

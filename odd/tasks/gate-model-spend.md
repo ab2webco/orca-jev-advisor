@@ -116,7 +116,16 @@ C1 and C2 ship. C1 does not raise the Clef-decided share: with and without the p
 - [x] T1 C1: the gate asks no permits question.
   - RED: `gate-providers.test.mjs` "a permits policy is not asked", in Jev and Both modes. The request carried `coverage` and `same_kind`. `decisions.test.ts` `gateJudgedPolicies` failed on the missing export.
   - GREEN: both tests pass. A violation answer keyed `policy_1` still resolves to the real prohibition behind a permits policy listed first. `decisions.test.ts`, `gate-bash.test.mjs` and `provider_cascade.test.ts`: 494 of 494 pass.
-- [ ] T2 C2: tier 1a takes the quoted `<`/`>`, the read-only git subcommands and `pgrep`/`ps`/`lsof`, and refuses git `--output`. RED tests for each form, and for the forms that must stay out (`$'…'`, an unclosed quote, `git grep -O`, `git diff --output=x`, `git log --out=x`).
+- [x] T2 C2: tier 1a takes the quoted `<`/`>`, the read-only git subcommands and `pgrep`/`ps`/`lsof`, and refuses git `--output`.
+  - RED: `gate_safe_command.test.ts` T2 tests, 4 of 5 failing. `git diff --output=src/x.ts` and `git log --out=x` were obviously safe before.
+  - GREEN: 52 of 52 in the file pass.
+  - Forms kept out:
+    - `$'…'` and an unclosed quote (old character test);
+    - a `>` in an awk program, which may be awk's own output redirection;
+    - `git grep -O`/`--open`;
+    - a git word with an expansion or a quoted option name;
+    - `pgrep "$X"`.
+  - `gate-bash.test.mjs` B2 now expects `pgrep -f x` and `ps aux | grep node` to pass as tier 1a, before any policy. `pkill -f x` takes their place as a program that writes nothing and still reaches the policy stage. `npm test`: 4,591 of 4,591.
 - [ ] T3 Replay: every captured command through the new hook vs the old. Zero commands whose real or replayed verdict was deny, ask or advise become allow or tier 1a. Model calls before vs after.
 - [ ] T4 Release 0.13.8: CHANGELOG, version bump, `npm run typecheck`, `npm test`, PR to main (no merge, tag or release).
 

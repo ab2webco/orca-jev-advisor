@@ -60,6 +60,24 @@ export function hasUnquotedRedirect(raw: string): boolean {
   return hasActive(raw, (char, double) => !double && (char === "<" || char === ">"));
 }
 
+/**
+ * Whether `text` leaves a quote open, or uses ANSI-C quoting (`$'...'`),
+ * where a backslash escapes a quote: this reader would then disagree with the
+ * shell about which characters are quoted.
+ */
+export function quotingUnreadable(text: string): boolean {
+  if (text.includes("$'")) return true;
+  let single = false;
+  let double = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] ?? "";
+    if (char === "\\" && !single) index += 1;
+    else if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+  }
+  return single || double;
+}
+
 /** An option spelled with quotes or a backslash (`-de''lete`, `'--pre'`, `\-delete`): the program still reads it as the option. */
 export function isQuotedOption(raw: string): boolean {
   return /['"\\]/.test(raw) && wordText(raw).startsWith("-");

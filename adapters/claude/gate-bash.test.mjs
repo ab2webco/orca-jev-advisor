@@ -3822,21 +3822,26 @@ function judgedPolicySet (home, command, repo) {
     ? `${computeRepoContextForTest('/tmp')} The command acts on files outside any repository, not in the session's current repository (${repo} on ${branchNameOf(repo)}).`
     : computeRepoContextForTest(repo)
   seedBothPolicySets(home, command, repo, repoContext)
-  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' }))
+  const stdout = run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' })
+  // Tier 1a passes a command through before any policy, with no output.
+  if (stdout.trim() === '') return 'tier 1a'
+  const payload = JSON.parse(stdout)
   const message = payload.systemMessage ?? ''
   if (/judged with never_write_to_main/.test(message)) return 'with-policy'
   if (/judged with no branch policy/.test(message)) return 'without-policy'
   return `not judged: ${payload.hookSpecificOutput?.permissionDecision} ${payload.hookSpecificOutput?.permissionDecisionReason ?? ''}`
 }
 
-const OUTSIDE_THE_CHECKOUT = ['pgrep -f x', 'ps aux | grep node', 'rm -rf ~/Library/a && ln -s ~/b ~/Library/a', 'mkdir -p /tmp/x']
+const OUTSIDE_THE_CHECKOUT = ['pgrep -f x', 'ps aux | grep node', 'pkill -f x', 'rm -rf ~/Library/a && ln -s ~/b ~/Library/a', 'mkdir -p /tmp/x']
+// odd/tasks/gate-model-spend.md T2: process listings are tier 1a, so no policy is ever asked about them.
+const LISTINGS = new Set(['pgrep -f x', 'ps aux | grep node'])
 const MOVE_OUT = 'mv src/a.ts /tmp/a.ts'
 const INTO_THE_CHECKOUT = ['mkdir src/x', 'touch src/x', MOVE_OUT, 'sed -i s/a/b/ src/x', 'echo hi | tee src/x', 'python3 x.py', 'find . -delete', 'git commit -m x', 'ln -s /tmp/a']
 
 test('B2: on main, a command that writes nothing into the checkout is not judged against never_write_to_main', () => {
   const judged = Object.fromEntries(OUTSIDE_THE_CHECKOUT.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('main'))]))
   // `mkdir -p /tmp/x` only writes in a temp root, so it may be allowed as contained before any policy.
-  assert.deepEqual(judged, Object.fromEntries(OUTSIDE_THE_CHECKOUT.map((command) => [command, command === 'mkdir -p /tmp/x' && judged[command] !== 'with-policy' ? judged[command] : 'without-policy'])))
+  assert.deepEqual(judged, Object.fromEntries(OUTSIDE_THE_CHECKOUT.map((command) => [command, LISTINGS.has(command) ? 'tier 1a' : command === 'mkdir -p /tmp/x' && judged[command] !== 'with-policy' ? judged[command] : 'without-policy'])))
 })
 
 test('B2: on main, a command that may write into the checkout is still judged against never_write_to_main', () => {
