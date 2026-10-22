@@ -16,6 +16,10 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.10
+
+- **The rule that protects main stops refusing work that never touches it.** Landing a reviewed pull request with `gh pr merge`, rebasing a feature branch, and writing a file git ignores (`tmp/handoff.md`, `.claude/settings.local.json`) are no longer read as writing to main. Editing, committing or merging local work on main is still refused. The Advisor panel offers the new wording as a changed team policy; adopt it there.
+
 ## What changed in 0.13.9
 
 - **Jev reports its state to Orca from member panes.** A pane that runs inside Orca but is not drawn by the game sends its model, effort, pins and what Jev is doing to Orca, so the lead's Panel can show it on each member's card. Nothing runs unless Orca gives the pane an absolute path to its CLI, and older Orca builds ignore the report.

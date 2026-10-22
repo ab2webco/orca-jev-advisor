@@ -5,6 +5,7 @@ import { test } from "node:test";
 
 import { isRecord } from "../guards.ts";
 import { POLICY_SEED_MARKER_KEY, parseSeedPolicies, parseSeedVersion, shouldSeedPolicies } from "./policy_seed.ts";
+import { applyPolicySeedChoices, mergePolicySeeds } from "./policy_seed_import.ts";
 
 const seedFile: unknown = JSON.parse(
   readFileSync(new URL("../../seed/policies.json", import.meta.url), "utf8"),
@@ -233,7 +234,7 @@ function sortKeysDeep(value: unknown): unknown {
  *  loudly here instead of silently reaching an install that will never know
  *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
  *  which decides `due` from `version` alone and never looks at content. */
-const PINNED_DIGEST = "6d2acb3e92ecc21e105a53a920dc3a01673165a34f787d434a68b47e34f3b24d";
+const PINNED_DIGEST = "d2cb5d91ca74e0f746fd090548b8967c32c891e0c36e5e9c6c55f770aa899264";
 
 test("editing a shipped policy row without bumping the seed version fails loudly", () => {
   // Pinned together on purpose: a row edit changes the digest, and the
@@ -252,7 +253,7 @@ test("editing a shipped policy row without bumping the seed version fails loudly
   );
   assert.equal(
     parseSeedVersion(seedFile),
-    5,
+    6,
     'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
       "PINNED_DIGEST once the rows for that release are final).",
   );
@@ -267,12 +268,53 @@ test("0.6.25 (JEVADV-104): never_write_to_main forbids writing on main and says 
   const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "never_write_to_main");
   assert.ok(row, "no never_write_to_main row in the shipped seed");
   assert.equal(row.kind, "prohibits");
-  for (const forbidden of ["editing their files", "committing", "cherry-picking", "pushing to them"]) {
+  for (const forbidden of ["editing their tracked files", "committing", "cherry-picking", "pushing to them"]) {
     assert.ok(row.rule.includes(forbidden), `the rule no longer forbids ${forbidden}`);
   }
   for (const fine of ["git fetch", "git pull", "origin/main into main", "gh pr update-branch"]) {
     assert.ok(row.rule.includes(fine), `the rule does not name ${fine} as fine`);
   }
+});
+
+/** never_write_to_main as seed version 5 shipped it, the text an install that
+ *  adopted 0.6.25's wording still holds in its store. */
+const NEVER_WRITE_TO_MAIN_V5 =
+  "Never write directly on main, master or develop, not even a one-line fix: no editing their files, committing, cherry-picking or merging your own work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch.";
+
+/** The owner's text, verbatim from JEVADV-107. */
+const NEVER_WRITE_TO_MAIN_V6 =
+  "Never write directly on main, master or develop, not even a one-line fix: no editing their tracked files, committing, cherry-picking or merging local work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Merging a reviewed pull request on the host (gh pr merge, including --squash, --auto and --match-head-commit) is that path and is allowed. Rebasing, committing or force-pushing a feature branch is not writing to them, even in a detached worktree or one based on origin/main. Files git ignores (tmp/, scratch notes, handoff files) are not their files. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch.";
+
+test("0.13.10 (JEVADV-107): never_write_to_main ships the owner's text, which allows reviewed PR merges, feature-branch rebases and git-ignored files", () => {
+  // The owner edited the policies.json mirror by hand on 2026-10-22 and Orca
+  // rewrote it from storage on the next start, so the gate kept refusing
+  // `gh pr merge`, rebases of feature branches and writes to tmp/handoff.md.
+  // The seed is the one path that reaches the store: it is offered as a
+  // differing row in the Advisor panel.
+  const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "never_write_to_main");
+  assert.ok(row, "no never_write_to_main row in the shipped seed");
+  assert.equal(row.rule, NEVER_WRITE_TO_MAIN_V6);
+  assert.equal(row.kind, "prohibits");
+  assert.equal(row.scope, "protected-branch");
+});
+
+test("0.13.10 (JEVADV-107): an install that stored the v5 never_write_to_main sees it as differing, and adopting it stores the new text", () => {
+  const seeds = parseSeedPolicies(seedFile);
+  const shipped = seeds.find((policy) => policy.id === "never_write_to_main");
+  assert.ok(shipped, "no never_write_to_main row in the shipped seed");
+  const stored = seeds.map((policy) => (policy.id === "never_write_to_main" ? { ...policy, rule: NEVER_WRITE_TO_MAIN_V5 } : policy));
+
+  const merge = mergePolicySeeds(stored, seeds);
+  assert.deepEqual(
+    merge.differing.map((difference) => [difference.id, difference.fields]),
+    [["never_write_to_main", ["rule"]]],
+  );
+  assert.equal(merge.added, 0);
+
+  const { result, replaced } = applyPolicySeedChoices(merge.merged, seeds, ["never_write_to_main"]);
+  assert.equal(replaced, 1);
+  assert.equal(result.find((policy) => policy.id === "never_write_to_main")?.rule, NEVER_WRITE_TO_MAIN_V6);
+  assert.deepEqual(mergePolicySeeds(result, seeds).differing, []);
 });
 
 test("0.6.25 (JEVADV-100): discard_uncommitted_work says the gate refuses only when something would be lost", () => {

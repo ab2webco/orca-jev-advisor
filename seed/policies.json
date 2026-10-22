@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "policies": [
     {
       "id": "read_and_test",
@@ -15,7 +15,7 @@
       "id": "never_write_to_main",
       "kind": "prohibits",
       "scope": "protected-branch",
-      "rule": "Never write directly on main, master or develop, not even a one-line fix: no editing their files, committing, cherry-picking or merging your own work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch."
+      "rule": "Never write directly on main, master or develop, not even a one-line fix: no editing their tracked files, committing, cherry-picking or merging local work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Merging a reviewed pull request on the host (gh pr merge, including --squash, --auto and --match-head-commit) is that path and is allowed. Rebasing, committing or force-pushing a feature branch is not writing to them, even in a detached worktree or one based on origin/main. Files git ignores (tmp/, scratch notes, handoff files) are not their files. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch."
     },
     {
       "id": "unit_commits",

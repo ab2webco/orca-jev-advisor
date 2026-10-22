@@ -2,6 +2,12 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.10
+
+- **never_write_to_main allows reviewed PR merges, feature-branch rebases and git-ignored files** (JEVADV-107, `seed/policies.json` version 6). The owner's text is now the shipped seed. It names merging a reviewed pull request with `gh pr merge` (including `--squash`, `--auto` and `--match-head-commit`) as the allowed path, says rebasing, committing or force-pushing a feature branch is not writing to main, and says files git ignores (`tmp/`, scratch notes, handoff files) are not main's files. Editing tracked files on main, committing, cherry-picking or merging local work into it, and pushing to it stay forbidden.
+  - **Why the seed.** The owner edited the `policies.json` mirror by hand on 2026-10-22; Orca rewrites the mirror from the plugin's storage on start, so the old text came back. The seed is the path that reaches storage: an install that holds the old row sees `never_write_to_main` as a differing row in the Advisor panel, and adopting it replaces the stored row and the mirror.
+  - **Measured on the gate with real Jev** (odd/qa/qa-0.13.10.md). In a checkout on main, `echo '{}' > .claude/settings.local.json` went from refused by the policy (3 of 3) to allowed (3 of 3). Editing a tracked file, `git commit -am`, `git merge feature/login` and `git cherry-pick` on main are still refused by the policy, 3 of 3 each.
+
 ## 0.13.9
 
 - **Jev reports its state to Orca from member panes** (odd/tasks/orca-member-report.md, `src/core/orca_report.ts`, `adapters/claude/mod-skills/hooks/index.ts` `reportToOrca`). A pane that runs inside Orca but is not drawn by the game now sends its model, effort and pins to Orca with `orca game state --json` and `ORCA_GAME_ADVISOR`. When known, it also sends the line Jev draws, the skill and tool it picked, the routed and session models, its confidence and the reason it kept a model. Orca keeps the report for that terminal and shows it on the member's card.
