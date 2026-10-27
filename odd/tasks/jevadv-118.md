@@ -83,8 +83,25 @@ record, so they share one commit.
   Note: G4 stands (owner): the shift happens only at strong economy (>= 95%
   of the tighter window), standard to simple, after a read-only turn; T5 adds
   that the turn's kind must be a confident `read` or `execute`.
-- [ ] T6: RED: the status line names the reason. GREEN. Commit.
-- [ ] T7: measurement script and its numbers. Commit. PR 3.
+- [x] T6: RED: the status line names the reason. GREEN. Commit.
+- [x] T7: measurement script and its numbers. Commit. PR 3.
+
+## Measurement (T7)
+`npm run measure-member-routing -- --from <date> --to <date> [--json]` prints
+the baseline table's measures for member sessions whose first start falls in
+the window, plus member starts by class (pointer, orca-pin, brief),
+escalations by signal and the CI pass rate per watch
+(`ci-watch-decisions-*`). Re-run before the release (2026-10-20 to
+2026-10-28, taken 2026-10-27): 234 member sessions, 9,981 steps, median
+11,464 output tokens, starts pointer 207, orca-pin 27, brief 0, CI pass rate
+66.7% (54 of 81 watches that ended). It is above the table because sessions
+kept running after the snapshot. With the snapshot's cut, the start split was
+206 pointer and 25 pin, not the 23 written above.
+
+5h/7d use per session is not recorded: router rows carry only the account's
+quota band, and `quota.json` is a live figure with no history. The "after"
+numbers need a release and a batch of members; run the same command on a
+window after it.
 
 ## Acceptance criteria
 - Red-first tests: a read-only audit gets a lower model or effort than a
