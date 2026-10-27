@@ -16,7 +16,7 @@ import type { QuotaAccount } from "./consumption.ts";
 import { ratesForPrompt } from "./model_cost.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { CONFIDENCE_FLOOR, TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
+import { TIER_EFFORT, activeGuards, aimedTier, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
 import { hasOrcaPin, heldDimensions, modelPinnedTiers, pinnedEffort } from "./orca_pins.ts";
 import type { OrcaPins } from "./orca_pins.ts";
 import type { GuardContext, QuotaBand, QuotaSource, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
@@ -413,7 +413,6 @@ export type StageReason =
   | "jev-payment"
   | "same"
   | "upgrade"
-  | "low-confidence"
   | "floor-restore"
   | "held-by-guard"
   | "held-by-orca-pin"
@@ -507,17 +506,20 @@ function decideStageFree(input: StageDecisionInput): StageDecision {
   }
   // The model comes from the collapsed tier; the effort from Jev's own
   // (shifted) tier, so frontier work on an account without Fable still runs
-  // Opus at the frontier's effort (0.6.2 E1).
-  const judged = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
-  const judgedTier = collapseTier(input.tiers, judged);
+  // Opus at the frontier's effort (0.6.2 E1). Both are raised on doubt and
+  // for implement work (JEVADV-117); the row keeps Jev's own tier.
+  const shifted = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
+  const judged = aimedTier(shifted, input.jev);
+  const judgedTier = collapseTier(input.tiers, shifted);
+  const aimed = collapseTier(input.tiers, judged);
   // The context-window floor: never a model the context would overflow.
   const context = input.usage?.contextTokens ?? null;
-  const fitted = context === null ? judgedTier : contextFloorTier(input.tiers, judgedTier, context);
-  const tier = fitted ?? judgedTier;
+  const fitted = context === null ? aimed : contextFloorTier(input.tiers, aimed, context);
+  const tier = fitted ?? aimed;
   const currentTier = currentRank === null ? null : (ROUTER_TIERS[currentRank] ?? null);
   const currentTooSmall = context !== null && currentTier !== null && !fitsContext(input.tiers[currentTier], context);
   const out = (decision: StageDecision): StageDecision =>
-    withContextGuard(decision, tier !== judgedTier || (currentTooSmall && decision.changed));
+    withContextGuard(decision, tier !== aimed || (currentTooSmall && decision.changed));
   const target = input.tiers[tier];
   const targetEffort = target.supportsEffort ? (input.tierEffort ?? TIER_EFFORT)[judged] : null;
   const base = { tier: judgedTier, confidence: input.jev.confidence, proposed: target.modelId };
@@ -547,7 +549,6 @@ function decideStageFree(input: StageDecisionInput): StageDecision {
   }
   if (proposedRank === currentRank) return out(decideEffort(input, base, targetEffort, guards, currentRank));
   if (proposedRank > currentRank) {
-    if (input.jev.confidence < CONFIDENCE_FLOOR && !currentTooSmall) return out({ ...stay, ...base, reason: "low-confidence", guard: null, pending: null });
     // The tier's effort, even back on the session's own model (0.6.2 E1: a
     // sticky `xhigh` is the account's default, not what this work needs);
     // only a person's own `max` or numeric budget is kept, never lowered.
@@ -617,7 +618,7 @@ export function qualitySwitchCost(input: StageDecisionInput, decision: StageDeci
 /**
  * 0.6.2 E2: Jev's tier resolves to the model the session already runs, so
  * only the effort can follow the work. A raise is quality: it applies at
- * once with confidence at or above CONFIDENCE_FLOOR, and no guard blocks it. A lowering rewrites
+ * once, and no guard blocks it (JEVADV-117: doubt raises too). A lowering rewrites
  * the cache for an output-only saving, so it must earn it the way a model
  * downgrade does: no guard, the same lower effort on consecutive prompts,
  * and a break-even on the session's real output medians -- unknown ones
@@ -636,7 +637,6 @@ function decideEffort(input: StageDecisionInput, base: Pick<StageDecision, "tier
     return { ...stay, reason: "same", pending: null, effortTarget: null };
   }
   if (from === null || to > from) {
-    if ((input.jev?.confidence ?? 0) < CONFIDENCE_FLOOR) return { ...stay, reason: "low-confidence", pending: null, effortTarget: targetEffort };
     return { ...stay, effort: targetEffort, changed: true, reason: "effort-raise", pending: null, effortTarget: targetEffort };
   }
   if (guards.length > 0) return { ...stay, reason: "held-by-guard", guard: guards[0] ?? null, pending: null, effortTarget: targetEffort };

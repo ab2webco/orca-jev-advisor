@@ -72,7 +72,7 @@ test("a switch, or no reason to keep, reads exactly as before", () => {
 const HELD = { changed: false, proposed: "claude-haiku-4-5-20251001", model: "claude-opus-5-5" } as const;
 
 test("keptWhy: a held reason names itself, held-by-guard names its guard", () => {
-  for (const reason of ["low-confidence", "hysteresis", "break-even", "prices-unknown"] as const) assert.equal(keptWhy({ ...HELD, reason, guard: null }), reason);
+  for (const reason of ["hysteresis", "break-even", "prices-unknown"] as const) assert.equal(keptWhy({ ...HELD, reason, guard: null }), reason);
   for (const guard of ["pointer-prompt", "low-confidence"] as const) assert.equal(keptWhy({ ...HELD, reason: "held-by-guard", guard }), guard);
   assert.equal(keptWhy({ ...HELD, reason: "held-by-guard", guard: null }), null, "a hold with no guard to name keeps today's wording");
 });
@@ -93,7 +93,7 @@ test("keptWhy: a same-model effort hold names its reason", () => {
   assert.equal(keptWhy({ ...EFFORT_HELD, reason: "effort-break-even", guard: null }), "break-even");
   assert.equal(keptWhy({ ...EFFORT_HELD, reason: "effort-unknown-savings", guard: null }), "unknown-savings");
   assert.equal(keptWhy({ ...EFFORT_HELD, reason: "held-by-guard", guard: "pointer-prompt" }), "pointer-prompt");
-  assert.equal(keptWhy({ ...EFFORT_HELD, reason: "low-confidence", guard: null, effortTarget: "max" }), "low-confidence");
+  assert.equal(keptWhy({ ...EFFORT_HELD, reason: "held-by-guard", guard: "low-confidence", effortTarget: "max" }), "low-confidence");
   // Reached, or nothing weighed: plain wording.
   assert.equal(keptWhy({ ...EFFORT_HELD, reason: "effort-lower", guard: null, changed: true, effort: "high" }), null);
   assert.equal(keptWhy({ ...EFFORT_HELD, reason: "same", guard: null, effortTarget: null }), null);

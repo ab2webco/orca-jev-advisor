@@ -31,7 +31,7 @@
 
 import { FABLE_ID, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { activeGuards, mentionsSensitiveTopic, shiftForPressure } from "./model_router_decide.ts";
+import { activeGuards, aimedTier, mentionsSensitiveTopic, shiftForPressure } from "./model_router_decide.ts";
 import { hasOrcaPin } from "./orca_pins.ts";
 import type { OrcaPins, PinnedDimension } from "./orca_pins.ts";
 import type { DestinationKind, GuardContext, QuotaBand, RouterGuard, SessionEffort, TierEffort, TierJudgment } from "./model_router_decide.ts";
@@ -121,9 +121,10 @@ function decideSubagentFree(input: SubagentDecisionInput): SubagentDecision {
   if (input.jev === null) return { ...stay, tier: null, confidence: null, proposed: null, reason: "jev-failed", guard: null };
 
   const guards = activeGuards(input.guards);
-  const tier = collapseTier(input.tiers, shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null));
-  const target = input.tiers[tier];
-  const base = { tier, confidence: input.jev.confidence, proposed: target.modelId };
+  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
+  // JEVADV-117: raised on doubt and for implement work; the row keeps Jev's own tier.
+  const target = input.tiers[collapseTier(input.tiers, aimedTier(shifted, input.jev))];
+  const base = { tier: collapseTier(input.tiers, shifted), confidence: input.jev.confidence, proposed: target.modelId };
   const proposedRank = modelRank(input.tiers, target.modelId);
 
   if (explicit !== null) {

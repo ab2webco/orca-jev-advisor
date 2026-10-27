@@ -13,6 +13,10 @@ import {
   buildTierQuestions,
   buildTierState,
   decideStart,
+  DOUBT_TIER,
+  IMPLEMENT_FLOOR_TIER,
+  floorForWork,
+  raiseForDoubt,
   interpretTier,
   mentionsSensitiveTopic,
   routerDecisionFileName,
@@ -142,13 +146,13 @@ test("tier effort (0.6.16 T1): the router's own table never asks for low -- simp
   assert.deepEqual(TIER_EFFORT, { simple: "medium", standard: "medium", complex: "high", frontier: "xhigh" });
 });
 
-test("0.6.16 T1: a simple judgment held on the session's own Opus sends medium by default, and the person's own low when they set it", () => {
+test("0.6.16 T1 / JEVADV-117: an unsure simple judgment on the session's own Opus is raised to the complex tier's effort, whatever the simple tier's", () => {
   const unsure = { ...CALM, confidence: 0.5 };
   const byDefault = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.5 }, configuredModel: "claude-opus-5-5", configuredEffort: null, guards: unsure });
   assert.equal(byDefault.guard, "low-confidence");
-  assert.equal(byDefault.effort, "medium");
+  assert.equal(byDefault.effort, "high");
   const own = decideStart({ tiers: TIERS, jev: { tier: "simple", confidence: 0.5 }, configuredModel: "claude-opus-5-5", configuredEffort: null, guards: unsure, tierEffort: { ...TIER_EFFORT, simple: "low" } });
-  assert.equal(own.effort, "low");
+  assert.equal(own.effort, "high");
 });
 
 test("start: Jev failure changes nothing", () => {
@@ -623,4 +627,58 @@ test("R2: a cold switch logs wouldApplyCold in measure and appliedCold in active
     assert.equal("wouldApplyCold" in record, false);
     assert.equal("appliedCold" in record, false);
   }
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-117: an unsure verdict raises the work to Opus 5.5
+// ---------------------------------------------------------------------------
+
+test("JEVADV-117: raiseForDoubt lifts an unsure tier to complex, never lowers, and leaves a confident one", () => {
+  assert.equal(DOUBT_TIER, "complex");
+  assert.equal(raiseForDoubt("simple", 0.53), "complex");
+  assert.equal(raiseForDoubt("standard", 0.69), "complex");
+  assert.equal(raiseForDoubt("frontier", 0.4), "frontier");
+  assert.equal(raiseForDoubt("simple", 0.7), "simple");
+});
+
+test("JEVADV-117: a session that starts on Haiku with an unsure simple verdict starts on Opus 5.5", () => {
+  const decision = decideStart({ tiers: DEFAULT_TIERS, jev: { tier: "simple", confidence: 0.53 }, configuredModel: "claude-haiku-5-5", configuredEffort: "high", guards: { ...CALM, confidence: 0.53 } });
+  assert.equal(decision.changed, true);
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.effort, "high");
+  assert.equal(decision.tier, "simple", "the row keeps Jev's own tier");
+  assert.equal(decision.proposed, "claude-opus-5-5");
+});
+
+test("JEVADV-117: a Jev failure at the start still changes nothing", () => {
+  const decision = decideStart({ tiers: DEFAULT_TIERS, jev: null, configuredModel: "claude-haiku-5-5", configuredEffort: "high", guards: { ...CALM, confidence: null } });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.model, "claude-haiku-5-5");
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-117: implementation work never runs below Opus 5.5
+// ---------------------------------------------------------------------------
+
+test("JEVADV-117: the implementation floor is the complex tier, and only implement work is floored", () => {
+  assert.equal(IMPLEMENT_FLOOR_TIER, "complex");
+  assert.equal(floorForWork("simple", "implement"), "complex");
+  assert.equal(floorForWork("standard", "implement"), "complex");
+  assert.equal(floorForWork("frontier", "implement"), "frontier");
+  for (const kind of ["read", "execute", "review", "design", undefined] as const) assert.equal(floorForWork("simple", kind), "simple");
+});
+
+test("JEVADV-117: a confident implement turn never starts on Haiku or Sonnet", () => {
+  for (const tier of ["simple", "standard"] as const) {
+    for (const configuredModel of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]) {
+      const decision = decideStart({ tiers: DEFAULT_TIERS, jev: { tier, confidence: 0.95, kind: "implement" }, configuredModel, configuredEffort: "high", guards: CALM });
+      assert.equal(decision.model, "claude-opus-5-5", `${tier} on ${configuredModel}`);
+      assert.equal(decision.tier, tier, "the row keeps Jev's own tier");
+    }
+  }
+});
+
+test("JEVADV-117: a confident simple turn that reads still starts on Haiku", () => {
+  const decision = decideStart({ tiers: DEFAULT_TIERS, jev: { tier: "simple", confidence: 0.95, kind: "read" }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
+  assert.equal(decision.model, "claude-haiku-5-5");
 });

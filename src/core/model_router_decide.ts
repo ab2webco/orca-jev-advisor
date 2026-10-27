@@ -21,7 +21,7 @@ import type { EngineFallbackReason, EngineNotes, ResolvedTiers, RouterTier } fro
 import { hasOrcaPin, heldDimensions, modelPinnedTiers, pinnedEffort } from "./orca_pins.ts";
 import type { OrcaPins, PinnedDimension } from "./orca_pins.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
-import type { WorkKindRecord } from "./work_kind.ts";
+import type { WorkKind, WorkKindRecord } from "./work_kind.ts";
 import type { CacheUnknown } from "./cache_warmth.ts";
 
 export type RouterEffort = "low" | "medium" | "high" | "xhigh";
@@ -153,6 +153,8 @@ export interface TierJudgment {
   readonly confidence: number;
   /** 0.6.22 T1 (JEVADV-97): top probability minus runner-up; absent when Jev's probabilities give none. Log only. */
   readonly margin?: number;
+  /** JEVADV-117: Jev's work kind for the same prompt, when it was asked and answered. */
+  readonly kind?: WorkKind;
 }
 
 function isRouterTier(value: string): value is RouterTier {
@@ -172,11 +174,41 @@ export function interpretTier(answers: Record<string, Answer>): TierJudgment | n
 // ---------------------------------------------------------------------------
 
 /**
- * The confidence under which Jev's tier holds the model. 0.6.11 T4 measured it
- * against the record (odd/tasks/release-0.6.11.md) and found no signal that
- * moves it, so it stays 0.7.
+ * The confidence under which Jev is unsure: its tier is raised to DOUBT_TIER
+ * (JEVADV-117) and nothing is lowered. 0.6.11 T4 measured it against the
+ * record (odd/tasks/release-0.6.11.md) and found no signal that moves it, so
+ * it stays 0.7.
  */
 export const CONFIDENCE_FLOOR = 0.7;
+
+/**
+ * JEVADV-117: the tier an unsure verdict raises the work to. Holding the
+ * session's model on doubt kept a TypeScript change on Haiku 5.5, which got
+ * it wrong; the owner wants doubt to escalate (Opus 5.5), never to hold.
+ */
+export const DOUBT_TIER: RouterTier = "complex";
+
+/** JEVADV-117: the weakest tier work that changes files runs on (the lead, 2026-10-26: Opus 5.5). */
+export const IMPLEMENT_FLOOR_TIER: RouterTier = "complex";
+
+function atLeast(tier: RouterTier, floor: RouterTier): RouterTier {
+  return ROUTER_TIERS.indexOf(tier) < ROUTER_TIERS.indexOf(floor) ? floor : tier;
+}
+
+/** Jev's tier, or DOUBT_TIER when Jev is unsure and its tier is weaker; never lower. */
+export function raiseForDoubt(tier: RouterTier, confidence: number): RouterTier {
+  return confidence >= CONFIDENCE_FLOOR ? tier : atLeast(tier, DOUBT_TIER);
+}
+
+/** Jev's tier, or IMPLEMENT_FLOOR_TIER when the work is implement and its tier is weaker; never lower. */
+export function floorForWork(tier: RouterTier, kind: WorkKind | undefined): RouterTier {
+  return kind === "implement" ? atLeast(tier, IMPLEMENT_FLOOR_TIER) : tier;
+}
+
+/** The tier a decision aims at: Jev's (shifted) tier under both floors above. */
+export function aimedTier(shifted: RouterTier, jev: TierJudgment): RouterTier {
+  return raiseForDoubt(floorForWork(shifted, jev.kind), jev.confidence);
+}
 
 /**
  * Whole words (already lower-case and without accents) that make a turn
@@ -414,14 +446,15 @@ function decideStartFree(input: StartDecisionInput): RouterDecision {
     return { ...unchanged, tier: null, confidence: null, proposed: null, reason: "jev-failed", guard: null };
   }
   const guards = activeGuards(input.guards);
-  // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1).
-  const judged = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
-  const tier = collapseTier(input.tiers, judged);
-  const target = input.tiers[tier];
+  // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1),
+  // both raised on doubt and for implement work (JEVADV-117); the row keeps Jev's own tier.
+  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
+  const judged = aimedTier(shifted, input.jev);
+  const target = input.tiers[collapseTier(input.tiers, judged)];
   const currentRank = modelRank(input.tiers, current);
   const proposedRank = modelRank(input.tiers, target.modelId);
   const isUpgrade = currentRank !== null && proposedRank !== null && proposedRank > currentRank;
-  const base = { tier, confidence: input.jev.confidence, proposed: target.modelId };
+  const base = { tier: collapseTier(input.tiers, shifted), confidence: input.jev.confidence, proposed: target.modelId };
   // Under any guard only a strict upgrade passes: a downgrade, a model the
   // floor cannot compare, and a same-rank change all keep the session's own
   // model (§6.2, review finding 2). Its effort may still rise to the tier's,
@@ -511,6 +544,8 @@ export interface RouterDecisionRecord {
   readonly appliedCold?: true;
   /** JEVADV-105: the dimensions an Orca launch pin held; absent when none did. */
   readonly orcaPin?: readonly PinnedDimension[];
+  /** JEVADV-117: Jev's work kind for a main-loop prompt; absent when not answered. */
+  readonly kind?: WorkKind;
 }
 
 export interface RouterDecisionRecordInput {
@@ -545,6 +580,8 @@ export interface RouterDecisionRecordInput {
   readonly cacheUnknown?: CacheUnknown | null;
   /** Track R: `switchedByColdCache` -- the switch passed break-even only because the cache was cold. */
   readonly coldSwitch?: boolean;
+  /** JEVADV-117: Jev's work kind for the prompt (`TierJudgment.kind`). */
+  readonly kind?: WorkKind;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -582,5 +619,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     ...(input.cacheWarm === null && input.cacheUnknown !== undefined && input.cacheUnknown !== null ? { cacheUnknown: input.cacheUnknown } : {}),
     ...(input.coldSwitch !== true ? {} : input.applied ? { appliedCold: true as const } : { wouldApplyCold: true as const }),
     ...(input.decision.orcaPin === undefined || input.decision.orcaPin.length === 0 ? {} : { orcaPin: input.decision.orcaPin }),
+    ...(input.kind === undefined ? {} : { kind: input.kind }),
   };
 }
