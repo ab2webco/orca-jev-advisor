@@ -165,6 +165,7 @@ import type { GitPlace, PlaceCache } from '../../../../src/core/agent_place.ts'
 import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { SubagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
+import { briefFileUsable, briefPointerPath, briefTaskText, judgeableBriefTask } from '../../../../src/core/brief_task.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, qualitySwitchCost, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt, switchedByColdCache } from '../../../../src/core/model_router_stage.ts'
 import { cacheClockUnknown, cacheUnknownOf, cacheWarmth, foundTranscriptPath, mergeCacheTail, parseCacheClock, readCacheTail, transcriptFindArgv, transcriptPathOf } from '../../../../src/core/cache_warmth.ts'
 import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
@@ -1323,6 +1324,30 @@ async function readOrcaPins($: EngineInterface): Promise<OrcaPins> {
  * sticky choice on every other step, adoption of the session's own model
  * on a warm session or after the person switched.
  */
+/**
+ * JEVADV-118 T1: what the router judges for a prompt -- an Orca member's
+ * brief's TASK block when the prompt points at one under this worktree's
+ * `.orca/briefs/` (its real path, a regular file, under the size cap, a TASK
+ * that describes work), else the prompt itself, whose pointer guard then holds
+ * as before. Any failure keeps the prompt.
+ */
+async function routerPromptText($: EngineInterface, promptText: string): Promise<{ text: string; brief: boolean }> {
+  const kept = { text: promptText, brief: false }
+  try {
+    const path = briefPointerPath(promptText)
+    if (path === null) return kept
+    const cwd = await $.session.cwd()
+    const cwdReal = (await $.fs.stat(cwd, { resolve: true })).realPath
+    const stat = await $.fs.stat(path.startsWith('/') ? path : `${cwd.replace(/\/+$/, '')}/${path.replace(/^\.\//, '')}`, { resolve: true })
+    if (cwdReal === undefined || stat.realPath === undefined || !briefFileUsable(cwdReal, { kind: stat.kind, size: stat.size, realPath: stat.realPath })) return kept
+    const task = briefTaskText(await $.fs.read(stat.realPath))
+    const judged = task === null ? null : judgeableBriefTask(task)
+    return judged === null ? kept : { text: judged, brief: true }
+  } catch {
+    return kept
+  }
+}
+
 async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', options: PluginOptions, project: string | null): Promise<RoutedStep> {
   const stickyRead = await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })
   const sticky = stickyRead.value
@@ -1397,7 +1422,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   // later" shape the warm-session branch above already uses.
   if (!personAuthored) return adopt(promptKey, false)
 
-  const promptText = lastPromptText(messages)
+  const { text: promptText, brief } = await routerPromptText($, lastPromptText(messages))
   const account = await resolveAccountId($)
   const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
   const destination = await resolveSessionDestination($, await $.session.cwd())
@@ -1417,7 +1442,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   )
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(jev?.kind === undefined ? {} : { kind: jev.kind }) }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), brief, ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(jev?.kind === undefined ? {} : { kind: jev.kind }) }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey, ...orcaJudgment(decision) }
   const next: RouterSticky = decision.changed
@@ -1476,7 +1501,7 @@ async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mod
 }
 
 async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', options: PluginOptions, sticky: RouterSticky, messages: readonly ActivityMessage[], promptKey: RouterSticky['lastPrompt'], originKind: string | null, project: string | null): Promise<RoutedStep> {
-  const promptText = lastPromptText(messages)
+  const { text: promptText, brief } = await routerPromptText($, lastPromptText(messages))
   const activity = summarizePreviousTurn(messages)
   const account = await resolveAccountId($)
   const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
@@ -1513,7 +1538,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), cacheWarm, cacheUnknown: cacheUnknownOf(cacheClock.clock, cacheClock.tailFailed), switchCost: qualitySwitchCost(decided, decision), coldSwitch: switchedByColdCache(decided, decision), ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(jev?.kind === undefined ? {} : { kind: jev.kind }) })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), cacheWarm, cacheUnknown: cacheUnknownOf(cacheClock.clock, cacheClock.tailFailed), switchCost: qualitySwitchCost(decided, decision), coldSwitch: switchedByColdCache(decided, decision), brief, ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(jev?.kind === undefined ? {} : { kind: jev.kind }) })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
