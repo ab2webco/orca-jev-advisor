@@ -43,6 +43,8 @@ export type RouterSticky = {
   person?: boolean
   /** JEVADV-118 T2: `model` is below the code floor, so every main-loop step checks the turn for code work that raises it. */
   floorWatch?: boolean
+  /** JEVADV-118 T4: the prompt (hash and position, as `lastPrompt`) a test-fix loop last raised the session for; it fires once per prompt. */
+  testLoop?: { hash: string; position: number } | null
 }
 
 /** Main-loop usage of this session, kept by the router after every step. */
