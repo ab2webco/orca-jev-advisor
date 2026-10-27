@@ -155,6 +155,8 @@ export interface TierJudgment {
   readonly margin?: number;
   /** JEVADV-117: Jev's work kind for the same prompt, when it was asked and answered. */
   readonly kind?: WorkKind;
+  /** JEVADV-118 T5: Jev's confidence in `kind`; absent when it gave none. */
+  readonly kindConfidence?: number;
 }
 
 function isRouterTier(value: string): value is RouterTier {
@@ -329,9 +331,15 @@ export function activeGuards(context: GuardContext): readonly RouterGuard[] {
  * (80-94%) never shifts a tier; it only relaxes hysteresis. With no
  * previous turn (session start, a subagent) nothing shows the work is
  * read-only, so nothing shifts.
+ *
+ * JEVADV-118 T5: and only when Jev is confident (CONFIDENCE_FLOOR) the work
+ * itself reads or executes; implement, review and design work never shifts
+ * down, nor work whose kind is unknown or unsure.
  */
-export function shiftForPressure(tier: RouterTier, band: QuotaBand, guards: readonly RouterGuard[], previousTurn: TurnActivity | null): RouterTier {
+export function shiftForPressure(tier: RouterTier, band: QuotaBand, guards: readonly RouterGuard[], previousTurn: TurnActivity | null, work: Pick<TierJudgment, "kind" | "kindConfidence">): RouterTier {
   if (band !== "strong-economy" || tier !== "standard" || guards.length > 0 || previousTurn === null) return tier;
+  const lightWork = (work.kind === "read" || work.kind === "execute") && work.kindConfidence !== undefined && work.kindConfidence >= CONFIDENCE_FLOOR;
+  if (!lightWork) return tier;
   const readOnly = previousTurn.filesEdited === 0 && previousTurn.errors === 0 && previousTurn.testsFailed === 0;
   return readOnly ? "simple" : tier;
 }
@@ -451,7 +459,7 @@ function decideStartFree(input: StartDecisionInput): RouterDecision {
   const guards = activeGuards(input.guards);
   // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1),
   // both raised on doubt and for implement work (JEVADV-117); the row keeps Jev's own tier.
-  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
+  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null, input.jev);
   const judged = aimedTier(shifted, input.jev);
   const target = input.tiers[collapseTier(input.tiers, judged)];
   const currentRank = modelRank(input.tiers, current);

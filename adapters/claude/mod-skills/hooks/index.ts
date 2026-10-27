@@ -1234,7 +1234,7 @@ async function askTierJudgment($: EngineInterface, options: PluginOptions, promp
 
 /** `tier` with Jev's own kind (never the keyword fallback's), when both answered. */
 function withJevKind(tier: TierJudgment | null, kind: WorkKindJudgment | null): TierJudgment | null {
-  return tier === null || kind === null || kind.source !== 'jev' ? tier : { ...tier, kind: kind.kind }
+  return tier === null || kind === null || kind.source !== 'jev' ? tier : { ...tier, kind: kind.kind, ...(kind.confidence === null ? {} : { kindConfidence: kind.confidence }) }
 }
 
 /** The tier judgment and, 0.6.16 T2, the work kind (`kindFor` names whose request it is; null asks none): both from the one Jev call; nulls on any failure. `payment` (G8): the failure was Jev's 402, a key without credit. */
