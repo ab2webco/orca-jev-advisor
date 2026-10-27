@@ -174,9 +174,10 @@ export function interpretTier(answers: Record<string, Answer>): TierJudgment | n
 // ---------------------------------------------------------------------------
 
 /**
- * The confidence under which Jev's tier holds the model. 0.6.11 T4 measured it
- * against the record (odd/tasks/release-0.6.11.md) and found no signal that
- * moves it, so it stays 0.7.
+ * The confidence under which Jev is unsure: its tier is raised to DOUBT_TIER
+ * (JEVADV-117) and nothing is lowered. 0.6.11 T4 measured it against the
+ * record (odd/tasks/release-0.6.11.md) and found no signal that moves it, so
+ * it stays 0.7.
  */
 export const CONFIDENCE_FLOOR = 0.7;
 
