@@ -35,7 +35,7 @@ import { collapseTier, modelRank, tierOfModel } from "./model_router_accounts.ts
 import type { ResolvedTiers } from "./model_router_accounts.ts";
 import { EFFORT_LEVELS, IMPLEMENT_FLOOR_TIER, TIER_EFFORT, effortRank, exactModelId, guardedEffort, isPersonEffort, topicFlags } from "./model_router_decide.ts";
 import type { SessionEffort, TierEffortMap } from "./model_router_decide.ts";
-import { isFailingTestRun, messagesSinceLastPrompt } from "./model_router_stage.ts";
+import { isFailingTestRun, isTestRun, messagesSinceLastPrompt } from "./model_router_stage.ts";
 import type { ActivityMessage, StageDecision } from "./model_router_stage.ts";
 import { pinnedEffort } from "./orca_pins.ts";
 import type { OrcaPins } from "./orca_pins.ts";
@@ -74,7 +74,7 @@ function editedPath(use: ActivityMessage["toolUses"][number]): string | null {
 /** A test file by its name or folder: `a.test.ts`, `a_spec.rb`, `test_a.py`, `tests/`, `__tests__/`, `spec/`. */
 const TEST_PATH = /(?:^|\/)(?:tests?|__tests__|spec)\/|[._-](?:test|spec)\.[a-z0-9]+$|(?:^|\/)test_[^/]+$/;
 
-/** Whether the work since the last real prompt holds a failing test run, a fix to a non-test file in the worktree, and a failing run again, in that order. */
+/** Whether the work since the last real prompt holds a failing test run, a fix to a non-test file in the worktree, and a failing run again, in that order, with no passing run between them. */
 export function testFixLoop(messages: readonly ActivityMessage[], cwd: string): boolean {
   const root = trimSlash(cwd);
   let stage: "start" | "failed" | "fixed" = "start";
@@ -83,6 +83,11 @@ export function testFixLoop(messages: readonly ActivityMessage[], cwd: string): 
       if (isFailingTestRun(use)) {
         if (stage === "fixed") return true;
         stage = "failed";
+        continue;
+      }
+      // A passing run ends the cycle: the next RED test starts a new one.
+      if (isTestRun(use)) {
+        stage = "start";
         continue;
       }
       const raw = editedPath(use);
@@ -178,7 +183,8 @@ function stepUp(effort: SessionEffort | null): SessionEffort | null {
 /**
  * T4: a test-fix loop's step: at least the floor's model (a stronger one is
  * kept) and the effort one step past the one it would run at; null with no
- * loop, under an Orca model pin, or when nothing would change.
+ * loop, under an Orca model pin, on a model the account does not know, or
+ * when nothing would change.
  */
 export function decideTestLoopEscalation(input: StepEscalationInput): StepEscalation | null {
   if (input.pins?.model === true || isPersonEffort(input.currentEffort) || !testFixLoop(input.messages, input.cwd)) return null;
@@ -186,7 +192,9 @@ export function decideTestLoopEscalation(input: StepEscalationInput): StepEscala
   const floor = input.tiers[collapseTier(input.tiers, IMPLEMENT_FLOOR_TIER)];
   const model = below ? exactModelId(floor.modelId, input.configuredModel) : input.currentModel;
   const tier = tierOfModel(input.tiers, model);
-  const supportsEffort = tier !== null && input.tiers[tier].supportsEffort;
+  // A model the account does not know: nothing here can say what it takes.
+  if (tier === null) return null;
+  const supportsEffort = input.tiers[tier].supportsEffort;
   const tierEffort = supportsEffort ? (input.tierEffort ?? TIER_EFFORT)[IMPLEMENT_FLOOR_TIER] : null;
   // No effort sent is the API's default, not a choice: the floor tier's stands in for it.
   const base = below ? (model === input.configuredModel ? guardedEffort(input.configuredEffort, tierEffort) : tierEffort) : input.currentEffort ?? tierEffort;
@@ -194,7 +202,8 @@ export function decideTestLoopEscalation(input: StepEscalationInput): StepEscala
   const effort = input.pins?.effort === true ? pinnedEffort(input.tiers, model, input.configuredModel, input.configuredEffort) : routed;
   if (model === input.currentModel && effort === input.currentEffort) return null;
   return {
-    tier: below ? IMPLEMENT_FLOOR_TIER : null,
+    // The tier of the model it runs on, so the status line names the raise.
+    tier,
     confidence: null,
     current: input.currentModel,
     proposed: below ? floor.modelId : input.currentModel,
