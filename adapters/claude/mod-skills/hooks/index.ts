@@ -166,7 +166,7 @@ import { subagentBand } from '../../../../src/core/subagent_band.ts'
 import type { SubagentBand } from '../../../../src/core/subagent_band.ts'
 import type { KeptDecision } from '../../../../src/core/model_router_status.ts'
 import { briefFileUsable, briefPointerPath, briefTaskText, judgeableBriefTask } from '../../../../src/core/brief_task.ts'
-import { belowCodeFloor, decideStepEscalation } from '../../../../src/core/model_router_floor.ts'
+import { belowCodeFloor, decideStepEscalation, decideTestLoopEscalation, testFixLoop } from '../../../../src/core/model_router_floor.ts'
 import { decideEngineTurn, decideStage, isNewPrompt, lastPromptKey, medianOf, qualitySwitchCost, quotaPressureOf, summarizePreviousTurn, summarizeSinceLastPrompt, switchedByColdCache } from '../../../../src/core/model_router_stage.ts'
 import { cacheClockUnknown, cacheUnknownOf, cacheWarmth, foundTranscriptPath, mergeCacheTail, parseCacheClock, readCacheTail, transcriptFindArgv, transcriptPathOf } from '../../../../src/core/cache_warmth.ts'
 import type { ActivityMessage, LiveRateLimit, EffortOutputs, SessionUsage, StageDecision, StageDecisionInput } from '../../../../src/core/model_router_stage.ts'
@@ -1380,8 +1380,8 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
     // JEVADV-117: the person's model is never moved again, up or down.
     if (sticky.person === true) return { input: e, status: null }
     if (e.index !== 0 || sticky.stats.turnId === e.turnId) {
-      // JEVADV-118 T2: below the code floor, the turn's own work is read on every step.
-      const escalated = sticky.floorWatch === true ? await routeStepEscalation($, e, mode, sticky, project) : null
+      // JEVADV-118 T2/T4: the turn's own work is read on every step (the code floor, a test-fix loop).
+      const escalated = await routeStepEscalation($, e, mode, sticky, project)
       return escalated ?? { input: stickyStepInput(e, sticky, mode), status: null }
     }
     // A new turn: point C only when a new real prompt started it (review
@@ -1488,7 +1488,7 @@ async function lockPersonModel($: EngineInterface, mode: 'measure' | 'active'): 
  * see routeMainStep's own note on the two cases reading a different one.
  */
 async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', sticky: RouterSticky, text: string, activity: TurnActivity | null, originKind: string | null, project: string | null): Promise<RoutedStep> {
-  const escalated = sticky.floorWatch === true ? await routeStepEscalation($, e, mode, sticky, project) : null
+  const escalated = await routeStepEscalation($, e, mode, sticky, project)
   if (escalated !== null) return escalated
   const account = await resolveAccountId($)
   const { tiers, band, quotaSource } = await resolveRouterAccount($, account)
@@ -1514,21 +1514,33 @@ async function routeEngineTurn($: EngineInterface, e: Frozen<TurnStepInput>, mod
  * high-risk path) raises the model to the floor from this step on, logged
  * as a stage row with its signal; null when nothing fired, which keeps the
  * sticky choice. The watch ends once raised.
+ *
+ * T4, on any model: a test-fix loop since the last real prompt raises the
+ * model to at least the floor and the effort one step, once per prompt
+ * (`testLoop` keeps the prompt it fired for). The loop is read locally
+ * before the account is resolved, so a step without one costs no lookup.
  */
 async function routeStepEscalation($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', sticky: RouterSticky, project: string | null): Promise<RoutedStep | null> {
+  const messages = await $.session.messages()
+  const cwd = await $.session.cwd()
+  const promptKey = lastPromptKey(messages)
+  const loopDue = isNewPrompt(sticky.testLoop ?? null, promptKey) && testFixLoop(messages, cwd)
+  if (sticky.floorWatch !== true && !loopDue) return null
   const account = await resolveAccountId($)
   const { tiers, band, quotaSource, tierEffort } = await resolveRouterAccount($, account)
-  const decision = decideStepEscalation({
+  const input = {
     tiers,
     tierEffort,
     currentModel: sticky.model,
     currentEffort: sticky.effort,
     configuredModel: sticky.configuredModel,
     configuredEffort: sticky.configuredEffort,
-    cwd: await $.session.cwd(),
-    messages: await $.session.messages(),
+    cwd,
+    messages,
     pins: await readOrcaPins($),
-  })
+  }
+  const floored = sticky.floorWatch === true ? decideStepEscalation(input) : null
+  const decision = floored ?? (loopDue ? decideTestLoopEscalation(input) : null)
   if (decision === null) return null
   const at = new Date(await $.clock.now()).toISOString()
   await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'stage', decision, applied: mode === 'active', quotaBand: band, quotaSource, effort: decision.effort, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), signal: decision.signal }))}\n`)
@@ -1537,11 +1549,12 @@ async function routeStepEscalation($: EngineInterface, e: Frozen<TurnStepInput>,
     model: decision.model,
     effort: decision.effort,
     rewrite: mode === 'active' && (decision.model !== sticky.configuredModel || decision.effort !== sticky.configuredEffort),
-    tier: decision.tier,
+    tier: decision.tier ?? sticky.tier,
     pendingLower: null,
     confidence: null,
     hold: null,
     floorWatch: false,
+    ...(decision.signal === 'test-loop' ? { testLoop: promptKey } : {}),
   }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
   return { input: stickyStepInput(e, next, mode), status: routerStatusFor(decision, tiers, mode, await resolveLocale($)) }

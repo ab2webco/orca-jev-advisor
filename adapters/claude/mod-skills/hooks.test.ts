@@ -2741,6 +2741,54 @@ test("JEVADV-118 T2 (hook): the person's own model choice wins over the code flo
 });
 
 // ---------------------------------------------------------------------------
+// JEVADV-118 T4: a test-fix loop (fail, fix a non-test file, fail again)
+// raises the effort one step on Opus 5.5, once per prompt.
+// ---------------------------------------------------------------------------
+
+const OPUS_HIGH = { model: "claude-opus-5-5", effort: "high" };
+
+function testRunRow(id: string): Row {
+  return { role: "assistant", text: "", toolUses: [{ tool_use_id: id, tool: "Bash", input: { command: "npm test" }, text: "ℹ pass 12\nℹ fail 2", isError: true }] };
+}
+
+/** A complex prompt kept on the session's own Opus 5.5 at high, in active mode. */
+async function codingOnOpusHigh(): Promise<{ host: FakeHost; handlers: Map<string, Hook>; engine: unknown }> {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.fetchQueue.push(tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, "fix the parser so the date tests pass", OPUS_HIGH, []);
+  assert.equal(first.model, "claude-opus-5-5");
+  assert.equal(first.effort, "high");
+  return { host, handlers, engine };
+}
+
+test("JEVADV-118 T4 (hook): fail, fix, fail raises Opus 5.5 from high to xhigh on the next step, once, and logs the signal", async () => {
+  const { host, handlers, engine } = await codingOnOpusHigh();
+  const rows = routerDecisionLines(host).length;
+  host.messages = [...host.messages, testRunRow("t1"), editRow(`${CWD}/src/parser.ts`), testRunRow("t2")];
+  const next = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 1, ...OPUS_HIGH }));
+  assert.equal(next.model, "claude-opus-5-5");
+  assert.equal(next.effort, "xhigh");
+  const row = routerDecisionLines(host).at(-1);
+  assert.equal(row?.reason, "escalate");
+  assert.equal(row?.signal, "test-loop");
+  assert.equal(row?.applied, true);
+  const later = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 2, ...OPUS_HIGH }));
+  assert.equal(later.effort, "xhigh", "it stays raised");
+  assert.equal(routerDecisionLines(host).length, rows + 1, "raised once");
+});
+
+test("JEVADV-118 T4 (hook): RED first, a test-only edit between two failing runs, keeps the effort", async () => {
+  const { host, handlers, engine } = await codingOnOpusHigh();
+  const rows = routerDecisionLines(host).length;
+  host.messages = [...host.messages, testRunRow("t1"), editRow(`${CWD}/src/parser.test.ts`), testRunRow("t2")];
+  const next = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 1, ...OPUS_HIGH }));
+  assert.equal(next.effort, "high");
+  assert.equal(routerDecisionLines(host).length, rows, "no escalation row");
+});
+
+// ---------------------------------------------------------------------------
 // 0.6.2 E8: the status line says, part by part, what applied and what only
 // measured, with one "jev" at the start.
 // ---------------------------------------------------------------------------
