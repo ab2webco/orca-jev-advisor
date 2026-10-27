@@ -1,6 +1,7 @@
 // The model router's own catalog (JEV-060 slice 2, §8): the status line the
 // person reads. Measure mode says what it would use; active mode says what
 // runs. A kept model says why it was kept, and Jev's tier as Jev's.
+// JEVADV-118 T6: a chosen one says who chose it and why (`chose.*`).
 import type { Catalog } from "./i18n.ts";
 
 export type ModelRouterKey =
@@ -33,6 +34,21 @@ export type ModelRouterKey =
   | "why.pointer-prompt"
   | "why.context-window"
   | "why.orca-pin"
+  | "status.active.chose.effort"
+  | "status.active.chose.noEffort"
+  | "status.measure.chose.effort"
+  | "status.measure.chose.noEffort"
+  | "chose.kind"
+  | "chose.code-floor"
+  | "chose.doubt"
+  | "chose.code-edit"
+  | "chose.high-risk-edit"
+  | "chose.test-loop"
+  | "kind.execute"
+  | "kind.read"
+  | "kind.review"
+  | "kind.implement"
+  | "kind.design"
   | "agents.count"
   | "agents.heading"
   | "agents.effort.withSource"
@@ -104,6 +120,21 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.pointer-prompt": "el mensaje remite a un documento",
     "why.context-window": "el contexto no cabe en un modelo menor",
     "why.orca-pin": "fijado por Orca",
+    "status.active.chose.effort": "modelo: {{model}} · esfuerzo {{effort}} · {{why}}",
+    "status.active.chose.noEffort": "modelo: {{model}} · {{why}}",
+    "status.measure.chose.effort": "mediría: {{model}} · esfuerzo {{effort}} · {{why}}",
+    "status.measure.chose.noEffort": "mediría: {{model}} · {{why}}",
+    "chose.kind": "Jev: {{kind}}",
+    "chose.code-floor": "piso de código (Jev: {{kind}})",
+    "chose.doubt": "subido: Jev con dudas (Jev: {{stage}})",
+    "chose.code-edit": "subido: se editó código",
+    "chose.high-risk-edit": "subido: se editó una ruta de riesgo",
+    "chose.test-loop": "subido: los tests fallaron dos veces",
+    "kind.execute": "ejecución",
+    "kind.read": "lectura",
+    "kind.review": "revisión",
+    "kind.implement": "código",
+    "kind.design": "diseño",
     // 0.6.8 T6: the subagents running now (subagent_status.ts).
     // 0.6.14 T2: the line only counts them; the band above the prompt has a
     // row for each (subagent_band.ts).
@@ -181,6 +212,21 @@ export const MODEL_ROUTER_CATALOG: Catalog<ModelRouterKey> = {
     "why.pointer-prompt": "the prompt points to a document",
     "why.context-window": "the context does not fit a smaller model",
     "why.orca-pin": "pinned by Orca",
+    "status.active.chose.effort": "model: {{model}} · {{effort}} effort · {{why}}",
+    "status.active.chose.noEffort": "model: {{model}} · {{why}}",
+    "status.measure.chose.effort": "would use: {{model}} · {{effort}} effort · {{why}}",
+    "status.measure.chose.noEffort": "would use: {{model}} · {{why}}",
+    "chose.kind": "Jev: {{kind}}",
+    "chose.code-floor": "code floor (Jev: {{kind}})",
+    "chose.doubt": "raised: Jev unsure (Jev: {{stage}})",
+    "chose.code-edit": "raised: code edited",
+    "chose.high-risk-edit": "raised: high-risk path edited",
+    "chose.test-loop": "raised: tests failed twice",
+    "kind.execute": "running things",
+    "kind.read": "reading",
+    "kind.review": "review",
+    "kind.implement": "code",
+    "kind.design": "design",
     "agents.count": "agents: {{n}}",
     "agents.heading": "Running agents: {{n}}",
     "agents.effort.withSource": "{{level}} ({{source}})",
