@@ -2774,9 +2774,20 @@ test("JEVADV-118 T4 (hook): fail, fix, fail raises Opus 5.5 from high to xhigh o
   assert.equal(row?.reason, "escalate");
   assert.equal(row?.signal, "test-loop");
   assert.equal(row?.applied, true);
+  assert.match(host.statusLines.at(-1) ?? "", /Opus 5\.5 · extra high effort/, "the status line names the raised effort");
   const later = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 2, ...OPUS_HIGH }));
   assert.equal(later.effort, "xhigh", "it stays raised");
   assert.equal(routerDecisionLines(host).length, rows + 1, "raised once");
+});
+
+test("JEVADV-118 T4 (hook): a second TDD cycle in the same turn (fail, fix, pass, new RED test, fail) keeps the effort", async () => {
+  const { host, handlers, engine } = await codingOnOpusHigh();
+  const rows = routerDecisionLines(host).length;
+  const passing: Row = { role: "assistant", text: "", toolUses: [{ tool_use_id: "t2", tool: "Bash", input: { command: "npm test" }, text: "ℹ pass 14\nℹ fail 0" }] };
+  host.messages = [...host.messages, testRunRow("t1"), editRow(`${CWD}/src/parser.ts`), passing, editRow(`${CWD}/src/parser.test.ts`), testRunRow("t3")];
+  const next = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 1, ...OPUS_HIGH }));
+  assert.equal(next.effort, "high");
+  assert.equal(routerDecisionLines(host).length, rows, "no escalation row");
 });
 
 test("JEVADV-118 T4 (hook): RED first, a test-only edit between two failing runs, keeps the effort", async () => {

@@ -119,6 +119,12 @@ test("T4: a fix that makes the run pass, a fix with no run before it, or one fai
   assert.equal(testFixLoop([PROMPT, testRun(true), edit("Write", { file_path: "/tmp/notes.md" }), testRun(true)], CWD), false, "a scratch note is no fix");
 });
 
+test("T4: a passing run ends the cycle: a second TDD cycle in the same turn is no loop", () => {
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false), TEST_EDIT, testRun(true)], CWD), false);
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false), FIX, testRun(true)], CWD), false, "the first failure of a new cycle is not a loop");
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false), testRun(true), FIX, testRun(true)], CWD), true, "a new cycle can still loop");
+});
+
 test("T4: only the work since the last real prompt counts", () => {
   const earlier = [{ role: "user" as const, text: "fix the parser", toolUses: [] }, testRun(true), FIX];
   assert.equal(testFixLoop([...earlier, PROMPT, testRun(true)], CWD), false);
@@ -136,11 +142,13 @@ test("T4: on Opus 5.5 the model stays and the effort rises one step; never Fable
   const onOpus = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "high" }));
   assert.equal(onOpus?.model, "claude-opus-5-5");
   assert.equal(onOpus?.effort, "xhigh");
+  assert.equal(onOpus?.tier, "complex", "the tier of the model it stays on, so the status line can name it");
   const fromMedium = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "medium" }));
   assert.equal(fromMedium?.effort, "high");
   assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "xhigh" })), null, "already at the cap: nothing to raise");
-  const onFable = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-fable-5-1", currentEffort: "high" }));
-  assert.equal(onFable?.model, "claude-fable-5-1", "never lowered off Fable");
+  // Fable is on no tier of the router's ladder, so a session the person put on it is left alone: never lowered.
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-fable-5-1", currentEffort: "high" })), null);
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "some-unknown-model", currentEffort: "high" })), null, "a model the account does not know is left alone");
 });
 
 test("T4: on Opus 5.5 with no effort sent, the floor tier's effort stands in and rises one step", () => {

@@ -226,10 +226,14 @@ const EDIT_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "
 const TEST_COMMAND = /\b(npm (run )?test|npx (jest|vitest|playwright test)|jest|vitest|pytest|go test|cargo test|node --test|bun test|deno test|phpunit|rspec)\b/;
 const TEST_FAILED = /✖|\bFAIL\b|\b[1-9]\d* (failing|failed|failures?)\b|\bfail [1-9]/;
 
+/** JEVADV-118 T4: a command that runs tests, whatever its result. */
+export function isTestRun(use: ActivityMessage["toolUses"][number]): boolean {
+  return typeof use.input.command === "string" && TEST_COMMAND.test(use.input.command);
+}
+
 /** JEVADV-118 T4: a test command whose result failed (an error, or a failure in its output); false for anything else. */
 export function isFailingTestRun(use: ActivityMessage["toolUses"][number]): boolean {
-  const command = typeof use.input.command === "string" ? use.input.command : null;
-  return command !== null && TEST_COMMAND.test(command) && (use.isError === true || TEST_FAILED.test(use.text ?? ""));
+  return isTestRun(use) && (use.isError === true || TEST_FAILED.test(use.text ?? ""));
 }
 
 // A read-only probe failing (an `ls` of a missing file, a `which` that finds
