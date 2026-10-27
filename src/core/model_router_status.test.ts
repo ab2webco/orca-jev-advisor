@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
-import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from "./model_router_status.ts";
+import { choseWhy, keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from "./model_router_status.ts";
 
 test("status line, Spanish, active: the spec's own example", () => {
   assert.equal(routerStatusText("es", "active", { label: "Sonnet 5", effort: "medium", tier: "standard" }), "modelo: Sonnet 5 · esfuerzo medio");
@@ -142,4 +142,42 @@ test("status: a plain decision does not name a stage; only a kept model names Je
       assert.ok(kept.includes("Jev:"), kept);
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-118 T6: the line says who chose the model and why -- Jev and the
+// work kind, the code floor, a raise on doubt, an escalation mid-turn. A
+// person's choice and an Orca pin already read as kept.
+// ---------------------------------------------------------------------------
+
+test("T6: a Jev pick names the work kind, both locales, both modes", () => {
+  assert.equal(routerStatusText("en", "active", { label: "Haiku 4.5", effort: "medium", tier: "simple", chose: { why: "kind", kind: "read" } }), "model: Haiku 4.5 · medium effort · Jev: reading");
+  assert.equal(routerStatusText("en", "measure", { label: "Haiku 4.5", effort: null, tier: "simple", chose: { why: "kind", kind: "execute" } }), "would use: Haiku 4.5 · Jev: running things");
+  assert.equal(routerStatusText("es", "active", { label: "Haiku 4.5", effort: "medium", tier: "simple", chose: { why: "kind", kind: "read" } }), "modelo: Haiku 4.5 · esfuerzo medio · Jev: lectura");
+});
+
+test("T6: the code floor and a raise on doubt say so, with Jev's kind or tier", () => {
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "simple", chose: { why: "code-floor", kind: "review" } }), "model: Opus 5.5 · high effort · code floor (Jev: review)");
+  assert.equal(routerStatusText("es", "active", { label: "Opus 5.5", effort: "high", tier: "simple", chose: { why: "code-floor", kind: "implement" } }), "modelo: Opus 5.5 · esfuerzo alto · piso de código (Jev: código)");
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "simple", chose: { why: "doubt" } }), "model: Opus 5.5 · high effort · raised: Jev unsure (Jev: ask)");
+});
+
+test("T6: an escalation mid-turn names its signal", () => {
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "complex", chose: { why: "code-edit" } }), "model: Opus 5.5 · high effort · raised: code edited");
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "complex", chose: { why: "high-risk-edit" } }), "model: Opus 5.5 · high effort · raised: high-risk path edited");
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "xhigh", tier: "complex", chose: { why: "test-loop" } }), "model: Opus 5.5 · extra high effort · raised: tests failed twice");
+  assert.equal(routerStatusText("es", "active", { label: "Opus 5.5", effort: "xhigh", tier: "complex", chose: { why: "test-loop" } }), "modelo: Opus 5.5 · esfuerzo muy alto · subido: los tests fallaron dos veces");
+});
+
+test("T6: a kept model still says why it was kept; the chosen reason never replaces it", () => {
+  assert.equal(routerStatusText("en", "active", { label: "Opus 5.5", effort: "high", tier: "simple", kept: "orca-pin", chose: { why: "kind", kind: "read" } }), "model: Opus 5.5 · high effort · kept: pinned by Orca (Jev: ask)");
+});
+
+test("T6: choseWhy reads the decision: escalation signal, code floor, doubt, then the kind", () => {
+  assert.deepEqual(choseWhy({ reason: "escalate", signal: "test-loop", tier: "complex", confidence: null }), { why: "test-loop" });
+  assert.deepEqual(choseWhy({ reason: "switch", tier: "simple", confidence: 0.9, kind: "review" }), { why: "code-floor", kind: "review" });
+  assert.deepEqual(choseWhy({ reason: "switch", tier: "simple", confidence: 0.5, kind: "read" }), { why: "doubt" });
+  assert.deepEqual(choseWhy({ reason: "same", tier: "simple", confidence: 0.9, kind: "read" }), { why: "kind", kind: "read" });
+  assert.equal(choseWhy({ reason: "switch", tier: "simple", confidence: 0.9 }), null, "no kind, no reason to add");
+  assert.deepEqual(choseWhy({ reason: "switch", tier: "complex", confidence: 0.9, kind: "implement" }), { why: "kind", kind: "implement" }, "already at the floor: Jev's own pick");
 });
