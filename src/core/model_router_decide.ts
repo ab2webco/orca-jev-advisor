@@ -191,6 +191,9 @@ export const DOUBT_TIER: RouterTier = "complex";
 /** JEVADV-117: the weakest tier work that changes files runs on (the lead, 2026-10-26: Opus 5.5). */
 export const IMPLEMENT_FLOOR_TIER: RouterTier = "complex";
 
+/** JEVADV-118 T3: the kinds floored at IMPLEMENT_FLOOR_TIER: changing files, judging work done, planning it. */
+const FLOORED_KINDS: readonly WorkKind[] = ["implement", "review", "design"];
+
 function atLeast(tier: RouterTier, floor: RouterTier): RouterTier {
   return ROUTER_TIERS.indexOf(tier) < ROUTER_TIERS.indexOf(floor) ? floor : tier;
 }
@@ -200,9 +203,9 @@ export function raiseForDoubt(tier: RouterTier, confidence: number): RouterTier 
   return confidence >= CONFIDENCE_FLOOR ? tier : atLeast(tier, DOUBT_TIER);
 }
 
-/** Jev's tier, or IMPLEMENT_FLOOR_TIER when the work is implement and its tier is weaker; never lower. */
+/** Jev's tier, or IMPLEMENT_FLOOR_TIER when the work is implement, review or design and its tier is weaker; never lower. */
 export function floorForWork(tier: RouterTier, kind: WorkKind | undefined): RouterTier {
-  return kind === "implement" ? atLeast(tier, IMPLEMENT_FLOOR_TIER) : tier;
+  return kind !== undefined && FLOORED_KINDS.includes(kind) ? atLeast(tier, IMPLEMENT_FLOOR_TIER) : tier;
 }
 
 /** The tier a decision aims at: Jev's (shifted) tier under both floors above. */
