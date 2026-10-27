@@ -366,8 +366,42 @@ export async function getBoard(host: StorageHost): Promise<BoardData> {
   return readKey(host, STORAGE_KEY.board, isBoardData, DEFAULT_BOARD);
 }
 
+/**
+ * The board's own budget, half of Orca's 262144-byte cap on one storage
+ * value (PLUGIN_STORAGE_VALUE_MAX_BYTES). The board keeps one entry per pane
+ * ever seen, so without a bound it grows into that cap and every later
+ * write is refused (JEVADV-116).
+ */
+export const BOARD_MAX_BYTES = 131072;
+
+const utf8 = new TextEncoder();
+
+function entryRecency(entry: BoardEntry): number {
+  const at = Date.parse(entry.updatedAt);
+  return Number.isNaN(at) ? Number.NEGATIVE_INFINITY : at;
+}
+
+/** Keeps the most recently updated entries that fit in `maxBytes` once serialized, in their original order. */
+export function boundBoard(data: BoardData, maxBytes: number = BOARD_MAX_BYTES): BoardData {
+  const sizes = data.entries.map((entry) => utf8.encode(JSON.stringify(entry)).length);
+  const wrapper = utf8.encode(JSON.stringify({ entries: [] })).length;
+  if (wrapper + sizes.reduce((sum, size) => sum + size + 1, 0) <= maxBytes) return data;
+  const newestFirst = data.entries
+    .map((entry, index) => ({ entry, index }))
+    .sort((a, b) => entryRecency(b.entry) - entryRecency(a.entry) || b.entry.receivedAt - a.entry.receivedAt);
+  const kept = new Set<number>();
+  let used = wrapper;
+  for (const { index } of newestFirst) {
+    const size = (sizes[index] ?? 0) + 1; // + the separating comma
+    if (used + size > maxBytes) break;
+    used += size;
+    kept.add(index);
+  }
+  return { entries: data.entries.filter((_, index) => kept.has(index)) };
+}
+
 export async function setBoard(host: StorageHost, data: BoardData): Promise<void> {
-  await host.set(STORAGE_KEY.board, data);
+  await host.set(STORAGE_KEY.board, boundBoard(data));
 }
 
 // ---------------------------------------------------------------------------

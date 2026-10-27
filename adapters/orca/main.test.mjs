@@ -2194,6 +2194,42 @@ test('onAgentStatusChanged: stores the resolved projectName beside the raw proje
   assert.equal(byPane['pane-float'].projectName, null, 'a pane with no project gets no invented name')
 })
 
+// JEVADV-116: Orca refuses one storage value over 262144 bytes. A board that
+// had grown to that edge must still take the next event, bounded, and a
+// refused write must be logged with its reason, never thrown.
+test('onAgentStatusChanged: a board grown past Orca\'s value cap is still written, bounded', async () => {
+  const entries = Array.from({ length: 2000 }, (_, i) => ({
+    worktreeId: 'wt-old', project: 'github:example/app', rama: 'main', paneKey: `pane-${i}`, state: 'done', receivedAt: i, updatedAt: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString()
+  }))
+  const storageHost = fakeStorageHost({ board: { entries } })
+  const cappedSet = storageHost.set
+  storageHost.set = async (key, value) => {
+    const bytes = Buffer.byteLength(JSON.stringify(value))
+    if (bytes > 262144) throw new Error(`value exceeds 262144 bytes (${bytes})`)
+    await cappedSet(key, value)
+  }
+  const orca = fakeOrca()
+  await onAgentStatusChanged(orca, storageHost, { worktreeId: 'wt-new', paneKey: 'pane-new', state: 'working', receivedAt: 5000 }, {
+    resolveWorktreeProjects: async () => new Map(),
+    resolveRepoNames: async () => new Map()
+  })
+  assert.deepEqual(orca._logs.filter((line) => line.startsWith('setBoard failed')), [])
+  const stored = storageHost._store.board.entries
+  assert.ok(stored.length < entries.length + 1, 'old entries were trimmed')
+  assert.ok(stored.some((entry) => entry.paneKey === 'pane-new'), 'the new event is kept')
+})
+
+test('onAgentStatusChanged: a refused board write is logged with its reason, never thrown', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  storageHost.set = async () => { throw new Error('value exceeds 262144 bytes') }
+  await assert.doesNotReject(onAgentStatusChanged(orca, storageHost, { worktreeId: 'wt-new', paneKey: 'pane-new', state: 'working', receivedAt: 1 }, {
+    resolveWorktreeProjects: async () => new Map(),
+    resolveRepoNames: async () => new Map()
+  }))
+  assert.ok(orca._logs.includes('setBoard failed: value exceeds 262144 bytes'))
+})
+
 // Today's bug: the real sidecar was granted --allow-fs-read on ~/.claude
 // (CLAUDE_HOME_DIR) but never on the SIBLING file ~/.claude.json --
 // verified by hand that Node's --permission sandbox denies a directory

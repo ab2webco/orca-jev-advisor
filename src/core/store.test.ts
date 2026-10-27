@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getTeamOwners, getQueueMode, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
+import { BOARD_MAX_BYTES, getBoard, getCatalog, getConfig, getExplicitModels, getPolicies, getTeamOwners, getQueueMode, setBoard, setPolicies, type BoardEntry, type CatalogData, type PolicyRow, type StorageHost } from "./store.ts";
 
 /** Minimal in-memory StorageHost, enough for getPolicies/setPolicies. */
 function fakeHost(initial: Record<string, unknown> = {}): StorageHost {
@@ -341,6 +341,62 @@ test("getBoard: an entry keeps its projectName, and one written before projectNa
 test("getBoard: a non-string projectName is malformed like any other wrong-typed field", async () => {
   const host = fakeHost({ board: { entries: [{ ...BOARD_ENTRY, projectName: 42 }] } });
   assert.deepEqual(await getBoard(host), { entries: [] });
+});
+
+// JEVADV-116: Orca refuses one storage value over 262144 bytes
+// (PLUGIN_STORAGE_VALUE_MAX_BYTES). The board keeps one entry per pane ever
+// seen, so it grew to that edge and 8393 of 20963 writes failed.
+const ORCA_STORAGE_VALUE_MAX_BYTES = 262144;
+
+/** A host that refuses an oversized value the way Orca's storage store does. */
+function cappedHost(): StorageHost {
+  const host = fakeHost();
+  return {
+    ...host,
+    async set(key: string, value: unknown): Promise<void> {
+      if (new TextEncoder().encode(JSON.stringify(value)).length > ORCA_STORAGE_VALUE_MAX_BYTES) {
+        throw new Error(`value exceeds ${ORCA_STORAGE_VALUE_MAX_BYTES} bytes`);
+      }
+      await host.set(key, value);
+    },
+  };
+}
+
+function manyPanes(count: number): BoardEntry[] {
+  return Array.from({ length: count }, (_, i) => ({
+    ...BOARD_ENTRY,
+    paneKey: `pane-${i}`,
+    receivedAt: i,
+    updatedAt: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString(),
+  }));
+}
+
+test("setBoard: a board past Orca's value cap is still written, under the board's own budget", async () => {
+  const host = cappedHost();
+  const entries = manyPanes(2000);
+  assert.ok(new TextEncoder().encode(JSON.stringify({ entries })).length > ORCA_STORAGE_VALUE_MAX_BYTES);
+  await setBoard(host, { entries });
+  const stored = await host.get("board");
+  assert.ok(new TextEncoder().encode(JSON.stringify(stored)).length <= BOARD_MAX_BYTES);
+  assert.ok(BOARD_MAX_BYTES <= ORCA_STORAGE_VALUE_MAX_BYTES / 2, "the budget stays well under Orca's cap");
+});
+
+test("setBoard: trimming drops the least recently updated entries and keeps the rest in order", async () => {
+  const host = fakeHost();
+  const entries = manyPanes(2000).reverse();
+  await setBoard(host, { entries });
+  const kept = (await getBoard(host)).entries;
+  assert.ok(kept.length > 0 && kept.length < entries.length);
+  assert.equal(kept[0]?.paneKey, "pane-1999", "the newest entry survives");
+  assert.ok(!kept.some((entry) => entry.paneKey === "pane-0"), "the oldest entry is dropped");
+  assert.deepEqual(kept, entries.slice(0, kept.length), "kept entries keep their original order");
+});
+
+test("setBoard: a board under the budget is written unchanged", async () => {
+  const host = fakeHost();
+  const entries = manyPanes(3);
+  await setBoard(host, { entries });
+  assert.deepEqual(await host.get("board"), { entries });
 });
 
 // 0.6.8 T1: the team repositories setting -- see src/core/team_owners.ts.
