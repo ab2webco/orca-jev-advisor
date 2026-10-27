@@ -74,12 +74,15 @@ record, so they share one commit.
   at its next step; an edit under `.orca/` or outside the worktree is not; an
   edited high-risk path raises; an Orca model pin and a `/model` lock hold.
   GREEN. Commit. PR 1.
-- [ ] T3: RED: a `review` or `design` turn judged `simple` resolves to Opus
+- [x] T3: RED: a `review` or `design` turn judged `simple` resolves to Opus
   5.5. GREEN. Commit.
-- [ ] T4: RED: fail, non-test edit, fail escalates; fail, test-only edit,
+- [x] T4: RED: fail, non-test edit, fail escalates; fail, test-only edit,
   fail does not; a pin holds. GREEN. Commit.
-- [ ] T5: RED: under economy a confident `read` turn shifts down a tier; an
+- [x] T5: RED: under economy a confident `read` turn shifts down a tier; an
   `implement` turn never does. GREEN. Commit. PR 2.
+  Note: G4 stands (owner): the shift happens only at strong economy (>= 95%
+  of the tighter window), standard to simple, after a read-only turn; T5 adds
+  that the turn's kind must be a confident `read` or `execute`.
 - [ ] T6: RED: the status line names the reason. GREEN. Commit.
 - [ ] T7: measurement script and its numbers. Commit. PR 3.
 
