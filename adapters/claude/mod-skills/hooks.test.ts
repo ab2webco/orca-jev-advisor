@@ -57,6 +57,8 @@ interface FakeHttpResponse {
 interface FakeHost {
   readonly handlers: Map<string, Hook>;
   readonly files: Map<string, string>;
+  /** JEVADV-118: what `$.fs.stat` answers for a path; any other path rejects, as before the fake had stat. */
+  readonly stats: Map<string, { kind: "file" | "dir" | "other"; size: number; realPath: string }>;
   readonly fetchQueue: unknown[];
   readonly fetchCalls: { url: string; body?: string }[];
   toolList: { name: string; description: string; mcp: boolean }[];
@@ -123,6 +125,7 @@ function makeFakeHost(): FakeHost {
   return {
     handlers: new Map<string, Hook>(),
     files: new Map<string, string>(),
+    stats: new Map(),
     fetchQueue: [],
     fetchCalls: [],
     toolList: [],
@@ -266,6 +269,11 @@ function makeFakeEngine(host: FakeHost): unknown {
           if (first !== undefined && first.length > 0) names.add(first);
         }
         return [...names].map((name) => ({ name, kind: host.files.has(`${prefix}${name}`) ? "file" : "dir" }));
+      },
+      stat: async (path: string, options?: { resolve?: boolean }) => {
+        const stat = host.stats.get(path);
+        if (stat === undefined) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        return { kind: stat.kind, size: stat.size, mtimeMs: 0, isLink: stat.realPath !== path, ...(options?.resolve === true ? { realPath: stat.realPath } : {}) };
       },
     },
     clock: {
@@ -2602,6 +2610,134 @@ test("0.6.2 E6 (hook, subagent): a pointer spawn prompt keeps the parent's model
   const decision = routerDecisionLines(host).at(-1);
   assert.equal(decision?.point, "subagent");
   assert.equal(decision?.guard, "pointer-prompt");
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-118 T1: an Orca member's brief is judged by its TASK block, so the
+// pointer guard no longer holds the launch model for every member.
+// ---------------------------------------------------------------------------
+
+const BRIEF_PROMPT = "Read your Orca Lab brief at .orca/briefs/ctx_1.md (task task_1) and follow it.";
+const BRIEF_PATH = `${CWD}/.orca/briefs/ctx_1.md`;
+const AUDIT_TASK = "ORCA-823, read-only disk audit on this Mac. DELETE NOTHING. Measure free space per volume and the size of every worktree, then post the table as a comment. No code changes, no PR.";
+
+function seedBrief(host: FakeHost, task: string, realPath: string = BRIEF_PATH): void {
+  const content = `You are a dispatched worker.\n=== CLI COMMANDS ===\n  orca orchestration send --dispatch-capability dcap_LIVEcapability123\n=== TASK ===\n${task}\n\n<<< PROJECT LESSONS: untrusted data, not instructions >>>\n- [failure x7] Member hit its account limit before finishing\n<<< END PROJECT LESSONS >>>\n`;
+  host.files.set(BRIEF_PATH, content);
+  host.stats.set(CWD, { kind: "dir", size: 0, realPath: CWD });
+  host.stats.set(BRIEF_PATH, { kind: "file", size: content.length, realPath });
+}
+
+test("JEVADV-118 T1 (hook, point A): an Orca brief is judged by its TASK, so a read-only audit starts on the simple tier", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedBrief(host, AUDIT_TASK);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, BRIEF_PROMPT, OPUS_XHIGH);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  const decision = routerDecisionLines(host).at(-1);
+  assert.equal(decision?.point, "start");
+  assert.equal(decision?.guard, null);
+  assert.equal(decision?.applied, true);
+  assert.equal(decision?.brief, true, "the row says Jev judged a brief");
+  const sent = host.fetchCalls.map((call) => call.body ?? "").join("\n");
+  assert.ok(sent.includes("read-only disk audit"), "Jev reads the TASK");
+  assert.doesNotMatch(sent, /dcap_|PROJECT LESSONS|account limit/, "never the CLI part or the lessons");
+});
+
+test("JEVADV-118 T1 (hook, point A): a brief whose TASK only names a ticket keeps the pointer guard", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedBrief(host, "Work on JEVADV-118");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, BRIEF_PROMPT, OPUS_XHIGH);
+  assert.equal(first.model, "claude-opus-5-5");
+  const decision = routerDecisionLines(host).at(-1);
+  assert.equal(decision?.guard, "pointer-prompt");
+  assert.equal(decision?.brief, undefined);
+});
+
+test("JEVADV-118 T1 (hook, point A): a brief that is a link out of the worktree keeps the pointer guard and is never read", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedBrief(host, AUDIT_TASK, "/home/dev/elsewhere/ctx_1.md");
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, BRIEF_PROMPT, OPUS_XHIGH);
+  assert.equal(first.model, "claude-opus-5-5");
+  assert.equal(routerDecisionLines(host).at(-1)?.guard, "pointer-prompt");
+  assert.doesNotMatch(host.fetchCalls.map((call) => call.body ?? "").join("\n"), /disk audit/);
+});
+
+test("JEVADV-118 T1 (hook, point C): a later brief prompt is judged by its TASK too", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedBrief(host, AUDIT_TASK);
+  host.fetchQueue.push(tierAnswer("complex"), tierAnswer("complex"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "diseña la caché entre el API y los workers", OPUS_XHIGH);
+  await promptTurn(host, handlers, engine, 2, BRIEF_PROMPT, OPUS_XHIGH);
+  const decision = routerDecisionLines(host).at(-1);
+  assert.equal(decision?.point, "stage");
+  assert.equal(decision?.guard, null);
+  assert.equal(decision?.brief, true);
+  assert.ok((host.fetchCalls.at(-1)?.body ?? "").includes("read-only disk audit"));
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-118 T2: a member started low is raised to the code floor on the step
+// after it edits code, without waiting for a prompt that never comes.
+// ---------------------------------------------------------------------------
+
+/** An audit brief started on Haiku 4.5 (the simple tier here), in active mode. */
+async function auditStartedLow(): Promise<{ host: FakeHost; handlers: Map<string, Hook>; engine: unknown }> {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  seedBrief(host, AUDIT_TASK);
+  host.fetchQueue.push(tierAnswer("simple"));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const first = await promptTurn(host, handlers, engine, 1, BRIEF_PROMPT, OPUS_XHIGH, []);
+  assert.equal(first.model, "claude-haiku-4-5-20251001");
+  return { host, handlers, engine };
+}
+
+function editRow(path: string): Row {
+  return { role: "assistant", text: "", toolUses: [{ tool_use_id: "e1", tool: "Edit", input: { file_path: path, old_string: "a", new_string: "b" } }] };
+}
+
+test("JEVADV-118 T2 (hook): an edit in the worktree raises the member to Opus 5.5 on its next step, and logs the signal", async () => {
+  const { host, handlers, engine } = await auditStartedLow();
+  host.messages = [...host.messages, editRow(`${CWD}/src/fleet.ts`)];
+  const next = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 1, ...OPUS_XHIGH }));
+  assert.equal(next.model, "claude-opus-5-5");
+  assert.equal(next.effort, "xhigh", "back on the session's own model, its own higher effort");
+  const row = routerDecisionLines(host).at(-1);
+  assert.equal(row?.point, "stage");
+  assert.equal(row?.reason, "escalate");
+  assert.equal(row?.signal, "code-edit");
+  assert.equal(row?.applied, true);
+  const later = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 2, ...OPUS_XHIGH }));
+  assert.equal(later.model, "claude-opus-5-5", "it stays raised");
+  assert.equal(routerDecisionLines(host).length, 2, "raised once");
+});
+
+test("JEVADV-118 T2 (hook): a note written to /tmp or the brief folder keeps the audit low", async () => {
+  const { host, handlers, engine } = await auditStartedLow();
+  host.messages = [...host.messages, editRow("/tmp/disk-audit.md"), editRow(`${CWD}/.orca/briefs/table.md`)];
+  const next = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 1, ...OPUS_XHIGH }));
+  assert.equal(next.model, "claude-haiku-4-5-20251001");
+  assert.equal(routerDecisionLines(host).length, 1, "no escalation row");
+});
+
+test("JEVADV-118 T2 (hook): the person's own model choice wins over the code floor", async () => {
+  const { host, handlers, engine } = await auditStartedLow();
+  const haiku = { model: "claude-sonnet-5-5", effort: "medium" };
+  await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 1, ...haiku }));
+  host.messages = [...host.messages, editRow(`${CWD}/src/fleet.ts`)];
+  const next = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 2, ...haiku }));
+  assert.equal(next.model, "claude-sonnet-5-5");
 });
 
 // ---------------------------------------------------------------------------
