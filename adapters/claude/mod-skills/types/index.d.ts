@@ -41,6 +41,8 @@ export type RouterSticky = {
   hold?: string | null
   /** JEVADV-117: the person chose the model (`/model`, or a mid-session switch); the router leaves it for the rest of the session. */
   person?: boolean
+  /** JEVADV-118 T2: `model` is below the code floor, so every main-loop step checks the turn for code work that raises it. */
+  floorWatch?: boolean
 }
 
 /** Main-loop usage of this session, kept by the router after every step. */

@@ -548,6 +548,8 @@ export interface RouterDecisionRecord {
   readonly kind?: WorkKind;
   /** JEVADV-118 T1: Jev judged an Orca member's brief (its TASK block), not the pointer prompt; absent otherwise. */
   readonly brief?: true;
+  /** JEVADV-118 T2: what raised the model mid-turn (`reason: "escalate"`); absent otherwise. */
+  readonly signal?: string;
 }
 
 export interface RouterDecisionRecordInput {
@@ -586,6 +588,8 @@ export interface RouterDecisionRecordInput {
   readonly kind?: WorkKind;
   /** JEVADV-118 T1: the prompt was an Orca brief, judged by its TASK block. */
   readonly brief?: boolean;
+  /** JEVADV-118 T2: the escalation signal of a mid-turn floor raise. */
+  readonly signal?: string;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -625,5 +629,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     ...(input.decision.orcaPin === undefined || input.decision.orcaPin.length === 0 ? {} : { orcaPin: input.decision.orcaPin }),
     ...(input.kind === undefined ? {} : { kind: input.kind }),
     ...(input.brief === true ? { brief: true as const } : {}),
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
   };
 }
