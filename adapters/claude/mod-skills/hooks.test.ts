@@ -1577,7 +1577,7 @@ test("0.6.16 T1: a subagent decision row carries its agent and its own turn", as
   assert.deepEqual([turnUsageLines(host).at(-1)?.agentId, turnUsageLines(host).at(-1)?.turnId], ["agent-1", "sub-1"]);
 });
 
-test("0.6.16 T1 (hook, active): simple work held on the session's Opus runs at medium, not the router's old low", async () => {
+test("0.6.16 T1 / JEVADV-117 (hook, active): unsure simple work on the session's Opus runs at the complex tier's high, not the router's old low", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   host.messages = [{ role: "user", text: "rename userId to accountId", toolUses: [] }];
@@ -1585,7 +1585,7 @@ test("0.6.16 T1 (hook, active): simple work held on the session's Opus runs at m
   const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
   const seen = await stepThrough(handlers, engine, turnStepEvent({ index: 0, model: "claude-opus-5-5", effort: "low" }));
   assert.equal(seen.model, "claude-opus-5-5");
-  assert.equal(seen.effort, "medium");
+  assert.equal(seen.effort, "high");
 });
 
 // ---------------------------------------------------------------------------
@@ -1652,7 +1652,7 @@ test("router, active, stage: no downgrade under a guard", async () => {
   assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · high effort · kept: the prompt points to a document (Jev: ask)");
 });
 
-test("router, measure, start: a model held by low confidence says why, not just Jev's tier", async () => {
+test("router, measure, start: JEVADV-117 -- low confidence on the session's Opus keeps nothing: it is what the doubt tier picks", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
   host.messages = [{ role: "user", text: "hi, what time is it?", toolUses: [] }];
@@ -1660,9 +1660,9 @@ test("router, measure, start: a model held by low confidence says why, not just 
   const { handlers, engine } = loadHooks(host);
   await stepThrough(handlers, engine, turnStepEvent(FRESH_START));
   const [decision] = routerDecisionLines(host);
-  assert.equal(decision?.reason, "held-by-guard");
+  assert.equal(decision?.proposed, "claude-opus-5-5");
   assert.equal(decision?.guard, "low-confidence");
-  assert.equal(host.statusLines.at(-1), "jev · would use: Opus 5.5 · high effort · would keep: low confidence (Jev: ask)");
+  assert.equal(host.statusLines.at(-1), "jev · would use: Opus 5.5 · high effort");
 });
 
 test("router, active, stage: an unsure turn after a failure on the weaker model restores the session's own (F9: low confidence is the guard)", async () => {

@@ -392,10 +392,11 @@ test("stage: an upgrade with confidence ≥ 0.70 switches immediately", () => {
   assert.equal(decision.pending, null);
 });
 
-test("stage: an upgrade under 0.70 waits when the session is already at or above its own model", () => {
+test("stage: JEVADV-117 -- an upgrade under 0.70 no longer waits on the session's own model", () => {
   const unsure = stage({ jev: { tier: "complex", confidence: 0.6 }, currentModel: "claude-sonnet-5-5", currentEffort: "medium", configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.6 } });
-  assert.equal(unsure.changed, false);
-  assert.equal(unsure.reason, "low-confidence");
+  assert.equal(unsure.changed, true);
+  assert.equal(unsure.model, "claude-opus-5-5");
+  assert.equal(unsure.reason, "upgrade");
 });
 
 test("stage: under ANY guard, a session running below its own model is restored to at least its own (§6.2)", () => {
@@ -406,10 +407,10 @@ test("stage: under ANY guard, a session running below its own model is restored 
   assert.equal(restore.changed, true);
   assert.equal(restore.reason, "floor-restore");
   assert.equal(restore.guard, "low-confidence", "F9: the failure itself is a fact for Jev, not the guard");
-  // The live case: Haiku after a simple start, then an unsure standard turn on a Sonnet session.
+  // The live case: Haiku after a simple start, then an unsure standard turn on a Sonnet session; JEVADV-117 raises it past the floor to Opus.
   const unsure = stage({ jev: { tier: "standard", confidence: 0.55 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-sonnet-5-5", configuredEffort: "medium", guards: { ...CALM, confidence: 0.55 } });
-  assert.equal(unsure.model, "claude-sonnet-5-5");
-  assert.equal(unsure.effort, "medium");
+  assert.equal(unsure.model, "claude-opus-5-5");
+  assert.equal(unsure.effort, "high");
   assert.equal(unsure.reason, "floor-restore");
   assert.equal(unsure.guard, "low-confidence");
   // A guard with a proposal above the floor goes to the proposal.
@@ -619,11 +620,11 @@ test("E2 raise: a higher tier on the same model raises the effort at once with c
   assert.equal(decision.pending, null);
 });
 
-test("E2 raise: under 0.70 the effort stays", () => {
+test("E2 raise: JEVADV-117 -- under 0.70 the effort still rises", () => {
   const decision = stage({ jev: { tier: "frontier", confidence: 0.6 }, guards: { ...CALM, confidence: 0.6 } });
-  assert.equal(decision.reason, "low-confidence");
-  assert.equal(decision.changed, false);
-  assert.equal(decision.effort, "high");
+  assert.equal(decision.reason, "effort-raise");
+  assert.equal(decision.changed, true);
+  assert.equal(decision.effort, "xhigh");
 });
 
 test("E2 raise: a guard never blocks a raise", () => {
@@ -808,10 +809,14 @@ test("context floor: the 10% margin counts -- 185K does not fit a 200K window", 
 });
 
 test("context floor: a session already on a model too small for its context moves up, whatever Jev's confidence", () => {
-  const decision = stage({ jev: { tier: "simple", confidence: 0.4 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-haiku-4-5-20251001", configuredEffort: null, usage: BIG_CONTEXT });
-  assert.equal(decision.model, "claude-sonnet-5-5");
-  assert.equal(decision.changed, true);
-  assert.equal(decision.guard, "context-window");
+  const sure = stage({ jev: { tier: "simple", confidence: 0.95 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-haiku-4-5-20251001", configuredEffort: null, usage: BIG_CONTEXT });
+  assert.equal(sure.model, "claude-sonnet-5-5");
+  assert.equal(sure.changed, true);
+  assert.equal(sure.guard, "context-window");
+  // JEVADV-117: unsure, the doubt tier is already above the floor.
+  const unsure = stage({ jev: { tier: "simple", confidence: 0.4 }, currentModel: "claude-haiku-4-5-20251001", currentEffort: null, configuredModel: "claude-haiku-4-5-20251001", configuredEffort: null, usage: BIG_CONTEXT });
+  assert.equal(unsure.model, "claude-opus-5-5");
+  assert.equal(unsure.guard, "context-window");
 });
 
 test("context floor: when no tier fits, the current model is held and the guard is named", () => {
@@ -941,4 +946,42 @@ test("R7: the decision itself is the same warm, cold or unknown: upgrades never 
     assert.deepEqual(decideStage({ ...STAGE_BASE, ...overrides, cacheWarm: false }), unknown, reason);
     assert.equal(unknown.changed, true, reason);
   }
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-117: an unsure verdict raises the work to Opus 5.5 instead of
+// holding the model the session runs.
+// ---------------------------------------------------------------------------
+
+const DEFAULT_TIERS = resolveAccountTiers({ env: {}, catalog: [], quota: null });
+const HAIKU_SESSION = { tiers: DEFAULT_TIERS, currentModel: "claude-haiku-5-5", currentEffort: "high", configuredModel: "claude-haiku-5-5", configuredEffort: "high" } as const;
+
+test("JEVADV-117: the evidence row -- a Haiku session, Jev unsure the work is simple -- moves to Opus 5.5", () => {
+  const decision = stage({ ...HAIKU_SESSION, jev: { tier: "simple", confidence: 0.53 }, guards: { ...CALM, text: "implement the warmup env var with tests", confidence: 0.53 } });
+  assert.equal(decision.changed, true);
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.effort, "high");
+  assert.equal(decision.reason, "upgrade");
+  assert.equal(decision.tier, "simple", "the row keeps Jev's own tier");
+  assert.equal(decision.proposed, "claude-opus-5-5");
+});
+
+test("JEVADV-117: an unsure verdict never lowers -- Opus at xhigh keeps its model and its effort", () => {
+  const decision = stage({ ...XHIGH_SESSION, jev: { tier: "simple", confidence: 0.4 }, currentModel: "claude-opus-5-5", currentEffort: "xhigh", guards: { ...CALM, confidence: 0.4 } });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.effort, "xhigh");
+  assert.equal(decision.guard, "low-confidence");
+});
+
+test("JEVADV-117: a Jev failure on Haiku still changes nothing", () => {
+  const decision = stage({ ...HAIKU_SESSION, jev: null, guards: { ...CALM, confidence: null } });
+  assert.equal(decision.changed, false);
+  assert.equal(decision.reason, "jev-failed");
+});
+
+test("JEVADV-117: an Orca model pin still holds an unsure verdict on the session's model", () => {
+  const decision = stage({ ...HAIKU_SESSION, jev: { tier: "simple", confidence: 0.5 }, guards: { ...CALM, confidence: 0.5 }, pins: { model: true, effort: false } });
+  assert.equal(decision.model, "claude-haiku-5-5");
+  assert.deepEqual(decision.orcaPin, ["model"]);
 });

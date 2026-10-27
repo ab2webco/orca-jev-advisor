@@ -179,6 +179,19 @@ export function interpretTier(answers: Record<string, Answer>): TierJudgment | n
 export const CONFIDENCE_FLOOR = 0.7;
 
 /**
+ * JEVADV-117: the tier an unsure verdict raises the work to. Holding the
+ * session's model on doubt kept a TypeScript change on Haiku 5.5, which got
+ * it wrong; the owner wants doubt to escalate (Opus 5.5), never to hold.
+ */
+export const DOUBT_TIER: RouterTier = "complex";
+
+/** Jev's tier, or DOUBT_TIER when Jev is unsure and its tier is weaker; never lower. */
+export function raiseForDoubt(tier: RouterTier, confidence: number): RouterTier {
+  if (confidence >= CONFIDENCE_FLOOR) return tier;
+  return ROUTER_TIERS.indexOf(tier) < ROUTER_TIERS.indexOf(DOUBT_TIER) ? DOUBT_TIER : tier;
+}
+
+/**
  * Whole words (already lower-case and without accents) that make a turn
  * sensitive. English and Spanish: the owner works in both. "token" is
  * deliberately absent -- usage talk is full of tokens.
@@ -414,14 +427,15 @@ function decideStartFree(input: StartDecisionInput): RouterDecision {
     return { ...unchanged, tier: null, confidence: null, proposed: null, reason: "jev-failed", guard: null };
   }
   const guards = activeGuards(input.guards);
-  // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1).
-  const judged = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
-  const tier = collapseTier(input.tiers, judged);
-  const target = input.tiers[tier];
+  // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1),
+  // both raised on doubt (JEVADV-117); the row keeps Jev's own tier.
+  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
+  const judged = raiseForDoubt(shifted, input.jev.confidence);
+  const target = input.tiers[collapseTier(input.tiers, judged)];
   const currentRank = modelRank(input.tiers, current);
   const proposedRank = modelRank(input.tiers, target.modelId);
   const isUpgrade = currentRank !== null && proposedRank !== null && proposedRank > currentRank;
-  const base = { tier, confidence: input.jev.confidence, proposed: target.modelId };
+  const base = { tier: collapseTier(input.tiers, shifted), confidence: input.jev.confidence, proposed: target.modelId };
   // Under any guard only a strict upgrade passes: a downgrade, a model the
   // floor cannot compare, and a same-rank change all keep the session's own
   // model (§6.2, review finding 2). Its effort may still rise to the tier's,

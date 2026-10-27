@@ -224,3 +224,10 @@ test("T7: an explicit model the account cannot place is kept", () => {
   assert.equal(decision.changed, false);
   assert.equal(decision.reason, "explicit");
 });
+
+test("JEVADV-117: an unsure verdict sends a subagent to Opus 5.5, not the Haiku its tier names", () => {
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.5 }, parentModel: "claude-sonnet-5-5", explicitModel: undefined, guards: { ...CALM, confidence: 0.5 } });
+  assert.equal(decision.changed, true);
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.tier, "simple", "the row keeps Jev's own tier");
+});

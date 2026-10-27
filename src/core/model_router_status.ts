@@ -63,7 +63,6 @@ export function keptWhy(decision: KeptDecision): RouterKeptWhy | null {
       return decision.guard;
     case "held-by-orca-pin":
       return "orca-pin";
-    case "low-confidence":
     case "hysteresis":
     case "break-even":
     case "prices-unknown":
