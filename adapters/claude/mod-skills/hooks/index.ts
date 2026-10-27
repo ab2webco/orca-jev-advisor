@@ -1224,20 +1224,26 @@ async function resolveSessionDestination($: EngineInterface, cwd: string): Promi
 }
 
 /** Jev's tier judgment for this turn's prompt, or null on any failure (no key, timeout, malformed answer). */
+/** The main loop's tier judgment, carrying Jev's work kind for the same prompt (JEVADV-117: an implement turn is floored). */
 async function askTierJudgment($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null): Promise<{ tier: TierJudgment | null; payment: boolean }> {
-  const { tier, payment } = await askTierAndKind($, options, promptText, activity, band, destinationKind, false)
-  return { tier, payment }
+  const { tier, kind, payment } = await askTierAndKind($, options, promptText, activity, band, destinationKind, 'prompt')
+  return { tier: withJevKind(tier, kind), payment }
 }
 
-/** The tier judgment and, 0.6.16 T2, at a spawn (`withKind`) the work kind: both from the one Jev call; nulls on any failure. `payment` (G8): the failure was Jev's 402, a key without credit. */
-async function askTierAndKind($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null, withKind: boolean): Promise<{ tier: TierJudgment | null; kind: WorkKindJudgment | null; payment: boolean }> {
+/** `tier` with Jev's own kind (never the keyword fallback's), when both answered. */
+function withJevKind(tier: TierJudgment | null, kind: WorkKindJudgment | null): TierJudgment | null {
+  return tier === null || kind === null || kind.source !== 'jev' ? tier : { ...tier, kind: kind.kind }
+}
+
+/** The tier judgment and, 0.6.16 T2, the work kind (`kindFor` names whose request it is; null asks none): both from the one Jev call; nulls on any failure. `payment` (G8): the failure was Jev's 402, a key without credit. */
+async function askTierAndKind($: EngineInterface, options: PluginOptions, promptText: string, activity: TurnActivity | null, band: QuotaBand, destinationKind: DestinationKind | null, kindFor: 'spawn' | 'prompt' | null): Promise<{ tier: TierJudgment | null; kind: WorkKindJudgment | null; payment: boolean }> {
   try {
     const apiKey = await resolveApiKey($, options)
     if (apiKey === null) return { tier: null, kind: null, payment: false }
     const state = buildTierState({ promptText, activity, destinationKind, quotaBand: band })
-    const questions = withKind ? withWorkKindQuestion(buildTierQuestions()) : buildTierQuestions()
+    const questions = kindFor === null ? buildTierQuestions() : withWorkKindQuestion(buildTierQuestions(), kindFor)
     const response = await callJev(apiKey, state, questions, { budgetMs: ROUTER_BUDGET_MS, fetchImpl: makeJevFetch($), sleepImpl: makeJevSleep($) })
-    return { tier: interpretTier(response.answers), kind: withKind ? interpretWorkKind(response.answers) : null, payment: false }
+    return { tier: interpretTier(response.answers), kind: kindFor === null ? null : interpretWorkKind(response.answers), payment: false }
   } catch (error) {
     return { tier: null, kind: null, payment: isJevPaymentFailure(jevFailureOf(error)) }
   }
@@ -1409,7 +1415,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   )
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), ...(jev?.margin === undefined ? {} : { margin: jev.margin }) }))}\n`)
+  await appendRouterDecision($, at, `${JSON.stringify(routerDecisionRecord({ at, account, point: 'start', decision, applied, quotaBand: band, quotaSource, origin: originKind, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(jev?.kind === undefined ? {} : { kind: jev.kind }) }))}\n`)
 
   const own = { configuredModel: e.model, configuredEffort: stickyEffort(e.effort), pendingLower: null, stats: EMPTY_STATS, lastPrompt: promptKey, ...orcaJudgment(decision) }
   const next: RouterSticky = decision.changed
@@ -1487,7 +1493,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   }
   const applied = mode === 'active' && decision.changed
   const at = new Date(await $.clock.now()).toISOString()
-  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), cacheWarm, cacheUnknown: cacheUnknownOf(cacheClock.clock, cacheClock.tailFailed), switchCost: qualitySwitchCost(decided, decision), coldSwitch: switchedByColdCache(decided, decision), ...(jev?.margin === undefined ? {} : { margin: jev.margin }) })
+  const record = routerDecisionRecord({ at, account, point: 'stage', decision, applied, quotaBand: band, quotaSource, breakEven: decision.breakEven, origin: originKind, effort: decision.effortTarget, project, sessionId: await readSessionId($), turnId: e.turnId, engine: engineNotesOf(tiers, decision.proposed), cacheWarm, cacheUnknown: cacheUnknownOf(cacheClock.clock, cacheClock.tailFailed), switchCost: qualitySwitchCost(decided, decision), coldSwitch: switchedByColdCache(decided, decision), ...(jev?.margin === undefined ? {} : { margin: jev.margin }), ...(jev?.kind === undefined ? {} : { kind: jev.kind }) })
   await appendRouterDecision($, at, `${JSON.stringify(record)}\n`)
 
   const next: RouterSticky = decision.changed
@@ -1708,14 +1714,14 @@ async function decideAgentRoute($: EngineInterface, task: AgentRouteTask, mode: 
   const text = `${task.description}\n${task.prompt}`
   const destination = await resolveSessionDestination($, task.cwd)
   // 0.6.16 T2: the work kind is one more question in this same call.
-  const judged = await askTierAndKind($, options, text, null, band, destination.destinationKind, workKindMode !== 'off')
+  const judged = await askTierAndKind($, options, text, null, band, destination.destinationKind, workKindMode === 'off' ? null : 'spawn')
   const jev = judged.tier
   const keywordKind = workKindMode === 'off' ? null : keywordWorkKind(task.description)
   const kind: WorkKindJudgment | null = workKindMode === 'off' ? null : (judged.kind ?? (keywordKind === null ? null : { kind: keywordKind, confidence: null, source: 'keywords' }))
   const pins = await readOrcaPins($)
   const decision: SubagentDecision = withJevPayment(decideSubagent({
     tiers,
-    jev,
+    jev: withJevKind(jev, judged.kind),
     parentModel: task.parentModel,
     explicitModel: task.fixedModel ?? undefined,
     guards: { text, activity: null, confidence: jev?.confidence ?? null },

@@ -231,3 +231,8 @@ test("JEVADV-117: an unsure verdict sends a subagent to Opus 5.5, not the Haiku 
   assert.equal(decision.model, "claude-opus-5-5");
   assert.equal(decision.tier, "simple", "the row keeps Jev's own tier");
 });
+
+test("JEVADV-117: a subagent Jev says implements runs on Opus 5.5, not the Haiku its tier names", () => {
+  const decision = decideSubagent({ tiers: TIERS, jev: { tier: "simple", confidence: 0.95, kind: "implement" }, parentModel: "claude-sonnet-5-5", explicitModel: undefined, guards: CALM });
+  assert.equal(decision.model, "claude-opus-5-5");
+});

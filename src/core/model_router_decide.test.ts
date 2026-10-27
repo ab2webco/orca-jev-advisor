@@ -14,6 +14,8 @@ import {
   buildTierState,
   decideStart,
   DOUBT_TIER,
+  IMPLEMENT_FLOOR_TIER,
+  floorForWork,
   raiseForDoubt,
   interpretTier,
   mentionsSensitiveTopic,
@@ -651,5 +653,32 @@ test("JEVADV-117: a session that starts on Haiku with an unsure simple verdict s
 test("JEVADV-117: a Jev failure at the start still changes nothing", () => {
   const decision = decideStart({ tiers: DEFAULT_TIERS, jev: null, configuredModel: "claude-haiku-5-5", configuredEffort: "high", guards: { ...CALM, confidence: null } });
   assert.equal(decision.changed, false);
+  assert.equal(decision.model, "claude-haiku-5-5");
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-117: implementation work never runs below Opus 5.5
+// ---------------------------------------------------------------------------
+
+test("JEVADV-117: the implementation floor is the complex tier, and only implement work is floored", () => {
+  assert.equal(IMPLEMENT_FLOOR_TIER, "complex");
+  assert.equal(floorForWork("simple", "implement"), "complex");
+  assert.equal(floorForWork("standard", "implement"), "complex");
+  assert.equal(floorForWork("frontier", "implement"), "frontier");
+  for (const kind of ["read", "execute", "review", "design", undefined] as const) assert.equal(floorForWork("simple", kind), "simple");
+});
+
+test("JEVADV-117: a confident implement turn never starts on Haiku or Sonnet", () => {
+  for (const tier of ["simple", "standard"] as const) {
+    for (const configuredModel of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5"]) {
+      const decision = decideStart({ tiers: DEFAULT_TIERS, jev: { tier, confidence: 0.95, kind: "implement" }, configuredModel, configuredEffort: "high", guards: CALM });
+      assert.equal(decision.model, "claude-opus-5-5", `${tier} on ${configuredModel}`);
+      assert.equal(decision.tier, tier, "the row keeps Jev's own tier");
+    }
+  }
+});
+
+test("JEVADV-117: a confident simple turn that reads still starts on Haiku", () => {
+  const decision = decideStart({ tiers: DEFAULT_TIERS, jev: { tier: "simple", confidence: 0.95, kind: "read" }, configuredModel: "claude-opus-5-5", configuredEffort: "high", guards: CALM });
   assert.equal(decision.model, "claude-haiku-5-5");
 });

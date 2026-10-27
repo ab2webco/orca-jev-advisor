@@ -17,7 +17,7 @@ back down.
 - T2 (PR 2): a person's `/model` (or a mid-session model change) locks the
   model for the rest of the session: the router never moves it, in either
   direction, and the status line names it at once.
-- T3 (PR 3): the main-loop Jev call also asks the work kind; an `implement`
+- T3 (PR 1, with T1: both change the same tier line): the main-loop Jev call also asks the work kind; an `implement`
   turn is floored at a named tier, `complex` (Opus 5.5) by default (lead,
   2026-10-26).
 
@@ -27,11 +27,11 @@ Out of scope: releases, tags, version bumps, tier prices, break-even.
 - [x] T1: RED: the evidence row (Haiku session, `simple` at 0.53) upgrades
   to Opus; a low-confidence verdict on a Sonnet session upgrades; a Jev
   failure still changes nothing; an Orca pin still holds. GREEN. Commit.
-- [ ] T2: RED: a `/model` back to the session's own model while the router
+- [x] T2 (PR 2): RED: a `/model` back to the session's own model while the router
   had it on Haiku is not rewritten; after a person switch a light prompt
   does not move the model down; the status line names the person's model
   right after `/model`. GREEN. Commit.
-- [ ] T3: RED: an `implement` turn judged `simple` or `standard` resolves
+- [x] T3: RED: an `implement` turn judged `simple` or `standard` resolves
   to Opus 5.5, never Haiku or Sonnet. GREEN. Commit.
 
 ## Acceptance criteria

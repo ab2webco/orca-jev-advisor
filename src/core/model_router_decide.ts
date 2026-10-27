@@ -21,7 +21,7 @@ import type { EngineFallbackReason, EngineNotes, ResolvedTiers, RouterTier } fro
 import { hasOrcaPin, heldDimensions, modelPinnedTiers, pinnedEffort } from "./orca_pins.ts";
 import type { OrcaPins, PinnedDimension } from "./orca_pins.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
-import type { WorkKindRecord } from "./work_kind.ts";
+import type { WorkKind, WorkKindRecord } from "./work_kind.ts";
 import type { CacheUnknown } from "./cache_warmth.ts";
 
 export type RouterEffort = "low" | "medium" | "high" | "xhigh";
@@ -153,6 +153,8 @@ export interface TierJudgment {
   readonly confidence: number;
   /** 0.6.22 T1 (JEVADV-97): top probability minus runner-up; absent when Jev's probabilities give none. Log only. */
   readonly margin?: number;
+  /** JEVADV-117: Jev's work kind for the same prompt, when it was asked and answered. */
+  readonly kind?: WorkKind;
 }
 
 function isRouterTier(value: string): value is RouterTier {
@@ -185,10 +187,26 @@ export const CONFIDENCE_FLOOR = 0.7;
  */
 export const DOUBT_TIER: RouterTier = "complex";
 
+/** JEVADV-117: the weakest tier work that changes files runs on (the lead, 2026-10-26: Opus 5.5). */
+export const IMPLEMENT_FLOOR_TIER: RouterTier = "complex";
+
+function atLeast(tier: RouterTier, floor: RouterTier): RouterTier {
+  return ROUTER_TIERS.indexOf(tier) < ROUTER_TIERS.indexOf(floor) ? floor : tier;
+}
+
 /** Jev's tier, or DOUBT_TIER when Jev is unsure and its tier is weaker; never lower. */
 export function raiseForDoubt(tier: RouterTier, confidence: number): RouterTier {
-  if (confidence >= CONFIDENCE_FLOOR) return tier;
-  return ROUTER_TIERS.indexOf(tier) < ROUTER_TIERS.indexOf(DOUBT_TIER) ? DOUBT_TIER : tier;
+  return confidence >= CONFIDENCE_FLOOR ? tier : atLeast(tier, DOUBT_TIER);
+}
+
+/** Jev's tier, or IMPLEMENT_FLOOR_TIER when the work is implement and its tier is weaker; never lower. */
+export function floorForWork(tier: RouterTier, kind: WorkKind | undefined): RouterTier {
+  return kind === "implement" ? atLeast(tier, IMPLEMENT_FLOOR_TIER) : tier;
+}
+
+/** The tier a decision aims at: Jev's (shifted) tier under both floors above. */
+export function aimedTier(shifted: RouterTier, jev: TierJudgment): RouterTier {
+  return raiseForDoubt(floorForWork(shifted, jev.kind), jev.confidence);
 }
 
 /**
@@ -428,9 +446,9 @@ function decideStartFree(input: StartDecisionInput): RouterDecision {
   }
   const guards = activeGuards(input.guards);
   // The model from the collapsed tier, the effort from Jev's own (0.6.2 E1),
-  // both raised on doubt (JEVADV-117); the row keeps Jev's own tier.
+  // both raised on doubt and for implement work (JEVADV-117); the row keeps Jev's own tier.
   const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
-  const judged = raiseForDoubt(shifted, input.jev.confidence);
+  const judged = aimedTier(shifted, input.jev);
   const target = input.tiers[collapseTier(input.tiers, judged)];
   const currentRank = modelRank(input.tiers, current);
   const proposedRank = modelRank(input.tiers, target.modelId);
@@ -525,6 +543,8 @@ export interface RouterDecisionRecord {
   readonly appliedCold?: true;
   /** JEVADV-105: the dimensions an Orca launch pin held; absent when none did. */
   readonly orcaPin?: readonly PinnedDimension[];
+  /** JEVADV-117: Jev's work kind for a main-loop prompt; absent when not answered. */
+  readonly kind?: WorkKind;
 }
 
 export interface RouterDecisionRecordInput {
@@ -559,6 +579,8 @@ export interface RouterDecisionRecordInput {
   readonly cacheUnknown?: CacheUnknown | null;
   /** Track R: `switchedByColdCache` -- the switch passed break-even only because the cache was cold. */
   readonly coldSwitch?: boolean;
+  /** JEVADV-117: Jev's work kind for the prompt (`TierJudgment.kind`). */
+  readonly kind?: WorkKind;
 }
 
 export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDecisionRecord {
@@ -596,5 +618,6 @@ export function routerDecisionRecord(input: RouterDecisionRecordInput): RouterDe
     ...(input.cacheWarm === null && input.cacheUnknown !== undefined && input.cacheUnknown !== null ? { cacheUnknown: input.cacheUnknown } : {}),
     ...(input.coldSwitch !== true ? {} : input.applied ? { appliedCold: true as const } : { wouldApplyCold: true as const }),
     ...(input.decision.orcaPin === undefined || input.decision.orcaPin.length === 0 ? {} : { orcaPin: input.decision.orcaPin }),
+    ...(input.kind === undefined ? {} : { kind: input.kind }),
   };
 }

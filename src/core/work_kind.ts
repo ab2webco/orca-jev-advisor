@@ -66,16 +66,21 @@ const KIND_CRITERIA: Readonly<Record<WorkKind, string>> = {
     'Design: plans before anything is built -- architecture, a plan or spec, weighing approaches. Examples: "design the cache between the API and the workers", "plan the migration in steps".',
 };
 
+/** What the kind question reads `prompt` as: a helper's task at a spawn, or (JEVADV-117) the person's own request in the main loop. */
+const KIND_SUBJECT: Readonly<Record<"spawn" | "prompt", string>> = {
+  spawn: "`prompt` is the task a coding assistant hands to a helper agent (a short description, then the instructions). Choose what the helper will mostly do.",
+  prompt: "`prompt` is the person's latest request to a coding assistant. Choose what the assistant will mostly do for it.",
+};
+
 /** `questions` with the kind question added: asked in the same call as the tier. */
-export function withWorkKindQuestion(questions: Record<string, Question>): Record<string, Question> {
+export function withWorkKindQuestion(questions: Record<string, Question>, subject: "spawn" | "prompt" = "spawn"): Record<string, Question> {
   const criteria: Record<string, string> = {};
   for (const kind of WORK_KINDS) criteria[kind] = KIND_CRITERIA[kind];
   return {
     ...questions,
     kind: {
       type: "choice",
-      instructions:
-        "`prompt` is the task a coding assistant hands to a helper agent (a short description, then the instructions). Choose what the helper will mostly do. A task that asks to change, write, fix, create or commit anything is implement, even when it reads or runs things first. When in doubt between a kind that changes no files and implement, choose implement.",
+      instructions: `${KIND_SUBJECT[subject]} A task that asks to change, write, fix, create or commit anything is implement, even when it reads or runs things first. When in doubt between a kind that changes no files and implement, choose implement.`,
       criteria,
     },
   };

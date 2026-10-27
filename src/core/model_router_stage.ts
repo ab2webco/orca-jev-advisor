@@ -16,7 +16,7 @@ import type { QuotaAccount } from "./consumption.ts";
 import { ratesForPrompt } from "./model_cost.ts";
 import { ROUTER_TIERS, baseModelId, collapseTier, modelRank } from "./model_router_accounts.ts";
 import type { ModelPrices, ResolvedTierModel, ResolvedTiers, RouterTier } from "./model_router_accounts.ts";
-import { TIER_EFFORT, activeGuards, effortRank, exactModelId, guardedEffort, isPersonEffort, raiseForDoubt, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
+import { TIER_EFFORT, activeGuards, aimedTier, effortRank, exactModelId, guardedEffort, isPersonEffort, shiftForPressure, tierEffortOn } from "./model_router_decide.ts";
 import { hasOrcaPin, heldDimensions, modelPinnedTiers, pinnedEffort } from "./orca_pins.ts";
 import type { OrcaPins } from "./orca_pins.ts";
 import type { GuardContext, QuotaBand, QuotaSource, RouterDecision, RouterGuard, SessionEffort, TierEffort, TierEffortMap, TierJudgment, TurnActivity } from "./model_router_decide.ts";
@@ -506,20 +506,20 @@ function decideStageFree(input: StageDecisionInput): StageDecision {
   }
   // The model comes from the collapsed tier; the effort from Jev's own
   // (shifted) tier, so frontier work on an account without Fable still runs
-  // Opus at the frontier's effort (0.6.2 E1). Both are raised on doubt
-  // (JEVADV-117); the row keeps Jev's own tier.
+  // Opus at the frontier's effort (0.6.2 E1). Both are raised on doubt and
+  // for implement work (JEVADV-117); the row keeps Jev's own tier.
   const shifted = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
-  const judged = raiseForDoubt(shifted, input.jev.confidence);
+  const judged = aimedTier(shifted, input.jev);
   const judgedTier = collapseTier(input.tiers, shifted);
-  const aimedTier = collapseTier(input.tiers, judged);
+  const aimed = collapseTier(input.tiers, judged);
   // The context-window floor: never a model the context would overflow.
   const context = input.usage?.contextTokens ?? null;
-  const fitted = context === null ? aimedTier : contextFloorTier(input.tiers, aimedTier, context);
-  const tier = fitted ?? aimedTier;
+  const fitted = context === null ? aimed : contextFloorTier(input.tiers, aimed, context);
+  const tier = fitted ?? aimed;
   const currentTier = currentRank === null ? null : (ROUTER_TIERS[currentRank] ?? null);
   const currentTooSmall = context !== null && currentTier !== null && !fitsContext(input.tiers[currentTier], context);
   const out = (decision: StageDecision): StageDecision =>
-    withContextGuard(decision, tier !== aimedTier || (currentTooSmall && decision.changed));
+    withContextGuard(decision, tier !== aimed || (currentTooSmall && decision.changed));
   const target = input.tiers[tier];
   const targetEffort = target.supportsEffort ? (input.tierEffort ?? TIER_EFFORT)[judged] : null;
   const base = { tier: judgedTier, confidence: input.jev.confidence, proposed: target.modelId };

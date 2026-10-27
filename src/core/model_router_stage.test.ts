@@ -985,3 +985,19 @@ test("JEVADV-117: an Orca model pin still holds an unsure verdict on the session
   assert.equal(decision.model, "claude-haiku-5-5");
   assert.deepEqual(decision.orcaPin, ["model"]);
 });
+
+test("JEVADV-117: a confident implement turn on a Haiku or Sonnet session moves to Opus 5.5 at once", () => {
+  for (const tier of ["simple", "standard"] as const) {
+    for (const model of ["claude-haiku-5-5", "claude-sonnet-5-5"]) {
+      const decision = stage({ tiers: DEFAULT_TIERS, jev: { tier, confidence: 0.95, kind: "implement" }, currentModel: model, currentEffort: "medium", configuredModel: model, configuredEffort: "medium" });
+      assert.equal(decision.model, "claude-opus-5-5", `${tier} on ${model}`);
+      assert.equal(decision.reason, "upgrade");
+    }
+  }
+});
+
+test("JEVADV-117: an implement turn on Opus is never lowered to the tier Jev named", () => {
+  const decision = stage({ jev: { tier: "simple", confidence: 0.95, kind: "implement" }, pending: { tier: "simple", turns: 5 } });
+  assert.equal(decision.model, "claude-opus-5-5");
+  assert.equal(decision.changed, false);
+});

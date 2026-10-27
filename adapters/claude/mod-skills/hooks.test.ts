@@ -2704,6 +2704,25 @@ test("nit 10 (hook): after the person switches model, the router part says it is
   assert.equal(host.statusLines.at(-1), "jev · model: Sonnet 5.5 · kept: your choice");
 });
 
+// JEVADV-117: the main loop asks the work kind in its one tier call, and an implement turn runs on Opus.
+test("JEVADV-117 (hook): a confident simple prompt Jev says implements starts on Opus 5.5, not Haiku", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host, {}, DEFAULT_MODELS);
+  host.messages = [{ role: "user", text: "add the warmup env var to sonar-index-warmup.ts with a test", toolUses: [] }];
+  host.fetchQueue.push(jevResponse({
+    tier: { type: "choice", choice: "simple", probabilities: { simple: 0.9 }, confidence: 0.9 },
+    kind: { type: "choice", choice: "implement", probabilities: { implement: 0.9 }, confidence: 0.9 },
+  }));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  const seen = await stepThrough(handlers, engine, turnStepEvent({ index: 0, model: "claude-haiku-5-5", effort: "high" }));
+  assert.equal(host.fetchCalls.length, 1, "one Jev call");
+  assert.deepEqual(Object.keys(JSON.parse(host.fetchCalls[0]?.body ?? "{}").questions).sort(), ["kind", "tier"]);
+  assert.equal(seen.model, "claude-opus-5-5");
+  const [row] = routerDecisionLines(host);
+  assert.equal(row?.tier, "simple");
+  assert.equal(row?.kind, "implement", "the row says why Opus");
+});
+
 // JEVADV-76: Jev rejects a choice over more than 255 options with a 400, and
 // sessions carry 266-448 tools once MCP servers are attached. One `which`
 // over the whole roster failed on every prompt; stage 1 now asks in batches.

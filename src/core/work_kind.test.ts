@@ -120,3 +120,12 @@ test("0.6.22 T1 interpretWorkKind: the margin rides along only when the probabil
   assert.deepEqual(interpretWorkKind({ kind: { type: "choice", choice: "read", probabilities: { read: 0.6, review: 0.3, execute: 0.1 }, confidence: 0.6 } }), { kind: "read", confidence: 0.6, source: "jev", margin: 0.6 - 0.3 });
   assert.ok(!("margin" in (interpretWorkKind({ kind: { type: "choice", choice: "read", probabilities: {}, confidence: 0.6 } }) ?? {})));
 });
+
+test("JEVADV-117: the main loop's kind question is about the person's request, not a helper's task", () => {
+  const kind = withWorkKindQuestion(buildTierQuestions(), "prompt").kind;
+  assert.equal(kind?.type, "choice");
+  if (kind?.type !== "choice") return;
+  assert.match(kind.instructions, /person's latest request/);
+  assert.doesNotMatch(kind.instructions, /helper agent/);
+  assert.deepEqual(Object.keys(kind.criteria), [...WORK_KINDS]);
+});
