@@ -1440,7 +1440,7 @@ async function lockPersonModel($: EngineInterface, mode: 'measure' | 'active'): 
   const locked: RouterSticky =
     sticky === undefined
       ? { model, effort: null, rewrite: false, configuredModel: model, configuredEffort: null, tier: null, pendingLower: null, stats: EMPTY_STATS, lastPrompt: null, person: true }
-      : { ...sticky, model, effort: sticky.configuredEffort, rewrite: false, configuredModel: model, pendingLower: null, person: true }
+      : { ...sticky, model, effort: sticky.configuredEffort, rewrite: false, configuredModel: model, pendingLower: null, confidence: null, hold: null, person: true }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, locked)
   const { tiers } = await resolveRouterAccount($, await resolveAccountId($))
   const tier = tierOfModel(tiers, model)

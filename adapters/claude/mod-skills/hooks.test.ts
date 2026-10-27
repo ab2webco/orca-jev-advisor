@@ -2786,6 +2786,18 @@ test("JEVADV-117 (hook): after the person switches model, later prompts never mo
   assert.equal(host.statusLines.at(-1), "jev · model: Haiku 4.5 · kept: your choice");
 });
 
+test("JEVADV-117 (hook): /model clears the last decision's hold and confidence, so Orca's card does not show a stale reason", async () => {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.state.set("routerSticky", { model: "claude-haiku-4-5-20251001", effort: null, rewrite: true, configuredModel: "claude-opus-5-5", configuredEffort: "high", tier: "simple", pendingLower: null, stats: { turnId: null, turnSteps: 0, stepsPerTurn: [], lastContext: null, outputTotal: 0, outputSteps: 0 }, lastPrompt: null, confidence: 0.53, hold: "held-by-guard" });
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await commandThrough(handlers, engine, "model", "opus");
+  const sticky = host.state.get("routerSticky") as { hold?: string | null; confidence?: number | null; person?: boolean };
+  assert.equal(sticky.person, true);
+  assert.equal(sticky.hold, null);
+  assert.equal(sticky.confidence, null);
+});
+
 test("JEVADV-117 (hook): a /model a plugin runs is not the person's choice", async () => {
   const host = makeFakeHost();
   seedRouterAccount(host);
