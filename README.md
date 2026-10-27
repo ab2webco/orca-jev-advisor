@@ -16,6 +16,12 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.11
+
+- **Unsure or implementation work runs on Opus 5.5.** When Jev is unsure of a turn (below 0.7) or says it implements something, the router raises it to at least Opus 5.5 instead of keeping a smaller model. A turn that only reads can still start on Haiku.
+- **Your `/model` choice stays.** After you pick a model with `/model`, the router stops changing it for the rest of the session, and the status line names it at once.
+- **The board keeps saving.** A board that had grown to Orca's storage limit was being refused; it now keeps the most recent entries within half the limit.
+
 ## What changed in 0.13.10
 
 - **The rule that protects main stops refusing work that never touches it.** Landing a reviewed pull request with `gh pr merge`, rebasing a feature branch, and writing a file git ignores (`tmp/handoff.md`, `.claude/settings.local.json`) are no longer read as writing to main. Editing, committing or merging local work on main is still refused. The Advisor panel offers the new wording as a changed team policy; adopt it there.

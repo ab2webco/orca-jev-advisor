@@ -2,6 +2,18 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.11
+
+- **Unsure verdicts and implementation work run on Opus 5.5 instead of holding the model** (JEVADV-117, #99, `src/core/model_router_decide.ts` `raiseForDoubt`, `floorForWork`, `aimedTier`). With `routerMode: active`, a member stayed on Haiku 5.5 for a TypeScript change because Jev answered below the 0.7 confidence floor, and low confidence held the model the session already ran.
+  - **Doubt raises.** A tier Jev answers below 0.7 is raised to at least `complex` (Opus 5.5) at session start, at every later prompt and at subagent spawn. A stronger tier is never lowered, and low confidence still blocks every lowering.
+  - **Implementation is floored at Opus 5.5.** The main loop's one Jev call now also asks the work kind. An `implement` answer floors the tier at `IMPLEMENT_FLOOR_TIER`, a named constant set to `complex`, so an implement turn never resolves to Haiku or Sonnet. Decision rows keep Jev's own tier and gain `kind`.
+  - **Unchanged.** A Jev failure (no answer, or an HTTP 402) changes nothing. Orca launch pins and the context-window floor still apply on top.
+- **A person's `/model` is theirs for the rest of the session** (JEVADV-117, #100, `adapters/claude/mod-skills/hooks/index.ts` `lockPersonModel`). After `/model`, the Jev line still read the old model, and the router could move the session back down on the next prompt.
+  - **Locked.** A `/model` the person runs (a plugin's does not count), or a mid-session model switch, makes that model the session's own. The router asks Jev nothing more and never moves it, up or down.
+  - **Named at once.** The status line reads `model: Opus 5.5 · kept: your choice` right after `/model`, and the Orca report drops the last decision's hold and confidence.
+  - **Not verified live:** that Claude Code's built-in `/model` raises `command.run`. If it does not, a switch to a different model is still locked when the next step runs on it; only a switch back to the model the router took over from depends on it.
+- **The board stays under Orca's storage value cap** (JEVADV-116, #98, `setBoard`, `boundBoard`). Orca refuses one plugin storage value over 262,144 bytes. The board kept one entry per pane ever seen and had reached about 261,900 bytes, so 8,393 of 20,963 board writes since 2026-10-25 failed. The board is now written as the most recently updated entries that fit in 131,072 bytes, half the cap; a smaller board is written unchanged.
+
 ## 0.13.10
 
 - **never_write_to_main allows reviewed PR merges, feature-branch rebases and git-ignored files** (JEVADV-107, `seed/policies.json` version 6). The owner's text is now the shipped seed. It names merging a reviewed pull request with `gh pr merge` (including `--squash`, `--auto` and `--match-head-commit`) as the allowed path, says rebasing, committing or force-pushing a feature branch is not writing to main, and says files git ignores (`tmp/`, scratch notes, handoff files) are not main's files. Editing tracked files on main, committing, cherry-picking or merging local work into it, and pushing to it stay forbidden.
