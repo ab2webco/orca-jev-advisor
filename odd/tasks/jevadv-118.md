@@ -62,8 +62,13 @@ Member sessions since 2026-10-20 (start held by a pointer or an Orca pin), from
 Out of scope: red CI and reviewer findings as escalation signals
 (JEVADV-119, opened and linked 2026-10-27), releases, Orca's side.
 
-Note: T1 and T2 change the same lines of the hooks module and the decision
-record, so they share one commit.
+Delivery (lead, 2026-10-27): the three PRs were split into six stacked PRs,
+each at most about 400 non-test added lines and green on its own, merged in
+order on main: T1 (brief), T2 (step floor), T3 to T5 (#103), T6 (status
+line), T7 core (the measure), T7 CLI (the command, this file's measurement).
+
+Lead's calls (2026-10-27): review subagents stay on Opus 5.5 under T3, and
+T5 keeps the strong-economy band (quality first).
 
 ## Tasks
 - [x] T1: RED: the Orca brief prompt resolves to its TASK text; the CLI part
@@ -84,7 +89,25 @@ record, so they share one commit.
   of the tighter window), standard to simple, after a read-only turn; T5 adds
   that the turn's kind must be a confident `read` or `execute`.
 - [x] T6: RED: the status line names the reason. GREEN. Commit.
-- [ ] T7: measurement script and its numbers. Commit. PR 3.
+- [x] T7: measurement script and its numbers. Commit.
+
+## Measurement (T7)
+`npm run measure-member-routing -- --from <date> --to <date> [--json]` prints
+the baseline table's measures for member sessions whose first start falls in
+the window, plus member starts by class (pointer, orca-pin, brief),
+escalations by signal and the CI pass rate per watch
+(`ci-watch-decisions-*`). Re-run before the release (2026-10-20 to
+2026-10-28, taken 2026-10-27): 234 member sessions, 9,981 steps, median
+11,464 output tokens, starts pointer 207, orca-pin 27, brief 0, CI pass rate
+66.7% (54 of 81 watches that ended). It is above the table because sessions
+kept running after the snapshot. With the snapshot's cut, the start split was
+206 pointer and 25 pin, not the 23 written above.
+
+5h/7d use per session is not recorded: router rows carry only the account's
+quota band, and `quota.json` is a live figure with no history. Recording it
+is JEVADV-120 (opened and linked 2026-10-27). The "after" numbers wait for
+the next Jev release, which needs the owner's OK, and a batch of members;
+run the same command on a window after it.
 
 ## Acceptance criteria
 - Red-first tests: a read-only audit gets a lower model or effort than a
