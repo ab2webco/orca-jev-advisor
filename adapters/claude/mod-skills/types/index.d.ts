@@ -39,6 +39,8 @@ export type RouterSticky = {
   confidence?: number | null
   /** JEVADV-106: why the router kept its model on the last decision (its reason); null when it changed. For the Orca report. */
   hold?: string | null
+  /** JEVADV-117: the person chose the model (`/model`, or a mid-session switch); the router leaves it for the rest of the session. */
+  person?: boolean
 }
 
 /** Main-loop usage of this session, kept by the router after every step. */

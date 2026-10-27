@@ -1334,8 +1334,8 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   const originKind = originRead.value?.kind ?? null
   const personAuthored = originKind === null || isPersonPromptOrigin(originKind)
 
-  const adopt = async (lastPrompt: RouterSticky['lastPrompt']): Promise<RoutedStep> => {
-    const own: RouterSticky = { model: e.model, effort: stickyEffort(e.effort), rewrite: false, configuredModel: e.model, configuredEffort: stickyEffort(e.effort), tier: null, pendingLower: null, stats: EMPTY_STATS, lastPrompt }
+  const adopt = async (lastPrompt: RouterSticky['lastPrompt'], person: boolean): Promise<RoutedStep> => {
+    const own: RouterSticky = { model: e.model, effort: stickyEffort(e.effort), rewrite: false, configuredModel: e.model, configuredEffort: stickyEffort(e.effort), tier: null, pendingLower: null, stats: EMPTY_STATS, lastPrompt, ...(person ? { person } : {}) }
     await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, own)
     return { input: e, status: null }
   }
@@ -1345,12 +1345,14 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
     // model the router took over from: their choice wins from here on.
     if (e.model !== sticky.configuredModel || stickyEffort(e.effort) !== sticky.configuredEffort) {
       // The status line says so, rather than showing the router's older
-      // decision (review nit 10).
-      const adopted = await adopt(sticky.lastPrompt)
+      // decision (review nit 10). JEVADV-117: and it stays theirs.
+      const adopted = await adopt(sticky.lastPrompt, true)
       const { tiers } = await resolveRouterAccount($, await resolveAccountId($))
       const tier = tierOfModel(tiers, e.model)
       return { ...adopted, status: routerPersonStatusText(await resolveLocale($), mode, tier === null ? e.model : tiers[tier].label) }
     }
+    // JEVADV-117: the person's model is never moved again, up or down.
+    if (sticky.person === true) return { input: e, status: null }
     if (e.index !== 0 || sticky.stats.turnId === e.turnId) return { input: stickyStepInput(e, sticky, mode), status: null }
     // A new turn: point C only when a new real prompt started it (review
     // finding 4), keyed on the prompt's identity so /compact cannot hide
@@ -1384,7 +1386,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   // without its state. Adopt, change nothing (§3); from here only point C.
   // The status line says the model was kept and why (0.6.2 E8).
   if (e.index !== 0 || messages.some((message) => message.role === 'assistant')) {
-    const adopted = await adopt(promptKey)
+    const adopted = await adopt(promptKey, false)
     const { tiers } = await resolveRouterAccount($, await resolveAccountId($))
     const tier = tierOfModel(tiers, e.model)
     return { ...adopted, status: routerWarmStatusText(await resolveLocale($), mode, tier === null ? e.model : tiers[tier].label) }
@@ -1393,7 +1395,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   // (JEV-061) -- keep the session's configured model and decide once a
   // person's own prompt actually arrives, the same "adopt now, decide
   // later" shape the warm-session branch above already uses.
-  if (!personAuthored) return adopt(promptKey)
+  if (!personAuthored) return adopt(promptKey, false)
 
   const promptText = lastPromptText(messages)
   const account = await resolveAccountId($)
@@ -1425,6 +1427,24 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
 
   const status = routerStatusFor(decision, tiers, mode, await resolveLocale($))
   return { input: stickyStepInput(e, next, mode), status }
+}
+
+/**
+ * JEVADV-117: the person ran `/model`, so the session's model is theirs from
+ * here on and never rewritten again. Returns the router's part of the
+ * status line, which names it at once instead of at the next step.
+ */
+async function lockPersonModel($: EngineInterface, mode: 'measure' | 'active'): Promise<string> {
+  const model = await $.session.model()
+  const sticky = (await $.state.get({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' })).value
+  const locked: RouterSticky =
+    sticky === undefined
+      ? { model, effort: null, rewrite: false, configuredModel: model, configuredEffort: null, tier: null, pendingLower: null, stats: EMPTY_STATS, lastPrompt: null, person: true }
+      : { ...sticky, model, effort: sticky.configuredEffort, rewrite: false, configuredModel: model, pendingLower: null, confidence: null, hold: null, person: true }
+  await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, locked)
+  const { tiers } = await resolveRouterAccount($, await resolveAccountId($))
+  const tier = tierOfModel(tiers, model)
+  return routerPersonStatusText(await resolveLocale($), mode, tier === null ? model : tiers[tier].label)
 }
 
 /** Point C (§6.4): the first step of a later turn. Asks Jev about the new prompt with the previous turn's activity, and moves the sticky model only as decideStage allows. */
@@ -4545,6 +4565,21 @@ export function register(on: On, options: PluginOptions): void {
   on('classic.PostCompact', async ($, e, next) => {
     await observeCompaction($, compactionWatch, modulesFile, 'post', e.trigger)
     return next(e)
+  })
+
+  // JEVADV-117: a person's `/model` locks the session's model; a plugin's does not.
+  on('command.run', async ($, e, next) => {
+    const result = await next(e)
+    if (e.command !== 'model' || !isPersonPromptOrigin(e.origin.kind)) return result
+    const mode = effectiveMode(moduleState(await resolveFeatureModules($, modulesFile), 'model-router'), routerMode)
+    if (mode === 'off') return result
+    try {
+      routerStatusText = await lockPersonModel($, mode)
+      await showLine($, game, statusLine() ?? undefined)
+    } catch {
+      // Best-effort: the next step's switch check still adopts the model.
+    }
+    return result
   })
 
   // 0.6.14 T1: a reload runs register again and raises session.start again;
