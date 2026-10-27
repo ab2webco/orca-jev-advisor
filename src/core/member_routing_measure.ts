@@ -18,7 +18,9 @@ import { isRecord } from "../guards.ts";
 import { baseModelId } from "./model_router_accounts.ts";
 import { medianOf } from "./model_router_stage.ts";
 import { CI_WATCH_DECISIONS_FILE_PATTERN } from "./ci_watch.ts";
-import { ROUTER_DECISIONS_FILE_PATTERN } from "./jev_health_usage.ts";
+
+/** The router's hourly decision files (model_router_decide.ts names them). Not imported from the jev_health probes, which no shipped source reaches. */
+export const ROUTER_DECISIONS_FILE_PATTERN = /^model-router-decisions-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/;
 
 /** The turn-usage hourly files, written by hooks/index.ts's recordTurnUsage. */
 export const TURN_USAGE_FILE_PATTERN = /^turn-usage-(\d{4}-\d{2}-\d{2}T\d{2})\.jsonl$/;
