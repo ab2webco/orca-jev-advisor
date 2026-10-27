@@ -11,7 +11,8 @@
 // research's keyword categories on the description are the fallback when Jev
 // does not answer, and are logged next to Jev's kind as a cross-check.
 // JEVADV-117: the main loop asks it too, in its own tier call, so an
-// implement turn is floored (IMPLEMENT_FLOOR_TIER).
+// implement turn is floored (IMPLEMENT_FLOOR_TIER); JEVADV-118 T3 floors
+// review and design turns the same way.
 //
 //   execute, read -- Sonnet 5 capped at high (never xhigh); Opus 5.5 and
 //                    Sonnet 5.5 at medium (their Claude Code default);
