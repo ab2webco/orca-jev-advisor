@@ -521,7 +521,7 @@ function decideStageFree(input: StageDecisionInput): StageDecision {
   // (shifted) tier, so frontier work on an account without Fable still runs
   // Opus at the frontier's effort (0.6.2 E1). Both are raised on doubt and
   // for implement work (JEVADV-117); the row keeps Jev's own tier.
-  const shifted = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
+  const shifted = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity, input.jev);
   const judged = aimedTier(shifted, input.jev);
   const judgedTier = collapseTier(input.tiers, shifted);
   const aimed = collapseTier(input.tiers, judged);

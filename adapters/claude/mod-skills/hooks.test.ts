@@ -2789,6 +2789,33 @@ test("JEVADV-118 T4 (hook): RED first, a test-only edit between two failing runs
 });
 
 // ---------------------------------------------------------------------------
+// JEVADV-118 T5: near a 5-hour or 7-day limit, only confident read or execute
+// work shifts down a tier; implement work never does.
+// ---------------------------------------------------------------------------
+
+async function stageUnderStrongEconomy(kind: string): Promise<Record<string, unknown> | undefined> {
+  const host = makeFakeHost();
+  seedRouterAccount(host);
+  host.rateLimits = [{ kind: "five_hour", percentUsed: 96.5, resetsAt: "2099-01-01T00:00:00.000Z" }];
+  host.fetchQueue.push(tierKindAnswer("standard", "read"), tierKindAnswer("standard", kind));
+  const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+  await promptTurn(host, handlers, engine, 1, "where does the router write its log?", OPUS_HIGH);
+  await promptTurn(host, handlers, engine, 2, "and where does it read the quota?", OPUS_HIGH);
+  const row = routerDecisionLines(host).at(-1);
+  assert.equal(row?.point, "stage");
+  assert.equal(row?.quotaBand, "strong-economy");
+  return row;
+}
+
+test("JEVADV-118 T5 (hook, point C): under strong economy a confident read turn after a read-only one shifts to the simple tier", async () => {
+  assert.equal((await stageUnderStrongEconomy("read"))?.tier, "simple");
+});
+
+test("JEVADV-118 T5 (hook, point C): under strong economy an implement turn keeps its tier", async () => {
+  assert.equal((await stageUnderStrongEconomy("implement"))?.tier, "standard");
+});
+
+// ---------------------------------------------------------------------------
 // 0.6.2 E8: the status line says, part by part, what applied and what only
 // measured, with one "jev" at the start.
 // ---------------------------------------------------------------------------
