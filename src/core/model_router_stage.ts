@@ -323,6 +323,12 @@ export function summarizeSinceLastPrompt(messages: readonly ActivityMessage[]): 
   return summarizeRange(messages.slice((prompts[prompts.length - 1] as number) + 1));
 }
 
+/** JEVADV-118 T2: the rows after the last real prompt (the current turn's own work so far); null with no real prompt. */
+export function messagesSinceLastPrompt(messages: readonly ActivityMessage[]): readonly ActivityMessage[] | null {
+  const last = realPromptIndexes(messages).at(-1);
+  return last === undefined ? null : messages.slice(last + 1);
+}
+
 function realPromptIndexes(messages: readonly ActivityMessage[]): readonly number[] {
   const prompts: number[] = [];
   messages.forEach((message, index) => {
@@ -424,7 +430,8 @@ export type StageReason =
   | "effort-lower"
   | "effort-hysteresis"
   | "effort-break-even"
-  | "effort-unknown-savings";
+  | "effort-unknown-savings"
+  | "escalate";
 
 export interface StageDecision extends Omit<RouterDecision, "reason"> {
   readonly reason: StageReason;

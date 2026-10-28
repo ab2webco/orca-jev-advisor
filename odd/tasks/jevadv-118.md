@@ -70,7 +70,7 @@ record, so they share one commit.
   and lessons never reach Jev; a ticket-only TASK, a path outside
   `.orca/briefs`, a symlink out of the worktree and an oversized file keep the
   pointer guard. GREEN. Commit.
-- [ ] T2: RED: a session on Haiku that edits `src/a.ts` is raised to Opus 5.5
+- [x] T2: RED: a session on Haiku that edits `src/a.ts` is raised to Opus 5.5
   at its next step; an edit under `.orca/` or outside the worktree is not; an
   edited high-risk path raises; an Orca model pin and a `/model` lock hold.
   GREEN. Commit. PR 1.
