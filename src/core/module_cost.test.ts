@@ -90,6 +90,16 @@ test("steward: a row is one call; a null verdict is a failure", () => {
   assert.deepEqual(stewardJevCalls({ at: AT, verdict: null, confidence: null }), { calls: 1, failures: 1, latencyMs: [] });
 });
 
+test("steward: a pre-cold row and an engine idle-compaction event are not Jev calls", () => {
+  // The pre-cold tier reuses the turn-end verdict; the engine observation is a plain log line.
+  const preColdFired = { at: AT, trigger: "pre-cold", decision: "pre-cold", verdict: "boundary", confidence: 0.9, applied: true };
+  const preColdSkip = { at: AT, trigger: "pre-cold", decision: "pre-cold-skip", verdict: null, confidence: null, coldSkip: "ttl" };
+  const engineIdle = { at: AT, event: "engine-idle-compact", trigger: "auto", idleMs: 3300000 };
+  assert.deepEqual(stewardJevCalls(preColdFired), { calls: 0, failures: 0, latencyMs: [] });
+  assert.deepEqual(stewardJevCalls(preColdSkip), { calls: 0, failures: 0, latencyMs: [] });
+  assert.deepEqual(stewardJevCalls(engineIdle), { calls: 0, failures: 0, latencyMs: [] });
+});
+
 test("verify-done: a row is one call with its latency; a jev-failed row is a failure", () => {
   assert.deepEqual(verifyDoneJevCalls({ at: AT, decision: "would-block", claim: "claimed-done", latencyMs: 420 }), { calls: 1, failures: 0, latencyMs: [420] });
   assert.deepEqual(verifyDoneJevCalls({ at: AT, decision: "jev-failed", claim: null, latencyMs: 3001 }), { calls: 1, failures: 1, latencyMs: [3001] });

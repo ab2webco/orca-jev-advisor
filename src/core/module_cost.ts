@@ -129,9 +129,14 @@ export function modelDecisionJevCalls(row: unknown): JevCallCount {
   return NONE;
 }
 
-/** context-steward-decisions: the steward logs only turns it asked Jev about, one call each; a null verdict is a failed call. */
+/**
+ * context-steward-decisions: a turn-end row is one Jev call; a null verdict is a failed call. The pre-cold tier
+ * (`trigger: "pre-cold"`) reuses the turn-end verdict and calls no Jev, and an engine idle-compaction observation
+ * (`event`) is a plain log line, so neither counts.
+ */
 export function stewardJevCalls(row: unknown): JevCallCount {
   if (!isRecord(row)) return NONE;
+  if (row["trigger"] === "pre-cold" || row["event"] !== undefined) return NONE;
   return { calls: 1, failures: row["verdict"] === null || row["verdict"] === undefined ? 1 : 0, latencyMs: [] };
 }
 
