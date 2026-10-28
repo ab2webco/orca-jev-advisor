@@ -123,7 +123,7 @@ Verdicts: **DUPLICATE** (drop ours, use native) · **OURS BETTER** · **COMPLEME
 ## 4. Context detail (the original JEVADV-109 question)
 
 - Turn-end steward Jev calls: 2,965 in 9 days, **383 a day** on full days; 95.1% end without compaction (mid-task 1,541, low-confidence 1,274).
-- **1,160 calls (39%) come right after a confident (≥0.8) mid-task verdict in the same session; 1,103 of them again led to nothing.** A back-off saves about 120 calls a day.
+- **1,160 calls (39%) come right after a confident (≥0.8) mid-task verdict in the same session; 1,103 of them again led to nothing.** A back-off after a confident mid-task would save about 464 asks a week and lose 28 compactions; rejected (section 6, ticket 2).
 - Overlap with native idle compaction: of 2,050 calls at ≥200K, **1,921 (94%) were in sessions resumed within 54 min**, 58 were followed by ≥54 min idle and then resumed, and 63 were never resumed. So skipping Jev "when native will act" saves essentially nothing.
 - The pre-cold tier calls no Jev; its in-zone fires cost 365k-745k input-equivalents each (about 2× context, which looks like a cold write, not the 0.1× warm read the design assumed).
 
@@ -136,7 +136,7 @@ Verdicts: **DUPLICATE** (drop ours, use native) · **OURS BETTER** · **COMPLEME
 ## 6. Proposed follow-up tickets, ranked (the lead decides; none created)
 
 1. **Gate: native auto mode for generic risk, Jev for policy only.** Up to ~20,700 Jev calls a week (the `risk` rows), plus most of the 610 ms p50 hook waits. Needs Orca to start sessions in `auto`, and an agreement run (A/B benchmark) before switching.
-2. **Steward back-off after a confident mid-task** (inside JEVADV-109). About 120 calls a day (~840 a week), risking delay on at most 57 compactions in 9 days.
+2. **Steward back-off after a confident mid-task: rejected** (JEVADV-109 lead decision). Skipping asks after a confident (≥0.8) mid-task in the same person turn, asking every 2nd answer, reset on a new person prompt, saves about 464 asks a week and loses 28 compactions (16 at a work boundary). Each lost compaction leaves about 315k tokens to be re-read on every later step of the main model, which costs far more than 464 cheap Jev asks. Not worth it. The earlier estimate of about 120 calls a day (~840 a week) was wrong and is withdrawn.
 3. **Skill selection: a pre-check before Jev, plus a smaller native listing.** Targets the ~4,700 weekly "no skill" decisions; native `skillListingBudgetFraction` and `skillOverrides` cut listing tokens on every turn.
 4. **Tool selection: measure agreement, then Off if it is low** (native tool search). Its share of the 29,603 module calls.
 5. **Memory: leave the files backend to native auto memory.** About 5.9 M Haiku input tokens and 31 M fork cache reads a week at stake.
