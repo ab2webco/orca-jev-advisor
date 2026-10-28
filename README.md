@@ -16,6 +16,14 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.12
+
+- **An Orca member starts on the model its task needs.** Jev now reads the TASK block of a member's Orca brief, so a read-only audit can start small instead of keeping the launch model. The brief's CLI part and the project lessons are never sent to Jev.
+- **Code keeps the strong model.** A member that starts small is raised to Opus 5.5 as soon as it edits code or a high-risk path. Review and design work never run below Opus 5.5. A failing test, a fix and a failing test again raise the effort one step. Near a 5-hour or 7-day limit, only confident reading or running work shifts down.
+- **The status line says why.** After the model it names who chose it: Jev's judged kind, the code floor, or a raise and its reason.
+- **Measure it.** `npm run measure-member-routing -- --from <date> --to <date>` reports tokens, model mix, escalations and CI pass rate for Orca member sessions.
+- **The cost report counts real Jev calls.** Steward rows that reuse a verdict or only log an engine event no longer count as calls or failures.
+
 ## What changed in 0.13.11
 
 - **Unsure or implementation work runs on Opus 5.5.** When Jev is unsure of a turn (below 0.7) or says it implements something, the router raises it to at least Opus 5.5 instead of keeping a smaller model. A turn that only reads can still start on Haiku.
