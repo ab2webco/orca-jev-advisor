@@ -4379,6 +4379,11 @@ export function register(on: On, options: PluginOptions): void {
       try {
         if (skillState === 'off') return { block: null, status: null }
         const toolMode = effectiveMode(skillState, await resolveToolsMode($, optionToolsMode, modSkillsSwitchesCache))
+        // Tool selection's own `off` (odd/tasks/tool-selection-off.md): no
+        // Jev call, nothing injected and no decision row -- so no
+        // `pendingToolMeasurementId` either, and tool.call observes nothing.
+        // Skill selection above is untouched by this mode.
+        if (toolMode === 'off') return { block: null, status: null }
         const activeToolMode = toolMode === 'active'
 
         // JEVADV-4: the same shared roll the skill closure consults above,
