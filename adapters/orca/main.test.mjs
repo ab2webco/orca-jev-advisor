@@ -641,7 +641,7 @@ test('attendCatalogRefreshRequest: an expired request publishes reason "expired"
 test('attendModSkillsConfigRequest: an expired request publishes reason "expired"', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
-    modSkillsConfigRequest: { id: 'msc-1', at: TEN_MINUTES_AGO, active: true, activeTools: true }
+    modSkillsConfigRequest: { id: 'msc-1', at: TEN_MINUTES_AGO, active: true, toolsMode: 'active' }
   })
   await attendModSkillsConfigRequest(orca, storageHost)
   const result = await storageHost.get(MOD_SKILLS_CONFIG_RESULT_KEY)
@@ -655,7 +655,7 @@ test('attendModSkillsConfigRequest: an expired request publishes reason "expired
 test('attendModSkillsConfigRequest: a fresh request saves through the mirror and publishes an ok result', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
-    modSkillsConfigRequest: { id: 'msc-2', at: new Date().toISOString(), active: true, activeTools: false }
+    modSkillsConfigRequest: { id: 'msc-2', at: new Date().toISOString(), active: true, toolsMode: 'measure' }
   })
   const saved = { current: null }
   const mirror = async (mode, stdin) => {
@@ -672,19 +672,19 @@ test('attendModSkillsConfigRequest: a fresh request saves through the mirror and
   const result = await storageHost.get(MOD_SKILLS_CONFIG_RESULT_KEY)
   assert.equal(result.id, 'msc-2')
   assert.equal(result.ok, true)
-  assert.deepEqual(saved.current, { active: true, activeTools: false })
+  assert.deepEqual(saved.current, { active: true, toolsMode: 'measure' })
   // The status mirror is republished from what was actually saved, so the
   // panel's next read reflects it without a second round trip.
   const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
   assert.equal(status.active, true)
-  assert.equal(status.activeTools, false)
+  assert.equal(status.toolsMode, 'measure')
   assert.equal(typeof status.checkedAt, 'string')
 })
 
-test('attendModSkillsConfigRequest: a non-boolean field in the request is treated as false, never crashes', async () => {
+test('attendModSkillsConfigRequest: a wrong-typed field in the request is treated as off, never crashes', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
-    modSkillsConfigRequest: { id: 'msc-3', at: new Date().toISOString(), active: 'yes', activeTools: 1 }
+    modSkillsConfigRequest: { id: 'msc-3', at: new Date().toISOString(), active: 'yes', toolsMode: 'on' }
   })
   const saved = { current: null }
   const mirror = async (mode, stdin) => {
@@ -692,13 +692,45 @@ test('attendModSkillsConfigRequest: a non-boolean field in the request is treate
     return { ok: true, value: saved.current }
   }
   await attendModSkillsConfigRequest(orca, storageHost, { mirror })
-  assert.deepEqual(saved.current, { active: false, activeTools: false })
+  assert.deepEqual(saved.current, { active: false, toolsMode: 'off' })
+})
+
+// odd/tasks/tool-selection-off.md, T3: the tool switch is three-way.
+for (const toolsMode of ['off', 'measure', 'active']) {
+  test(`attendModSkillsConfigRequest: toolsMode "${toolsMode}" is saved and republished as is`, async () => {
+    const orca = fakeOrca()
+    const storageHost = fakeStorageHost({
+      modSkillsConfigRequest: { id: `msc-${toolsMode}`, at: new Date().toISOString(), active: false, toolsMode }
+    })
+    const saved = { current: null }
+    const mirror = async (mode, stdin) => {
+      if (mode === 'mod-skills-config-save') { saved.current = JSON.parse(stdin); return { ok: true } }
+      return { ok: true, value: saved.current }
+    }
+    await attendModSkillsConfigRequest(orca, storageHost, { mirror })
+    assert.deepEqual(saved.current, { active: false, toolsMode })
+    assert.equal((await storageHost.get(MOD_SKILLS_STATUS_KEY)).toolsMode, toolsMode)
+  })
+}
+
+test('attendModSkillsConfigRequest: a legacy activeTools request (a panel opened before the upgrade) keeps its choice', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modSkillsConfigRequest: { id: 'msc-legacy', at: new Date().toISOString(), active: true, activeTools: true }
+  })
+  const saved = { current: null }
+  const mirror = async (mode, stdin) => {
+    if (mode === 'mod-skills-config-save') { saved.current = JSON.parse(stdin); return { ok: true } }
+    return { ok: true, value: saved.current }
+  }
+  await attendModSkillsConfigRequest(orca, storageHost, { mirror })
+  assert.deepEqual(saved.current, { active: true, toolsMode: 'active' })
 })
 
 test('attendModSkillsConfigRequest: a mirror failure is reported, not silently swallowed as success', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({
-    modSkillsConfigRequest: { id: 'msc-4', at: new Date().toISOString(), active: true, activeTools: true }
+    modSkillsConfigRequest: { id: 'msc-4', at: new Date().toISOString(), active: true, toolsMode: 'active' }
   })
   const mirror = async (mode) => {
     if (mode === 'mod-skills-config-save') return { ok: false, reason: 'exception', detail: 'disk is full' }
@@ -914,24 +946,35 @@ test('publishModelRouterStatus: a script failure degrades to an empty target lis
   assert.deepEqual(status.targets, [])
 })
 
-test('publishModSkillsStatus: a failed mirror read normalizes to both switches off, never throws', async () => {
+test('publishModSkillsStatus: a failed mirror read normalizes to skills measurement and tools off, never throws', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost()
   const mirror = async () => ({ ok: false, reason: 'launch-failed', detail: 'boom' })
   await publishModSkillsStatus(orca, storageHost, { mirror })
   const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
   assert.equal(status.active, false)
-  assert.equal(status.activeTools, false)
+  assert.equal(status.toolsMode, 'off')
+  assert.equal('activeTools' in status, false, 'the legacy boolean is never published')
 })
 
-test('publishModSkillsStatus: a malformed mirror value (wrong types) normalizes to both switches off', async () => {
+test('publishModSkillsStatus: a malformed mirror value (wrong types) normalizes to skills measurement and tools off', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost()
-  const mirror = async () => ({ ok: true, value: { active: 'yes', activeTools: null } })
+  const mirror = async () => ({ ok: true, value: { active: 'yes', toolsMode: 'on' } })
   await publishModSkillsStatus(orca, storageHost, { mirror })
   const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
   assert.equal(status.active, false)
-  assert.equal(status.activeTools, false)
+  assert.equal(status.toolsMode, 'off')
+})
+
+test('publishModSkillsStatus: publishes the three-way toolsMode the mirror read', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost()
+  const mirror = async () => ({ ok: true, value: { active: true, toolsMode: 'active' } })
+  await publishModSkillsStatus(orca, storageHost, { mirror })
+  const status = await storageHost.get(MOD_SKILLS_STATUS_KEY)
+  assert.equal(status.active, true)
+  assert.equal(status.toolsMode, 'active')
 })
 
 // ---------------------------------------------------------------------------

@@ -67,6 +67,7 @@ import { ORCA_USER_DATA_ENV, claudeAccountsDir, homeConfigTarget, resolveOrcaUse
 import { managedNodeRoots } from '../../src/core/node_runtime.ts'
 import { decideRescanInstall, isRescanDue } from '../../src/core/claude_integration_rescan.ts'
 import { DEFAULT_FEATURE_MODULES } from '../../src/core/feature_modules.ts'
+import { DEFAULT_MOD_SKILLS_SWITCHES, parseToolsMode, toolsModeFromSwitch } from '../../src/core/mod_skills_config.ts'
 import { createModuleScheduler, followStatus, modulesFromRead } from './module-scheduler.mjs'
 import {
   attendModelsMirrorRequest,
@@ -2120,7 +2121,9 @@ async function applyOrcaUiLanguageAtActivation (orca, storageHost, options = {})
 }
 
 // ---------------------------------------------------------------------------
-// Skill/tool selection switches -- mod-skills' `active`/`activeTools`
+// Skill/tool selection switches -- mod-skills' `active` and three-way
+// `toolsMode` (`off | measure | active`, odd/tasks/tool-selection-off.md;
+// it replaced the `activeTools` boolean)
 // (adapters/claude/mod-skills/hooks/index.ts) used to read only Claude
 // Code's `options`, which nothing in this repo populates (no `userConfig`
 // declared anywhere -- see src/core/mod_skills_config.ts's own module note),
@@ -2137,7 +2140,7 @@ const MOD_SKILLS_CONFIG_REQUEST_KEY = 'modSkillsConfigRequest'
 const MOD_SKILLS_CONFIG_RESULT_KEY = 'modSkillsConfigResult'
 const MOD_SKILLS_STATUS_KEY = 'modSkillsStatus'
 
-/** Reads the mirror file's current switches, defaulting to both off on any
+/** Reads the mirror file's current switches, defaulting to skills measurement and tools off on any
  *  failure or malformed value -- never thrown, matching the file's own
  *  best-effort contract (src/core/mod_skills_config.ts). `options.mirror`
  *  lets tests substitute a fake in place of the real sidecar; production
@@ -2153,10 +2156,10 @@ async function readModSkillsConfigMirror (options = {}) {
  *  publishLocaleStatus. */
 async function publishModSkillsStatus (orca, storageHost, options = {}) {
   const result = await readModSkillsConfigMirror(options)
-  const value = result.ok && isRecord(result.value) &&
-    typeof result.value.active === 'boolean' && typeof result.value.activeTools === 'boolean'
-    ? { active: result.value.active, activeTools: result.value.activeTools }
-    : { active: false, activeTools: false }
+  const toolsMode = result.ok && isRecord(result.value) ? parseToolsMode(result.value.toolsMode) : null
+  const value = result.ok && isRecord(result.value) && typeof result.value.active === 'boolean' && toolsMode !== null
+    ? { active: result.value.active, toolsMode }
+    : { active: DEFAULT_MOD_SKILLS_SWITCHES.active, toolsMode: DEFAULT_MOD_SKILLS_SWITCHES.toolsMode }
   await storageHost.set(MOD_SKILLS_STATUS_KEY, { ...value, checkedAt: new Date().toISOString() })
     .catch((error) => orca.log(`mod-skills status publish failed: ${error.message}`))
 }
@@ -2178,9 +2181,10 @@ async function attendModSkillsConfigRequest (orca, storageHost, options = {}) {
   }
 
   const active = request.active === true
-  const activeTools = request.activeTools === true
+  // A panel opened before the upgrade still sends the legacy boolean; it keeps its choice, like the file does.
+  const toolsMode = parseToolsMode(request.toolsMode) ?? toolsModeFromSwitch(request.activeTools) ?? DEFAULT_MOD_SKILLS_SWITCHES.toolsMode
   const mirror = options.mirror ?? runSecretMirrorScript
-  const result = await mirror('mod-skills-config-save', JSON.stringify({ active, activeTools }))
+  const result = await mirror('mod-skills-config-save', JSON.stringify({ active, toolsMode }))
   if (!result.ok) {
     orca.log(`mod-skills config mirror (save) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
   }

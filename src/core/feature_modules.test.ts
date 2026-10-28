@@ -19,6 +19,7 @@ import {
   FEATURE_MODULES,
   FEATURE_MODULES_FILE,
   MODULE_IDS,
+  MODULE_STATES,
   effectiveMode,
   hooksFor,
   modCopyNeeded,
@@ -162,6 +163,18 @@ test("defaults: each feature's own mode decides, exactly as today", () => {
   assert.equal(effectiveMode(moduleState(modules, "skill-selection"), switchMode(false)), "measure");
   assert.equal(effectiveMode(moduleState(modules, "skill-selection"), switchMode(true)), "active");
   assert.equal(effectiveMode(moduleState(modules, "gate"), "active"), "active");
+});
+
+test("tool selection's own mode lists off and starts off (odd/tasks/tool-selection-off.md)", () => {
+  const skills = FEATURE_MODULES.find((module) => module.id === "skill-selection");
+  assert.ok(skills);
+  const tools = skills.modes.find((mode) => mode.store.includes(".toolsMode"));
+  assert.ok(tools, "the tool mode is stored as toolsMode");
+  assert.deepEqual(tools.values, ["off", "measure", "active"]);
+  assert.equal(tools.defaultValue, "off");
+  assert.equal(tools.shadowValue, "measure");
+  // Off stays off under every module state: a shadow never turns it on.
+  for (const state of MODULE_STATES) assert.equal(effectiveMode(state, "off"), "off", state);
 });
 
 test("defaults: every installed hook, every worker job and every mod feature but verify-done stays on", () => {
