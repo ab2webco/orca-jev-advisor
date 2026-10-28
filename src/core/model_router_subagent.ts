@@ -121,7 +121,7 @@ function decideSubagentFree(input: SubagentDecisionInput): SubagentDecision {
   if (input.jev === null) return { ...stay, tier: null, confidence: null, proposed: null, reason: "jev-failed", guard: null };
 
   const guards = activeGuards(input.guards);
-  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null);
+  const shifted = shiftForPressure(input.jev.tier, input.band ?? "normal", guards, null, input.jev);
   // JEVADV-117: raised on doubt and for implement work; the row keeps Jev's own tier.
   const target = input.tiers[collapseTier(input.tiers, aimedTier(shifted, input.jev))];
   const base = { tier: collapseTier(input.tiers, shifted), confidence: input.jev.confidence, proposed: target.modelId };

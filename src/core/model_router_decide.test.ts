@@ -665,7 +665,23 @@ test("JEVADV-117: the implementation floor is the complex tier, and only impleme
   assert.equal(floorForWork("simple", "implement"), "complex");
   assert.equal(floorForWork("standard", "implement"), "complex");
   assert.equal(floorForWork("frontier", "implement"), "frontier");
-  for (const kind of ["read", "execute", "review", "design", undefined] as const) assert.equal(floorForWork("simple", kind), "simple");
+  for (const kind of ["read", "execute", undefined] as const) assert.equal(floorForWork("simple", kind), "simple");
+});
+
+test("JEVADV-118 T3: review and design work join implement under the floor", () => {
+  for (const kind of ["review", "design"] as const) {
+    assert.equal(floorForWork("simple", kind), "complex", kind);
+    assert.equal(floorForWork("standard", kind), "complex", kind);
+    assert.equal(floorForWork("frontier", kind), "frontier", kind);
+  }
+});
+
+test("JEVADV-118 T3: a confident simple review or design turn starts on Opus 5.5", () => {
+  for (const kind of ["review", "design"] as const) {
+    const decision = decideStart({ tiers: DEFAULT_TIERS, jev: { tier: "simple", confidence: 0.95, kind }, configuredModel: "claude-haiku-5-5", configuredEffort: "high", guards: CALM });
+    assert.equal(decision.model, "claude-opus-5-5", kind);
+    assert.equal(decision.tier, "simple", "the row keeps Jev's own tier");
+  }
 });
 
 test("JEVADV-117: a confident implement turn never starts on Haiku or Sonnet", () => {

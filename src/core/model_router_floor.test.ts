@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { ModelEntry } from "./model_catalog.ts";
 import { resolveAccountTiers } from "./model_router_accounts.ts";
-import { belowCodeFloor, decideStepEscalation, escalationSignal } from "./model_router_floor.ts";
+import { belowCodeFloor, decideStepEscalation, decideTestLoopEscalation, escalationSignal, testFixLoop } from "./model_router_floor.ts";
 import type { StepEscalationInput } from "./model_router_floor.ts";
 import type { ActivityMessage } from "./model_router_stage.ts";
 
@@ -90,4 +90,85 @@ test("belowCodeFloor: Haiku and Sonnet are below the code floor, Opus and Fable 
   assert.equal(belowCodeFloor(TIERS, "claude-opus-5-5"), false);
   assert.equal(belowCodeFloor(TIERS, "claude-opus-5-5[1m]"), false);
   assert.equal(belowCodeFloor(TIERS, "some-unknown-model"), false);
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-118 T4: failing tests twice, RED-safe
+// ---------------------------------------------------------------------------
+
+function testRun(failed: boolean, command = "npm test"): ActivityMessage {
+  return { role: "assistant", text: "", toolUses: [{ tool: "Bash", input: { command }, text: failed ? "ℹ pass 12\nℹ fail 2" : "ℹ pass 14\nℹ fail 0", ...(failed ? { isError: true as const } : {}) }] };
+}
+const FIX = edit("Edit", { file_path: `${CWD}/src/parser.ts` });
+const TEST_EDIT = edit("Edit", { file_path: `${CWD}/src/parser.test.ts` });
+
+test("T4: a failing run, a fix to a non-test file and a failing run again is a test-fix loop", () => {
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(true)], CWD), true);
+  assert.equal(testFixLoop([PROMPT, testRun(true, "node --test src/a.test.ts"), FIX, edit("Read", { file_path: `${CWD}/src/a.ts` }), testRun(true, "node --test src/a.test.ts")], CWD), true);
+});
+
+test("T4: RED first is not a loop: a failing run, a test-only edit and a failing run again", () => {
+  assert.equal(testFixLoop([PROMPT, testRun(true), TEST_EDIT, testRun(true)], CWD), false);
+  assert.equal(testFixLoop([PROMPT, TEST_EDIT, testRun(true), edit("Write", { file_path: `${CWD}/test/parser_spec.rb` }), testRun(true)], CWD), false);
+});
+
+test("T4: a fix that makes the run pass, a fix with no run before it, or one failing run is no loop", () => {
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false)], CWD), false);
+  assert.equal(testFixLoop([PROMPT, FIX, testRun(true)], CWD), false);
+  assert.equal(testFixLoop([PROMPT, testRun(true), testRun(true)], CWD), false, "no fix between the runs");
+  assert.equal(testFixLoop([PROMPT, testRun(true), edit("Write", { file_path: "/tmp/notes.md" }), testRun(true)], CWD), false, "a scratch note is no fix");
+});
+
+test("T4: a passing run ends the cycle: a second TDD cycle in the same turn is no loop", () => {
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false), TEST_EDIT, testRun(true)], CWD), false);
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false), FIX, testRun(true)], CWD), false, "the first failure of a new cycle is not a loop");
+  assert.equal(testFixLoop([PROMPT, testRun(true), FIX, testRun(false), testRun(true), FIX, testRun(true)], CWD), true, "a new cycle can still loop");
+});
+
+test("T4: only the work since the last real prompt counts", () => {
+  const earlier = [{ role: "user" as const, text: "fix the parser", toolUses: [] }, testRun(true), FIX];
+  assert.equal(testFixLoop([...earlier, PROMPT, testRun(true)], CWD), false);
+});
+
+test("T4: below the floor the loop raises to Opus 5.5 and the effort one step past the floor's (high to xhigh)", () => {
+  const decision = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)]));
+  assert.equal(decision?.model, "claude-opus-5-5");
+  assert.equal(decision?.effort, "xhigh");
+  assert.equal(decision?.reason, "escalate");
+  assert.equal(decision?.signal, "test-loop");
+});
+
+test("T4: on Opus 5.5 the model stays and the effort rises one step; never Fable, never past xhigh", () => {
+  const onOpus = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "high" }));
+  assert.equal(onOpus?.model, "claude-opus-5-5");
+  assert.equal(onOpus?.effort, "xhigh");
+  assert.equal(onOpus?.tier, "complex", "the tier of the model it stays on, so the status line can name it");
+  const fromMedium = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "medium" }));
+  assert.equal(fromMedium?.effort, "high");
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "xhigh" })), null, "already at the cap: nothing to raise");
+  // Fable is on no tier of the router's ladder, so a session the person put on it is left alone: never lowered.
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-fable-5-1", currentEffort: "high" })), null);
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "some-unknown-model", currentEffort: "high" })), null, "a model the account does not know is left alone");
+});
+
+test("T4: on Opus 5.5 with no effort sent, the floor tier's effort stands in and rises one step", () => {
+  const decision = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: null }));
+  assert.equal(decision?.effort, "xhigh");
+});
+
+test("T4: a person's max or numeric effort is never touched", () => {
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "max" })), null);
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: 32000 })), null);
+});
+
+test("T4: no loop changes nothing", () => {
+  assert.equal(decideTestLoopEscalation(input([testRun(true), TEST_EDIT, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "high" })), null);
+});
+
+test("T4: an Orca model pin holds; an effort pin keeps the session's effort", () => {
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { pins: { model: true, effort: false } })), null);
+  const pinned = decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { pins: { model: false, effort: true }, configuredEffort: "medium" }));
+  assert.equal(pinned?.model, "claude-opus-5-5");
+  assert.equal(pinned?.effort, "medium");
+  assert.equal(decideTestLoopEscalation(input([testRun(true), FIX, testRun(true)], { currentModel: "claude-opus-5-5", currentEffort: "high", pins: { model: false, effort: true } })), null, "on Opus an effort pin leaves nothing to raise");
 });

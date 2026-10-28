@@ -226,6 +226,16 @@ const EDIT_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "
 const TEST_COMMAND = /\b(npm (run )?test|npx (jest|vitest|playwright test)|jest|vitest|pytest|go test|cargo test|node --test|bun test|deno test|phpunit|rspec)\b/;
 const TEST_FAILED = /✖|\bFAIL\b|\b[1-9]\d* (failing|failed|failures?)\b|\bfail [1-9]/;
 
+/** JEVADV-118 T4: a command that runs tests, whatever its result. */
+export function isTestRun(use: ActivityMessage["toolUses"][number]): boolean {
+  return typeof use.input.command === "string" && TEST_COMMAND.test(use.input.command);
+}
+
+/** JEVADV-118 T4: a test command whose result failed (an error, or a failure in its output); false for anything else. */
+export function isFailingTestRun(use: ActivityMessage["toolUses"][number]): boolean {
+  return isTestRun(use) && (use.isError === true || TEST_FAILED.test(use.text ?? ""));
+}
+
 // A read-only probe failing (an `ls` of a missing file, a `which` that finds
 // nothing) is the model looking, not the work failing: its error must not
 // hold an expensive model through the previous-failure guard. Self-contained
@@ -362,7 +372,7 @@ function summarizeRange(range: readonly ActivityMessage[]): TurnActivity {
         mentions.push(command);
         if (TEST_COMMAND.test(command)) {
           testsRun += 1;
-          if (use.isError === true || TEST_FAILED.test(use.text ?? "")) testsFailed += 1;
+          if (isFailingTestRun(use)) testsFailed += 1;
         }
       }
     }
@@ -515,7 +525,7 @@ function decideStageFree(input: StageDecisionInput): StageDecision {
   // (shifted) tier, so frontier work on an account without Fable still runs
   // Opus at the frontier's effort (0.6.2 E1). Both are raised on doubt and
   // for implement work (JEVADV-117); the row keeps Jev's own tier.
-  const shifted = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity);
+  const shifted = shiftForPressure(input.jev.tier, input.band, guards, input.guards.activity, input.jev);
   const judged = aimedTier(shifted, input.jev);
   const judgedTier = collapseTier(input.tiers, shifted);
   const aimed = collapseTier(input.tiers, judged);

@@ -194,25 +194,36 @@ test("hysteresis: 2 turns in normal, 1 under pressure", () => {
 });
 
 const READ_ONLY = { toolCalls: 3, filesEdited: 0, testsRun: 0, testsFailed: 0, errors: 0, mentions: "" };
+const CONFIDENT_READ = { kind: "read", kindConfidence: 0.9 } as const;
 
 test("pressure shift (G4, owner rule): only at >= 95%, standard goes to simple, and only after a read-only, failure-free turn", () => {
-  assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY), "simple");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY, CONFIDENT_READ), "simple");
   // Normal and economy (80-94%) never shift a tier; economy only relaxes hysteresis.
-  assert.equal(shiftForPressure("standard", "normal", [], READ_ONLY), "standard");
-  assert.equal(shiftForPressure("standard", "economy", [], READ_ONLY), "standard");
+  assert.equal(shiftForPressure("standard", "normal", [], READ_ONLY, CONFIDENT_READ), "standard");
+  assert.equal(shiftForPressure("standard", "economy", [], READ_ONLY, CONFIDENT_READ), "standard");
   // The previous turn edited files, or a tool failed, or there was no previous turn.
-  assert.equal(shiftForPressure("standard", "strong-economy", [], { ...READ_ONLY, filesEdited: 1 }), "standard");
-  assert.equal(shiftForPressure("standard", "strong-economy", [], { ...READ_ONLY, errors: 1 }), "standard");
-  assert.equal(shiftForPressure("standard", "strong-economy", [], { ...READ_ONLY, testsRun: 1, testsFailed: 1 }), "standard");
-  assert.equal(shiftForPressure("standard", "strong-economy", [], null), "standard");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], { ...READ_ONLY, filesEdited: 1 }, CONFIDENT_READ), "standard");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], { ...READ_ONLY, errors: 1 }, CONFIDENT_READ), "standard");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], { ...READ_ONLY, testsRun: 1, testsFailed: 1 }, CONFIDENT_READ), "standard");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], null, CONFIDENT_READ), "standard");
   // Only standard moves; any guard stops it.
-  assert.equal(shiftForPressure("complex", "strong-economy", [], READ_ONLY), "complex");
-  assert.equal(shiftForPressure("simple", "strong-economy", [], READ_ONLY), "simple");
-  assert.equal(shiftForPressure("standard", "strong-economy", ["low-confidence"], READ_ONLY), "standard");
+  assert.equal(shiftForPressure("complex", "strong-economy", [], READ_ONLY, CONFIDENT_READ), "complex");
+  assert.equal(shiftForPressure("simple", "strong-economy", [], READ_ONLY, CONFIDENT_READ), "simple");
+  assert.equal(shiftForPressure("standard", "strong-economy", ["low-confidence"], READ_ONLY, CONFIDENT_READ), "standard");
+});
+
+test("JEVADV-118 T5: under pressure only confident read or execute work shifts down; implement, review and design never do", () => {
+  assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY, { kind: "execute", kindConfidence: 0.9 }), "simple");
+  for (const kind of ["implement", "review", "design"] as const) {
+    assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY, { kind, kindConfidence: 0.95 }), "standard", kind);
+  }
+  assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY, { kind: "read", kindConfidence: 0.5 }), "standard", "an unsure kind holds");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY, { kind: "read" }), "standard", "a kind with no confidence holds");
+  assert.equal(shiftForPressure("standard", "strong-economy", [], READ_ONLY, {}), "standard", "no kind holds");
 });
 
 test("stage under strong economy: a standard turn after a read-only turn runs on the simple tier", () => {
-  const decision = stage({ jev: { tier: "standard", confidence: 0.9 }, band: "strong-economy", guards: { ...CALM, activity: READ_ONLY }, pending: { tier: "simple", turns: 1 } });
+  const decision = stage({ jev: { tier: "standard", confidence: 0.9, ...CONFIDENT_READ }, band: "strong-economy", guards: { ...CALM, activity: READ_ONLY }, pending: { tier: "simple", turns: 1 } });
   assert.equal(decision.tier, "simple");
   assert.equal(decision.model, "claude-haiku-4-5-20251001");
 });
