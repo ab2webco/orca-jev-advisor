@@ -150,7 +150,8 @@ import { interpretWorkKind, keywordWorkKind, kindStepEffort, readWorkTierEffort,
 import type { WorkKindJudgment, WorkKindMode, WorkKindRecord } from '../../../../src/core/work_kind.ts'
 import { EFFORT_WINDOW_MS, effortOutputMedians, isRecentTurnUsageFile } from '../../../../src/core/model_router_effort.ts'
 import type { RouterMode } from '../../../../src/core/model_router_mode.ts'
-import { keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
+import { choseWhy, keptWhy, routerPersonStatusText, routerStatusText, routerWarmStatusText } from '../../../../src/core/model_router_status.ts'
+import type { RouterChose } from '../../../../src/core/model_router_status.ts'
 import { composeStatusLine, skillStatusPart, toolStatusPart } from '../../../../src/core/status_line.ts'
 import { TEAMMATE_TYPE, isUnseenWhy, observedSubagent, parseRunningSubagents, reconcileRunning, subagentEffortSource, subagentModelLabel, subagentWhy, subagentsStatusPart } from '../../../../src/core/subagent_status.ts'
 import { EXPLICIT_MODELS_MIRROR_FILE, parseExplicitModels } from '../../../../src/core/explicit_models.ts'
@@ -1263,12 +1264,17 @@ function withModel(e: Frozen<TurnStepInput>, model: string, effort: RouterSticky
 }
 
 /** The status-line text for a decision, or null when there is nothing to say (Jev failed). A kept model says why (keptWhy). */
-function routerStatusFor(decision: Pick<RouterDecision, 'tier' | 'model' | 'effort'> & KeptDecision, tiers: ResolvedTiers, mode: 'measure' | 'active', locale: Locale): string | null {
+function routerStatusFor(decision: Pick<RouterDecision, 'tier' | 'model' | 'effort'> & KeptDecision, tiers: ResolvedTiers, mode: 'measure' | 'active', locale: Locale, chose: RouterChose | null = null): string | null {
   if (decision.tier === null) return null
   const tier = tierOfModel(tiers, decision.model)
   const label = tier === null ? decision.model : tiers[tier].label
   const effort = typeof decision.effort === 'string' ? toRouterEffort(decision.effort) : null
-  return routerStatusText(locale, mode, { label, effort, tier: decision.tier, kept: keptWhy(decision) })
+  return routerStatusText(locale, mode, { label, effort, tier: decision.tier, kept: keptWhy(decision), chose })
+}
+
+/** JEVADV-118 T6: who chose a start or stage decision and why, from Jev's judgment (its kind when it gave one). */
+function choseFor(decision: { readonly tier: RouterDecision['tier']; readonly confidence: number | null; readonly reason: string }, jev: TierJudgment | null): RouterChose | null {
+  return choseWhy({ reason: decision.reason, tier: decision.tier, confidence: decision.confidence, ...(jev?.kind === undefined ? {} : { kind: jev.kind }) })
 }
 
 /** Real prompts in the transcript: user messages with text and no tool results. */
@@ -1456,7 +1462,7 @@ async function routeMainStep($: EngineInterface, e: Frozen<TurnStepInput>, mode:
   const next: RouterSticky = { ...chosen, floorWatch: belowCodeFloor(tiers, chosen.model) }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
 
-  const status = routerStatusFor(decision, tiers, mode, await resolveLocale($))
+  const status = routerStatusFor(decision, tiers, mode, await resolveLocale($), choseFor(decision, jev))
   return { input: stickyStepInput(e, next, mode), status }
 }
 
@@ -1557,7 +1563,7 @@ async function routeStepEscalation($: EngineInterface, e: Frozen<TurnStepInput>,
     ...(decision.signal === 'test-loop' ? { testLoop: promptKey } : {}),
   }
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
-  return { input: stickyStepInput(e, next, mode), status: routerStatusFor(decision, tiers, mode, await resolveLocale($)) }
+  return { input: stickyStepInput(e, next, mode), status: routerStatusFor(decision, tiers, mode, await resolveLocale($), choseWhy({ reason: decision.reason, signal: decision.signal, tier: decision.tier, confidence: null })) }
 }
 
 async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'measure' | 'active', options: PluginOptions, sticky: RouterSticky, messages: readonly ActivityMessage[], promptKey: RouterSticky['lastPrompt'], originKind: string | null, project: string | null): Promise<RoutedStep> {
@@ -1617,7 +1623,7 @@ async function routeStage($: EngineInterface, e: Frozen<TurnStepInput>, mode: 'm
   await $.state.set({ plugin: 'orca-jev-mod-skills', key: 'routerSticky' }, next)
 
   const shown = { tier: decision.tier, model: next.model, effort: next.effort, effortTarget: decision.effortTarget, reason: decision.reason, guard: decision.guard, changed: decision.changed, proposed: decision.proposed }
-  const status = decision.tier === null ? null : routerStatusFor(shown, tiers, mode, await resolveLocale($))
+  const status = decision.tier === null ? null : routerStatusFor(shown, tiers, mode, await resolveLocale($), choseFor(decision, jev))
   return { input: stickyStepInput(e, next, mode), status }
 }
 

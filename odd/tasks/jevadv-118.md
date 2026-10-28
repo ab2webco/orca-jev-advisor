@@ -83,7 +83,7 @@ record, so they share one commit.
   Note: G4 stands (owner): the shift happens only at strong economy (>= 95%
   of the tighter window), standard to simple, after a read-only turn; T5 adds
   that the turn's kind must be a confident `read` or `execute`.
-- [ ] T6: RED: the status line names the reason. GREEN. Commit.
+- [x] T6: RED: the status line names the reason. GREEN. Commit.
 - [ ] T7: measurement script and its numbers. Commit. PR 3.
 
 ## Acceptance criteria

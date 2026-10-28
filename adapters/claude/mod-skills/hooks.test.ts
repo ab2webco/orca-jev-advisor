@@ -1674,7 +1674,8 @@ test("router, measure, start: JEVADV-117 -- low confidence on the session's Opus
   const [decision] = routerDecisionLines(host);
   assert.equal(decision?.proposed, "claude-opus-5-5");
   assert.equal(decision?.guard, "low-confidence");
-  assert.equal(host.statusLines.at(-1), "jev · would use: Opus 5.5 · high effort");
+  // JEVADV-118 T6: the line says why it is Opus: Jev was unsure of its "ask".
+  assert.equal(host.statusLines.at(-1), "jev · would use: Opus 5.5 · high effort · raised: Jev unsure (Jev: ask)");
 });
 
 test("router, active, stage: an unsure turn after a failure on the weaker model restores the session's own (F9: low confidence is the guard)", async () => {
@@ -2718,6 +2719,7 @@ test("JEVADV-118 T2 (hook): an edit in the worktree raises the member to Opus 5.
   assert.equal(row?.reason, "escalate");
   assert.equal(row?.signal, "code-edit");
   assert.equal(row?.applied, true);
+  assert.match(host.statusLines.at(-1) ?? "", / · raised: code edited$/, "T6: the line says the code floor raised it");
   const later = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 2, ...OPUS_XHIGH }));
   assert.equal(later.model, "claude-opus-5-5", "it stays raised");
   assert.equal(routerDecisionLines(host).length, 2, "raised once");
@@ -2774,7 +2776,7 @@ test("JEVADV-118 T4 (hook): fail, fix, fail raises Opus 5.5 from high to xhigh o
   assert.equal(row?.reason, "escalate");
   assert.equal(row?.signal, "test-loop");
   assert.equal(row?.applied, true);
-  assert.match(host.statusLines.at(-1) ?? "", /Opus 5\.5 · extra high effort/, "the status line names the raised effort");
+  assert.equal(host.statusLines.at(-1), "jev · model: Opus 5.5 · extra high effort · raised: tests failed twice", "T6: the line names the raise and why");
   const later = await stepThrough(handlers, engine, turnStepEvent({ turnId: "turn-1", index: 2, ...OPUS_HIGH }));
   assert.equal(later.effort, "xhigh", "it stays raised");
   assert.equal(routerDecisionLines(host).length, rows + 1, "raised once");
@@ -2824,6 +2826,21 @@ test("JEVADV-118 T5 (hook, point C): under strong economy a confident read turn 
 
 test("JEVADV-118 T5 (hook, point C): under strong economy an implement turn keeps its tier", async () => {
   assert.equal((await stageUnderStrongEconomy("implement"))?.tier, "standard");
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-118 T6: the status line says who chose the model and why.
+// ---------------------------------------------------------------------------
+
+test("JEVADV-118 T6 (hook, point A): Jev's pick names the work kind; a floored one names the code floor", async () => {
+  for (const [kind, expected] of [["read", "jev · model: Haiku 4.5 · Jev: reading"], ["review", "jev · model: Opus 5.5 · high effort · code floor (Jev: review)"]] as const) {
+    const host = makeFakeHost();
+    seedRouterAccount(host);
+    host.fetchQueue.push(tierKindAnswer("simple", kind));
+    const { handlers, engine } = loadHooksWith(host, { routerMode: "active" });
+    await promptTurn(host, handlers, engine, 1, "where does the router write its log?", OPUS_HIGH);
+    assert.equal(host.statusLines.at(-1), expected, kind);
+  }
 });
 
 // ---------------------------------------------------------------------------

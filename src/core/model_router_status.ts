@@ -13,11 +13,25 @@ import type { Locale } from "./i18n.ts";
 import { MODEL_ROUTER_CATALOG } from "./i18n_model_router.ts";
 import { baseModelId } from "./model_router_accounts.ts";
 import type { RouterTier } from "./model_router_accounts.ts";
+import { floorForWork, raiseForDoubt } from "./model_router_decide.ts";
 import type { RouterEffort, RouterGuard, SessionEffort, StartReason } from "./model_router_decide.ts";
+import type { EscalationSignal } from "./model_router_floor.ts";
 import type { StageReason } from "./model_router_stage.ts";
+import type { WorkKind } from "./work_kind.ts";
 
 /** Why a model was kept: a held decision's own reason, or the guard that held it. */
 export type RouterKeptWhy = "low-confidence" | "break-even" | "hysteresis" | "prices-unknown" | "unknown-savings" | "pointer-prompt" | "context-window" | "orca-pin";
+
+/**
+ * JEVADV-118 T6: who chose a model the router did not keep, and why: Jev,
+ * by the work's kind; the code floor over Jev's tier; a raise on Jev's
+ * doubt; or a signal mid-turn (an edit, a high-risk path, a test-fix loop).
+ */
+export type RouterChose =
+  | { readonly why: "kind"; readonly kind: WorkKind }
+  | { readonly why: "code-floor"; readonly kind: WorkKind }
+  | { readonly why: "doubt" }
+  | { readonly why: EscalationSignal };
 
 export interface RouterStatusInput {
   /** The model's short label ("Sonnet 5"), or its id when it has none. */
@@ -27,6 +41,33 @@ export interface RouterStatusInput {
   readonly tier: RouterTier;
   /** Why the model was kept although Jev's tier picks another (keptWhy); null or absent reads as a plain decision. */
   readonly kept?: RouterKeptWhy | null;
+  /** T6: who chose it and why (choseWhy), shown when nothing kept it; null or absent adds nothing. */
+  readonly chose?: RouterChose | null;
+}
+
+/** The part of a decision choseWhy reads: its reason and signal, Jev's (shifted) tier, confidence and kind. */
+export interface ChoseInput {
+  readonly reason: string;
+  readonly signal?: EscalationSignal;
+  readonly tier: RouterTier | null;
+  readonly confidence: number | null;
+  readonly kind?: WorkKind;
+}
+
+/** T6: the escalation's signal, else the code floor, else a raise on doubt, else Jev's kind; null when none applies. */
+export function choseWhy(input: ChoseInput): RouterChose | null {
+  if (input.reason === "escalate" && input.signal !== undefined) return { why: input.signal };
+  if (input.tier === null) return null;
+  if (input.kind !== undefined && floorForWork(input.tier, input.kind) !== input.tier) return { why: "code-floor", kind: input.kind };
+  if (input.confidence !== null && raiseForDoubt(input.tier, input.confidence) !== input.tier) return { why: "doubt" };
+  return input.kind === undefined ? null : { why: "kind", kind: input.kind };
+}
+
+function choseText(locale: Locale, chose: RouterChose, stage: string): string {
+  if (chose.why === "kind" || chose.why === "code-floor") {
+    return translate(MODEL_ROUTER_CATALOG, locale, `chose.${chose.why}`, { kind: translate(MODEL_ROUTER_CATALOG, locale, `kind.${chose.kind}`) });
+  }
+  return translate(MODEL_ROUTER_CATALOG, locale, `chose.${chose.why}`, { stage });
 }
 
 /** The part of a start or stage decision keptWhy reads. */
@@ -76,12 +117,15 @@ export function routerStatusText(locale: Locale, mode: "measure" | "active", inp
   const stage = translate(MODEL_ROUTER_CATALOG, locale, `stage.${input.tier}`);
   const kept = input.kept ?? null;
   const why = kept === null ? null : translate(MODEL_ROUTER_CATALOG, locale, `why.${kept}`);
+  const chose = why === null && input.chose !== undefined && input.chose !== null ? choseText(locale, input.chose, stage) : null;
   if (input.effort === null) {
     if (why !== null) return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.kept.noEffort" : "status.measure.kept.noEffort", { model: input.label, why, stage });
+    if (chose !== null) return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.chose.noEffort" : "status.measure.chose.noEffort", { model: input.label, why: chose });
     return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.noEffort" : "status.measure.noEffort", { model: input.label });
   }
   const effort = translate(MODEL_ROUTER_CATALOG, locale, `effort.${input.effort}`);
   if (why !== null) return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.kept.effort" : "status.measure.kept.effort", { model: input.label, effort, why, stage });
+  if (chose !== null) return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.chose.effort" : "status.measure.chose.effort", { model: input.label, effort, why: chose });
   return translate(MODEL_ROUTER_CATALOG, locale, mode === "active" ? "status.active.effort" : "status.measure.effort", { model: input.label, effort });
 }
 
