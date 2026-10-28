@@ -177,7 +177,8 @@ test("resolveUserSkillsDir is null when neither CLAUDE_CONFIG_DIR nor home is kn
 // resolveModSkillsSwitches -- T10 (odd/tasks/panel-worker-wakeup.md). Reads
 // <configDir>/mod-skills-config.json the same best-effort way resolveLocale
 // reads the locale mirror: missing file, unreachable home, or a read that
-// throws all fall back to both switches off, never a thrown error.
+// throws all fall back to the defaults (skills measurement, tools off),
+// never a thrown error.
 //
 // EngineInterface is a large host-provided type; this fake only implements
 // the two namespaces resolveModSkillsSwitches (via resolveHomePaths) actually
@@ -209,37 +210,46 @@ function fakeEngine(env: Readonly<Record<string, string>>, files: Readonly<Recor
   };
 }
 
-test("resolveModSkillsSwitches: no home resolvable falls back to both off", async () => {
+test("resolveModSkillsSwitches: no home resolvable falls back to the defaults (tools off)", async () => {
   const engine = fakeEngine({}, {});
   const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
-  assert.deepEqual(result, { active: false, activeTools: false });
+  assert.deepEqual(result, { active: false, toolsMode: "off" });
 });
 
-test("resolveModSkillsSwitches: the file has never been written -- falls back to both off", async () => {
+test("resolveModSkillsSwitches: the file has never been written -- falls back to the defaults (tools off)", async () => {
   const engine = fakeEngine({ HOME: "/home/dev" }, {});
   const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
-  assert.deepEqual(result, { active: false, activeTools: false });
+  assert.deepEqual(result, { active: false, toolsMode: "off" });
 });
 
-test("resolveModSkillsSwitches: reads both switches from a real file", async () => {
+test("resolveModSkillsSwitches: reads a legacy activeTools file as tools active", async () => {
   const engine = fakeEngine(
     { HOME: "/home/dev" },
     { "/home/dev/.config/orca-supervisor/mod-skills-config.json": '{"active":true,"activeTools":true}' },
   );
   const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
-  assert.deepEqual(result, { active: true, activeTools: true });
+  assert.deepEqual(result, { active: true, toolsMode: "active" });
 });
 
-test("resolveModSkillsSwitches: malformed JSON on disk falls back to both off, never throws", async () => {
+test("resolveModSkillsSwitches: reads the three-way toolsMode from a real file", async () => {
+  const engine = fakeEngine(
+    { HOME: "/home/dev" },
+    { "/home/dev/.config/orca-supervisor/mod-skills-config.json": '{"active":false,"toolsMode":"measure"}' },
+  );
+  const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
+  assert.deepEqual(result, { active: false, toolsMode: "measure" });
+});
+
+test("resolveModSkillsSwitches: malformed JSON on disk falls back to the defaults (tools off), never throws", async () => {
   const engine = fakeEngine(
     { HOME: "/home/dev" },
     { "/home/dev/.config/orca-supervisor/mod-skills-config.json": "{not json" },
   );
   const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
-  assert.deepEqual(result, { active: false, activeTools: false });
+  assert.deepEqual(result, { active: false, toolsMode: "off" });
 });
 
-test("resolveModSkillsSwitches: a read that throws falls back to both off, never propagates", async () => {
+test("resolveModSkillsSwitches: a read that throws falls back to the defaults (tools off), never propagates", async () => {
   const engine: FakeEngine = {
     env: { get: async (name: string) => (name === "HOME" ? "/home/dev" : undefined) },
     fs: {
@@ -250,7 +260,7 @@ test("resolveModSkillsSwitches: a read that throws falls back to both off, never
     },
   };
   const result = await resolveModSkillsSwitches(engine as Parameters<typeof resolveModSkillsSwitches>[0]);
-  assert.deepEqual(result, { active: false, activeTools: false });
+  assert.deepEqual(result, { active: false, toolsMode: "off" });
 });
 
 // ---------------------------------------------------------------------------
