@@ -2265,41 +2265,83 @@ async function attendModelRouterStatusRefresh (orca, storageHost, options = {}) 
   await publishModelRouterStatus(orca, storageHost, { ...options, refreshId: request.id })
 }
 
+/** The script that writes each router field, in the order a batch runs them. */
+const MODEL_ROUTER_FIELD_SCRIPTS = [
+  ['mode', 'router-mode-set', (value) => value],
+  ['workKind', 'work-kind-set', (value) => value],
+  ['effort', 'router-effort-set', (value) => JSON.stringify(value)],
+  ['steward', 'steward-set', (value) => JSON.stringify(value)]
+]
+
+/** One target's pending fields as `[field, script, arg]` steps, or null when
+ *  the change is malformed (no target, or no field of the right type). */
+function modelRouterChangeSteps (change) {
+  if (!isRecord(change) || typeof change.target !== 'string') return null
+  const steps = []
+  for (const [field, script, toArg] of MODEL_ROUTER_FIELD_SCRIPTS) {
+    if (!(field in change)) continue
+    const value = change[field]
+    const typed = field === 'mode' || field === 'workKind' ? typeof value === 'string' : isRecord(value)
+    if (!typed) return null
+    steps.push({ target: change.target, field, script, arg: toArg(value) })
+  }
+  return steps.length > 0 ? steps : null
+}
+
 /** Attends one pending "set this target's router mode" request from the
  *  panel, if any -- or, 0.6.2 E3, its per-tier effort (`effort`, an
  *  object the installer validates before anything is written), or, 0.6.16
- *  T2, its work-kind switch (`workKind`). */
+ *  T2, its work-kind switch (`workKind`). A single request sets one field;
+ *  the steward wins over work kind, then effort, then mode, as before.
+ *  odd/tasks/single-save-bar.md T1: `changes` carries every edit the
+ *  panel's one save bar collected. Each field runs in order, a failure does
+ *  not stop the rest, and the result lists every item. */
 async function attendModelRouterConfigRequest (orca, storageHost, options = {}) {
   const request = await storageHost.get(MODEL_ROUTER_CONFIG_REQUEST_KEY)
-  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string' ||
-      typeof request.target !== 'string' || (typeof request.mode !== 'string' && typeof request.workKind !== 'string' && !isRecord(request.effort) && !isRecord(request.steward))) return
+  const isBatch = isRecord(request) && Array.isArray(request.changes)
+  if (!isRecord(request) || typeof request.id !== 'string' || typeof request.at !== 'string') return
+  if (!isBatch && (typeof request.target !== 'string' || (typeof request.mode !== 'string' && typeof request.workKind !== 'string' && !isRecord(request.effort) && !isRecord(request.steward)))) return
 
   await storageHost.delete(MODEL_ROUTER_CONFIG_REQUEST_KEY).catch((error) =>
     orca.log(`model router config request cleanup failed: ${error.message}`))
 
+  const publishResult = (result) => storageHost.set(MODEL_ROUTER_CONFIG_RESULT_KEY, { id: request.id, at: new Date().toISOString(), ...result })
+    .catch((err) => orca.log(`model router config result publish failed: ${err.message}`))
+
   const age = Date.now() - Date.parse(request.at)
   if (!(age >= 0) || age > SECRET_REQUEST_TTL_MS) {
-    await storageHost.set(MODEL_ROUTER_CONFIG_RESULT_KEY, {
-      id: request.id, at: new Date().toISOString(), ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.'
-    }).catch((err) => orca.log(`model router config result publish failed: ${err.message}`))
+    await publishResult({ ok: false, reason: 'expired', detail: 'the request is older than SECRET_REQUEST_TTL_MS and was never attended.' })
     return
   }
 
-  const runScript = options.runScript ?? runClaudeIntegrationScript
-  const result = isRecord(request.steward)
-    ? await runScript('steward-set', [request.target, JSON.stringify(request.steward)])
-    : typeof request.workKind === 'string'
-      ? await runScript('work-kind-set', [request.target, request.workKind])
-      : isRecord(request.effort)
-        ? await runScript('router-effort-set', [request.target, JSON.stringify(request.effort)])
-        : await runScript('router-mode-set', [request.target, request.mode])
-  if (!result.ok) {
-    orca.log(`model router config script (set) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+  let steps
+  if (isBatch) {
+    const perChange = request.changes.map(modelRouterChangeSteps)
+    if (perChange.length === 0 || perChange.some((s) => s === null)) {
+      await publishResult({ ok: false, reason: 'malformed', detail: 'every change needs a target and at least one well-typed field.' })
+      return
+    }
+    steps = perChange.flat()
+  } else {
+    const field = isRecord(request.steward) ? 'steward' : typeof request.workKind === 'string' ? 'workKind' : isRecord(request.effort) ? 'effort' : 'mode'
+    steps = modelRouterChangeSteps({ target: request.target, [field]: request[field] })
   }
 
-  await storageHost.set(MODEL_ROUTER_CONFIG_RESULT_KEY, {
-    id: request.id, at: new Date().toISOString(), ok: result.ok, reason: result.reason ?? null, detail: result.detail ?? null
-  }).catch((err) => orca.log(`model router config result publish failed: ${err.message}`))
+  const runScript = options.runScript ?? runClaudeIntegrationScript
+  const items = []
+  for (const step of steps) {
+    const result = await runScript(step.script, [step.target, step.arg])
+    if (!result.ok) {
+      orca.log(`model router config script (set) failed: ${String(result.reason ?? 'unknown')} -- ${String(result.detail ?? '').slice(0, 160)}`)
+    }
+    items.push({ target: step.target, field: step.field, ok: result.ok === true, reason: result.reason ?? null, detail: result.detail ?? null })
+  }
+
+  if (isBatch) {
+    await publishResult({ ok: items.every((item) => item.ok), reason: null, detail: null, items })
+  } else {
+    await publishResult({ ok: items[0].ok, reason: items[0].reason, detail: items[0].detail })
+  }
 
   await publishModelRouterStatus(orca, storageHost, options)
 }

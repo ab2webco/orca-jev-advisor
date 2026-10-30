@@ -875,6 +875,84 @@ test('attendModelRouterConfigRequest: a malformed request (missing target/mode) 
   assert.equal(await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY), null)
 })
 
+// odd/tasks/single-save-bar.md T1: the panel's one save bar sends every
+// router edit as a single batch, so one slot and one poller serve them all.
+test('attendModelRouterConfigRequest: a batch runs every change in order, reports each, and republishes status once', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: {
+      id: 'mrc-b',
+      at: new Date().toISOString(),
+      changes: [
+        { target: 'home', mode: 'active', workKind: 'measure' },
+        { target: 'acct-2', effort: { simple: 'low', standard: 'medium', complex: 'high', frontier: 'xhigh' }, steward: { mode: 'active', threshold: 150000 } }
+      ]
+    }
+  })
+  const calls = []
+  const runScript = async (mode, extraArgs) => {
+    calls.push([mode, extraArgs])
+    if (mode === 'router-mode-status') return { ok: true, targets: [{ target: 'home', mode: 'active' }] }
+    return { ok: true }
+  }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  assert.deepEqual(calls.map(([mode, args]) => [mode, args[0]]), [
+    ['router-mode-set', 'home'],
+    ['work-kind-set', 'home'],
+    ['router-effort-set', 'acct-2'],
+    ['steward-set', 'acct-2'],
+    ['router-mode-status', undefined]
+  ])
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-b')
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.items.map((item) => [item.target, item.field, item.ok]), [
+    ['home', 'mode', true], ['home', 'workKind', true], ['acct-2', 'effort', true], ['acct-2', 'steward', true]
+  ])
+})
+
+test('attendModelRouterConfigRequest: a batch keeps going past a failed change and reports which one failed', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: {
+      id: 'mrc-bf',
+      at: new Date().toISOString(),
+      changes: [{ target: 'gone', mode: 'active' }, { target: 'home', workKind: 'off' }]
+    }
+  })
+  const calls = []
+  const runScript = async (mode, extraArgs) => {
+    calls.push(mode)
+    if (mode === 'router-mode-set') return { ok: false, reason: 'unknown-target', detail: 'no such target' }
+    return { ok: true, targets: [] }
+  }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  assert.deepEqual(calls, ['router-mode-set', 'work-kind-set', 'router-mode-status'])
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.ok, false)
+  assert.deepEqual(result.items, [
+    { target: 'gone', field: 'mode', ok: false, reason: 'unknown-target', detail: 'no such target' },
+    { target: 'home', field: 'workKind', ok: true, reason: null, detail: null }
+  ])
+})
+
+test('attendModelRouterConfigRequest: a batch with a malformed change runs nothing and says so', async () => {
+  const orca = fakeOrca()
+  const storageHost = fakeStorageHost({
+    modelRouterConfigRequest: {
+      id: 'mrc-bm',
+      at: new Date().toISOString(),
+      changes: [{ target: 'home', mode: 'active' }, { mode: 'active' }]
+    }
+  })
+  const runScript = async () => { throw new Error('must never be called') }
+  await attendModelRouterConfigRequest(orca, storageHost, { runScript })
+  const result = await storageHost.get(MODEL_ROUTER_CONFIG_RESULT_KEY)
+  assert.equal(result.id, 'mrc-bm')
+  assert.equal(result.ok, false)
+  assert.equal(result.reason, 'malformed')
+})
+
 test('publishModelRouterStatus: publishes the targets the script reports', async () => {
   const orca = fakeOrca()
   const storageHost = fakeStorageHost({})
