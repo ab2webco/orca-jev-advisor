@@ -183,6 +183,20 @@
          policy kind is the same class of "needs your attention", not a new
          color of its own. */
       .hint.warn { color: var(--destructive, var(--fb-destructive)); }
+      /* odd/tasks/single-save-bar.md T3: a section shows one short line; its
+         long explanation waits behind this native disclosure, so it opens
+         with Enter or Space and needs no script. Muted and small, like .hint. */
+      details.more { margin: 2px 0 6px; font-size: 11px; }
+      details.more > summary {
+        cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 4px;
+        color: var(--muted-foreground, var(--fb-muted-foreground)); border-radius: 3px; padding: 1px 2px;
+      }
+      details.more > summary::-webkit-details-marker { display: none; }
+      details.more > summary::before { content: '\25B8'; font-size: 9px; opacity: 0.6; transition: transform 0.12s; }
+      details.more[open] > summary::before { transform: rotate(90deg); }
+      details.more > summary:hover { color: var(--foreground, var(--fb-foreground)); }
+      details.more > summary:focus-visible { outline: 2px solid var(--ring, var(--fb-ring)); outline-offset: 1px; }
+      details.more > .hint { margin-top: 4px; }
       /* News, not a failure: the reader's own text colour on the muted
          surface, so it stands out from a plain hint without borrowing the
          destructive red that .hint.warn keeps for things that need fixing. */
@@ -222,6 +236,9 @@
         color: var(--muted-foreground, var(--fb-muted-foreground)); }
       .router-effort td { padding: 4px 8px 4px 0; border-top: 1px solid var(--border, var(--fb-border));
         color: var(--foreground, var(--fb-foreground)); overflow-wrap: anywhere; }
+      /* A stage name ("Implementar") wraps between words only; the model and
+         effort columns give up the width instead. */
+      .router-effort td:first-child { overflow-wrap: normal; word-break: normal; hyphens: manual; }
       .router-effort .actions { margin-top: 8px; }
       /* The context steward: mode, threshold in thousands of tokens, save. */
       .steward-row { align-items: center; margin-bottom: 14px; }
@@ -358,9 +375,13 @@
       -->
       <section id="modules-section">
         <h2 data-i18n="modules.heading"></h2>
-        <p class="hint" data-i18n="modules.intro"></p>
+        <p class="hint" data-i18n="modules.introShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="modules.intro"></p>
+          <p class="hint" data-i18n="modules.costNote"></p>
+        </details>
         <div id="modules-rows"></div>
-        <p class="hint" data-i18n="modules.costNote"></p>
       </section>
 
       <section id="secret-section">
@@ -389,7 +410,11 @@
       -->
       <section id="provider-section" data-state="loading">
         <h2 data-i18n="provider.heading"></h2>
-        <p class="hint" data-i18n="provider.intro"></p>
+        <p class="hint" data-i18n="provider.introShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="provider.intro"></p>
+        </details>
         <p class="hint" id="provider-reading" data-i18n="provider.reading"></p>
         <label id="provider-mode-label" data-i18n="provider.modeLabel"></label>
         <div id="provider-mode" class="mode-buttons" role="group" aria-labelledby="provider-mode-label">
@@ -403,8 +428,12 @@
           <button type="button" data-value="clef-flash">clef-flash</button>
           <button type="button" data-value="clef-omni">clef-omni</button>
         </div>
-        <p class="hint" data-i18n="provider.allowance"></p>
-        <p class="hint" data-i18n="provider.receives"></p>
+        <p class="hint" data-i18n="provider.allowanceShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="provider.allowance"></p>
+          <p class="hint" data-i18n="provider.receives"></p>
+        </details>
         <p id="cloudflare-heading" class="field-heading" data-i18n="provider.cloudflareHeading"></p>
         <div class="sub" id="cloudflare-status" style="padding:0 0 6px"></div>
         <div class="row two">
@@ -423,7 +452,11 @@
 
       <section id="claude-integration-section">
         <h2 data-i18n="integration.heading"></h2>
-        <p class="hint" id="integration-hint"></p>
+        <p class="hint" data-i18n="integration.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" id="integration-hint"></p>
+        </details>
         <ul id="claude-integration-status" style="margin:0; padding-left:18px; font-size:12px; line-height:1.7;"></ul>
         <div class="actions">
           <button id="claude-integration-setup" class="primary" type="button" data-i18n="integration.setup"></button>
@@ -434,7 +467,11 @@
 
       <section id="thresholds-section">
         <h2 data-i18n="thresholds.heading"></h2>
-        <p class="hint" data-i18n="thresholds.ceilingHint"></p>
+        <p class="hint" data-i18n="thresholds.ceilingHintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="thresholds.ceilingHint"></p>
+        </details>
         <div class="row two">
           <div><label for="consequenceCeiling" data-i18n="thresholds.ceilingLabel"></label>
             <output id="consequenceCeiling"></output></div>
@@ -492,7 +529,11 @@
         <h2 data-i18n="teamOwners.heading"></h2>
         <label for="team-owners" data-i18n="teamOwners.label"></label>
         <textarea id="team-owners" rows="4" spellcheck="false" autocomplete="off" data-i18n-placeholder="teamOwners.placeholder"></textarea>
-        <p class="hint" data-i18n="teamOwners.hint"></p>
+        <p class="hint" data-i18n="teamOwners.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="teamOwners.hint"></p>
+        </details>
       </section>
 
       <!--
@@ -510,7 +551,11 @@
           <button type="button" data-value="ask" data-i18n="queueMode.ask"></button>
           <button type="button" data-value="queue" data-i18n="queueMode.queue"></button>
         </div>
-        <p class="hint" data-i18n="queueMode.hint"></p>
+        <p class="hint" data-i18n="queueMode.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="queueMode.hint"></p>
+        </details>
       </section>
       </div>
 
@@ -518,13 +563,21 @@
       <p class="hint info" data-module-note="skill-selection" hidden></p>
       <section id="mod-skills-section" data-module="skill-selection">
         <h2 data-i18n="modSkills.heading"></h2>
-        <p class="hint" id="mod-skills-hint"></p>
+        <p class="hint" data-i18n="modSkills.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" id="mod-skills-hint"></p>
+        </details>
         <p class="hint" id="mod-skills-readiness"></p>
         <div class="checkbox-row">
           <input id="mod-skills-active" type="checkbox" />
           <div class="checkbox-text">
             <span class="checkbox-label" data-i18n="modSkills.activeLabel"></span>
-            <span class="hint" data-i18n="modSkills.activeHint"></span>
+            <span class="hint" data-i18n="modSkills.activeHintShort"></span>
+            <details class="more">
+              <summary data-i18n="more.summary"></summary>
+              <p class="hint" data-i18n="modSkills.activeHint"></p>
+            </details>
           </div>
         </div>
         <label id="mod-skills-tools-mode-label" data-i18n="modSkills.toolsModeLabel"></label>
@@ -533,7 +586,11 @@
           <button type="button" data-value="measure" data-i18n="modSkills.toolsModeMeasure"></button>
           <button type="button" data-value="active" data-i18n="modSkills.toolsModeActive"></button>
         </div>
-        <p class="hint" id="mod-skills-tools-mode-hint" data-i18n="modSkills.toolsModeHint"></p>
+        <p class="hint" id="mod-skills-tools-mode-hint" data-i18n="modSkills.toolsModeHintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="modSkills.toolsModeHint"></p>
+        </details>
         <div class="actions">
           <span class="said" id="mod-skills-said"></span>
         </div>
@@ -551,7 +608,11 @@
       -->
       <section id="models-section" data-module="model-router">
         <h2 data-i18n="models.heading"></h2>
-        <p class="hint" data-i18n="models.hint"></p>
+        <p class="hint" data-i18n="models.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="models.hint"></p>
+        </details>
         <p class="hint" id="models-source-line"><a id="models-source-link" href="https://platform.claude.com/docs/en/about-claude/models/overview" target="_blank" rel="noopener" data-i18n="models.sourceLine"></a></p>
         <p class="hint" id="models-empty-catalog-hint" style="display:none"></p>
         <!--
@@ -610,7 +671,12 @@
           <input id="models-active" type="checkbox" />
           <div class="checkbox-text">
             <span class="checkbox-label" data-i18n="models.activeLabel"></span>
+            <span class="hint" data-i18n="models.activeHintShort"></span>
             <span class="hint" id="models-active-hint"></span>
+            <details class="more">
+              <summary data-i18n="more.summary"></summary>
+              <p class="hint" data-i18n="models.activeHint"></p>
+            </details>
           </div>
         </div>
         <div class="checkbox-row">
@@ -640,9 +706,14 @@
       -->
       <section id="model-router-section" data-module="model-router">
         <h2 data-i18n="modelRouter.heading"></h2>
-        <p class="hint" data-i18n="modelRouter.explanation"></p>
-        <p class="hint" data-i18n="modelRouter.workKindHint"></p>
-        <p class="hint" data-i18n="modelRouter.stewardHint" data-module="steward"></p>
+        <p class="hint" data-i18n="modelRouter.explanationShort"></p>
+        <p class="hint" data-i18n="modelRouter.stewardHintShort" data-module="steward"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="modelRouter.explanation"></p>
+          <p class="hint" data-i18n="modelRouter.workKindHint"></p>
+          <p class="hint" data-i18n="modelRouter.stewardHint" data-module="steward"></p>
+        </details>
         <p class="hint info" data-module-note="steward" hidden></p>
         <div id="model-router-rows"></div>
         <p class="hint" id="model-router-empty" style="display:none" data-i18n="modelRouter.empty"></p>
@@ -663,7 +734,11 @@
           <button type="button" data-value="judge" data-i18n="explicitModels.judge"></button>
           <button type="button" data-value="keep" data-i18n="explicitModels.keep"></button>
         </div>
-        <p class="hint" data-i18n="explicitModels.hint"></p>
+        <p class="hint" data-i18n="explicitModels.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="explicitModels.hint"></p>
+        </details>
       </section>
       </div>
 
@@ -671,7 +746,11 @@
       <p class="hint info" data-module-note="gate" hidden></p>
       <section id="deny-tier-section" data-module="gate">
         <h2 data-i18n="denyTier.heading"></h2>
-        <p class="hint" data-i18n="denyTier.hint"></p>
+        <p class="hint" data-i18n="denyTier.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="denyTier.hint"></p>
+        </details>
         <div id="deny-tier-rows"></div>
         <div class="actions">
           <span class="said" id="deny-tier-said"></span>
@@ -688,7 +767,11 @@
       -->
       <section id="gate-authorizations-section" data-module="gate">
         <h2 data-i18n="gateAuth.heading"></h2>
-        <p class="hint" data-i18n="gateAuth.hint"></p>
+        <p class="hint" data-i18n="gateAuth.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="gateAuth.hint"></p>
+        </details>
         <p class="hint" id="gate-auth-empty" data-i18n="gateAuth.loading"></p>
         <div id="gate-auth-rows"></div>
         <div class="actions">
@@ -705,7 +788,11 @@
       -->
       <section id="trusted-programs-section" data-module="gate">
         <h2 data-i18n="trusted.heading"></h2>
-        <p class="hint" data-i18n="trusted.hint"></p>
+        <p class="hint" data-i18n="trusted.hintShort"></p>
+        <details class="more">
+          <summary data-i18n="more.summary"></summary>
+          <p class="hint" data-i18n="trusted.hint"></p>
+        </details>
         <p class="hint" id="trusted-empty" data-i18n="trusted.loading"></p>
         <ul id="trusted-rows"></ul>
         <label for="trusted-name" data-i18n="trusted.label"></label>
@@ -747,7 +834,8 @@
       // <head> for why this isn't Orca's own contributes.languagePacks.
       var CATALOG = {
         es: {
-          'app.subtitle': 'Configuración del plugin. Todo se guarda a través del host de Orca — nada de esto llama a una URL externa desde este panel.',
+          'app.subtitle': 'Ajustes del plugin, guardados a través de Orca. Este panel nunca llama a una URL externa.',
+          'more.summary': '¿Qué es esto?',
           'tabs.groupLabel': 'Secciones de configuración',
           'tabs.general': 'General',
           'tabs.destinations': 'Destinos',
@@ -757,6 +845,7 @@
           'tabs.rules': 'Reglas',
           'modules.heading': 'Módulos',
           'modules.intro': 'Cada función se puede apagar para que no cueste nada: sin proceso de hook, sin llamadas a Jev y sin trabajo en segundo plano. «Solo medir» registra lo que haría, sin cambiar tus turnos. Lo que elijas vale al instante, sin recargar Claude Code. Una sesión que ya estaba abierta antes de actualizar el plugin conserva su mod anterior hasta que la reinicies.',
+          'modules.introShort': 'Apaga cada función, déjala en «Solo medir» o actívala. El cambio vale al instante.',
           'modules.costNote': 'Las cifras salen de una semana de uso real medido (odd/tasks/feature-modules.md); las tuyas dependen de cómo trabajes. El trabajo en segundo plano cuenta solo lo que el módulo hace por sí solo: los resúmenes que comparten varios módulos siguen mientras alguno esté encendido. Con todos los módulos encendidos son unos 730 procesos de node por hora con un panel abierto y unos 240 sin ninguno abierto.',
           'modules.state.off': 'Apagado',
           'modules.state.shadow': 'Solo medir',
@@ -775,7 +864,9 @@
           'modules.desc.skill-selection': 'Deja que Jev elija la skill y la herramienta de un turno, en vez de que el modelo vea la lista completa.',
           'modules.desc.board': 'Mantiene el tablero: el estado en vivo de tus agentes, por proyecto y rama.',
           'modules.desc.verify-done': 'En los turnos que editaron archivos sin un test que pasara, pregunta a Jev si el mensaje final dice que el trabajo está hecho, y lo registra. Solo mide: no bloquea nada ni cambia ninguna respuesta. A Jev le envía el mensaje final, redactado y recortado, y los conteos del turno; nunca contenidos de archivos ni los comandos o rutas que usó el turno.',
+          'modules.descShort.verify-done': 'Registra si un turno que editó archivos sin un test que pase dice que terminó.',
           'modules.desc.ci-watch': 'Después de un push, de abrir un pull request o de fusionarlo, vigila con gh la ejecución de CI y te avisa aquí cuando termina, con una línea sobre el prompt y un mensaje. En «Solo medir» no le envía nada al agente: solo cuenta las consultas de CI y las esperas largas que el agente hizo mientras tanto. En Activo, además, le avisa al agente una vez, cuando está libre, para que no tenga que consultar.',
+          'modules.descShort.ci-watch': 'Vigila la CI después de un push o un pull request y te avisa cuando termina.',
           'modules.cost.gate': 'En uso: unas {{jev}} llamadas a Jev por prompt y {{hooks}} procesos de hook por cada comando de Bash o edición de archivos (unos {{seconds}} s cada uno).',
           'modules.cost.model-router': 'En uso: unas {{jev}} llamadas a Jev por prompt y, por cada subagente que arranca, {{agentJev}} llamadas a Jev y {{agentHooks}} procesos de hook.',
           'modules.cost.steward': 'En uso: unas {{jev}} llamadas a Jev por prompt.',
@@ -789,7 +880,9 @@
           'modules.weekly.ci-watch.notes': ', avisos enviados {{injected}}',
           'modules.name.memory': 'Memoria',
           'modules.desc.memory': 'Al final de cada turno respondido decide si hay algo que valga la pena recordar y dónde iría: con Engram, Engram lo guarda todo y tu auto-memoria solo los avisos sobre cómo trabajar (feedback) y los datos sobre ti (user); sin Engram, la auto-memoria lo guarda todo. En «Solo medir» no guarda nada en Engram, no juzga conflictos y no escribe archivos de memoria. En activo guarda en Engram cuando Engram está en marcha, y refleja en tu carpeta de auto-memoria las reglas sobre cómo trabajar y los datos sobre ti; sin Engram, o con Engram configurado pero sin responder, escribe en tu carpeta de auto-memoria: cada memoria nueva es un archivo con una línea en MEMORY.md, y antes de reescribir o quitar un archivo lo copia byte a byte en .memory-backup. En este release nunca borra una memoria: una copia de reserva solo se quita cuando Engram ya la tiene. Tu hilo principal sigue guardando como hoy. Cuando tu hilo principal guarda en Engram en un turno, el estado Activo no guarda nada propio en ese turno.',
+          'modules.descShort.memory': 'Al final de cada turno decide si hay algo que valga la pena recordar, y dónde.',
           'modules.cost.memory': 'En uso: una llamada a Haiku por turno respondido. En «Solo medir», en 1 de cada {{every}} turnos que Haiku marca para actualizar, un fork de la sesión redacta la memoria; en activo, cada uno de esos turnos tiene su fork. Las llamadas a Haiku y los forks cuentan contra la cuota de tu plan Max. En «Solo medir», la única llamada a Engram es una comprobación de solo lectura, una vez por sesión; en activo con Engram, cada memoria es un mem_save, y cada conflicto una lectura, una llamada a Haiku y un mem_judge.',
+          'modules.costShort.memory': 'En uso: una llamada a Haiku por turno respondido, más un fork de la sesión en algunos turnos.',
           'modules.memory.sees': 'Haiku ve tu MEMORY.md (hasta 8.000 caracteres) y el último intercambio (hasta 12.000 caracteres, con los secretos redactados y solo el nombre de cada herramienta, nunca su entrada ni su salida). El fork ve la transcripción de esta sesión y las claves de tema de tu memoria, o tus archivos de memoria si no hay Engram. En activo, lo que el fork redacta se guarda en Engram, o en tu carpeta de auto-memoria cuando Engram no está en uso. Para juzgar un conflicto, Haiku ve solo el texto de las dos memorias. El registro guarda conteos y tipos, nunca lo que se guarda.',
           'modules.memory.active.unknown': 'Dónde guarda: todavía no se ha detectado. Lo decide el primer turno respondido.',
           'modules.memory.active.live': 'Dónde guarda: en Engram, que está en marcha ({{signal}}). Cada memoria va a Engram; las reglas sobre cómo trabajar y los datos sobre ti también se reflejan como archivos en tu carpeta de auto-memoria, para que cada sesión los lea. Cuando Engram avisa de un conflicto, Haiku juzga los claros y deja pendientes los demás.',
@@ -844,12 +937,14 @@
           'integration.fileGuardModuleOff': 'Guarda de ediciones (reglas del propio gate): quitada a propósito (el módulo Gate está apagado).',
           'provider.heading': 'Quién decide',
           'provider.intro': 'Jev (TypeSafe) juzga cada comando hoy. Clef (Cloudflare Workers AI) habla el mismo contrato y tiene una cuota gratis diaria. En «Ambos», Clef responde primero y Jev responde cuando Clef duda, ve que podría aplicar una política, falla o se acaba la cuota del día.',
+          'provider.introShort': 'Quién juzga cada comando: Jev, Clef (con cuota gratis diaria) o los dos.',
           'provider.modeLabel': 'Proveedor del gate',
           'provider.modeJev': 'Solo Jev',
           'provider.modeBoth': 'Ambos',
           'provider.modeClef': 'Solo Clef',
           'provider.modelLabel': 'Modelo de Clef',
           'provider.allowance': 'La cuota gratis de 10.000 neuronas al día alcanza, sin políticas, para unas 950 llamadas del gate con clef, 1.500 con clef-omni y 6.000 con clef-flash. Cada política alarga la pregunta: con unas 20, clef llega a unas 245 llamadas al día y clef-omni a unas 390. Clef se detiene en 9.000 neuronas para no facturar nunca, y vuelve a las 00:00 UTC; en «Ambos» Jev responde mientras tanto.',
+          'provider.allowanceShort': 'La cuota gratis diaria de Clef alcanza para cientos de llamadas del gate y nunca cobra.',
           'provider.receives': 'Clef recibe lo mismo que Jev recibe del gate: el comando, con los secretos redactados, y el contexto del repositorio. El enrutador, las skills, las herramientas, la memoria y verify-done siguen siempre con Jev.',
           'provider.cloudflareHeading': 'Credenciales de Cloudflare',
           'provider.accountLabel': 'ID de cuenta',
@@ -889,6 +984,7 @@
           'secret.notConfigured': 'Sin clave configurada.',
           'integration.heading': 'Integración con Claude Code',
           'integration.hint': 'Este plugin escribe ocho cosas fuera de sí mismo para que los hooks y el mod de skills funcionen en Claude Code: entradas en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, una copia del mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), un espejo de las políticas del equipo en JSON legible (no es secreto), un espejo del catálogo de modelos en JSON legible (no es secreto) y el archivo de los módulos encendidos (no es secreto). Nada de esto se hace sin mostrarlo aquí. "Revertir todo" deshace las entradas de hooks, la variable de entorno y la copia del mod de skills; borrar la clave elimina el archivo de la clave; los tres espejos JSON nunca se borran, solo se sobrescriben con su siguiente guardado.',
+          'integration.hintShort': 'Lo que este plugin escribe en Claude Code, y cómo configurarlo o deshacerlo.',
           'integration.checking': 'Comprobando…',
           'integration.statusUnavailable': 'No se pudo leer el estado.',
           'integration.hookInstalled': 'Hook de Bash: puesto, en {{path}}',
@@ -932,7 +1028,8 @@
           'integration.reverted': 'Revertido.',
           'thresholds.heading': 'Techo del gate y tamaño del log',
           'thresholds.ceilingLabel': 'Techo de consecuencia',
-          'thresholds.ceilingHint': 'El techo de consecuencia que aplica la puerta de comandos por defecto. Un destino puede anular este número desde su propia fila en el catálogo, abajo. No es editable aquí: viene de medición, no de preferencia (ver el comentario de GATE_CONSEQUENCE_CEILING en decisions.ts).',
+          'thresholds.ceilingHint': 'El techo de consecuencia que aplica la puerta de comandos por defecto. Un destino puede anular este número desde su propia fila en el catálogo de destinos (pestaña Destinos). No es editable aquí: viene de medición, no de preferencia (ver el comentario de GATE_CONSEQUENCE_CEILING en decisions.ts).',
+          'thresholds.ceilingHintShort': 'El techo de consecuencia por defecto del gate. Sale de la medición, así que no se edita.',
           'thresholds.logMaxEntries': 'Tamaño máximo del log',
           'catalog.heading': 'Catálogo de destinos',
           'catalog.hint': 'Un destino por worktree que este plugin puede llegar a juzgar o enrutar.',
@@ -1003,28 +1100,35 @@
           'explicitModels.judge': 'Juzgarlos',
           'explicitModels.keep': 'Mantenerlos',
           'explicitModels.hint': 'Juzgarlos: con el enrutador en activo, Jev puede bajar ese modelo si la tarea es simple y está seguro. Nunca lo baja si duda, si la tarea es sensible o ya está fallando, y en el repositorio de un cliente nunca por debajo del modelo de la sesión. Mantenerlos: se usa siempre el modelo fijado.',
+          'explicitModels.hintShort': 'Juzgarlos: Jev puede bajar un modelo fijado si la tarea es simple. Mantenerlos: nunca.',
           'queueMode.heading': 'Cuando una persona debe aprobar',
           'queueMode.label': 'Qué hace el agente si una política pide a una persona',
           'queueMode.ask': 'Preguntar ahora',
           'queueMode.queue': 'Dejarlo en espera y seguir',
           'queueMode.hint': 'En espera: la acción no se ejecuta, queda en «Esperándote» en el tablero y el agente sigue con lo demás. Para soltarla, dile al agente en su sesión que la corra de nuevo: en ese momento se te pregunta. Nunca se ejecuta sin ti.',
+          'queueMode.hintShort': 'En espera, la acción queda en el tablero y el agente sigue. Nunca se ejecuta sin ti.',
           'teamOwners.hint': 'Subir una rama de trabajo o abrir un pull request en un repositorio de estos dueños no llega al cliente, así que no se consulta a las políticas que piden a una persona. Fusionar, subir a main, forzar un push y cualquier repositorio fuera de esta lista se siguen consultando. Vacío = todo se decide como hasta ahora.',
+          'teamOwners.hintShort': 'Repositorios de tu equipo: en ellos no se pregunta por subir ramas de trabajo ni abrir PRs.',
           'modSkills.heading': 'Selección de skill y herramienta (experimental)',
           'modSkills.readiness.noData': 'Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.',
           'modSkills.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} prompts comparables. Faltan {{shortfall}}.',
           'modSkills.readiness.rateLow': 'Medición: ya hay {{comparable}} prompts comparables, pero el acierto es {{matchRate}}% y el umbral es {{minMatchRate}}%. Encenderlos ahora aplicaría un criterio que los datos no respaldan.',
           'modSkills.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} prompts comparables con {{matchRate}}% de acierto, contra {{minComparable}} y {{minMatchRate}}%. Ya hay con qué calibrar.',
           'modSkills.readiness.unknown': 'Medición: sin lectura todavía.',
-          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. La skill está en medición y la herramienta Apagada por defecto: activarlas hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). No las actives hasta que la medición alcance su umbral: {{minComparable}} prompts comparables y un acierto de al menos {{minMatchRate}}% frente a lo que el modelo cargó de verdad. La línea de abajo dice cuánto falta.',
+          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. La skill está en medición y la herramienta Apagada por defecto: activarlas hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, en la pestaña General). No las actives hasta que la medición alcance su umbral: {{minComparable}} prompts comparables y un acierto de al menos {{minMatchRate}}% frente a lo que el modelo cargó de verdad. La línea de abajo dice cuánto falta.',
+          'modSkills.hintShort': 'Jev elige la skill o la herramienta de cada turno. No las actives hasta que estén medidas.',
           'modSkills.activeLabel': 'Dejar que Jev elija la skill (modo activo)',
           'modSkills.activeHint': 'Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.',
+          'modSkills.activeHintShort': 'Apagado: solo registra la skill que elegiría Jev. Encendido: el modelo recibe solo esa skill.',
           'modSkills.toolsModeLabel': 'Selección de herramienta',
           'modSkills.toolsModeOff': 'Apagada',
           'modSkills.toolsModeMeasure': 'Medir',
           'modSkills.toolsModeActive': 'Activa',
           'modSkills.toolsModeHint': 'Apagada (por defecto): no consulta a Jev ni registra nada. Medir: registra qué herramienta habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Activa: le sugiere al modelo qué herramienta usar en este turno, sin quitarle ni bloquearle ninguna herramienta.',
+          'modSkills.toolsModeHintShort': 'Apagada: nada. Medir: registra la herramienta que elegiría Jev. Activa: se la sugiere al modelo.',
           'modelRouter.heading': 'Enrutador de modelo de Jev',
           'modelRouter.explanation': 'Modo medir: decide y registra sin cambiar nada. Modo activo: aplica la elección al iniciar la sesión y en cada cambio de etapa. Los cambios se aplican a las sesiones nuevas.',
+          'modelRouter.explanationShort': 'Por cuenta: Medir solo registra qué modelo elegiría; Activo lo aplica en sesiones nuevas.',
           'modelRouter.targetHome': 'Este equipo',
           'modelRouter.targetAccount': 'Cuenta {{id}}',
           'modelRouter.modeOff': 'Apagado',
@@ -1039,6 +1143,7 @@
           'modelRouter.effortLevel': 'Esfuerzo',
           'modelRouter.effortNone': 'no usa esfuerzo',
           'modelRouter.stewardHint': 'Guardián de contexto: al terminar cada turno por encima del umbral, Jev juzga si una tarea acaba de cerrarse. En modo activo compacta la sesión conservando el plan y el trabajo pendiente, y ante un tema nuevo sugiere /clear. Modo medir: solo registra lo que haría. Releer el contexto es la mayor parte del costo de una sesión larga. Al llegar a 600 mil tokens (o al 80% de la ventana del modelo principal, si es menor) compacta siempre. Desde 400 mil compacta salvo que Jev esté seguro de que la tarea sigue a medias; ese tramo tiene su propio interruptor y empieza en medir. Antes de que se enfríe la caché: si una sesión grande queda inactiva casi una hora, la caché del prompt está por vencer y al volver se reescribiría entera al doble de precio; este tramo la compacta mientras la caché sigue tibia, sin pisar la compactación inactiva del propio motor. Tiene su propio interruptor (apagado, medir, activo) y empieza en medir.',
+          'modelRouter.stewardHintShort': 'Guardián de contexto: compacta una sesión larga cuando se cierra una tarea, y conserva el plan.',
           'modelRouter.workKindHint': 'Esfuerzo según el tipo de trabajo: al lanzar un subagente, Jev también juzga qué hará (ejecutar, leer, revisar, implementar o diseñar). En modo activo, los que solo ejecutan o leen van como mucho en alto en Sonnet 5 (nunca muy alto) y en medio en Opus 5.5 y Sonnet 5.5; revisar, implementar y diseñar no cambian. Nunca baja el esfuerzo que fija la definición del agente ni tu máximo, ni con temas sensibles o en el sitio de un cliente. Modo medir: solo registra lo que enviaría.',
           'modelRouter.workKindLabel': 'Tipo de trabajo (subagentes)',
           'modelRouter.stewardLabel': 'Guardián de contexto',
@@ -1058,6 +1163,7 @@
           'modelRouter.effort.max': 'Máximo',
           'denyTier.heading': 'Nivel de bloqueo (deny)',
           'denyTier.hint': 'Estos comandos se le niegan al agente en vez de preguntarte. Preguntar te detiene a ti y espera; negar le dice que no al modelo, que sigue con otra cosa. En el registro de este mismo gate, 3103 preguntas se respondieron que si y 1 que no, y 5 de 16 no se respondieron nunca: la pregunta costaba atencion, no compraba seguridad. Tu nunca estas bloqueado: corre el comando en tu terminal cuando quieras. Desmarcar uno no vuelve la regla silenciosa, la baja a preguntar, nunca a permitir.',
+          'denyTier.hintShort': 'Estos comandos se le niegan al agente en vez de preguntarte. Tú puedes correrlos igual.',
           'denyTier.forcePushLabel': 'Reescribir una rama con force push',
           'denyTier.forcePushHint': 'El agente no lo hace. Rehace historia que otras personas ya pueden tener.',
           'denyTier.pushProtectedLabel': 'Empujar a main, master o production',
@@ -1078,6 +1184,7 @@
           'denyTier.terraformDestroyHint': 'El agente no lo hace. Desmonta recursos reales que otros pueden estar usando.',
           'gateAuth.heading': 'Autorizaciones recordadas',
           'gateAuth.hint': 'Entregas que el agente confirmó después de un aviso, por repositorio. En ese repositorio, subir una rama de trabajo, un pull request o un release pasa sin un aviso nuevo. Cada una vence 30 días después de su último uso. Una política que pregunta o prohíbe, y el nivel de bloqueo de arriba, siempre siguen decidiendo.',
+          'gateAuth.hintShort': 'Entregas que el agente confirmó, por repositorio. Cada una vence a los 30 días sin uso.',
           'gateAuth.empty': 'Aún no hay nada recordado. Cuando el agente confirma la misma línea de entrega después de un aviso, queda recordada aquí para ese repositorio.',
           'gateAuth.unreadable': 'No se pudieron leer las autorizaciones recordadas. Vuelve a abrir este panel en un momento.',
           'gateAuth.lastUsed': 'Último uso: {{when}}',
@@ -1095,6 +1202,7 @@
           'gateAuth.class.release-create': 'Crear un release',
           'trusted.heading': 'Programas de confianza',
           'trusted.hint': 'Programas tuyos que el gate deja pasar sin consultar a Jev: una línea que empieza con uno de ellos pasa si lo demás es solo lectura o trabajo local. Escribe solo el nombre del programa (por ejemplo, el de una herramienta tuya). Una política que pregunta o prohíbe, y el nivel de bloqueo de arriba, siempre siguen decidiendo. Nada se agrega solo.',
+          'trusted.hintShort': 'Programas tuyos que el gate deja pasar sin consultar a Jev cuando el resto de la línea solo lee.',
           'trusted.empty': 'No confías en ningún programa todavía. Si agregas uno, los comandos que empiezan con él pasan sin preguntar a Jev, y ese programa puede enviar mensajes o cambiar cosas fuera de esta máquina. Agrega solo programas tuyos que conozcas.',
           'trusted.loading': 'Leyendo los programas de confianza…',
           'trusted.label': 'Nombre del programa',
@@ -1160,6 +1268,7 @@
           // for models-section's own script tag, at the end of the body.
           'models.heading': 'Catálogo de modelos',
           'models.hint': 'Esta escalera es el conjunto de modelos disponibles para el enrutador de Jev: solo elige entre los marcados como disponibles. El interruptor del enrutador de cada cuenta (apagado, medir o activo), más abajo, decide si solo mide o si también actúa. El esfuerzo que pide cada etapa se ajusta en la tabla de cada cuenta.',
+          'models.hintShort': 'Los modelos entre los que elige el enrutador. Solo usa los marcados como disponibles.',
           'models.sourceLine': 'Datos de los modelos tomados de la documentación de modelos de Anthropic',
           'models.emptyCatalog': 'El catálogo está vacío: por ahora cada llamada a una subtarea pasa sin cambios. Usa el formulario de abajo para agregar un modelo.',
           'models.emptyCatalogUnseeded': 'El catálogo está vacío porque los modelos del plugin ({{models}}) todavía no se cargaron: se cargan cuando arranca su proceso de fondo (el worker). Si no aparecen después de reiniciar Orca, el registro del plugin debería decir «model catalog seed planted» o «initial model seeding failed». Mientras tanto, cada llamada a una subtarea pasa sin cambios.',
@@ -1185,9 +1294,10 @@
           'models.add': '+ Agregar modelo',
           'models.addMissingFields': 'Completa id, etiqueta, provider y agentModel.',
           'models.addDuplicateId': 'Ya existe un modelo con ese id.',
-          'models.added': 'Agregado, sin clasificar y no disponible — ajústalo abajo y guarda la escalera.',
+          'models.added': 'Agregado, sin clasificar y no disponible — ajústalo abajo y guarda con la barra inferior.',
           'models.activeLabel': 'Interruptor heredado: el gancho clásico de subtareas, para cuentas con el enrutador apagado',
           'models.activeHint': 'Es el interruptor anterior al enrutador y solo actúa donde el enrutador no está activo; donde el enrutador está activo, el gancho clásico se hace a un lado. Apagado: solo mide. Encendido: reescribe el modelo únicamente cuando la medición ya alcanzó su umbral de listo, Jev está seguro y no está de acuerdo con lo pedido, y la sesión corre en modo bypassPermissions; en cualquier otro caso solo mide, sin cambiar nada.',
+          'models.activeHintShort': 'El gancho clásico, anterior al enrutador. Solo actúa donde el enrutador no está activo.',
           'models.readiness.noData': 'Medición: todavía sin decisiones comparables.',
           'models.readiness.shortfall': 'Medición: {{comparable}} de {{minComparable}} decisiones comparables. Faltan {{shortfall}}.',
           'models.readiness.rateLow': 'Medición: ya hay {{comparable}} decisiones comparables, pero el acierto es {{matchRate}}%, por debajo del umbral. Encender esto ahora aplicaría un criterio que los datos no respaldan.',
@@ -1206,7 +1316,7 @@
           'models.seedNoticeDismissing': 'Descartando…',
           'models.seedNoticeDismissed': 'Descartado. No se cambió ningún modelo.',
           'models.seedNoticeNoneChosen': 'No marcaste ninguno, así que no se cambió nada.',
-          'models.seedNoticeDirtyBlocked': 'Tienes cambios sin guardar en la escalera. Guarda la escalera o descarta tus cambios antes de aplicar la base.',
+          'models.seedNoticeDirtyBlocked': 'Tienes cambios sin guardar en la escalera. Guárdalos con la barra inferior o descártalos antes de aplicar la base.',
           'models.seedNoticeDiscardEdits': 'Descartar mis cambios',
           'models.seedNoticeEditsDiscarded': 'Descartado: la escalera se recargó desde el almacenamiento.',
           'models.measurementsHeading': 'Medición',
@@ -1227,7 +1337,8 @@
           'integration.fileGuardNotInstalled': 'Guarda de ediciones (reglas del propio gate): no puesta.',
         },
         en: {
-          'app.subtitle': "Plugin settings. Everything is saved through Orca's own host — none of this calls an external URL from this panel.",
+          'app.subtitle': 'Plugin settings, saved through Orca. This panel never calls an external URL.',
+          'more.summary': 'What is this?',
           'tabs.groupLabel': 'Configuration sections',
           'tabs.general': 'General',
           'tabs.destinations': 'Destinations',
@@ -1237,6 +1348,7 @@
           'tabs.rules': 'Rules',
           'modules.heading': 'Modules',
           'modules.intro': 'Each feature can be switched off so it costs nothing: no hook process, no Jev call and no background work. Shadow lets it measure and log what it would do, without changing your turns. A choice takes effect at once, with no Claude Code reload. A session that was already open before the plugin updated keeps its old mod until you restart it.',
+          'modules.introShort': 'Turn each feature off, to Shadow (measure only) or to Active. A change applies at once.',
           'modules.costNote': 'Figures come from one week of measured real use (odd/tasks/feature-modules.md); yours depend on how you work. Background counts only the work a module does on its own: summaries several modules share keep running while any of them is on. With every module on, that is about 730 node processes an hour while a panel is open and about 240 with none open.',
           'modules.state.off': 'Off',
           'modules.state.shadow': 'Shadow',
@@ -1255,7 +1367,9 @@
           'modules.desc.skill-selection': 'Lets Jev pick the skill and the tool for a turn, instead of the model seeing the full list.',
           'modules.desc.board': 'Keeps the board: the live status of your agents, by project and branch.',
           'modules.desc.verify-done': 'On turns that edited files with no test passing, asks Jev whether its final message says the work is done, and logs it. It only measures: it blocks nothing and changes no answer. Jev gets the final message, redacted and cut, and the turn\'s counts; never file contents, nor the commands or paths the turn used.',
+          'modules.descShort.verify-done': 'Logs whether a turn that edited files with no passing test says the work is done.',
           'modules.desc.ci-watch': 'After a push, a pull request or a merge, watches the CI run with gh and tells you here when it ends, with a line above the prompt and a message. In Shadow it sends nothing to the agent: it only counts the CI checks and long sleeps the agent made meanwhile. In Active it also tells the agent once, when it is idle, so it does not have to poll.',
+          'modules.descShort.ci-watch': 'Watches CI after a push or a pull request and tells you when it ends.',
           'modules.cost.gate': 'In use: about {{jev}} Jev calls per prompt, and {{hooks}} hook processes per Bash command or file edit (about {{seconds}} s each).',
           'modules.cost.model-router': 'In use: about {{jev}} Jev calls per prompt and, for every subagent started, {{agentJev}} Jev calls and {{agentHooks}} hook processes.',
           'modules.cost.steward': 'In use: about {{jev}} Jev calls per prompt.',
@@ -1269,7 +1383,9 @@
           'modules.weekly.ci-watch.notes': ', notes sent {{injected}}',
           'modules.name.memory': 'Memory',
           'modules.desc.memory': 'At the end of each answered turn, decides whether anything is worth remembering and where it would go: with Engram, Engram holds everything and your auto-memory keeps only the rules for how to work (feedback) and the facts about you (user); without Engram, auto-memory holds everything. In Shadow it only measures: it saves nothing to Engram, judges no conflict and writes no memory file. Active saves to Engram when Engram is live, and mirrors the rules for how to work and the facts about you into your auto-memory folder; with no Engram, or Engram configured but not answering, it writes into your auto-memory folder: each new memory is a file with one line in MEMORY.md, and a file it rewrites or removes is first copied byte for byte to .memory-backup. It never deletes a memory in this release: a fallback copy is removed only once Engram has it. Your main thread keeps saving as it does today. When your main thread saves to Engram in a turn, Active saves nothing of its own for that turn.',
+          'modules.descShort.memory': 'At the end of each turn, decides whether anything is worth remembering, and where.',
           'modules.cost.memory': 'In use: one Haiku call per answered turn. In Shadow, on 1 in {{every}} turns Haiku marks for an update, one fork of the session drafts the memory; in Active, every such turn gets its fork. Haiku calls and forks count against your Max plan quota. In Shadow the only Engram call is a read-only check, once a session; in Active with Engram, each memory is one mem_save, and each conflict one read, one Haiku call and one mem_judge.',
+          'modules.costShort.memory': 'In use: one Haiku call per answered turn, plus a fork of the session on some turns.',
           'modules.memory.sees': 'Haiku sees your MEMORY.md (up to 8,000 characters) and the last exchange (up to 12,000 characters, secrets redacted, only the name of each tool, never its input or output). The fork sees this session\'s own transcript and your memory topic keys, or your memory files when there is no Engram. In Active, what the fork drafts is saved to Engram, or written into your auto-memory folder when Engram is not in use. To judge a conflict, Haiku sees only the two memories\' text. The log keeps counts and types, never what is saved.',
           'modules.memory.active.unknown': 'Where it saves: not detected yet. The first answered turn decides it.',
           'modules.memory.active.live': 'Where it saves: Engram, which is live ({{signal}}). Every memory goes to Engram; rules for how to work and facts about you are also mirrored as files in your auto-memory folder, so every session reads them. When Engram reports a conflict, Haiku judges the clear ones and leaves the rest pending.',
@@ -1324,12 +1440,14 @@
           'integration.fileGuardModuleOff': "Edit guard (the gate's own rules): removed on purpose (the Gate module is off).",
           'provider.heading': 'Decision provider',
           'provider.intro': 'Jev (TypeSafe) judges every command today. Clef (Cloudflare Workers AI) speaks the same contract and has a free daily allowance. In Both, Clef answers first and Jev answers when Clef is in doubt, sees a possible policy hit, fails, or the day\u2019s allowance is spent.',
+          'provider.introShort': 'Who judges each command: Jev, Clef (with a free daily allowance) or both.',
           'provider.modeLabel': 'Gate provider',
           'provider.modeJev': 'Jev only',
           'provider.modeBoth': 'Both',
           'provider.modeClef': 'Clef only',
           'provider.modelLabel': 'Clef model',
           'provider.allowance': 'Without policies, the free 10,000 neurons a day cover about 950 gate calls with clef, 1,500 with clef-omni and 6,000 with clef-flash. Each policy lengthens the question: with about 20, clef reaches about 245 calls a day and clef-omni about 390. Clef stops at 9,000 neurons so it never bills, and comes back at 00:00 UTC; in Both, Jev answers meanwhile.',
+          'provider.allowanceShort': "Clef's free daily allowance covers hundreds of gate calls, and it never bills.",
           'provider.receives': 'Clef receives what Jev receives from the gate: the command, with secrets redacted, and the repository context. The router, skills, tools, memory and verify-done always stay on Jev.',
           'provider.cloudflareHeading': 'Cloudflare credentials',
           'provider.accountLabel': 'Account ID',
@@ -1369,6 +1487,7 @@
           'secret.notConfigured': 'No key configured.',
           'integration.heading': 'Claude Code integration',
           'integration.hint': "This plugin writes eight things outside itself so the hooks and the skills mod work in Claude Code: entries in <code>~/.claude/settings.json</code>, an environment variable in that same file, a plain-text file holding the key with restricted permissions, a copy of the skills mod, a human-readable JSON mirror of the destination catalog (not secret), a human-readable JSON mirror of the team policies (not secret), a human-readable JSON mirror of the model catalog (not secret), and the file saying which modules are on (not secret). None of this happens without showing it here. \"Revert everything\" puts back the hook entries, the environment variable and the skills-mod copy; clearing the key deletes the key file; the three JSON mirrors are never deleted, only overwritten by their own next save.",
+          'integration.hintShort': 'What this plugin writes into Claude Code, and how to set it up or undo it.',
           'integration.checking': 'Checking…',
           'integration.statusUnavailable': 'Could not read the status.',
           'integration.hookInstalled': 'Bash hook: installed, at {{path}}',
@@ -1412,12 +1531,13 @@
           'integration.reverted': 'Reverted.',
           'thresholds.heading': 'Gate ceiling & log size',
           'thresholds.ceilingLabel': 'Consequence ceiling',
-          'thresholds.ceilingHint': "The consequence ceiling the command gate applies by default. A destination can override this number from its own row in the catalog below. Not editable here: it comes from measurement, not preference (see GATE_CONSEQUENCE_CEILING's own comment in decisions.ts).",
+          'thresholds.ceilingHint': "The consequence ceiling the command gate applies by default. A destination can override this number from its own row in the destination catalog (Destinations tab). Not editable here: it comes from measurement, not preference (see GATE_CONSEQUENCE_CEILING's own comment in decisions.ts).",
+          'thresholds.ceilingHintShort': "The gate's default consequence ceiling. It comes from measurement, so it is read-only.",
           'thresholds.logMaxEntries': 'Maximum log size',
           'catalog.heading': 'Destination catalog',
           'catalog.hint': 'One destination per worktree this plugin may judge or route.',
           'catalog.refresh': 'Search Orca',
-          'catalog.refreshHint': "Looks for repositories Orca already knows that your catalog doesn't -- never adds anything by itself; what it finds appears in the list above.",
+          'catalog.refreshHint': "Looks for repositories Orca already knows that your catalog doesn't. It never adds anything by itself; what it finds appears in the list above.",
           'catalog.refreshing': 'Searching…',
           'catalog.refreshFound': '{{count}} new destination(s) to propose, below.',
           'catalog.refreshNone': 'No repositories to propose.',
@@ -1483,28 +1603,35 @@
           'explicitModels.judge': 'Judge them',
           'explicitModels.keep': 'Keep them',
           'explicitModels.hint': 'Judge them: with the router active, Jev may lower that model when the task is simple and it is sure. It never lowers it when unsure, when the work is sensitive or already failing, and in a client repository never below the session model. Keep them: the fixed model is always used.',
+          'explicitModels.hintShort': 'Judge them: Jev may lower a fixed model on simple work. Keep them: it never does.',
           'queueMode.heading': 'When a person must approve',
           'queueMode.label': 'What the agent does when a policy needs a person',
           'queueMode.ask': 'Ask now',
           'queueMode.queue': 'Queue it and carry on',
           'queueMode.hint': 'Queued: the action does not run, it waits under “Waiting for you” on the board, and the agent carries on with the rest. To release it, tell the agent in its session to run it again: you are asked at that moment. It never runs without you.',
+          'queueMode.hintShort': 'Queued, the action waits on the board and the agent carries on. It never runs without you.',
           'teamOwners.hint': 'Pushing a work branch or opening a pull request in a repository these owners hold never reaches a client, so policies that need a person are not asked about it. Merging, pushing to main, force pushes and any repository outside this list are still asked. Empty = everything is decided as it is today.',
+          'teamOwners.hintShort': 'Repositories your team owns: pushing work branches or opening PRs there is not asked about.',
           'modSkills.heading': 'Skill & tool selection (experimental)',
           'modSkills.readiness.noData': 'Measurement: no comparable prompts yet. One counts when Jev suggested a skill AND the skill the model loaded was observed.',
           'modSkills.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable prompts. {{shortfall}} to go.',
           'modSkills.readiness.rateLow': 'Measurement: {{comparable}} comparable prompts already, but the match rate is {{matchRate}}% against a threshold of {{minMatchRate}}%. Turning these on now would apply a criterion the data does not support.',
           'modSkills.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
           'modSkills.readiness.unknown': 'Measurement: nothing read yet.',
-          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Skills start in measurement and tools start Off: making either active today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both short of active until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
+          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Skills start in measurement and tools start Off: making either active today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, on the General tab). Leave both short of active until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
+          'modSkills.hintShort': 'Jev picks the skill or the tool for each turn. Leave both short of active until measured.',
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
           'modSkills.activeHint': "Off (today): only records which skill Jev would have picked, in a local log; nothing the model sees changes. On: withholds the skill listing from the model and injects the winning skill's own instructions instead.",
+          'modSkills.activeHintShort': 'Off: only logs the skill Jev would pick. On: the model gets only that skill.',
           'modSkills.toolsModeLabel': 'Tool selection',
           'modSkills.toolsModeOff': 'Off',
           'modSkills.toolsModeMeasure': 'Measure',
           'modSkills.toolsModeActive': 'Active',
           'modSkills.toolsModeHint': 'Off (default): asks Jev nothing and records nothing. Measure: records which tool Jev would have picked, in a local log; nothing the model sees changes. Active: advises the model which tool to use for this turn, without removing or blocking any tool.',
+          'modSkills.toolsModeHintShort': 'Off: nothing. Measure: logs the tool Jev would pick. Active: suggests it to the model.',
           'modelRouter.heading': 'Jev model router',
           'modelRouter.explanation': 'Measure mode: decides and logs without changing anything. Active mode: applies the choice at session start and at every stage change. Changes apply to new sessions.',
+          'modelRouter.explanationShort': 'Per account: Measure only logs the model it would pick; Active applies it to new sessions.',
           'modelRouter.targetHome': 'This computer',
           'modelRouter.targetAccount': 'Account {{id}}',
           'modelRouter.modeOff': 'Off',
@@ -1519,6 +1646,7 @@
           'modelRouter.effortLevel': 'Effort',
           'modelRouter.effortNone': 'takes no effort',
           'modelRouter.stewardHint': 'Context steward: at the end of each turn above the threshold, Jev judges whether a task just closed. In active mode it compacts the session, keeping the plan and the pending work, and on a new topic it suggests /clear. Measure mode only logs what it would do. Re-reading the context is most of what a long session costs. At 600 thousand tokens (or 80% of the main model\'s window, if smaller) it always compacts. From 400 thousand it compacts unless Jev is sure the task is still half done; that tier has its own switch and starts in measure. Before the cache goes cold: when a large session sits idle for almost an hour, its prompt cache is about to expire and a return would rewrite all of it at twice the price; this tier compacts it while the cache is still warm, never racing the engine\'s own idle compaction. It has its own switch (off, measure, active) and starts in measure.',
+          'modelRouter.stewardHintShort': 'Context steward: compacts a long session once a task closes, keeping the plan.',
           'modelRouter.workKindHint': 'Effort by work kind: when a subagent is spawned, Jev also judges what it will do (execute, read, review, implement or design). In active mode, runs that only execute or read go at high at most on Sonnet 5 (never extra high) and at medium on Opus 5.5 and Sonnet 5.5; review, implement and design are unchanged. It never goes below the effort an agent definition sets or your own max, nor on sensitive topics or in a client\'s site. Measure mode only logs what it would send.',
           'modelRouter.workKindLabel': 'Work kind (subagents)',
           'modelRouter.stewardLabel': 'Context steward',
@@ -1538,6 +1666,7 @@
           'modelRouter.effort.max': 'Max',
           'denyTier.heading': 'Deny tier',
           'denyTier.hint': "These commands are refused to the agent rather than asked about. An ask stops you and waits; a refusal tells the model no and it carries on with something else. Across this gate's own log, 3103 questions were answered yes and 1 no, and 5 of 16 were never answered at all — the question was costing attention, not buying safety. You are never blocked: run the command yourself in a terminal whenever you mean to. Unchecking one never makes a rule silent — it drops to asking, never to allowing.",
+          'denyTier.hintShort': 'These commands are refused to the agent instead of asking you. You can still run them.',
           'denyTier.forcePushLabel': 'Force-push a branch',
           'denyTier.forcePushHint': 'The agent will not. It rewrites history other people may already have.',
           'denyTier.pushProtectedLabel': 'Push to main, master or production',
@@ -1558,6 +1687,7 @@
           'denyTier.terraformDestroyHint': 'The agent will not. It tears down real resources other people may be using.',
           'gateAuth.heading': 'Remembered authorizations',
           'gateAuth.hint': 'Deliveries the agent confirmed after an advice, per repository. In that repository, pushing a feature branch, a pull request or a release goes through without a new advice. Each one lapses 30 days after its last use. A policy that asks or forbids, and the deny tier above, still always decide.',
+          'gateAuth.hintShort': 'Deliveries the agent confirmed, per repository. Each lapses 30 days after its last use.',
           'gateAuth.empty': 'Nothing remembered yet. When the agent confirms the same delivery line after an advice, it is remembered here for that repository.',
           'gateAuth.unreadable': 'The remembered authorizations could not be read. Open this panel again in a moment.',
           'gateAuth.lastUsed': 'Last used: {{when}}',
@@ -1575,6 +1705,7 @@
           'gateAuth.class.release-create': 'Create a release',
           'trusted.heading': 'Trusted programs',
           'trusted.hint': 'Programs of your own that the gate lets through without asking Jev: a line that starts with one passes when everything else in it only reads or does local work. Type only the program name (for example, one of your own tools). A policy that asks or forbids, and the deny tier above, still always decide. Nothing is ever added on its own.',
+          'trusted.hintShort': 'Your own programs the gate lets through without asking Jev when the rest of the line only reads.',
           'trusted.empty': 'You trust no program yet. If you add one, commands that start with it pass without asking Jev, and that program can send messages or change things outside this machine. Add only programs of your own that you know.',
           'trusted.loading': 'Reading the trusted programs…',
           'trusted.label': 'Program name',
@@ -1640,6 +1771,7 @@
           // for models-section's own script tag, at the end of the body.
           'models.heading': 'Model catalog',
           'models.hint': "This ladder is the set of models available to the router: Jev only picks among the ones marked available. Each account's router switch (off, measure or active), further down, decides whether it only measures or also acts. The effort each tier asks for is set in each account's table.",
+          'models.hintShort': 'The models the router may pick from. It only uses the ones marked available.',
           'models.sourceLine': "Model data from Anthropic's models documentation",
           'models.emptyCatalog': 'The catalog is empty, so every subagent call passes through unchanged for now. Use the form below to add a model.',
           'models.emptyCatalogUnseeded': 'The catalog is empty because the plugin\'s models ({{models}}) have not been loaded yet: they load when its background process (the worker) starts. If they do not appear after restarting Orca, the plugin log should say "model catalog seed planted" or "initial model seeding failed". Until then, every subagent call passes through unchanged.',
@@ -1665,9 +1797,10 @@
           'models.add': '+ Add model',
           'models.addMissingFields': 'Fill in id, label, provider and agentModel.',
           'models.addDuplicateId': 'A model with that id already exists.',
-          'models.added': 'Added, unranked and not available — adjust it below and save the ladder.',
+          'models.added': 'Added, unranked and not available — adjust it below and save with the bar at the bottom.',
           'models.activeLabel': 'Legacy switch: the classic subagent hook, for accounts where the router is off',
           'models.activeHint': "The switch from before the router. It only acts where the router is not active; where the router is active, the classic hook steps aside. Off: measures only. On: rewrites the model only when measurement has reached its readiness threshold, Jev is confident and disagrees with what was requested, and the session runs in bypassPermissions; any other case only measures, changing nothing.",
+          'models.activeHintShort': 'The classic hook from before the router. It only acts where the router is not active.',
           'models.readiness.noData': 'Measurement: no comparable decisions yet.',
           'models.readiness.shortfall': 'Measurement: {{comparable}} of {{minComparable}} comparable decisions. {{shortfall}} to go.',
           'models.readiness.rateLow': 'Measurement: {{comparable}} comparable decisions already, but the match rate is {{matchRate}}%, below the threshold. Turning this on now would apply a criterion the data does not support.',
@@ -1686,7 +1819,7 @@
           'models.seedNoticeDismissing': 'Dismissing…',
           'models.seedNoticeDismissed': 'Dismissed. No model was changed.',
           'models.seedNoticeNoneChosen': 'Nothing was ticked, so nothing changed.',
-          'models.seedNoticeDirtyBlocked': 'You have unsaved ladder edits. Save the ladder or discard your edits before applying the baseline.',
+          'models.seedNoticeDirtyBlocked': 'You have unsaved ladder edits. Save them with the bar at the bottom or discard them before applying the baseline.',
           'models.seedNoticeDiscardEdits': 'Discard my edits',
           'models.seedNoticeEditsDiscarded': 'Discarded: the ladder was reloaded from storage.',
           'models.measurementsHeading': 'Measurement',
@@ -4848,10 +4981,17 @@
         return currentLocale === 'es' ? text.replace('.', ',') : text
       }
 
-      function moduleCostText (row) {
+      // odd/tasks/single-save-bar.md T3: these cards show one short line for
+      // what the module does (and memory one for its cost); the full text,
+      // and what memory's Haiku sees, sit behind the card's "What is this?".
+      var MODULE_SHORT_TEXT = ['verify-done', 'ci-watch', 'memory']
+      var MODULE_SHORT_COST = ['memory']
+
+      function moduleCostText (row, full) {
         var params = {}
         Object.keys(row.cost).forEach(function (key) { params[key] = formatFigure(row.cost[key]) })
-        return t('modules.cost.' + row.id, params)
+        var short = !full && MODULE_SHORT_COST.indexOf(row.id) !== -1
+        return t((short ? 'modules.costShort.' : 'modules.cost.') + row.id, params)
       }
 
       function moduleBackgroundText (row) {
@@ -4890,13 +5030,26 @@
             line.setAttribute('data-module-' + part, row.id)
             card.appendChild(line)
           })
+          var more = null
+          if (MODULE_SHORT_TEXT.indexOf(row.id) !== -1) {
+            more = elMake('details', 'more')
+            more.setAttribute('data-module-more', row.id)
+            more.appendChild(elMake('summary'))
+            ;['descfull', 'costfull'].forEach(function (part) {
+              if (part === 'costfull' && MODULE_SHORT_COST.indexOf(row.id) === -1) return
+              var line = elMake('p', 'hint module-' + part)
+              line.setAttribute('data-module-' + part, row.id)
+              more.appendChild(line)
+            })
+          }
           if (row.id === 'memory') {
             ;['sees', 'backend', 'week', 'writes', 'engram', 'pending'].forEach(function (part) {
               var line = elMake('p', 'hint module-memory-' + part)
               line.setAttribute('data-module-memory', part)
-              card.appendChild(line)
+              ;(part === 'sees' ? more : card).appendChild(line)
             })
           }
+          if (more !== null) card.appendChild(more)
           if (row.id === 'gate') {
             var warn = elMake('p', 'hint warn module-warn')
             warn.setAttribute('data-module-warn', row.id)
@@ -5054,8 +5207,14 @@
           if (info === null || row.states.indexOf(info.state) === -1) { known = false; info = null }
           states[row.id] = info ? info.state : null
           moduleQuery('name', row.id).textContent = t('modules.name.' + row.id)
-          moduleQuery('desc', row.id).textContent = t('modules.desc.' + row.id)
-          moduleQuery('cost', row.id).textContent = moduleCostText(row)
+          var shortText = MODULE_SHORT_TEXT.indexOf(row.id) !== -1
+          moduleQuery('desc', row.id).textContent = t((shortText ? 'modules.descShort.' : 'modules.desc.') + row.id)
+          moduleQuery('cost', row.id).textContent = moduleCostText(row, false)
+          if (shortText) {
+            moduleQuery('more', row.id).querySelector('summary').textContent = t('more.summary')
+            moduleQuery('descfull', row.id).textContent = t('modules.desc.' + row.id)
+            if (MODULE_SHORT_COST.indexOf(row.id) !== -1) moduleQuery('costfull', row.id).textContent = moduleCostText(row, true)
+          }
           if (row.id === 'ci-watch') moduleQuery('weekly', row.id).textContent = ciWatchWeeklyText(measurements)
           moduleQuery('background', row.id).textContent = moduleBackgroundText(row)
           moduleQuery('install', row.id).textContent = status === null ? t(integrationReadFailed ? 'modules.install.readFailed' : 'modules.install.reading') : moduleInstallText(row.id, info, status)
@@ -5884,15 +6043,15 @@
 
       // ---------- active mode switch ---------------------------------------
 
-      /** The hint's base sentence plus the live readiness line -- a null
+      /** The live readiness line under the switch's short hint -- a null
        *  matchRate/summary is never rendered as a 0%, exactly like
        *  renderModSkillsReadiness above. */
       function modelsRenderActiveHint (measurements) {
         var hintEl = el('models-active-hint')
         var summary = measurements && measurements.ok ? measurements.summary : null
         var readiness = summary ? summary.readiness : null
-        var base = t('models.activeHint')
-        if (!readiness) { hintEl.textContent = base + ' ' + t('models.readiness.unknown'); modelsReadinessLine = t('models.readiness.unknown'); return }
+        // The explanation itself is a short line and a disclosure in the markup; this is the live readiness.
+        if (!readiness) { hintEl.textContent = t('models.readiness.unknown'); modelsReadinessLine = t('models.readiness.unknown'); return }
         var comparable = summary.comparable || 0
         var params = {
           minComparable: String(MODELS_READINESS_FALLBACK.minComparable),
@@ -5905,7 +6064,7 @@
         else if (readiness.reason === 'ready') line = t('models.readiness.ready', params)
         else if (readiness.reason === 'match-rate-too-low') line = t('models.readiness.rateLow', params)
         else line = t('models.readiness.shortfall', params)
-        hintEl.textContent = base + ' ' + line
+        hintEl.textContent = line
         modelsReadinessLine = readiness.reason === 'ready' ? null : line
       }
 

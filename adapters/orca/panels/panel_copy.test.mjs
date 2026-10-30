@@ -11,13 +11,13 @@ import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PANELS = ['config.html', 'board.html']
-const TRANSLATION_LINE = /^\s+'([A-Za-z0-9_.]+)':\s*'(.*)',?\s*$/
+const TRANSLATION_LINE = /^\s+'([A-Za-z0-9_.-]+)':\s*(['"])(.*)\2,?\s*$/
 
 function translationValues (file) {
   const values = []
   for (const line of readFileSync(join(HERE, file), 'utf8').split('\n')) {
     const match = TRANSLATION_LINE.exec(line)
-    if (match) values.push({ key: match[1], value: match[2] })
+    if (match) values.push({ key: match[1], value: match[3] })
   }
   return values
 }
@@ -80,6 +80,10 @@ const NEW_ROUTER_KEYS_BY_FILE = {
 // odd/tasks/single-save-bar.md T2: the per-row Save buttons are gone, and with
 // them 'modelRouter.save'; the one bar's own keys take the same parity check.
 NEW_ROUTER_KEYS_BY_FILE['config.html'].push('save.barClean', 'save.barDirty', 'save.discard', 'save.discarded', 'save.skippedModuleOff', 'save.notSaved', 'save.routerStale', 'catalog.proposalsDirtyBlocked', 'policies.importDirtyBlocked')
+
+// odd/tasks/single-save-bar.md T3: each long hint's one short line, and the
+// shared "What is this?" that opens the full text.
+NEW_ROUTER_KEYS_BY_FILE['config.html'].push('more.summary', 'modules.introShort', 'modules.descShort.verify-done', 'modules.descShort.ci-watch', 'modules.descShort.memory', 'modules.costShort.memory', 'provider.introShort', 'provider.allowanceShort', 'integration.hintShort', 'thresholds.ceilingHintShort', 'teamOwners.hintShort', 'queueMode.hintShort', 'explicitModels.hintShort', 'modSkills.hintShort', 'modSkills.activeHintShort', 'modSkills.toolsModeHintShort', 'modelRouter.explanationShort', 'modelRouter.stewardHintShort', 'denyTier.hintShort', 'gateAuth.hintShort', 'trusted.hintShort', 'models.hintShort', 'models.activeHintShort')
 
 // Track R (odd/tasks/router-cold-switch.md): the router card's cold-switch line.
 NEW_ROUTER_KEYS_BY_FILE['board.html'].push('consumption.modelRouterColdSwitches')

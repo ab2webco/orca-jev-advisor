@@ -414,6 +414,16 @@ async function openPanel (storage, locale = 'en', colorScheme = 'light', viewpor
   return { browser: context, page, errors }
 }
 
+/** A section's text on screen, plus what waits behind its "What is this?"
+ *  disclosures (odd/tasks/single-save-bar.md T3): innerText skips a closed
+ *  <details>, and the full explanation is still the panel's to show. */
+async function sectionText (page, selector) {
+  return page.evaluate((sel) => {
+    const section = document.querySelector(sel)
+    return [section.innerText, ...Array.from(section.querySelectorAll('details.more')).map((more) => more.textContent)].join('\n')
+  }, selector)
+}
+
 /** Same host simulation as openPanel, but with `window.localStorage`
  *  replaced by a getter that throws -- JEVADV-41's tab memory must not be
  *  able to break the panel on a machine where storage access itself throws
@@ -3938,7 +3948,7 @@ test('steward: each account shows the context steward mode and threshold next to
     })
     assert.deepEqual(rows.map((r) => [r.target, r.mode, r.threshold]), [['home', 'measure', '120'], ['11112222-3333-4444-5555-666677778888', 'active', '150']])
     assert.match(rows[0].text, /Context steward/)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /compact/i)
     assert.match(hint, /\/clear/)
   } finally {
@@ -3977,7 +3987,7 @@ test('steward: the 400k soft tier shows its own switch, measure by default, and 
     }))
     assert.deepEqual(soft.map((s) => s.pressed), ['measure', 'active'])
     assert.match(soft[0].text, /400k/)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /600/)
     assert.match(hint, /400/)
     await page.evaluate(() => document.querySelector('[data-steward-target="home"] [data-steward-soft] button[data-value="active"]').click())
@@ -4019,7 +4029,7 @@ test('0.6.16 T2: each account shows its work-kind switch, and saving sends only 
     }))
     assert.deepEqual(rows.map((r) => [r.target, r.pressed]), [['home', 'measure'], ['11112222-3333-4444-5555-666677778888', 'active']])
     assert.match(rows[0].text, /work kind/i)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /Sonnet 5/)
     await page.click('[data-work-kind-target="home"] button[data-value="active"]')
     await page.click('#save-all')
@@ -4061,7 +4071,8 @@ test('0.6.2: the Models intro says what the ladder, the switch and the table do,
     const { browser, page } = await openPanel(SCENARIOS.ready, locale)
     try {
       await page.click('#tab-models')
-      const intro = await page.evaluate(() => document.querySelector('#models-section .hint').innerText)
+      // single-save-bar T3: the intro is now one short line; its full text waits behind "What is this?".
+      const intro = await page.evaluate(() => document.querySelector('#models-section details.more .hint').textContent)
       for (const word of words) assert.match(intro, word, `${locale}: ${intro}`)
       assert.doesNotMatch(intro, / -- /)
       if (locale === 'es') assert.match(intro, /[áéíóú]/, 'Spanish copy keeps its accents')
@@ -4075,7 +4086,7 @@ test('0.6.2: the classic hook\'s checkbox is labelled as the legacy switch, not 
   const { browser, page } = await openPanel(SCENARIOS.ready)
   try {
     await page.click('#tab-models')
-    const text = await page.evaluate(() => document.getElementById('models-section').innerText)
+    const text = await sectionText(page, '#models-section')
     assert.doesNotMatch(text, /Let Jev rewrite the model \(active mode\)/)
     assert.match(text, /Legacy switch/)
     assert.match(text, /router is active/)
@@ -5523,7 +5534,8 @@ async function moduleCards (page) {
       pressed: buttons.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.value),
       labels: buttons.map((b) => b.textContent),
       disabled: buttons.map((b) => b.disabled),
-      text: card.innerText
+      // What is on screen, plus what waits behind the card's "What is this?" (single-save-bar T3).
+      text: [card.innerText, ...Array.from(card.querySelectorAll('details.more')).map((more) => more.textContent)].join('\n')
     }
   }))
 }
@@ -6178,7 +6190,7 @@ test('steward: the pre-cold switch shows off, measure and active, measure by def
     assert.deepEqual(cold.map((c) => c.pressed), ['measure', 'active'])
     assert.deepEqual(cold[0].values, ['off', 'measure', 'active'])
     assert.match(cold[0].text, /cache/i)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /idle/i)
     await page.evaluate(() => document.querySelector('[data-steward-target="home"] [data-steward-cold] button[data-value="off"]').click())
     await page.click('#save-all')
@@ -6430,3 +6442,108 @@ test('one save bar: adding proposed destinations or importing policies is refuse
     await browser.close()
   }
 })
+
+// ---------------------------------------------------------------------------
+// odd/tasks/single-save-bar.md T3: the owner found the long paragraphs did
+// not help ("esos párrafos de texto no ayudan"). Each section shows one short
+// line; the full text stays, collapsed behind a "What is this?" disclosure.
+// ---------------------------------------------------------------------------
+
+const HINT_BUDGET = 180
+const CONFIG_TABS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+// Live readouts, not explanations: their length is the figures they carry.
+const HINT_READOUTS = '[data-module-memory="week"]'
+
+/** Every visible hint-like line on the current tab longer than `budget`, outside a disclosure. */
+async function longVisibleHints (page, budget) {
+  return page.evaluate(([limit, readouts]) => Array.from(document.querySelectorAll('.hint, p.sub'))
+    .filter((node) => node.getClientRects().length > 0 && node.closest('details') === null && !node.matches(readouts))
+    .map((node) => ({ name: node.id || node.getAttribute('data-i18n') || node.className, length: node.textContent.trim().length }))
+    .filter((hint) => hint.length > limit), [budget, HINT_READOUTS])
+}
+
+for (const locale of ['en', 'es']) {
+  test(`config (${locale}): no always-visible hint on any tab runs past ${HINT_BUDGET} characters`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    for (const scenario of ['ready', 'router-ready']) {
+      const { browser, page, errors } = await openPanel(SCENARIOS[scenario], locale)
+      try {
+        const offenders = []
+        for (const tab of CONFIG_TABS) {
+          await page.click(`#tab-${tab}`)
+          for (const hint of await longVisibleHints(page, HINT_BUDGET)) offenders.push(`${scenario}/${tab}/${hint.name}: ${hint.length}`)
+        }
+        assert.deepEqual(offenders, [])
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    }
+  })
+
+  test(`config (${locale}): each long explanation sits collapsed behind "What is this?", with its full text`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel(SCENARIOS['router-ready'], locale)
+    try {
+      const found = await page.evaluate(() => {
+        const catalog = window.CATALOG[document.documentElement.lang]
+        return {
+          summary: catalog['more.summary'],
+          disclosures: Array.from(document.querySelectorAll('details.more')).map((node) => ({
+            open: node.open,
+            summary: node.querySelector('summary').textContent,
+            keys: Array.from(node.querySelectorAll('[data-i18n]')).map((child) => child.getAttribute('data-i18n')),
+            full: Array.from(node.querySelectorAll('[data-i18n]')).every((child) => child.textContent === catalog[child.getAttribute('data-i18n')] || child.innerHTML === catalog[child.getAttribute('data-i18n')])
+          })),
+          stewardShort: document.querySelector('[data-i18n="modelRouter.stewardHintShort"]')?.textContent ?? null,
+          modSkills: document.getElementById('mod-skills-hint')?.closest('details.more') !== null
+        }
+      })
+      assert.ok(typeof found.summary === 'string' && found.summary.length > 0)
+      assert.equal(found.summary, locale === 'es' ? '¿Qué es esto?' : 'What is this?')
+      assert.ok(found.disclosures.length >= 10, `expected the long texts behind disclosures, found ${found.disclosures.length}`)
+      for (const disclosure of found.disclosures) {
+        assert.equal(disclosure.open, false, `${disclosure.keys.join(',')} starts collapsed`)
+        assert.equal(disclosure.summary, found.summary)
+        assert.ok(disclosure.full, `${disclosure.keys.join(',')} carries its full text`)
+      }
+      const keys = found.disclosures.flatMap((disclosure) => disclosure.keys)
+      for (const key of ['modelRouter.stewardHint', 'modelRouter.workKindHint', 'models.hint', 'denyTier.hint', 'modules.intro']) assert.ok(keys.includes(key), `${key} is behind a disclosure`)
+      assert.ok(found.stewardShort && found.stewardShort.length <= 120, 'the guardian keeps one short line in view')
+      assert.ok(found.modSkills, 'the skills mod explanation is behind a disclosure')
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+
+  test(`config (${locale}): at 320px the router stage labels wrap between words, never inside one`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel(SCENARIOS['router-ready'], locale, 'light', { width: 320, height: 900 })
+    try {
+      await page.click('#tab-models')
+      const result = await page.evaluate(() => {
+        const broken = []
+        const cells = Array.from(document.querySelectorAll('[data-model-router-effort-table] tbody tr td:first-child'))
+        for (const cell of cells) {
+          const text = cell.firstChild
+          if (!text || text.nodeType !== Node.TEXT_NODE) continue
+          const value = text.textContent
+          let at = 0
+          for (const word of value.split(' ')) {
+            const range = document.createRange()
+            range.setStart(text, at)
+            range.setEnd(text, at + word.length)
+            const lines = new Set(Array.from(range.getClientRects()).map((rect) => Math.round(rect.top)))
+            if (lines.size > 1) broken.push(word)
+            at += word.length + 1
+          }
+        }
+        return { cells: cells.length, broken, scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }
+      })
+      assert.ok(result.cells > 0, 'the router-ready scenario renders effort tables')
+      assert.deepEqual(result.broken, [])
+      assert.ok(result.scroll <= result.client, `${result.scroll}px in ${result.client}px`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
