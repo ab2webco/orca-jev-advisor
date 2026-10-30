@@ -28,7 +28,7 @@ The config panel has a separate Save button per section and, on the Models tab, 
 - [x] T1 worker batch request, additive
 - [x] T2 one bar, dirty tracking, ordered saves, per-row buttons gone, tests moved to `#save-all`
 - [x] T3 short hints with disclosure, es/en
-- [ ] T4 docs, CHANGELOG, shots looked at
+- [x] T4 docs, CHANGELOG, shots looked at (config tabs, es and en, 1440, 768, 390, 320, both themes)
 
 ## Acceptance criteria
 - Strict TDD: RED observed before each GREEN.

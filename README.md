@@ -591,6 +591,13 @@ for this release.
 
 ## Configuring it
 
+**Saving.** Change as much as you like across every tab and account,
+then press the one save bar at the bottom ("Save changes (N)"); Discard
+puts back the last values read. If any field is invalid, nothing is
+written. The Jev key and Cloudflare credentials keep their own buttons,
+and a module switch on General applies at once. Each section shows one
+line; "What is this?" opens the full explanation.
+
 **Destinations.** Not every repository deserves the same freedom. A
 destination is a worktree plus how certain the plugin must be before it
 acts there: your own tooling can be judged loosely, a client's production
