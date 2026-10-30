@@ -2,6 +2,12 @@
 
 Every release of Jev Advisor, newest first.
 
+## Unreleased (next release)
+
+- **Tool selection can be turned off, and starts off** (`odd/tasks/tool-selection-off.md`, `src/core/mod_skills_config.ts`). A week of measurement (`odd/qa/native-runtime-verification.md`) found the advised tool matched the first tool used in 27.2% of 1,984 decisions, against 69.2% for always guessing Bash. The `activeTools` boolean only offered measurement or active, and both called Jev on every sampled prompt.
+  - **Three modes.** The tool switch is now `toolsMode` in `mod-skills-config.json`: Off, Measure or Active, chosen in the config panel's Skill & tool selection tab. Off makes no Jev call, injects nothing, writes no decision row and observes no tool call. Skill selection is unaffected.
+  - **Your earlier choice is kept.** A file that still holds the legacy `activeTools` keeps it: `true` reads as Active, `false` as Measure. With neither field the mode is Off. A boolean `activeTools` in Claude Code's plugin options still takes precedence, mapped the same way.
+
 ## 0.13.12
 
 - **An Orca member's model is judged from its brief, not held by the pointer guard** (JEVADV-118, #105, `src/core/brief_task.ts`). Every Orca member starts with "Read your Orca Lab brief at .orca/briefs/ctx_….md … and follow it.", which the pointer guard read as a pointer, so it held the launch model for 206 of 231 member sessions (2026-10-20 to 2026-10-27). A read-only disk audit ran on Opus 5.5 · high.

@@ -271,7 +271,8 @@ export const FEATURE_MODULES: readonly FeatureModule[] = [
     ],
     modes: [
       { name: "active (skills)", values: ["measurement", "active"], defaultValue: "measurement", store: "<configDir>/mod-skills-config.json .active", shadowValue: "measurement" },
-      { name: "activeTools (tools)", values: ["measurement", "active"], defaultValue: "measurement", store: "<configDir>/mod-skills-config.json .activeTools", shadowValue: "measurement" },
+      // Three-way since odd/tasks/tool-selection-off.md, and off by default: a legacy `.activeTools` boolean is read when `.toolsMode` is absent (true active, false measure).
+      { name: "toolsMode (tools, legacy activeTools)", values: ["off", "measure", "active"], defaultValue: "off", store: "<configDir>/mod-skills-config.json .toolsMode", shadowValue: "measure" },
     ],
   },
   {
@@ -444,7 +445,7 @@ export function effectiveMode(state: ModuleState, own: FeatureMode): FeatureMode
   return own;
 }
 
-/** A boolean on/active switch (the skills mod's `active`/`activeTools`, the legacy model switch) on the FeatureMode scale: off means measurement, not off. */
+/** A boolean on/active switch (the skills mod's `active`, the legacy model switch) on the FeatureMode scale: off means measurement, not off. */
 export function switchMode(active: boolean): "measure" | "active" {
   return active ? "active" : "measure";
 }

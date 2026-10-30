@@ -520,13 +520,13 @@
             <span class="hint" data-i18n="modSkills.activeHint"></span>
           </div>
         </div>
-        <div class="checkbox-row">
-          <input id="mod-skills-active-tools" type="checkbox" />
-          <div class="checkbox-text">
-            <span class="checkbox-label" data-i18n="modSkills.activeToolsLabel"></span>
-            <span class="hint" data-i18n="modSkills.activeToolsHint"></span>
-          </div>
+        <label id="mod-skills-tools-mode-label" data-i18n="modSkills.toolsModeLabel"></label>
+        <div id="mod-skills-tools-mode" class="mode-buttons" role="group" aria-labelledby="mod-skills-tools-mode-label">
+          <button type="button" data-value="off" data-i18n="modSkills.toolsModeOff"></button>
+          <button type="button" data-value="measure" data-i18n="modSkills.toolsModeMeasure"></button>
+          <button type="button" data-value="active" data-i18n="modSkills.toolsModeActive"></button>
         </div>
+        <p class="hint" id="mod-skills-tools-mode-hint" data-i18n="modSkills.toolsModeHint"></p>
         <div class="actions">
           <button id="save-mod-skills" type="button" data-i18n="modSkills.save"></button>
           <span class="said" id="mod-skills-said"></span>
@@ -1004,11 +1004,14 @@
           'modSkills.readiness.rateLow': 'Medición: ya hay {{comparable}} prompts comparables, pero el acierto es {{matchRate}}% y el umbral es {{minMatchRate}}%. Encenderlos ahora aplicaría un criterio que los datos no respaldan.',
           'modSkills.readiness.ready': 'Medición: umbral alcanzado — {{comparable}} prompts comparables con {{matchRate}}% de acierto, contra {{minComparable}} y {{minMatchRate}}%. Ya hay con qué calibrar.',
           'modSkills.readiness.unknown': 'Medición: sin lectura todavía.',
-          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. Los dos interruptores de abajo están apagados por defecto: encenderlos hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). Déjalos apagados hasta que la medición alcance su umbral: {{minComparable}} prompts comparables y un acierto de al menos {{minMatchRate}}% frente a lo que el modelo cargó de verdad. La línea de abajo dice cuánto falta.',
+          'modSkills.hint': 'Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. La skill está en medición y la herramienta Apagada por defecto: activarlas hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, más arriba). No las actives hasta que la medición alcance su umbral: {{minComparable}} prompts comparables y un acierto de al menos {{minMatchRate}}% frente a lo que el modelo cargó de verdad. La línea de abajo dice cuánto falta.',
           'modSkills.activeLabel': 'Dejar que Jev elija la skill (modo activo)',
           'modSkills.activeHint': 'Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.',
-          'modSkills.activeToolsLabel': 'Dejar que Jev elija la herramienta (modo activo)',
-          'modSkills.activeToolsHint': 'Apagado (hoy): solo registra qué herramienta habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: le sugiere al modelo qué herramienta usar en este turno, sin quitarle ni bloquearle ninguna herramienta.',
+          'modSkills.toolsModeLabel': 'Selección de herramienta',
+          'modSkills.toolsModeOff': 'Apagada',
+          'modSkills.toolsModeMeasure': 'Medir',
+          'modSkills.toolsModeActive': 'Activa',
+          'modSkills.toolsModeHint': 'Apagada (por defecto): no consulta a Jev ni registra nada. Medir: registra qué herramienta habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Activa: le sugiere al modelo qué herramienta usar en este turno, sin quitarle ni bloquearle ninguna herramienta.',
           'modSkills.save': 'Guardar selección',
           'modSkills.saving': 'Guardando…',
           'modSkills.saved': 'Guardado.',
@@ -1489,11 +1492,14 @@
           'modSkills.readiness.rateLow': 'Measurement: {{comparable}} comparable prompts already, but the match rate is {{matchRate}}% against a threshold of {{minMatchRate}}%. Turning these on now would apply a criterion the data does not support.',
           'modSkills.readiness.ready': 'Measurement: threshold reached — {{comparable}} comparable prompts at {{matchRate}}%, against {{minComparable}} and {{minMatchRate}}%. There is now something to calibrate from.',
           'modSkills.readiness.unknown': 'Measurement: nothing read yet.',
-          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Both switches below are off by default: turning either on today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both off until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
+          'modSkills.hint': "Jev can choose which skill or tool to use on each turn, instead of the model seeing the full list. Skills start in measurement and tools start Off: making either active today would mean applying a decision threshold nobody has measured yet, the same mistake this plugin already made once with the gate's consequence ceiling (see Gate ceiling & log size, above). Leave both short of active until measurement reaches its threshold: {{minComparable}} comparable prompts and a match rate of at least {{minMatchRate}}% against what the model actually loaded. The line below says how far off that is.",
           'modSkills.activeLabel': 'Let Jev choose the skill (active mode)',
           'modSkills.activeHint': "Off (today): only records which skill Jev would have picked, in a local log; nothing the model sees changes. On: withholds the skill listing from the model and injects the winning skill's own instructions instead.",
-          'modSkills.activeToolsLabel': 'Let Jev choose the tool (active mode)',
-          'modSkills.activeToolsHint': 'Off (today): only records which tool Jev would have picked, in a local log; nothing the model sees changes. On: advises the model which tool to use for this turn, without removing or blocking any tool.',
+          'modSkills.toolsModeLabel': 'Tool selection',
+          'modSkills.toolsModeOff': 'Off',
+          'modSkills.toolsModeMeasure': 'Measure',
+          'modSkills.toolsModeActive': 'Active',
+          'modSkills.toolsModeHint': 'Off (default): asks Jev nothing and records nothing. Measure: records which tool Jev would have picked, in a local log; nothing the model sees changes. Active: advises the model which tool to use for this turn, without removing or blocking any tool.',
           'modSkills.save': 'Save selection settings',
           'modSkills.saving': 'Saving…',
           'modSkills.saved': 'Saved.',
@@ -2464,9 +2470,9 @@
         })
       }
 
-      function sendModSkillsConfigRequest (active, activeTools) {
+      function sendModSkillsConfigRequest (active, toolsMode) {
         var requestId = 'mod-skills-config-' + Date.now() + '-' + Math.random().toString(36).slice(2)
-        var request = { id: requestId, at: new Date().toISOString(), active: active, activeTools: activeTools }
+        var request = { id: requestId, at: new Date().toISOString(), active: active, toolsMode: toolsMode }
         signalPanelOpen()
         return write(MOD_SKILLS_CONFIG_REQUEST_KEY, request).then(function (r) {
           if (!r || !r.ok) throw shownError(t('common.couldNotSend'))
@@ -3461,9 +3467,17 @@
         lineEl.textContent = t('modSkills.readiness.shortfall', params)
       }
 
+      // Tool selection's three-way mode (odd/tasks/tool-selection-off.md):
+      // anything but one of the three reads as Off, the default
+      // src/core/mod_skills_config.ts applies.
+      var TOOLS_MODES = ['off', 'measure', 'active']
+      var modSkillsToolsModeEl = el('mod-skills-tools-mode')
+      wireButtonGroup(modSkillsToolsModeEl)
+
       function fillModSkillsStatus (status) {
         el('mod-skills-active').checked = !!(status && status.active === true)
-        el('mod-skills-active-tools').checked = !!(status && status.activeTools === true)
+        var toolsMode = status && TOOLS_MODES.indexOf(status.toolsMode) !== -1 ? status.toolsMode : 'off'
+        setPressedValue(modSkillsToolsModeEl, toolsMode)
       }
 
       var modSkillsSaidEl = el('mod-skills-said')
@@ -3471,8 +3485,8 @@
         if (refuseUnreadSection('modSkills', modSkillsSaidEl)) return
         said(modSkillsSaidEl, t('modSkills.saving'))
         var active = el('mod-skills-active').checked
-        var activeTools = el('mod-skills-active-tools').checked
-        sendModSkillsConfigRequest(active, activeTools).then(function () {
+        var toolsMode = pressedValue(modSkillsToolsModeEl, 'off')
+        sendModSkillsConfigRequest(active, toolsMode).then(function () {
           said(modSkillsSaidEl, t('modSkills.saved'))
         }).catch(function (error) {
           said(modSkillsSaidEl, errorText(error), true)
@@ -4453,7 +4467,8 @@
         // `modCopy exists:false` across all four config roots while
         // mod-skills-config.json read `active:true, activeTools:true`, and
         // mod-skills-measurements.jsonl had never been created at all.
-        var switchedOn = !!(modSkillsStatus && (modSkillsStatus.active === true || modSkillsStatus.activeTools === true))
+        // Tools count as on only in `active`, as `activeTools: true` did.
+        var switchedOn = !!(modSkillsStatus && (modSkillsStatus.active === true || modSkillsStatus.toolsMode === 'active'))
         if (!modCopy || !modCopy.exists) {
           return switchedOn ? t('integration.modOnButMissing') : t('integration.modNotInstalled')
         }
@@ -5003,7 +5018,7 @@
       defineSection('teamOwners', 'teamOwners', 'save.whichTeamOwners', function () { return el('team-owners').previousElementSibling }, fillTeamOwners, function () { return [el('team-owners')] })
       defineSection('queueMode', 'queueMode', 'save.whichQueueMode', function () { return el('queue-mode-label') }, fillQueueMode, function () { return groupButtons('queue-mode') })
       defineSection('explicitModels', 'explicitModels', 'save.whichExplicitModels', function () { return el('explicit-models-label') }, fillExplicitModels, function () { return groupButtons('explicit-models') })
-      defineSection('modSkills', MOD_SKILLS_STATUS_KEY, 'modSkills.heading', function () { return el('save-mod-skills').parentNode }, fillModSkillsStatus, function () { return [el('mod-skills-active'), el('mod-skills-active-tools')] })
+      defineSection('modSkills', MOD_SKILLS_STATUS_KEY, 'modSkills.heading', function () { return el('save-mod-skills').parentNode }, fillModSkillsStatus, function () { return [el('mod-skills-active')].concat(groupButtons('mod-skills-tools-mode')) })
       defineSection('denyTier', DENY_TIER_STATUS_KEY, 'denyTier.heading', function () { return el('deny-tier-rows') }, fillDenyTierStatus, function () { return Array.from(el('deny-tier-rows').querySelectorAll('input')) })
       // Not written from the page, only shown: the hint says when the state could not be read.
       defineSection('modules', CLAUDE_INTEGRATION_STATUS_KEY, null, function () { return el('modules-rows') }, function () {})

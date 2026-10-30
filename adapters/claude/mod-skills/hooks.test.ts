@@ -355,7 +355,8 @@ async function attachmentNext(e: unknown): Promise<{ text: string }> {
   return { text: (e as { text: string }).text };
 }
 
-function seedModSkillsConfig(host: FakeHost, switches: { active: boolean; activeTools: boolean }): void {
+/** The switches file as written: `toolsMode` today, or the legacy `activeTools` boolean an older panel wrote (odd/tasks/tool-selection-off.md). */
+function seedModSkillsConfig(host: FakeHost, switches: { active: boolean; activeTools?: boolean; toolsMode?: "off" | "measure" | "active" }): void {
   host.files.set(`${CONFIG_DIR}/mod-skills-config.json`, JSON.stringify(switches));
 }
 
@@ -881,6 +882,119 @@ test("the reverse: skill measurement + tool active, both run independently in th
   const toolRecord = lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH);
   assert.equal(toolRecord.mode, "active");
   assert.equal((toolRecord.decision as { name: string | null }).name, "Bash");
+});
+
+// ---------------------------------------------------------------------------
+// odd/tasks/tool-selection-off.md, T2: tool selection's own `off` mode. The
+// tool path makes no Jev call, injects nothing, writes no decision row, and
+// observes no tool call; skill selection runs exactly as before.
+// ---------------------------------------------------------------------------
+
+/** Skill path (active): both stages, Jev picks graft-helper. */
+const SKILL_ACTIVE_PICK = (): unknown[] => [
+  jevResponse({
+    which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+    skill_needed: { type: "noul", noul: 0.8 },
+  }),
+  jevResponse({
+    which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 },
+    "fits::graft-helper": { type: "noul", noul: 0.9 },
+  }),
+];
+
+/** Tool path (active): both stages, Jev picks Bash. */
+const TOOL_ACTIVE_PICK = (): unknown[] => [
+  jevResponse({
+    which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.9 }, confidence: 0.9 },
+    needsOneTool: { type: "noul", noul: 0.8 },
+  }),
+  jevResponse({
+    which: { type: "choice", choice: "Bash", probabilities: { Bash: 0.95 }, confidence: 0.9 },
+    "fits::Bash": { type: "noul", noul: 0.9 },
+  }),
+];
+
+for (const [label, switches] of [
+  ["toolsMode off", { active: true, toolsMode: "off" }],
+  ["neither tool field (the default)", { active: true }],
+] as const) {
+  test(`tools ${label}: zero tool Jev calls, no tool row, nothing injected, while skill selection still runs`, async () => {
+    const host = makeFakeHost();
+    seedModSkillsConfig(host, switches);
+    seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+    seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+    host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+    const { handlers, engine } = loadHooks(host);
+    host.fetchQueue.push(...SKILL_ACTIVE_PICK(), ...TOOL_ACTIVE_PICK());
+
+    const captured = await submitPromptCapture(handlers, engine, "run the build");
+    const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+    await toolCallThrough(handlers, engine, "Bash", { command: "npm run build" }, { result: "ok" });
+
+    assert.equal(host.fetchCalls.length, 2, "only the skill path's two calls: the tool path asked Jev nothing");
+    assert.equal(host.fetchQueue.length, 2, "the tool path's answers were never consumed");
+    assert.equal(host.files.has(TOOL_MEASUREMENTS_PATH), false, "no tool decision row and no tool observation row");
+    assert.equal((captured.context ?? []).some((block) => block.includes("<tool_relevance>")), false, "no tool advice injected");
+    assert.ok((captured.context ?? []).some((block) => block.includes("<skill_relevance>")), "skill selection still injects its pick");
+    assert.equal(attachment.text, null, "skill selection still withholds the listing for its pick");
+    assert.equal(lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH).mode, "active");
+  });
+}
+
+test("toolsMode measure: the tool path records a measurement-mode decision and injects nothing", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, toolsMode: "measure" });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+  host.fetchQueue.push(...TOOL_ACTIVE_PICK());
+
+  const captured = await submitPromptCapture(handlers, engine, "run the build");
+
+  assert.equal(host.fetchCalls.length, 2);
+  assert.equal(lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH).mode, "measurement");
+  assert.equal(captured.context, undefined, "measure never injects");
+});
+
+test("toolsMode active: the tool path injects its pick as advice", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, toolsMode: "active" });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooks(host);
+  host.fetchQueue.push(...TOOL_ACTIVE_PICK());
+
+  const captured = await submitPromptCapture(handlers, engine, "run the build");
+
+  assert.equal(lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH).mode, "active");
+  assert.ok((captured.context ?? []).some((block) => block.includes("<tool_relevance>") && block.includes("Bash")));
+});
+
+test("options.activeTools still wins over the file: true is active even when the file says off", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, toolsMode: "off" });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooksWith(host, { activeTools: true });
+  host.fetchQueue.push(...TOOL_ACTIVE_PICK());
+
+  const captured = await submitPromptCapture(handlers, engine, "run the build");
+
+  assert.equal(lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH).mode, "active");
+  assert.ok((captured.context ?? []).some((block) => block.includes("<tool_relevance>")));
+});
+
+test("options.activeTools false is measure, not off, even when the file says off", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, toolsMode: "off" });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  host.toolList = [{ name: "Bash", description: "Runs a shell command", mcp: false }];
+  const { handlers, engine } = loadHooksWith(host, { activeTools: false });
+  host.fetchQueue.push(...TOOL_ACTIVE_PICK());
+
+  await submitPrompt(handlers, engine, "run the build");
+
+  assert.equal(lastDecisionRecord(host, TOOL_MEASUREMENTS_PATH).mode, "measurement");
 });
 
 test("a withheld turn followed by a restored turn: pendingListingWithheld never leaks across turns", async () => {

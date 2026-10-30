@@ -132,14 +132,16 @@ function loadModSkillsLine () {
 
 test('modSkillsLine: switches on with no copy on disk reports the contradiction, not a plain "not installed"', () => {
   const { line } = loadModSkillsLine()
-  assert.equal(line({ exists: false }, null, { active: true, activeTools: false }), 'integration.modOnButMissing')
-  assert.equal(line({ exists: false }, null, { active: false, activeTools: true }), 'integration.modOnButMissing')
-  assert.equal(line(null, null, { active: true, activeTools: true }), 'integration.modOnButMissing')
+  assert.equal(line({ exists: false }, null, { active: true, toolsMode: 'off' }), 'integration.modOnButMissing')
+  assert.equal(line({ exists: false }, null, { active: false, toolsMode: 'active' }), 'integration.modOnButMissing')
+  assert.equal(line(null, null, { active: true, toolsMode: 'active' }), 'integration.modOnButMissing')
 })
 
 test('modSkillsLine: no copy and both switches off is the ordinary "not installed"', () => {
   const { line } = loadModSkillsLine()
-  assert.equal(line({ exists: false }, null, { active: false, activeTools: false }), 'integration.modNotInstalled')
+  assert.equal(line({ exists: false }, null, { active: false, toolsMode: 'off' }), 'integration.modNotInstalled')
+  // Measure is not a switch turned on (odd/tasks/tool-selection-off.md), the same as skills' own measurement.
+  assert.equal(line({ exists: false }, null, { active: false, toolsMode: 'measure' }), 'integration.modNotInstalled')
   assert.equal(line({ exists: false }, null, null), 'integration.modNotInstalled')
   assert.equal(line({ exists: false }, null, undefined), 'integration.modNotInstalled')
 })

@@ -56,9 +56,10 @@
  * sampling roll as the skill path (JEVADV-4: this path used to call Jev on
  * every real prompt with no sampling at all, unlike the skill path), and
  * observes what the model actually called through a new `tool.call` hook,
- * the tool equivalent of `skill.prompt`. Measurement mode is the default
- * here too and changes nothing observable; active mode
- * (`options.activeTools`, off by default) injects the winner as advice in
+ * the tool equivalent of `skill.prompt`. Its mode is three-way
+ * (`toolsMode`, odd/tasks/tool-selection-off.md): `off`, the default, does
+ * none of this -- no Jev call, no record, no observation; measurement mode
+ * changes nothing observable; active mode injects the winner as advice in
  * a `<tool_relevance>` block -- it never blocks, rewrites or removes a
  * tool call, and fails open the same way. There is no listing to withhold
  * for tools, so this path never touches `pendingListingWithheld`.
@@ -71,7 +72,7 @@
  * helpers it kept: computeHomePaths, parseEnvFile, and their types). The
  * engine also requires a NAMED `export function register(on, options)`,
  * never a default export -- see this file's own export below -- and
- * `resolveActiveMode`/`resolveActiveToolMode` used to be closures declared
+ * `resolveActiveMode`/`resolveToolsMode` used to be closures declared
  * INSIDE register, which is exactly the "not at the top of the file" shape
  * the engine refuses; they are top-level functions now too, taking their
  * cache explicitly instead of closing over it.
@@ -127,8 +128,8 @@ import { TOOLS_CATALOG } from '../../../../src/core/i18n_tools.ts'
 import type { ToolsKey } from '../../../../src/core/i18n_tools.ts'
 import { DEFAULT_FEATURE_MODULES, FEATURE_MODULES_FILE, effectiveMode, moduleState, parseFeatureModules, switchMode } from '../../../../src/core/feature_modules.ts'
 import type { FeatureModules, ModuleState } from '../../../../src/core/feature_modules.ts'
-import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig } from '../../../../src/core/mod_skills_config.ts'
-import type { ModSkillsSwitches } from '../../../../src/core/mod_skills_config.ts'
+import { DEFAULT_MOD_SKILLS_SWITCHES, parseModSkillsConfig, toolsModeFromSwitch } from '../../../../src/core/mod_skills_config.ts'
+import type { ModSkillsSwitches, ToolsMode } from '../../../../src/core/mod_skills_config.ts'
 import { DEFAULT_MOD_SKILLS_SAMPLING_CONFIG, parseModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
 import type { ModSkillsSamplingConfig } from '../../../../src/core/mod_skills_sampling.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../../../src/core/mod_skills_readiness.ts'
@@ -275,7 +276,7 @@ export async function resolveLocale($: EngineInterface): Promise<Locale> {
 }
 
 // ---------------------------------------------------------------------------
-// mod-skills' own `active`/`activeTools` switches -- see
+// mod-skills' own `active`/`toolsMode` switches -- see
 // src/core/mod_skills_config.ts's module note (T10,
 // odd/tasks/panel-worker-wakeup.md). Read from
 // `<configDir>/mod-skills-config.json`, the same self-contained way
@@ -284,7 +285,7 @@ export async function resolveLocale($: EngineInterface): Promise<Locale> {
 // unexpected failure. `register` below only falls back to this when
 // `options` (Claude Code's own `userConfig` channel) does not actually
 // carry a boolean for the field in question -- see resolveActiveMode/
-// resolveActiveToolMode.
+// resolveToolsMode.
 // ---------------------------------------------------------------------------
 
 export async function resolveModSkillsSwitches($: EngineInterface): Promise<ModSkillsSwitches> {
@@ -3728,7 +3729,7 @@ async function writeMemoryDraft($: EngineInterface, draft: MemoryDraft, backend:
 // exactly as before), just passed in rather than captured.
 // ---------------------------------------------------------------------------
 
-/** The per-session cache resolveActiveMode/resolveActiveToolMode share: `resolveModSkillsSwitches` reads the config file at most once per session, no matter how many prompts ask either question. `register` creates one fresh object per call (a fresh one on every reload, exactly like the module-level cache this replaces). */
+/** The per-session cache resolveActiveMode/resolveToolsMode share: `resolveModSkillsSwitches` reads the config file at most once per session, no matter how many prompts ask either question. `register` creates one fresh object per call (a fresh one on every reload, exactly like the module-level cache this replaces). */
 interface ModSkillsSwitchesCache {
   value: ModSkillsSwitches | null;
 }
@@ -3739,10 +3740,11 @@ async function resolveActiveMode($: EngineInterface, optionActive: boolean | nul
   return cache.value.active
 }
 
-async function resolveActiveToolMode($: EngineInterface, optionActiveTools: boolean | null, cache: ModSkillsSwitchesCache): Promise<boolean> {
-  if (optionActiveTools !== null) return optionActiveTools
+/** Tool selection's own mode: `options.activeTools` when it carries a boolean (already mapped to `active`/`measure`), else the file's `toolsMode`. */
+async function resolveToolsMode($: EngineInterface, optionToolsMode: ToolsMode | null, cache: ModSkillsSwitchesCache): Promise<ToolsMode> {
+  if (optionToolsMode !== null) return optionToolsMode
   if (cache.value === null) cache.value = await resolveModSkillsSwitches($)
-  return cache.value.activeTools
+  return cache.value.toolsMode
 }
 
 // ---------------------------------------------------------------------------
@@ -3965,12 +3967,13 @@ export function register(on: On, options: PluginOptions): void {
   // resolveModSkillsSwitches above) is the actual source of truth, and
   // declaring `userConfig` for the same fields would let Claude Code's own
   // config menu silently disagree with it. `resolveActiveMode`/
-  // `resolveActiveToolMode` above read that file once per session,
+  // `resolveToolsMode` above read that file once per session,
   // cached in `modSkillsSwitchesCache` below. `options` still wins
   // whenever it genuinely carries a boolean, so nothing regresses the day
-  // this changes.
+  // this changes: a boolean `activeTools` there maps to `active`/`measure`
+  // exactly like the legacy field in the file (toolsModeFromSwitch).
   const optionActive = typeof options.active === 'boolean' ? (options.active as boolean) : null
-  const optionActiveTools = typeof options.activeTools === 'boolean' ? (options.activeTools as boolean) : null
+  const optionToolsMode = toolsModeFromSwitch(options.activeTools)
   const modSkillsSwitchesCache: ModSkillsSwitchesCache = { value: null }
   const routerMode = parseRouterMode(options.routerMode)
   // Where the feature module file lives, worked out on the first hook call that reads it (resolveFeatureModules).
@@ -3983,8 +3986,8 @@ export function register(on: On, options: PluginOptions): void {
   const excerptChars = Math.max(0, Math.round(number('excerptChars', DEFAULT_EXCERPT_CHARS)))
 
   // Tool selection's own options, independent of the skill ones above: a
-  // separate switch (`activeTools`, off by default, same reasoning and same
-  // resolveActiveToolMode fallback above), its own budget/thresholds, and
+  // separate three-way switch (`toolsMode`, off by default, resolved by
+  // resolveToolsMode above), its own budget/thresholds, and
   // its own shortlist/description caps.
   const toolBudgetMs = number('toolBudgetMs', DEFAULT_BUDGET_MS)
   const toolGateThreshold = number('toolGateThreshold', TOOL_DEFAULT_GATE_THRESHOLD)
@@ -4375,7 +4378,13 @@ export function register(on: On, options: PluginOptions): void {
     const toolOutcome = await (async (): Promise<{ block: string | null; status: string | null }> => {
       try {
         if (skillState === 'off') return { block: null, status: null }
-        const activeToolMode = effectiveMode(skillState, switchMode(await resolveActiveToolMode($, optionActiveTools, modSkillsSwitchesCache))) === 'active'
+        const toolMode = effectiveMode(skillState, await resolveToolsMode($, optionToolsMode, modSkillsSwitchesCache))
+        // Tool selection's own `off` (odd/tasks/tool-selection-off.md): no
+        // Jev call, nothing injected and no decision row -- so no
+        // `pendingToolMeasurementId` either, and tool.call observes nothing.
+        // Skill selection above is untouched by this mode.
+        if (toolMode === 'off') return { block: null, status: null }
+        const activeToolMode = toolMode === 'active'
 
         // JEVADV-4: the same shared roll the skill closure consults above,
         // not a second independent one -- see its own comment for why. An

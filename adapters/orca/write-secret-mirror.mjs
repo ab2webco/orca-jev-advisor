@@ -65,15 +65,17 @@
  *          src/core/explicit_models.ts's parseExplicitModels (anything
  *          malformed is `{ mode: "judge" }`, the default), to
  *          explicit-models.json. Not secret.
- *   mod-skills-config-save  reads `{active, activeTools}` as JSON from
+ *   mod-skills-config-save  reads `{active, toolsMode}` as JSON from
  *          stdin and atomically writes it, normalized through the same pure
  *          parser adapters/claude/mod-skills reads back with
  *          (src/core/mod_skills_config.ts's parseModSkillsConfig -- a
- *          wrong-typed or missing field is written as `false`, never
- *          passed through raw), to mod-skills-config.json. Not secret.
+ *          wrong-typed or missing field is written as its default, `false`
+ *          or `"off"`, never passed through raw), to mod-skills-config.json.
+ *          Not secret.
  *   mod-skills-config-read  reports the mirror's current `{active,
- *          activeTools}` (both `false` when the file has never been
- *          written), for main.mjs's publishModSkillsStatus.
+ *          toolsMode}` (`false` and `"off"` when the file has never been
+ *          written; a legacy `activeTools` boolean reads as `active` or
+ *          `measure`), for main.mjs's publishModSkillsStatus.
  *   feature-modules-read  reports each feature module's state (`off`,
  *          `shadow` or `active`) from feature-modules.json, every module
  *          `active` when the file is missing or malformed
@@ -216,7 +218,7 @@ try {
   TRUSTED_PROGRAMS_PATH = join(CONFIG_DIR, TRUSTED_PROGRAMS_MIRROR_FILE)
   QUEUE_MODE_PATH = join(CONFIG_DIR, QUEUE_MODE_MIRROR_FILE)
   EXPLICIT_MODELS_PATH = join(CONFIG_DIR, EXPLICIT_MODELS_MIRROR_FILE)
-  // mod-skills' `active`/`activeTools` switches -- see
+  // mod-skills' `active`/`toolsMode` switches -- see
   // src/core/mod_skills_config.ts's module note (T10,
   // odd/tasks/panel-worker-wakeup.md). Neither is sensitive, so it gets
   // ordinary file permissions like the catalog/policies files above, not
@@ -478,14 +480,15 @@ async function explicitModelsSave (raw) {
 /** Normalizes the payload through the same pure parser the hooks sandbox
  *  reads back with, so what lands on disk is never a raw, unvalidated echo
  *  of whatever the panel sent -- a wrong-typed or missing field is written
- *  as `false`, exactly like a malformed file already reads as. */
+ *  as its default (`false`, or `"off"` for toolsMode), exactly like a
+ *  malformed file already reads as. */
 async function modSkillsConfigSave (raw) {
   const normalized = parseModSkillsConfig(raw)
   await writeAtomic(`${JSON.stringify(normalized, null, 2)}\n`, MOD_SKILLS_CONFIG_PATH, null)
   return { ok: true }
 }
 
-/** Reports the mirror's current switches, both `false` when the file has
+/** Reports the mirror's current switches, the defaults when the file has
  *  never been written or is unreadable as JSON -- same best-effort contract
  *  as parseModSkillsConfig itself, never thrown. */
 async function modSkillsConfigRead () {

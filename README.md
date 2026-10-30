@@ -898,11 +898,17 @@ Two honest limits:
   the same merge is not equally consequential on a throwaway branch and on
   a client's main branch. The calibration does not yet cover that
   variation, so treat the defaults as good rather than final.
-- **Skill and tool selection ship in measurement mode**, which changes
-  nothing you can observe. They record what would have been suggested next
-  to what the model actually did. Their thresholds are not calibrated, so
-  turning them on is not recommended yet — that record is what makes the
-  numbers real instead of invented.
+- **Skill selection ships in measurement mode**, which changes nothing you
+  can observe. It records what would have been suggested next to what the
+  model actually did. Its thresholds are not calibrated, so turning it on is
+  not recommended yet — that record is what makes the numbers real instead
+  of invented.
+- **Tool selection ships Off.** Its switch has three modes (Off, Measure,
+  Active, in the Skill & tool selection tab). Off asks Jev nothing and
+  records nothing; a week of measurement found its advice matched the tool
+  actually used 27.2% of the time, below the 69.2% of always guessing Bash.
+  A config that already chose the old `activeTools` switch keeps that
+  choice: on reads as Active, off as Measure.
 
 ### Active skill mode never leaves you with neither
 
