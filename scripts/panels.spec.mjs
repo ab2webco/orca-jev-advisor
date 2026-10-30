@@ -542,9 +542,53 @@ test('Save never writes an empty destination catalog over a stored one unless th
   }
 })
 
+// odd/tasks/tool-selection-off.md, T4: tool selection is three-way (Off,
+// Measure, Active), the panel's own mode-button group in place of the old
+// checkbox; Off is what nothing stored reads as.
+for (const locale of ['en', 'es']) {
+  test(`Tool selection is an Off/Measure/Active group, labeled, showing the stored mode (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel({ modSkillsStatus: { active: false, toolsMode: 'measure' } }, locale)
+    try {
+      await page.click('#tab-modskills')
+      assert.equal(await page.$('#mod-skills-active-tools'), null, 'the old checkbox is gone')
+      const buttons = await page.$$eval('#mod-skills-tools-mode button', (all) => all.map((b) => ({ value: b.getAttribute('data-value'), text: b.textContent.trim(), pressed: b.getAttribute('aria-pressed'), visible: b.offsetWidth > 0 && b.offsetHeight > 0 })))
+      assert.deepEqual(buttons.map((b) => b.value), ['off', 'measure', 'active'])
+      for (const b of buttons) {
+        assert.ok(b.text.length > 0, `${b.value} has a label`)
+        assert.ok(b.visible, `${b.value} is visible`)
+      }
+      assert.deepEqual(buttons.map((b) => b.pressed), ['false', 'true', 'false'])
+      const labelledBy = await page.getAttribute('#mod-skills-tools-mode', 'aria-labelledby')
+      assert.ok((await page.textContent(`#${labelledBy}`)).trim().length > 0, 'the group has a visible name')
+      assert.ok((await page.textContent('#mod-skills-tools-mode-hint')).trim().length > 0)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('Tool selection reads as Off when nothing was stored, and Save sends the chosen toolsMode', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ modSkillsStatus: { active: true } })
+  try {
+    await page.click('#tab-modskills')
+    assert.equal(await page.getAttribute('#mod-skills-tools-mode button[data-value="off"]', 'aria-pressed'), 'true')
+    await page.click('#mod-skills-tools-mode button[data-value="active"]')
+    await page.click('#save-mod-skills')
+    await page.waitForFunction(() => Object.prototype.hasOwnProperty.call(window.__written, 'modSkillsConfigRequest'), null, { timeout: 30000 })
+    const request = await page.evaluate(() => window.__written.modSkillsConfigRequest)
+    assert.equal(request.active, true)
+    assert.equal(request.toolsMode, 'active')
+    assert.equal('activeTools' in request, false, 'the legacy boolean is never sent')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 // The same bug class on the buttons that send a whole section to the worker.
 test('Skill and tool switches and the deny tier are not sent while their stored values are unread', { skip: chromium ? false : 'playwright is not installed' }, async () => {
-  const { browser, page, errors } = await openPanel({ modSkillsStatus: { active: true, activeTools: true }, denyTierStatus: { denyRmRf: false }, __failReadsOf: { modSkillsStatus: 99, denyTierStatus: 99 } })
+  const { browser, page, errors } = await openPanel({ modSkillsStatus: { active: true, toolsMode: 'active' }, denyTierStatus: { denyRmRf: false }, __failReadsOf: { modSkillsStatus: 99, denyTierStatus: 99 } })
   try {
     await page.evaluate(() => { document.getElementById('save-mod-skills').click(); document.getElementById('save-deny-tier').click() })
     await page.waitForTimeout(1500)
