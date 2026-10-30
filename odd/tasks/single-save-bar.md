@@ -44,3 +44,5 @@ The config panel has a separate Save button per section and, on the Models tab, 
 - Stacked on `feat/tool-selection-off` (not merged yet).
 - The Engram mirror `odd/single-save-bar/tasks` is pending: Engram was disconnected on 2026-10-30.
 - About 400+ lines across worker, panel and copy, so it is planned as chained PRs: T1, then T2, then T3+T4.
+- Stale router field (decided 2026-10-30, not yet put to the owner): a field that changed outside the panel between load and save is left out of the batch, and its row shows the real value with the "changed outside this panel" message. It is not kept pending, so a save never overwrites someone else's newer choice. A refused field stays pending and counted.
+- Left as is: the Memory card's live readouts (`modules.memory.active.live` and the weekly line, up to about 319 characters) are status lines, not hints, and still wrap over several lines.

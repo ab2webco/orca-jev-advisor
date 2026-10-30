@@ -454,7 +454,7 @@ for the three setting mirrors and the queue below:
 | A human-readable mirror of the model catalog (not secret) | `~/.config/orca-supervisor/models-catalog.json` | the model hook reads it outside Orca to rank a recommendation |
 | Your team's repository owners (not secret) | `~/.config/orca-supervisor/team-owners.json` | the gate checks a command's remote against them |
 | *When a person must approve* and *Models fixed by an agent* (not secret) | `~/.config/orca-supervisor/queue-mode.json`, `explicit-models.json` | the gate and the router read them outside Orca |
-| Which modules are on (not secret) | `~/.config/orca-supervisor/feature-modules.json` | the hooks and the skills mod read it outside Orca; written only when you save the Modules section |
+| Which modules are on (not secret) | `~/.config/orca-supervisor/feature-modules.json` | the hooks and the skills mod read it outside Orca; written by the worker when you switch a module on General |
 | The actions queued for a person, command redacted | `~/.cache/orca-supervisor/human-queue.jsonl` | the board's "Waiting for you" list; only written in queue mode |
 
 **Memory in Active (0.9.0)** writes one more thing, and only when you set
