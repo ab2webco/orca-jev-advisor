@@ -86,5 +86,6 @@ test('a read result from an older generation is dropped, and a write or a newer 
 test('an unloaded section locks its controls, and Save with nothing loaded says so', () => {
   assert.match(extractFunction(configHtml, 'lockSection'), /data-section-locked/)
   assert.match(extractFunction(configHtml, 'markSectionLoaded'), /lockSection\(section\)/)
-  assert.match(configHtml, /namedWrites\.length === 0\) \{ said\(saveSaidEl, t\('save\.nothingLoaded'\), true\); return \}/)
+  // odd/tasks/single-save-bar.md T2: an edit the bar sends on its own (the model catalog, a request, a router field) still counts as something to save.
+  assert.match(configHtml, /namedWrites\.length === 0 && !editedElsewhere\) \{ said\(saveSaidEl, t\('save\.nothingLoaded'\), true\); return \}/)
 })

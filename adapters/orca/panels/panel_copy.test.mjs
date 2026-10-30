@@ -71,12 +71,15 @@ const NEW_ROUTER_KEYS_BY_FILE = {
     'modelRouter.modeOff',
     'modelRouter.modeMeasure',
     'modelRouter.modeActive',
-    'modelRouter.save',
     'modelRouter.saving',
     'modelRouter.saved',
     'modelRouter.empty',
   ],
 }
+
+// odd/tasks/single-save-bar.md T2: the per-row Save buttons are gone, and with
+// them 'modelRouter.save'; the one bar's own keys take the same parity check.
+NEW_ROUTER_KEYS_BY_FILE['config.html'].push('save.barClean', 'save.barDirty', 'save.discard', 'save.discarded', 'save.skippedModuleOff', 'save.notSaved', 'save.routerStale', 'catalog.proposalsDirtyBlocked', 'policies.importDirtyBlocked')
 
 // Track R (odd/tasks/router-cold-switch.md): the router card's cold-switch line.
 NEW_ROUTER_KEYS_BY_FILE['board.html'].push('consumption.modelRouterColdSwitches')

@@ -26,7 +26,7 @@ The config panel has a separate Save button per section and, on the Models tab, 
 
 ## Checklist
 - [x] T1 worker batch request, additive
-- [ ] T2 one bar, dirty tracking, ordered saves, per-row buttons gone, tests moved to `#save-all`
+- [x] T2 one bar, dirty tracking, ordered saves, per-row buttons gone, tests moved to `#save-all`
 - [ ] T3 short hints with disclosure, es/en
 - [ ] T4 docs, CHANGELOG, shots looked at
 

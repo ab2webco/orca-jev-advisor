@@ -62,6 +62,8 @@ test('config.html: the models-section exists', () => {
   assert.match(configHtml, /<section id="models-section" data-module="model-router">/)
 })
 
+// odd/tasks/single-save-bar.md T2: the ladder and the switches are saved by
+// the one bar (#save-all), so their own Save buttons are no longer here.
 const EXPECTED_IDS = [
   'models-empty-catalog-hint',
   'models-seed-notice',
@@ -74,7 +76,6 @@ const EXPECTED_IDS = [
   'models-seed-notice-dirty-text',
   'models-seed-notice-discard',
   'models-ladder-list',
-  'models-save-ladder',
   'models-ladder-said',
   'models-add-id',
   'models-add-label',
@@ -86,7 +87,6 @@ const EXPECTED_IDS = [
   'models-add-said',
   'models-active',
   'models-active-hint',
-  'models-save-config',
   'models-config-said',
   'models-measurements',
 ]
