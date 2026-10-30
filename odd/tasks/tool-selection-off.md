@@ -17,15 +17,15 @@ The owner approved turning it off ("Si dale", 2026-10-28). Today it cannot be tu
   - A wrong-typed field falls back field by field, as today.
 - **T2 (mod):** `adapters/claude/mod-skills/hooks/index.ts`: in `off`, the tool path makes **no** Jev call, injects nothing, and writes no decision row. Its `tool.call` observation also stops. The skill path is untouched. `options.activeTools` precedence keeps working: a boolean there maps as above.
 - **T3 (Orca side):** `adapters/orca/main.mjs` publishes and accepts the three-way value through the mod-skills status and config request. `src/core/feature_modules.ts` lists `off` among the `activeTools (tools)` values, with `off` as the default.
-- **T4 (panel):** `adapters/orca/panels/config.html` replaces the tool checkbox with the panel's existing three-way `<select>` (the model router rows' control), in English and Spanish. Covers `panels.spec` and the screenshot fixtures.
+- **T4 (panel):** `adapters/orca/panels/config.html` replaces the tool checkbox with the panel's existing three-way mode-button group (the model router rows' control), in English and Spanish. Covers `panels.spec` and the screenshot fixtures.
 - **T5:** README, CHANGELOG (unreleased section) and the module docs that describe the tool switch.
 
 ## Checklist
-- [ ] T1 core three-way mode with legacy mapping
-- [ ] T2 mod skips the tool path entirely when off
-- [ ] T3 Orca status, config request and module table
-- [ ] T4 config panel select, both languages, shots looked at
-- [ ] T5 docs
+- [x] T1 core three-way mode with legacy mapping
+- [x] T2 mod skips the tool path entirely when off
+- [x] T3 Orca status, config request and module table
+- [x] T4 config panel select, both languages, shots looked at
+- [x] T5 docs
 
 ## Acceptance criteria
 - Strict TDD: RED observed for each rule, then GREEN.
