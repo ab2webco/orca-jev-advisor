@@ -16,6 +16,12 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.13
+
+- **One save for the whole Configuration panel.** Change what you need on every tab and every account, then press the one bar at the bottom ("Save changes (N)"). Discard puts back what was saved. If any field is wrong, nothing is written. The Jev key, the Cloudflare credentials and the module switches still apply on their own.
+- **Shorter text.** Each section shows one line; "What is this?" opens the full explanation.
+- **Tool selection can be off, and starts off.** It now has Off, Measure and Active. Off asks Jev nothing. A week of measurement found its advice matched the tool actually used 27.2% of the time, below always guessing Bash (69.2%). An earlier choice is kept.
+
 ## What changed in 0.13.12
 
 - **An Orca member starts on the model its task needs.** Jev now reads the TASK block of a member's Orca brief, so a read-only audit can start small instead of keeping the launch model. The brief's CLI part and the project lessons are never sent to Jev.
