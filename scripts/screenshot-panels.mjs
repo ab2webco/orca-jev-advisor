@@ -1432,6 +1432,11 @@ async function main() {
 
               const name = `${scenario}-${panel.replace('.html', '')}-${theme}-${width}-${tabKey}.png`
               if (!quick || tabKey === tabKeys[0]) {
+                // odd/tasks/single-save-bar.md T2: a full-page photograph is
+                // taken as one tall viewport, so the sticky save bar would be
+                // frozen over the middle of the page. It goes back into the
+                // flow for the photograph only; a person scrolling sees it stick.
+                if (panel === 'config.html') await page.addStyleTag({ content: '#save-section { position: static !important; }' })
                 await page.screenshot({ path: join(OUT_DIR, name), fullPage: true })
                 shots += 1
               }

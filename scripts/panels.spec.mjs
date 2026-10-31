@@ -217,6 +217,11 @@ function playwrightLocaleFor (locale) {
  */
 function hostBridge (storage) {
   window.__written = {}
+  // odd/tasks/single-save-bar.md T2: `__written` keeps only the last value
+  // per key, so "exactly one request" needs a count, and "this went before
+  // that" needs the order the keys were written in.
+  window.__writeCounts = {}
+  window.__writeOrder = []
   window.addEventListener('message', (event) => {
     const msg = event.data
     if (!msg || msg.type !== 'orca-panel-action') return
@@ -245,7 +250,31 @@ function hostBridge (storage) {
         // JEV-060 slice 2, T9: same request/result handshake as the other
         // channels above -- `storage.__modelRouterConfigResult` lets a test
         // override ok/reason/detail; a plain "it worked" is the default.
-        value = { ok: true, ...storage.__modelRouterConfigResult, id: window.__written.modelRouterConfigRequest.id }
+        // odd/tasks/single-save-bar.md T2: a batch (`changes`) is answered the
+        // way main.mjs's attendModelRouterConfigRequest answers it, one item
+        // per field in the order mode, workKind, effort, steward; a target in
+        // `storage.__modelRouterFailTargets` gets its items refused.
+        const request = window.__written.modelRouterConfigRequest
+        if (Array.isArray(request.changes)) {
+          const failing = storage.__modelRouterFailTargets ?? []
+          const items = []
+          for (const change of request.changes) {
+            for (const field of ['mode', 'workKind', 'effort', 'steward']) {
+              if (change[field] === undefined) continue
+              const refused = failing.includes(change.target)
+              items.push({ target: change.target, field, ok: !refused, reason: refused ? 'script-failed' : null, detail: null })
+            }
+          }
+          value = { ok: items.every((item) => item.ok), reason: null, detail: null, items, ...storage.__modelRouterConfigResult, id: request.id }
+        } else {
+          value = { ok: true, ...storage.__modelRouterConfigResult, id: request.id }
+        }
+      } else if (key === 'modSkillsConfigResult' && window.__written.modSkillsConfigRequest) {
+        // odd/tasks/single-save-bar.md T2: the bar waits for each request's
+        // answer before the next one, so an unanswered one would hold the rest.
+        value = { ok: true, ...storage.__modSkillsConfigResult, id: window.__written.modSkillsConfigRequest.id }
+      } else if (key === 'denyTierConfigResult' && window.__written.denyTierConfigRequest) {
+        value = { ok: true, ...storage.__denyTierConfigResult, id: window.__written.denyTierConfigRequest.id }
       } else if (key === 'modelRouterStatus' && window.__written.modelRouterStatusRefreshRequest) {
         // 0.6.2 E7: the worker answers a refresh request by republishing the
         // status with the request's id. `storage.__routerRefreshSequence`
@@ -293,7 +322,12 @@ function hostBridge (storage) {
         value = storage[key] ?? null
       }
     }
-    if (msg.action === 'storage.set') window.__written[msg.params?.key] = msg.params?.value
+    if (msg.action === 'storage.set') {
+      const key = msg.params?.key
+      window.__written[key] = msg.params?.value
+      window.__writeCounts[key] = (window.__writeCounts[key] ?? 0) + 1
+      window.__writeOrder.push(key)
+    }
     const reply = { type: 'orca-panel-action-result', requestId: msg.requestId, ok: true, value: { value } }
     if (msg.action === 'storage.get') {
       const key = msg.params?.key
@@ -378,6 +412,16 @@ async function openPanel (storage, locale = 'en', colorScheme = 'light', viewpor
   await page.goto(`file://${await renderPanel()}`)
   await page.waitForTimeout(SETTLE_MS)
   return { browser: context, page, errors }
+}
+
+/** A section's text on screen, plus what waits behind its "What is this?"
+ *  disclosures (odd/tasks/single-save-bar.md T3): innerText skips a closed
+ *  <details>, and the full explanation is still the panel's to show. */
+async function sectionText (page, selector) {
+  return page.evaluate((sel) => {
+    const section = document.querySelector(sel)
+    return [section.innerText, ...Array.from(section.querySelectorAll('details.more')).map((more) => more.textContent)].join('\n')
+  }, selector)
 }
 
 /** Same host simulation as openPanel, but with `window.localStorage`
@@ -574,7 +618,7 @@ test('Tool selection reads as Off when nothing was stored, and Save sends the ch
     await page.click('#tab-modskills')
     assert.equal(await page.getAttribute('#mod-skills-tools-mode button[data-value="off"]', 'aria-pressed'), 'true')
     await page.click('#mod-skills-tools-mode button[data-value="active"]')
-    await page.click('#save-mod-skills')
+    await page.click('#save-all')
     await page.waitForFunction(() => Object.prototype.hasOwnProperty.call(window.__written, 'modSkillsConfigRequest'), null, { timeout: 30000 })
     const request = await page.evaluate(() => window.__written.modSkillsConfigRequest)
     assert.equal(request.active, true)
@@ -587,15 +631,19 @@ test('Tool selection reads as Off when nothing was stored, and Save sends the ch
 })
 
 // The same bug class on the buttons that send a whole section to the worker.
+// odd/tasks/single-save-bar.md T2: the one bar sends neither, and names both.
 test('Skill and tool switches and the deny tier are not sent while their stored values are unread', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ modSkillsStatus: { active: true, toolsMode: 'active' }, denyTierStatus: { denyRmRf: false }, __failReadsOf: { modSkillsStatus: 99, denyTierStatus: 99 } })
   try {
-    await page.evaluate(() => { document.getElementById('save-mod-skills').click(); document.getElementById('save-deny-tier').click() })
+    await page.click('#save-all')
+    await page.waitForFunction(() => Object.prototype.hasOwnProperty.call(window.__written, 'config'), null, { timeout: 30000 })
     await page.waitForTimeout(1500)
     assert.equal(await page.evaluate(() => Object.prototype.hasOwnProperty.call(window.__written, 'modSkillsConfigRequest')), false)
     assert.equal(await page.evaluate(() => Object.prototype.hasOwnProperty.call(window.__written, 'denyTierConfigRequest')), false)
-    assert.match(await page.textContent('#mod-skills-said'), /left alone/)
-    assert.match(await page.textContent('#deny-tier-said'), /left alone/)
+    const said = await page.textContent('#save-said')
+    assert.match(said, /left alone/)
+    assert.match(said, /Skill & tool selection/i)
+    assert.match(said, /Deny tier/i)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -605,11 +653,12 @@ test('Skill and tool switches and the deny tier are not sent while their stored 
 test('the model ladder and its switches are not saved while the stored catalog is unread', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ models: [{ id: 'm1', label: 'M1', provider: 'anthropic', agentModel: 'opus', rank: 1, available: true }], modelsConfig: { active: true, readyOverride: true }, __failReadsOf: { models: 99, modelsConfig: 99 } })
   try {
-    await page.evaluate(() => { document.getElementById('models-save-ladder').click(); document.getElementById('models-save-config').click() })
+    await page.click('#save-all')
+    await page.waitForFunction(() => Object.prototype.hasOwnProperty.call(window.__written, 'config'), null, { timeout: 30000 })
     await page.waitForTimeout(1500)
     assert.equal(await page.evaluate(() => Object.prototype.hasOwnProperty.call(window.__written, 'models')), false)
     assert.equal(await page.evaluate(() => Object.prototype.hasOwnProperty.call(window.__written, 'modelsConfig')), false)
-    assert.match(await page.textContent('#models-ladder-said'), /left alone/)
+    assert.match(await page.textContent('#save-said'), /left alone/)
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -1816,11 +1865,10 @@ test('a dirty ladder blocks Apply and shows the inline message, without sending 
     const writtenWhileDirty = await page.evaluate(() => window.__written.modelsSeedRequest)
     assert.equal(writtenWhileDirty, undefined, 'a dirty ladder must not send an apply request')
 
-    await page.click('#models-save-ladder')
-    await page.waitForFunction(
-      () => /saved|guardado/i.test(document.getElementById('models-ladder-said').innerText),
-      undefined, { timeout: 25000 }
-    )
+    // odd/tasks/single-save-bar.md T2: the one bar saves the ladder.
+    await page.click('#save-all')
+    await page.waitForFunction(() => Array.isArray(window.__written.models), undefined, { timeout: 25000 })
+    await page.waitForFunction(() => !document.getElementById('save-all').disabled, undefined, { timeout: 25000 })
 
     await page.click('#models-seed-notice-apply')
     await page.waitForFunction(() => !!window.__written.modelsSeedRequest, undefined, { timeout: 25000 })
@@ -2515,7 +2563,7 @@ test('with no targets at all, the section shows its own empty sentence rather th
   }
 })
 
-test('changing a row\'s mode and clicking its save button sends a modelRouterConfigRequest with that target and mode', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+test('changing a row\'s mode and clicking the save bar sends a modelRouterConfigRequest with that target and mode', { skip: chromium ? false : 'playwright is not installed' }, async () => {
   const { browser, page } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_TWO_TARGETS })
   try {
     await page.click('#tab-models')
@@ -2524,12 +2572,12 @@ test('changing a row\'s mode and clicking its save button sends a modelRouterCon
       const group = document.querySelector('#model-router-rows .mode-buttons[data-model-router-target="home"]')
       group.querySelectorAll('button')[2].click() // click 'active' button
     })
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
+    await page.click('#save-all')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
     assert.equal(typeof request.id, 'string')
-    assert.equal(request.target, 'home')
-    assert.equal(request.mode, 'active')
+    // odd/tasks/single-save-bar.md T2: one batch, this row its only change.
+    assert.deepEqual(request.changes, [{ target: 'home', mode: 'active' }])
   } finally {
     await browser.close()
   }
@@ -3871,12 +3919,10 @@ test('0.6.2: saving an account\'s effort table sends that target\'s whole per-ti
   try {
     await page.click('#tab-models')
     await page.click('div[data-model-router-effort="home:complex"] button[data-value="xhigh"]')
-    await page.click('button[data-model-router-effort-save="home"]')
+    await page.click('#save-all')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
-    assert.equal(request.target, 'home')
-    assert.equal(request.mode, undefined)
-    assert.deepEqual(request.effort, { ...EFFORT_DEFAULTS, complex: 'xhigh' })
+    assert.deepEqual(request.changes, [{ target: 'home', effort: { ...EFFORT_DEFAULTS, complex: 'xhigh' } }])
   } finally {
     await browser.close()
   }
@@ -3902,7 +3948,7 @@ test('steward: each account shows the context steward mode and threshold next to
     })
     assert.deepEqual(rows.map((r) => [r.target, r.mode, r.threshold]), [['home', 'measure', '120'], ['11112222-3333-4444-5555-666677778888', 'active', '150']])
     assert.match(rows[0].text, /Context steward/)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /compact/i)
     assert.match(hint, /\/clear/)
   } finally {
@@ -3917,14 +3963,11 @@ test('steward: saving sends that target\'s mode and threshold in tokens', { skip
     // Click the third button (active mode) for steward
     await page.evaluate(() => document.querySelector('[data-steward-target="home"] .mode-buttons').querySelectorAll('button')[2].click())
     await page.fill('[data-steward-target="home"] input[type=number]', '100')
-    await page.click('[data-steward-target="home"] .model-router-steward-save')
+    await page.click('#save-all')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
-    assert.equal(request.target, 'home')
-    assert.equal(request.mode, undefined)
-    assert.equal(request.effort, undefined)
     // 0.6.15 T4: the 400k soft tier's switch goes with them, measure unless changed.
-    assert.deepEqual(request.steward, { mode: 'active', threshold: 100000, softMode: 'measure', coldMode: 'measure' })
+    assert.deepEqual(request.changes, [{ target: 'home', steward: { mode: 'active', threshold: 100000, softMode: 'measure', coldMode: 'measure' } }])
   } finally {
     await browser.close()
   }
@@ -3944,14 +3987,14 @@ test('steward: the 400k soft tier shows its own switch, measure by default, and 
     }))
     assert.deepEqual(soft.map((s) => s.pressed), ['measure', 'active'])
     assert.match(soft[0].text, /400k/)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /600/)
     assert.match(hint, /400/)
     await page.evaluate(() => document.querySelector('[data-steward-target="home"] [data-steward-soft] button[data-value="active"]').click())
-    await page.click('[data-steward-target="home"] .model-router-steward-save')
+    await page.click('#save-all')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
-    assert.deepEqual(request.steward, { mode: 'measure', threshold: 120000, softMode: 'active', coldMode: 'measure' })
+    assert.deepEqual(request.changes[0].steward, { mode: 'measure', threshold: 120000, softMode: 'active', coldMode: 'measure' })
   } finally {
     await browser.close()
   }
@@ -3962,7 +4005,7 @@ test('steward: a threshold out of range is refused in place and nothing is sent'
   try {
     await page.click('#tab-models')
     await page.fill('[data-steward-target="home"] input[type=number]', '5')
-    await page.click('[data-steward-target="home"] .model-router-steward-save')
+    await page.click('#save-all')
     await page.waitForTimeout(500)
     const written = await page.evaluate(() => window.__written.modelRouterConfigRequest ?? null)
     assert.equal(written, null)
@@ -3986,13 +4029,13 @@ test('0.6.16 T2: each account shows its work-kind switch, and saving sends only 
     }))
     assert.deepEqual(rows.map((r) => [r.target, r.pressed]), [['home', 'measure'], ['11112222-3333-4444-5555-666677778888', 'active']])
     assert.match(rows[0].text, /work kind/i)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /Sonnet 5/)
     await page.click('[data-work-kind-target="home"] button[data-value="active"]')
-    await page.click('[data-work-kind-target="home"] .model-router-work-kind-save')
+    await page.click('#save-all')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
-    assert.deepEqual([request.target, request.workKind, request.mode, request.effort, request.steward], ['home', 'active', undefined, undefined, undefined])
+    assert.deepEqual(request.changes, [{ target: 'home', workKind: 'active' }])
   } finally {
     await browser.close()
   }
@@ -4028,7 +4071,8 @@ test('0.6.2: the Models intro says what the ladder, the switch and the table do,
     const { browser, page } = await openPanel(SCENARIOS.ready, locale)
     try {
       await page.click('#tab-models')
-      const intro = await page.evaluate(() => document.querySelector('#models-section .hint').innerText)
+      // single-save-bar T3: the intro is now one short line; its full text waits behind "What is this?".
+      const intro = await page.evaluate(() => document.querySelector('#models-section details.more .hint').textContent)
       for (const word of words) assert.match(intro, word, `${locale}: ${intro}`)
       assert.doesNotMatch(intro, / -- /)
       if (locale === 'es') assert.match(intro, /[áéíóú]/, 'Spanish copy keeps its accents')
@@ -4042,7 +4086,7 @@ test('0.6.2: the classic hook\'s checkbox is labelled as the legacy switch, not 
   const { browser, page } = await openPanel(SCENARIOS.ready)
   try {
     await page.click('#tab-models')
-    const text = await page.evaluate(() => document.getElementById('models-section').innerText)
+    const text = await sectionText(page, '#models-section')
     assert.doesNotMatch(text, /Let Jev rewrite the model \(active mode\)/)
     assert.match(text, /Legacy switch/)
     assert.match(text, /router is active/)
@@ -4120,7 +4164,7 @@ test('0.6.2 E7: a save over a mode that changed elsewhere writes nothing and sho
     await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
     await page.waitForTimeout(1500)
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[0].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
+    await page.click('#save-all')
     await page.waitForFunction(() => {
       const modes = Array.from(document.querySelectorAll('#model-router-rows .mode-buttons')).map((g) => Array.from(g.querySelectorAll('button')).findIndex((b) => b.className === 'active'))
       return modes[0] === 2 // 'active' is index 2
@@ -4147,12 +4191,12 @@ test('finding 5: a second save on the same row is not refused as "changed outsid
     await page.waitForFunction(() => window.__routerRefreshCount === 1, undefined, { timeout: 10000 })
     await page.waitForTimeout(1500)
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[2].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
-    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 15000 })
-    await page.waitForTimeout(2500)
+    await page.click('#save-all')
+    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.changes?.[0]?.mode === 'active', undefined, { timeout: 15000 })
+    await page.waitForFunction(() => !document.getElementById('save-all').disabled, undefined, { timeout: 15000 })
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[1].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
-    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'measure', undefined, { timeout: 15000 })
+    await page.click('#save-all')
+    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.changes?.[0]?.mode === 'measure', undefined, { timeout: 15000 })
     const text = await page.evaluate(() => document.getElementById('model-router-rows').innerText)
     assert.doesNotMatch(text, /changed outside this panel/)
   } finally {
@@ -4178,8 +4222,8 @@ test('nit 6: a status published without the request id but newer than the reques
   try {
     await page.click('#tab-models')
     await page.evaluate(() => document.querySelector('.mode-buttons[data-model-router-target="home"]').querySelectorAll('button')[2].click())
-    await page.click('#model-router-rows .checkbox-row:has(.mode-buttons[data-model-router-target="home"]) .model-router-save')
-    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.mode === 'active', undefined, { timeout: 8000 })
+    await page.click('#save-all')
+    await page.waitForFunction(() => window.__written.modelRouterConfigRequest?.changes?.[0]?.mode === 'active', undefined, { timeout: 8000 })
   } finally {
     await browser.close()
   }
@@ -5220,18 +5264,21 @@ for (const [locale, onText, measured] of [['en', /Owner override on: rewrites ar
   })
 }
 
+// odd/tasks/single-save-bar.md T2: the bar writes the switches only once one
+// of them changed, so the first save turns the legacy switch on.
 test('models: saving the legacy switch writes the ready override with it, and an untouched override stays off', { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
   const { browser, page, errors } = await openPanel({ ...SCENARIOS.ready, modelsConfig: { active: false } })
   try {
     await page.click('#tab-models')
     assert.equal(await page.isChecked('#models-ready-override'), false)
-    await page.click('#models-save-config')
-    await page.waitForTimeout(800)
-    assert.deepEqual(await page.evaluate(() => window.__written.modelsConfig), { active: false, readyOverride: false })
+    await page.check('#models-active')
+    await page.click('#save-all')
+    await page.waitForFunction(() => !!window.__written.modelsConfig, undefined, { timeout: 15000 })
+    assert.deepEqual(await page.evaluate(() => window.__written.modelsConfig), { active: true, readyOverride: false })
     await page.check('#models-ready-override')
-    await page.click('#models-save-config')
-    await page.waitForTimeout(800)
-    assert.deepEqual(await page.evaluate(() => window.__written.modelsConfig), { active: false, readyOverride: true })
+    await page.click('#save-all')
+    await page.waitForFunction(() => window.__written.modelsConfig.readyOverride === true, undefined, { timeout: 15000 })
+    assert.deepEqual(await page.evaluate(() => window.__written.modelsConfig), { active: true, readyOverride: true })
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -5487,7 +5534,8 @@ async function moduleCards (page) {
       pressed: buttons.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.value),
       labels: buttons.map((b) => b.textContent),
       disabled: buttons.map((b) => b.disabled),
-      text: card.innerText
+      // What is on screen, plus what waits behind the card's "What is this?" (single-save-bar T3).
+      text: [card.innerText, ...Array.from(card.querySelectorAll('details.more')).map((more) => more.textContent)].join('\n')
     }
   }))
 }
@@ -6142,13 +6190,13 @@ test('steward: the pre-cold switch shows off, measure and active, measure by def
     assert.deepEqual(cold.map((c) => c.pressed), ['measure', 'active'])
     assert.deepEqual(cold[0].values, ['off', 'measure', 'active'])
     assert.match(cold[0].text, /cache/i)
-    const hint = await page.evaluate(() => document.querySelector('#model-router-section').innerText)
+    const hint = await sectionText(page, '#model-router-section')
     assert.match(hint, /idle/i)
     await page.evaluate(() => document.querySelector('[data-steward-target="home"] [data-steward-cold] button[data-value="off"]').click())
-    await page.click('[data-steward-target="home"] .model-router-steward-save')
+    await page.click('#save-all')
     await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 25000 })
     const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
-    assert.deepEqual(request.steward, { mode: 'measure', threshold: 120000, softMode: 'measure', coldMode: 'off' })
+    assert.deepEqual(request.changes[0].steward, { mode: 'measure', threshold: 120000, softMode: 'measure', coldMode: 'off' })
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
@@ -6218,3 +6266,284 @@ test('steward: measured only, the pre-cold line shows no saving or waste line', 
     await browser.close()
   }
 })
+
+// ---------------------------------------------------------------------------
+// odd/tasks/single-save-bar.md T2: one save bar for every tab. The per-section
+// and per-row save buttons are gone; #save-all sends what changed, in order,
+// after every check has passed.
+// ---------------------------------------------------------------------------
+
+const ACCOUNT = '11112222-3333-4444-5555-666677778888'
+
+/** Every stored section read, the provider read, and the on-open router refresh answered. */
+async function waitForPanelLoaded (page) {
+  await page.waitForFunction(() => document.getElementById('provider-section').getAttribute('data-state') === 'ready' &&
+    Object.keys(sections).filter((id) => id !== 'modules').every((id) => sections[id].loaded) &&
+    window.__routerRefreshCount >= 1, null, { timeout: 40000 })
+  // The refresh's own answer is read on the next poll; let it land before editing.
+  await page.waitForTimeout(1500)
+}
+
+/** Presses one of a router target's mode buttons: 0 off, 1 measure, 2 active. */
+async function pressRouterMode (page, target, index) {
+  await page.evaluate(({ target, index }) => document.querySelector(`.mode-buttons[data-model-router-target="${target}"]`).querySelectorAll('button')[index].click(), { target, index })
+}
+
+/** The mode a router target shows pressed. */
+async function shownRouterMode (page, target) {
+  return page.evaluate((target) => ['off', 'measure', 'active'][Array.from(document.querySelector(`.mode-buttons[data-model-router-target="${target}"]`).querySelectorAll('button')).findIndex((b) => b.className === 'active')], target)
+}
+
+test('one save bar: edits on two router targets, a work kind and the skill selection go out as one router batch and one skill request', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const status = { ...MODEL_ROUTER_STATUS_EFFORT, targets: MODEL_ROUTER_STATUS_EFFORT.targets.map((target) => ({ ...target, workKind: 'measure' })) }
+  const { browser, page, errors } = await openPanel({ modelRouterStatus: status, modSkillsStatus: { active: false, toolsMode: 'off' } })
+  try {
+    await waitForPanelLoaded(page)
+    await page.click('#tab-models')
+    assert.equal(await page.locator('.model-router-save, .model-router-work-kind-save, .model-router-steward-save, [data-model-router-effort-save]').count(), 0, 'no per-row save buttons')
+    for (const id of ['save-mod-skills', 'save-deny-tier', 'models-save-ladder', 'models-save-config']) {
+      assert.equal(await page.$(`#${id}`), null, `#${id} is gone`)
+    }
+    await pressRouterMode(page, 'home', 2)
+    await pressRouterMode(page, ACCOUNT, 1)
+    await page.click('[data-work-kind-target="home"] button[data-value="active"]')
+    await page.click('#tab-modskills')
+    await page.check('#mod-skills-active')
+    await page.click('#save-all')
+    await page.waitForFunction(() => !!window.__written.modelRouterConfigRequest, undefined, { timeout: 40000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.deepEqual(request.changes, [{ target: 'home', mode: 'active', workKind: 'active' }, { target: ACCOUNT, mode: 'measure' }])
+    assert.equal(request.target, undefined, 'the batch carries no single-field shape')
+    const counts = await page.evaluate(() => window.__writeCounts)
+    assert.equal(counts.modelRouterConfigRequest, 1, 'exactly one router request')
+    assert.equal(counts.modSkillsConfigRequest, 1, 'exactly one skill selection request')
+    assert.deepEqual(await page.evaluate(() => window.__written.modSkillsConfigRequest).then((r) => [r.active, r.toolsMode]), [true, 'off'])
+    const order = await page.evaluate(() => window.__writeOrder)
+    assert.ok(order.indexOf('modSkillsConfigRequest') < order.indexOf('modelRouterConfigRequest'), 'the skill selection goes before the router batch')
+    assert.equal(order.includes('denyTierConfigRequest'), false, 'an untouched deny tier is not sent')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('one save bar: a stale router field is not sent and shows the real value; a refused one stays pending and visible', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const [home, owner, other] = ROUTER_ACCOUNTS.targets.map((target) => target.target)
+  const changedElsewhere = { ...ROUTER_ACCOUNTS, targets: ROUTER_ACCOUNTS.targets.map((target) => (target.target === home ? { ...target, mode: 'active' } : target)) }
+  const afterSave = { ...changedElsewhere, targets: changedElsewhere.targets.map((target) => (target.target === owner ? { ...target, mode: 'active' } : target)) }
+  const { browser, page, errors } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, __routerRefreshSequence: [ROUTER_ACCOUNTS, changedElsewhere, afterSave], __modelRouterFailTargets: [other] })
+  try {
+    await waitForPanelLoaded(page)
+    await page.click('#tab-models')
+    await pressRouterMode(page, home, 2)
+    await pressRouterMode(page, owner, 2)
+    await pressRouterMode(page, other, 2)
+    await page.click('#save-all')
+    await page.waitForFunction(() => window.__routerRefreshCount >= 3, undefined, { timeout: 40000 })
+    await page.waitForFunction(() => /outside this panel/.test(document.getElementById('model-router-rows').innerText), undefined, { timeout: 15000 })
+    const request = await page.evaluate(() => window.__written.modelRouterConfigRequest)
+    assert.deepEqual(request.changes, [{ target: owner, mode: 'active' }, { target: other, mode: 'active' }], 'the stale field is left out of the batch')
+    assert.equal(await shownRouterMode(page, home), 'active', 'the stale row shows the real value')
+    assert.equal(await shownRouterMode(page, owner), 'active', 'the saved row shows what was saved')
+    assert.equal(await shownRouterMode(page, other), 'active', 'the refused edit survives the redraw')
+    const rows = await page.evaluate(() => Array.from(document.querySelectorAll('#model-router-rows .router-row')).filter((row) => row.querySelector('.mode-buttons[data-model-router-target]')).map((row) => ({ target: row.getAttribute('title'), said: row.querySelector('.said').innerText, bad: row.querySelector('.said').classList.contains('bad') })))
+    assert.match(rows.find((row) => row.target === home).said, /outside this panel/)
+    assert.equal(rows.find((row) => row.target === other).bad, true, 'the refused row says why')
+    assert.ok(rows.find((row) => row.target === other).said.length > 0)
+    assert.match(await page.textContent('#save-all'), /\(1\)/, 'the refused edit is still counted as unsaved')
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test('one save bar: an out-of-range steward threshold writes nothing anywhere, even with valid edits elsewhere', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({ modelRouterStatus: MODEL_ROUTER_STATUS_EFFORT, modSkillsStatus: { active: false, toolsMode: 'off' } })
+  try {
+    await waitForPanelLoaded(page)
+    await page.click('#tab-models')
+    await pressRouterMode(page, ACCOUNT, 1)
+    await page.fill('[data-steward-target="home"] input[type=number]', '5')
+    await page.click('#tab-modskills')
+    await page.check('#mod-skills-active')
+    await page.click('#tab-general')
+    const before = await page.evaluate(() => ({ ...window.__writeCounts }))
+    await page.click('#save-all')
+    await page.waitForTimeout(1500)
+    const after = await page.evaluate(() => ({ ...window.__writeCounts }))
+    delete before.configPanelSeen
+    delete after.configPanelSeen
+    assert.deepEqual(after, before, 'one invalid field anywhere writes nothing anywhere')
+    assert.equal(await page.evaluate(() => document.getElementById('tab-models').getAttribute('aria-selected')), 'true', 'the bar switches to the tab holding the problem')
+    assert.match(await page.evaluate(() => document.querySelector('[data-steward-target="home"] .said').innerText), /10/)
+    assert.equal(await page.evaluate(() => document.getElementById('save-said').classList.contains('bad')), true)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+for (const [locale, clean, dirty, discard] of [['en', /^Save$/, /^Save changes \(2\)$/, /^Discard$/], ['es', /^Guardar$/, /^Guardar cambios \(2\)$/, /^Descartar$/]]) {
+  test(`one save bar: it counts the unsaved changes, and Discard puts every one back (${locale})`, { skip: chromium ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel({ modelRouterStatus: ROUTER_ACCOUNTS, teamOwners: ['acme'] }, locale)
+    try {
+      await waitForPanelLoaded(page)
+      const bar = () => page.evaluate(() => ({ save: document.getElementById('save-all').textContent.trim(), disabled: document.getElementById('save-all').disabled, discard: document.getElementById('discard-all').textContent.trim(), discardShown: document.getElementById('discard-all').offsetParent !== null }))
+      let state = await bar()
+      assert.match(state.save, clean)
+      assert.equal(state.disabled, false, 'a clean bar still saves every loaded section, as it always did')
+      assert.equal(state.discardShown, false, 'nothing to discard')
+      await page.click('#tab-policies')
+      await page.fill('#team-owners', 'acme\nglobex')
+      await page.click('#tab-models')
+      await pressRouterMode(page, 'home', 2)
+      state = await bar()
+      assert.match(state.save, dirty)
+      assert.equal(state.discardShown, true)
+      assert.match(state.discard, discard)
+      await page.click('#discard-all')
+      assert.equal(await page.inputValue('#team-owners'), 'acme')
+      assert.equal(await shownRouterMode(page, 'home'), 'measure')
+      state = await bar()
+      assert.match(state.save, clean)
+      assert.equal(state.discardShown, false)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
+
+test('one save bar: adding proposed destinations or importing policies is refused while that list has unsaved edits', { skip: chromium ? false : 'playwright is not installed' }, async () => {
+  const { browser, page, errors } = await openPanel({
+    catalog: { destinations: [{ id: 'dest', label: 'Dest', kind: 'project', worktreePath: '/p' }] },
+    catalogProposalsStatus: CATALOG_PROPOSAL_FIXTURE,
+    policies: [{ id: 'keep_me', rule: 'Anything that touches a client gets confirmed.', kind: 'requires_human' }]
+  })
+  try {
+    await waitForPanelLoaded(page)
+    await page.click('#tab-destinations')
+    await page.evaluate(() => { const input = document.querySelectorAll('#catalog-list .entry input')[1]; input.value = 'Renamed'; input.dispatchEvent(new Event('input', { bubbles: true })) })
+    await page.click('#catalog-proposals input[data-catalog-proposal-id="client-site-a-backend"]')
+    await page.selectOption('#catalog-proposals select[data-catalog-proposal-kind="client-site-a-backend"]', 'client-site')
+    await page.click('#add-catalog-proposals')
+    await page.waitForTimeout(800)
+    assert.equal(await page.evaluate(() => window.__written.catalogProposalAcceptRequest), undefined, 'adding would redraw the list over the unsaved edit')
+    assert.match(await page.textContent('#catalog-proposals .said'), /unsaved/i)
+    assert.equal(await page.evaluate(() => document.querySelectorAll('#catalog-list .entry input')[1].value), 'Renamed', 'the edit is still there')
+    await page.click('#tab-policies')
+    await page.evaluate(() => { const input = document.querySelectorAll('#policies-list .entry input')[1]; input.value = 'A new rule.'; input.dispatchEvent(new Event('input', { bubbles: true })) })
+    await page.click('#import-policy-seeds')
+    await page.waitForTimeout(800)
+    assert.equal(await page.evaluate(() => window.__written.policySeedImportRequest), undefined)
+    assert.match(await page.textContent('#policy-import-said'), /unsaved/i)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// odd/tasks/single-save-bar.md T3: the owner found the long paragraphs did
+// not help ("esos párrafos de texto no ayudan"). Each section shows one short
+// line; the full text stays, collapsed behind a "What is this?" disclosure.
+// ---------------------------------------------------------------------------
+
+const HINT_BUDGET = 180
+const CONFIG_TABS = ['general', 'destinations', 'policies', 'models', 'modskills', 'rules']
+// Live readouts, not explanations: their length is the figures they carry.
+const HINT_READOUTS = '[data-module-memory="week"]'
+
+/** Every visible hint-like line on the current tab longer than `budget`, outside a disclosure. */
+async function longVisibleHints (page, budget) {
+  return page.evaluate(([limit, readouts]) => Array.from(document.querySelectorAll('.hint, p.sub'))
+    .filter((node) => node.getClientRects().length > 0 && node.closest('details') === null && !node.matches(readouts))
+    .map((node) => ({ name: node.id || node.getAttribute('data-i18n') || node.className, length: node.textContent.trim().length }))
+    .filter((hint) => hint.length > limit), [budget, HINT_READOUTS])
+}
+
+for (const locale of ['en', 'es']) {
+  test(`config (${locale}): no always-visible hint on any tab runs past ${HINT_BUDGET} characters`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    for (const scenario of ['ready', 'router-ready']) {
+      const { browser, page, errors } = await openPanel(SCENARIOS[scenario], locale)
+      try {
+        const offenders = []
+        for (const tab of CONFIG_TABS) {
+          await page.click(`#tab-${tab}`)
+          for (const hint of await longVisibleHints(page, HINT_BUDGET)) offenders.push(`${scenario}/${tab}/${hint.name}: ${hint.length}`)
+        }
+        assert.deepEqual(offenders, [])
+        assert.deepEqual(errors, [])
+      } finally {
+        await browser.close()
+      }
+    }
+  })
+
+  test(`config (${locale}): each long explanation sits collapsed behind "What is this?", with its full text`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel(SCENARIOS['router-ready'], locale)
+    try {
+      const found = await page.evaluate(() => {
+        const catalog = window.CATALOG[document.documentElement.lang]
+        return {
+          summary: catalog['more.summary'],
+          disclosures: Array.from(document.querySelectorAll('details.more')).map((node) => ({
+            open: node.open,
+            summary: node.querySelector('summary').textContent,
+            keys: Array.from(node.querySelectorAll('[data-i18n]')).map((child) => child.getAttribute('data-i18n')),
+            full: Array.from(node.querySelectorAll('[data-i18n]')).every((child) => child.textContent === catalog[child.getAttribute('data-i18n')] || child.innerHTML === catalog[child.getAttribute('data-i18n')])
+          })),
+          stewardShort: document.querySelector('[data-i18n="modelRouter.stewardHintShort"]')?.textContent ?? null,
+          modSkills: document.getElementById('mod-skills-hint')?.closest('details.more') !== null
+        }
+      })
+      assert.ok(typeof found.summary === 'string' && found.summary.length > 0)
+      assert.equal(found.summary, locale === 'es' ? '¿Qué es esto?' : 'What is this?')
+      assert.ok(found.disclosures.length >= 10, `expected the long texts behind disclosures, found ${found.disclosures.length}`)
+      for (const disclosure of found.disclosures) {
+        assert.equal(disclosure.open, false, `${disclosure.keys.join(',')} starts collapsed`)
+        assert.equal(disclosure.summary, found.summary)
+        assert.ok(disclosure.full, `${disclosure.keys.join(',')} carries its full text`)
+      }
+      const keys = found.disclosures.flatMap((disclosure) => disclosure.keys)
+      for (const key of ['modelRouter.stewardHint', 'modelRouter.workKindHint', 'models.hint', 'denyTier.hint', 'modules.intro']) assert.ok(keys.includes(key), `${key} is behind a disclosure`)
+      assert.ok(found.stewardShort && found.stewardShort.length <= 120, 'the guardian keeps one short line in view')
+      assert.ok(found.modSkills, 'the skills mod explanation is behind a disclosure')
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+
+  test(`config (${locale}): at 320px the router stage labels wrap between words, never inside one`, { skip: chromium && SCENARIOS ? false : 'playwright is not installed' }, async () => {
+    const { browser, page, errors } = await openPanel(SCENARIOS['router-ready'], locale, 'light', { width: 320, height: 900 })
+    try {
+      await page.click('#tab-models')
+      const result = await page.evaluate(() => {
+        const broken = []
+        const cells = Array.from(document.querySelectorAll('[data-model-router-effort-table] tbody tr td:first-child'))
+        for (const cell of cells) {
+          const text = cell.firstChild
+          if (!text || text.nodeType !== Node.TEXT_NODE) continue
+          const value = text.textContent
+          let at = 0
+          for (const word of value.split(' ')) {
+            const range = document.createRange()
+            range.setStart(text, at)
+            range.setEnd(text, at + word.length)
+            const lines = new Set(Array.from(range.getClientRects()).map((rect) => Math.round(rect.top)))
+            if (lines.size > 1) broken.push(word)
+            at += word.length + 1
+          }
+        }
+        return { cells: cells.length, broken, scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }
+      })
+      assert.ok(result.cells > 0, 'the router-ready scenario renders effort tables')
+      assert.deepEqual(result.broken, [])
+      assert.ok(result.scroll <= result.client, `${result.scroll}px in ${result.client}px`)
+      assert.deepEqual(errors, [])
+    } finally {
+      await browser.close()
+    }
+  })
+}
