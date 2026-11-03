@@ -2,9 +2,9 @@
 
 Every release of Jev Advisor, newest first.
 
-## Unreleased (next release)
+## 0.13.14
 
-- **`orca game push` from a checkout on main is no longer judged as a write on main** (`odd/tasks/game-push-branch-reach.md`, `src/core/branch_reach.ts`). An Orca lead on main ran `orca game push`, which only sends the continue prompt to member terminals, and Jev refused it under `never_write_to_main`. The word "push" played no part: `orca` was on neither of the branch-reach lists, so its directory counted as a place it writes, and the policy was asked.
+- **`orca game push` from a checkout on main is no longer judged as a write on main** (#116, `odd/tasks/game-push-branch-reach.md`, `src/core/branch_reach.ts`). An Orca lead on main ran `orca game push`, which only sends the continue prompt to member terminals, and Jev refused it under `never_write_to_main`. The word "push" played no part: `orca` was on neither of the branch-reach lists, so its directory counted as a place it writes, and the policy was asked.
   - **Writes nothing.** `orca game push`, `state`, `leads`, `accounts`, `member`, `history`, `metrics`, `events` and `owner-questions` now write only their redirect targets. The program must be `orca` or `orca-ide`, by bare name or an absolute path outside the checkout, with every word readable as written.
   - **Still asked on main.** `orca game scene new`, `launch`, `wave`, `view`, `sweep --close`, any other `orca` command group, an `orca` inside the checkout, `npm run push-docs` (an npm script may write the checkout), `git commit` and any push naming main.
 

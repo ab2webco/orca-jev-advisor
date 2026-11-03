@@ -18,7 +18,7 @@ The bug report suspected a match on the word "push". The code does not do that:
 ## Checklist
 - [x] G1 RED: `branchReachPlaces` returned `["/work/repo"]` for the refused command; the gate-bash integration test judged it `with-policy` on main.
 - [x] G1 GREEN: both return no place / `without-policy`; true positives (`scene new`, `npm run push-docs`, `git commit`, `orca game push && git commit`, `git push origin main`) still keep the policy.
-- [x] Release 0.13.14: CHANGELOG, README, `package.json`, `orca-plugin.json`.
+- [x] Release 0.13.14 (#116): CHANGELOG, README, `package.json`, `orca-plugin.json`.
 
 ## Acceptance criteria
 - The refused command on a main checkout is not judged against never_write_to_main.

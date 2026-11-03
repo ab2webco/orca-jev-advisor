@@ -16,6 +16,10 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.14
+
+- **`orca game push` from a checkout on main goes ahead.** It only sends the continue prompt to your members' terminals, yet Jev refused it as a write on main. Orca game commands that message terminals or only read (`push`, `state`, `leads`, `member`, `history`, `metrics`, `events` and similar reads) are no longer judged against `never_write_to_main`. Commits, pushes to main, scripts run in the checkout and Orca commands that create files or worktrees still are.
+
 ## What changed in 0.13.13
 
 - **One save for the whole Configuration panel.** Change what you need on every tab and every account, then press the one bar at the bottom ("Save changes (N)"). Discard puts back what was saved. If any field is wrong, nothing is written. The Jev key, the Cloudflare credentials and the module switches still apply on their own.
