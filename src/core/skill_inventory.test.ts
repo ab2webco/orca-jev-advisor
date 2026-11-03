@@ -15,7 +15,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { listSkillInventory } from "./skill_inventory.ts";
+import { enabledPluginSkillDirs, listSkillInventory } from "./skill_inventory.ts";
 import type { SkillFs, SkillFsEntry, SkillFsStat, SkillInventoryRoots } from "./skill_inventory.ts";
 
 function skillMd(name: string, description: string): string {
@@ -174,4 +174,31 @@ test("a plain (non-link) directory is still listed with no stat call needed", as
     skills.map((s) => s.name),
     ["plain"],
   );
+});
+
+// Local addition (not upstream): a plugin's skills reach the inventory.
+test("an enabled user-scope plugin's skills are listed as plugin:skill; a disabled one is not", async () => {
+  const settings = { enabledPlugins: { "ponytail@ponytail": true, "off@x": false } };
+  const installed = {
+    plugins: {
+      "ponytail@ponytail": [
+        { scope: "project", projectPath: "/other", installPath: "C:\\old" },
+        { scope: "user", installPath: "C:\\cache\\ponytail\\4.11.0" },
+      ],
+      "off@x": [{ scope: "user", installPath: "/off" }],
+    },
+  };
+  const dirs = enabledPluginSkillDirs(settings, installed);
+  assert.deepEqual(dirs, [{ plugin: "ponytail", dir: "C:/cache/ponytail/4.11.0/skills" }]);
+
+  const state = makeState();
+  state.dirs.set("C:/cache/ponytail/4.11.0/skills", [{ name: "ponytail-review", kind: "dir" }]);
+  state.files.set("C:/cache/ponytail/4.11.0/skills/ponytail-review/SKILL.md", skillMd("ponytail-review", "Reviews a diff."));
+  const skills = await listSkillInventory(makeFakeFs(state), { projectSkillsDir: null, userSkillsDir: null, pluginSkillsDirs: dirs });
+  assert.deepEqual(skills, [{ name: "ponytail:ponytail-review", description: "Reviews a diff.", path: "C:/cache/ponytail/4.11.0/skills/ponytail-review/SKILL.md", source: "plugin" }]);
+});
+
+test("missing or malformed plugin files read as no plugin skills", () => {
+  assert.deepEqual(enabledPluginSkillDirs(null, null), []);
+  assert.deepEqual(enabledPluginSkillDirs({ enabledPlugins: { "a@b": true } }, { plugins: { "a@b": "nope" } }), []);
 });
