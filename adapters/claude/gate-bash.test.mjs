@@ -3855,6 +3855,23 @@ test('B2: on a working branch, none of these commands is judged against never_wr
   assert.deepEqual(judged, Object.fromEntries(commands.map((command) => [command, true])))
 })
 
+// odd/tasks/game-push-branch-reach.md G1: an Orca lead on main ran
+// `orca game push`, which only messages member terminals, and Jev refused it
+// under never_write_to_main because the policy was asked at all.
+const ORCA_GAME_ON_MAIN = ['/Applications/Orca.app/Contents/Resources/bin/orca game push', 'orca game push --json', 'orca game state --json', 'echo push']
+const ORCA_OR_PUSH_INTO_THE_CHECKOUT = ['orca game scene new', 'npm run push-docs', 'git commit -m push', 'orca game push && git commit -m x']
+
+test('G1: on main, an Orca game push or read is not judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(ORCA_GAME_ON_MAIN.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('main'))]))
+  // `echo push` prints only, so tier 1a passes it before any policy.
+  assert.deepEqual(judged, Object.fromEntries(ORCA_GAME_ON_MAIN.map((command) => [command, command === 'echo push' ? 'tier 1a' : 'without-policy'])))
+})
+
+test('G1: on main, a command that may still write the checkout is judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(ORCA_OR_PUSH_INTO_THE_CHECKOUT.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('main'))]))
+  assert.deepEqual(judged, Object.fromEntries(ORCA_OR_PUSH_INTO_THE_CHECKOUT.map((command) => [command, 'with-policy'])))
+})
+
 // ---------------------------------------------------------------------------
 // 0.6.28 T2: a command whose only effect is inside a temp root is allowed
 // locally (stopReason `contained`), after the local deny rules and before

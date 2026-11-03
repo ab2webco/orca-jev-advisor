@@ -5,6 +5,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { branchReachPlaces, namesProtectedBranch } from "./branch_reach.ts";
+import { buildSeedScopeIndex, filterPoliciesForBranchReach, type Policy } from "./decisions.ts";
+import { pushTargets } from "./deny_rule_shapes.ts";
+import type { ImplicitPushDestination } from "./push_remote.ts";
 
 const PROTECTED: ReadonlySet<string> = new Set(["main", "master", "production", "develop", "staging"]);
 
@@ -329,4 +332,82 @@ test("B1: a reader whose arguments cannot be read keeps its directory", () => {
   assert.ok(ASKED(branchReachPlaces("uniq - src/out", REPO, HOME)));
   assert.ok(ASKED(branchReachPlaces("rg x '--pre' cat", REPO, HOME)));
   assert.ok(ASKED(branchReachPlaces("cat f >x<y", REPO, HOME)));
+});
+
+// odd/tasks/game-push-branch-reach.md G1: on 2026-11-03 an Orca lead session
+// whose checkout was on main ran `/Applications/Orca.app/Contents/Resources/
+// bin/orca game push` and Jev refused it under never_write_to_main (gate log:
+// commandFamily orca, source jev, verdict deny). `orca game push` sends the
+// continue prompt to member terminals and writes no file in the checkout, but
+// `orca` was on neither list, so its directory counted and the policy was
+// asked. The word "push" played no part in keeping it: pushTargets reads only
+// git pushes.
+const ORCA_BIN = "/Applications/Orca.app/Contents/Resources/bin/orca";
+const POLICY: Policy = { id: "never_write_to_main", rule: "Never write directly on main or develop, not even a one-line fix.", kind: "prohibits" };
+const SCOPE = buildSeedScopeIndex([{ id: "never_write_to_main", scope: "protected-branch" }]);
+const NO_REMOTE = (): boolean => false;
+const NO_IMPLICIT = (): ImplicitPushDestination => ({ kind: "branch", name: "main" });
+
+test("G1: the refused `orca game push` on a main checkout reaches no place, and never_write_to_main is not asked", () => {
+  const command = `${ORCA_BIN} game push`;
+  const places = branchReachPlaces(command, REPO, HOME);
+  assert.deepEqual(places, []);
+  assert.equal(namesProtectedBranch(command, PROTECTED), false);
+  assert.deepEqual(pushTargets(command, REPO, HOME, NO_REMOTE, NO_IMPLICIT), []);
+  const branches = places.map((): string => "main");
+  assert.deepEqual(filterPoliciesForBranchReach([POLICY], SCOPE, { branches, namesProtected: false, protectedBranches: PROTECTED }), []);
+});
+
+test("G1: Orca game commands that only message terminals or read Orca's own state write no file in the checkout", () => {
+  for (const command of [
+    "orca game push",
+    "orca game push --json",
+    "orca game push --dry-run",
+    "orca-ide game push",
+    `${ORCA_BIN} game state --json`,
+    "orca game leads --json",
+    "orca game accounts --refresh --json",
+    "orca game member CIN-12 --json",
+    "orca game history --ticket CIN-12",
+    "orca game metrics --since 2026-10-15",
+    "orca game events --ticket CIN-12 --json",
+    "orca game owner-questions --all",
+    "ORCA_X=1 orca game push",
+    "orca game push 2>&1 | tail -5",
+    "echo push",
+  ]) {
+    assert.deepEqual(branchReachPlaces(command, REPO, HOME), [], command);
+  }
+  assert.deepEqual(branchReachPlaces("orca game push > /tmp/push.log", REPO, HOME), ["/tmp/push.log"]);
+});
+
+test("G1: an Orca command that may write the checkout, or one the text does not settle, still counts its directory", () => {
+  for (const command of [
+    "orca game scene new",
+    "orca game launch CIN-12",
+    "orca game wave CIN-1 CIN-2",
+    "orca game view zen",
+    "orca game sweep --close",
+    "orca worktree create x",
+    "orca game",
+    "orca game $SUB",
+    'orca game "$(echo push)"',
+    "orca game pu''sh",
+    "./orca game push",
+    "bin/orca game push",
+    `${REPO}/bin/orca game push`,
+    "orcax game push",
+    "npm run push-docs",
+  ]) {
+    assert.ok(ASKED(branchReachPlaces(command, REPO, HOME)), command);
+  }
+  assert.deepEqual(branchReachPlaces("orca game push > notes.md", REPO, HOME), [`${REPO}/notes.md`]);
+});
+
+test("G1: real writes to main keep never_write_to_main next to an Orca push", () => {
+  assert.ok(ASKED(branchReachPlaces('orca game push && git commit -m "push"', REPO, HOME)));
+  assert.ok(ASKED(branchReachPlaces("orca game push; git push", REPO, HOME)));
+  assert.equal(namesProtectedBranch("orca game push && git push origin main", PROTECTED), true);
+  assert.equal(namesProtectedBranch("git push origin HEAD:main", PROTECTED), true);
+  assert.deepEqual(pushTargets("orca game push && git push origin main", REPO, HOME, NO_REMOTE, NO_IMPLICIT).map((push) => push.branch), ["main"]);
 });
