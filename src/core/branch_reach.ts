@@ -106,6 +106,33 @@ function writesNoFile(program: string, args: readonly string[]): boolean {
   }
 }
 
+// odd/tasks/game-push-branch-reach.md G1: on 2026-11-03 `orca game push`,
+// run by an Orca lead whose checkout was on main, was refused under
+// never_write_to_main: `orca` was on neither list, so its directory counted.
+// These `orca game` commands message member terminals or read Orca's own
+// state; none writes a file in the checkout. Commands that create a file or a
+// worktree (`scene new`, `launch`, `wave`) or store settings (`view`) are not
+// here, nor is any other `orca` command group.
+const ORCA_PROGRAMS: ReadonlySet<string> = new Set(["orca", "orca-ide"]);
+const ORCA_GAME_WRITES_NO_FILE: ReadonlySet<string> = new Set([
+  "push", "state", "leads", "accounts", "member", "history", "metrics", "events", "owner-questions",
+]);
+
+/**
+ * Whether `program` is the Orca CLI, by its bare name or an absolute path
+ * outside `dir` and `cwd` (a `./orca` in the checkout may be anything), run
+ * as one of the `orca game` commands that write no file. Every word must read
+ * as written: `orca game "$SUB"` or `pu''sh` keeps its directory.
+ */
+function orcaGameWritesNoFile(program: string, args: readonly string[], dir: string, cwd: string): boolean {
+  const name = program.slice(program.lastIndexOf("/") + 1);
+  if (!ORCA_PROGRAMS.has(name)) return false;
+  if (name !== program && (!isAbsolute(program) || holds(dir, resolve(program)) || holds(cwd, resolve(program)))) return false;
+  if (args.some((raw) => isUnreadableWord(raw) || raw !== wordText(raw))) return false;
+  const [group, command] = args;
+  return group === "game" && command !== undefined && ORCA_GAME_WRITES_NO_FILE.has(command);
+}
+
 /** Options that take a value, per program whose only writes are the files it names. */
 interface OptionShape {
   /** Short letters that take a value, glued (`-m755`) or as the next word. */
@@ -324,11 +351,12 @@ function listedProgramPlaces(segment: string, dir: string, cwd: string, home: st
   if (split === null) return null;
   const [program, ...args] = split.words;
   if (program === undefined || program !== wordText(program)) return null;
-  const named = WRITES_NO_FILE.has(program) ? (writesNoFile(program, args) ? { files: [], writesDir: false, parentsCount: false } : null) : namedWrites(program, args);
+  const writesNone = WRITES_NO_FILE.has(program) ? writesNoFile(program, args) : orcaGameWritesNoFile(program, args, dir, cwd);
+  const named = writesNone ? { files: [], writesDir: false, parentsCount: false } : WRITES_NO_FILE.has(program) ? null : namedWrites(program, args);
   if (named === null) return null;
   const places: (string | null)[] = named.writesDir ? [dir] : [];
   // A variable may hold an option (`cp $OPTS a b` may be `cp -t src a b`).
-  let unknown = !WRITES_NO_FILE.has(program) && args.some((raw) => hasExpansion(homeRest(raw) ?? raw));
+  let unknown = !writesNone && !WRITES_NO_FILE.has(program) && args.some((raw) => hasExpansion(homeRest(raw) ?? raw));
   for (const raw of [...named.files, ...split.targets]) {
     const path = resolveWord(raw, dir, home);
     if (path === null) {

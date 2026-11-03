@@ -2,6 +2,12 @@
 
 Every release of Jev Advisor, newest first.
 
+## Unreleased (next release)
+
+- **`orca game push` from a checkout on main is no longer judged as a write on main** (`odd/tasks/game-push-branch-reach.md`, `src/core/branch_reach.ts`). An Orca lead on main ran `orca game push`, which only sends the continue prompt to member terminals, and Jev refused it under `never_write_to_main`. The word "push" played no part: `orca` was on neither of the branch-reach lists, so its directory counted as a place it writes, and the policy was asked.
+  - **Writes nothing.** `orca game push`, `state`, `leads`, `accounts`, `member`, `history`, `metrics`, `events` and `owner-questions` now write only their redirect targets. The program must be `orca` or `orca-ide`, by bare name or an absolute path outside the checkout, with every word readable as written.
+  - **Still asked on main.** `orca game scene new`, `launch`, `wave`, `view`, `sweep --close`, any other `orca` command group, an `orca` inside the checkout, `npm run push-docs` (an npm script may write the checkout), `git commit` and any push naming main.
+
 ## 0.13.13
 
 - **Tool selection can be turned off, and starts off** (#113, `odd/tasks/tool-selection-off.md`, `src/core/mod_skills_config.ts`). A week of measurement (`odd/qa/native-runtime-verification.md`) found the advised tool matched the first tool used in 27.2% of 1,984 decisions, against 69.2% for always guessing Bash. The `activeTools` boolean only offered measurement or active, and both called Jev on every sampled prompt.
