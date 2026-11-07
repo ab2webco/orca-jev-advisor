@@ -16,6 +16,10 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.15
+
+- **A cancelled CI run no longer reads as a failure.** When a newer commit on the same branch cancels a run, the CI notice says "superseded by" and names the newer commit, instead of failure. A run cancelled with no newer commit says "cancelled", never "passed". A real failure on your latest commit, a required check included, is still reported as failure.
+
 ## What changed in 0.13.14
 
 - **`orca game push` from a checkout on main goes ahead.** It only sends the continue prompt to your members' terminals, yet Jev refused it as a write on main. Orca game commands that message terminals or only read (`push`, `state`, `leads`, `member`, `history`, `metrics`, `events` and similar reads) are no longer judged against `never_write_to_main`. Commits, pushes to main, scripts run in the checkout and Orca commands that create files or worktrees still are.

@@ -2,6 +2,13 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.15
+
+- **A CI run cancelled by a newer commit no longer reads as a failure** (ORCA-1010, #117, `src/core/ci_watch.ts`). The CI watcher called every conclusion other than success, skipped or neutral a failure, and stayed on the pushed sha without checking for a newer one. Three runs on one branch were cancelled by a newer merge, and Jev reported failure for each of them. Only one had a failed job: the verify gate.
+  - **Superseded.** When the watched branch has a run for a newer commit, the watch ends as `superseded by <sha7>` in the band, the toast and the agent's note, even if a gate failed on the older commit.
+  - **Cancelled.** A cancellation with no newer commit ends as `cancelled`, naming the cancelled workflows. It never reads as success, and the game shows it as a warning.
+  - **Failure.** A failed run on the newest commit, including a required gate such as verify, still reports failure, even when other runs were cancelled. The weekly CI summary counts cancelled and superseded watches as finished, and `npm run measure-member-routing` no longer counts them as failures.
+
 ## 0.13.14
 
 - **`orca game push` from a checkout on main is no longer judged as a write on main** (#116, `odd/tasks/game-push-branch-reach.md`, `src/core/branch_reach.ts`). An Orca lead on main ran `orca game push`, which only sends the continue prompt to member terminals, and Jev refused it under `never_write_to_main`. The word "push" played no part: `orca` was on neither of the branch-reach lists, so its directory counted as a place it writes, and the policy was asked.
