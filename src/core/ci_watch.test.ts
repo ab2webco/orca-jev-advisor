@@ -301,7 +301,7 @@ test("done needs two identical polls with every run completed, a settle window s
   assert.equal(third.kind, "wait");
   const fourth = ciWatchStep(third.kind === "wait" ? third.progress : progress, finished, TARGET);
   assert.equal(fourth.kind, "done");
-  assert.deepEqual(fourth.kind === "done" ? fourth.verdict : null, { outcome: "success", url: "https://github.com/a/b/actions/runs/101", workflows: 1, failed: [], durationMs: 60_000 });
+  assert.deepEqual(fourth.kind === "done" ? fourth.verdict : null, { outcome: "success", url: "https://github.com/a/b/actions/runs/101", workflows: 1, failed: [], supersededBy: null, durationMs: 60_000 });
 });
 
 test("done after a long wait needs only the confirming poll", () => {
@@ -355,12 +355,36 @@ test("verdict: success, skipped and neutral are success", () => {
 });
 
 test("verdict: anything else is failure, the failed workflows are named and the failed run's url is the one given", () => {
-  for (const conclusion of ["failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale", "something-new"]) {
+  for (const conclusion of ["failure", "timed_out", "action_required", "startup_failure", "stale", "something-new"]) {
     const step = settle([run(), run({ id: 102, conclusion, workflow: "Deploy", url: "https://github.com/a/b/actions/runs/102" })]);
     assert.equal(step.kind === "done" ? step.verdict.outcome : null, "failure", conclusion);
     assert.deepEqual(step.kind === "done" ? step.verdict.failed : null, ["Deploy"], conclusion);
     assert.equal(step.kind === "done" ? step.verdict.url : null, "https://github.com/a/b/actions/runs/102", conclusion);
   }
+});
+
+test("a run superseded by a newer head on its branch ends as superseded by that sha, not failure, even with a gate failed on the old sha", () => {
+  const newer = run({ id: 301, sha: OTHER_SHA, status: "in_progress", conclusion: null, createdAtMs: T0 + 90_000, updatedAtMs: T0 + 95_000 });
+  const step = settle([run({ conclusion: "cancelled" }), run({ id: 102, workflow: "verify", conclusion: "failure" }), newer]);
+  assert.equal(step.kind === "done" ? step.verdict.outcome : null, "superseded");
+  assert.equal(step.kind === "done" ? step.verdict.supersededBy : null, "fedcba9");
+  assert.equal(step.kind === "done" ? ciNoteText({ sha7: "0123456", branch: "feat/x" }, step.verdict) : null, "CI for 0123456 on feat/x: superseded by fedcba9, https://github.com/a/b/actions/runs/101");
+});
+
+test("a cancellation with no newer head stays visible as cancelled and never reads as success", () => {
+  const step = settle([run(), run({ id: 102, workflow: "Deploy", conclusion: "cancelled", url: "https://github.com/a/b/actions/runs/102" })]);
+  assert.equal(step.kind === "done" ? step.verdict.outcome : null, "cancelled");
+  assert.deepEqual(step.kind === "done" ? step.verdict.failed : null, ["Deploy"]);
+  assert.equal(step.kind === "done" ? ciNoteText({ sha7: "0123456", branch: "feat/x" }, step.verdict) : null, "CI for 0123456 on feat/x: cancelled (Deploy), https://github.com/a/b/actions/runs/102");
+  assert.ok(isCiWatchNote("CI for 0123456 on feat/x: cancelled (Deploy), https://github.com/a/b/actions/runs/102"));
+});
+
+test("a real failure on the newest head still reports failure, a required gate such as verify included", () => {
+  const older = run({ id: 50, sha: OTHER_SHA, conclusion: "cancelled", createdAtMs: T0 - 60_000, updatedAtMs: T0 - 30_000 });
+  const step = settle([older, run(), run({ id: 102, workflow: "verify", conclusion: "failure", url: "https://github.com/a/b/actions/runs/102" }), run({ id: 103, workflow: "Deploy", conclusion: "cancelled" })]);
+  assert.equal(step.kind === "done" ? step.verdict.outcome : null, "failure");
+  assert.deepEqual(step.kind === "done" ? step.verdict.failed : null, ["verify"]);
+  assert.equal(step.kind === "done" ? step.verdict.supersededBy : undefined, null);
 });
 
 test("a completed run with no conclusion is failure, never a guess towards success", () => {
@@ -397,10 +421,10 @@ test("a later trigger on the same sha extends the watch: the settle window resta
 
 test("the agent's note: sha, branch, outcome and url; a failure names the workflows", () => {
   const url = "https://github.com/a/b/actions/runs/7";
-  assert.equal(ciNoteText({ sha7: "0123456", branch: "feat/x" }, { outcome: "success", url, workflows: 2, failed: [], durationMs: null }), `CI for 0123456 on feat/x: success, ${url}`);
-  assert.equal(ciNoteText({ sha7: "0123456", branch: "feat/x" }, { outcome: "failure", url, workflows: 2, failed: ["CI", "Deploy"], durationMs: null }), `CI for 0123456 on feat/x: failure (CI, Deploy), ${url}`);
-  assert.equal(ciNoteText({ sha7: "0123456", branch: null }, { outcome: "success", url, workflows: 1, failed: [], durationMs: null }), `CI for 0123456: success, ${url}`);
-  assert.equal(ciNoteText({ sha7: "0123456", branch: "b" }, { outcome: "failure", url, workflows: 6, failed: ["a", "b", "c", "d", "e"], durationMs: null }), `CI for 0123456 on b: failure (a, b, c and 2 more), ${url}`);
+  assert.equal(ciNoteText({ sha7: "0123456", branch: "feat/x" }, { outcome: "success", url, workflows: 2, failed: [], supersededBy: null, durationMs: null }), `CI for 0123456 on feat/x: success, ${url}`);
+  assert.equal(ciNoteText({ sha7: "0123456", branch: "feat/x" }, { outcome: "failure", url, workflows: 2, failed: ["CI", "Deploy"], supersededBy: null, durationMs: null }), `CI for 0123456 on feat/x: failure (CI, Deploy), ${url}`);
+  assert.equal(ciNoteText({ sha7: "0123456", branch: null }, { outcome: "success", url, workflows: 1, failed: [], supersededBy: null, durationMs: null }), `CI for 0123456: success, ${url}`);
+  assert.equal(ciNoteText({ sha7: "0123456", branch: "b" }, { outcome: "failure", url, workflows: 6, failed: ["a", "b", "c", "d", "e"], supersededBy: null, durationMs: null }), `CI for 0123456 on b: failure (a, b, c and 2 more), ${url}`);
 });
 
 test("the note is recognised by its own wording", () => {
@@ -452,6 +476,15 @@ test("band rows: passed says how long CI took (the runs' own clock, else the wat
   assert.deepEqual(ciBandRows("es", [failed], T0 + 41 * MIN, 200), ["CI feat/x (0123456) · falló «lint», «build» tras 12 min"]);
   assert.deepEqual(ciBandRows("en", [failed], T0 + 41 * MIN, 200), ["CI feat/x (0123456) · failed \"lint\", \"build\" after 12 min"]);
   assert.deepEqual(ciBandRows("en", [{ ...failed, failed: [], durationMs: 90 * MIN + 5 * MIN }], T0 + 41 * MIN, 200), ["CI feat/x (0123456) · failed after 1 h 35 min"]);
+});
+
+test("band rows: cancelled names the cancelled workflows; superseded names the newer head; both survive the state round trip", () => {
+  const ended: CiBandRow = { ...ROW, running: [], done: 2, total: 2, durationMs: 3 * MIN, finishedAtMs: T0 + 5 * MIN };
+  const cancelled: CiBandRow = { ...ended, status: "cancelled", failed: ["Deploy"] };
+  const superseded: CiBandRow = { ...ended, status: "superseded", supersededBy: "fedcba9" };
+  assert.deepEqual(ciBandRows("en", [cancelled, superseded], T0 + 6 * MIN, 200), ["CI feat/x (0123456) · cancelled \"Deploy\" after 3 min", "CI feat/x (0123456) · superseded by fedcba9 after 3 min"]);
+  assert.deepEqual(ciBandRows("es", [cancelled, superseded], T0 + 6 * MIN, 200), ["CI feat/x (0123456) · cancelado «Deploy» tras 3 min", "CI feat/x (0123456) · reemplazado por fedcba9 tras 3 min"]);
+  assert.deepEqual(parseCiBandRows({ rows: [cancelled, superseded] }), [cancelled, superseded]);
 });
 
 test("band rows: before any run of the sha has appeared the row says it waits for GitHub and when it stops waiting", () => {

@@ -2965,12 +2965,12 @@ async function ciWatchFinish($: EngineInterface, host: CiWatchHost, watch: CiWat
     ciRemoveRow(host, watch.id)
     await ciPublishRows($, host)
   } else {
-    const row: CiBandRow = { ...ciWatchingRow(watch, 0, 0, []), status: verdict.outcome, done: verdict.workflows, total: verdict.workflows, failed: verdict.failed, durationMs: verdict.durationMs, finishedAtMs }
+    const row: CiBandRow = { ...ciWatchingRow(watch, 0, 0, []), status: verdict.outcome, done: verdict.workflows, total: verdict.workflows, failed: verdict.failed, durationMs: verdict.durationMs, finishedAtMs, ...(verdict.supersededBy === null ? {} : { supersededBy: verdict.supersededBy }) }
     ciSetRow(host, row)
     await ciPublishRows($, host)
     const toast = `${ciFinishedText(await resolveLocale($), row)}${verdict.url.length > 0 ? ` · ${verdict.url}` : ''}`
     $.ui.toast(toast, { timeoutMs: CI_TOAST_MS })
-    await notifyGame($, host.game, { id: `ci:${row.id}`, level: verdict.outcome === 'failure' ? 'warn' : 'info', text: toast, at: finishedAtMs })
+    await notifyGame($, host.game, { id: `ci:${row.id}`, level: verdict.outcome === 'failure' || verdict.outcome === 'cancelled' ? 'warn' : 'info', text: toast, at: finishedAtMs })
     $.clock.after(CI_ROW_KEEP_MS, () => ciRowsExpire($, host))
   }
   const at = new Date(finishedAtMs).toISOString()

@@ -12,7 +12,7 @@
 
 import type { Locale } from "./i18n.ts";
 import { ciShownRows } from "./ci_watch.ts";
-import type { CiBandRow } from "./ci_watch.ts";
+import type { CiBandRow, CiVerdictOutcome } from "./ci_watch.ts";
 import type { SessionEffort } from "./model_router_decide.ts";
 import { subagentWhyText } from "./subagent_band.ts";
 import type { RunningSubagent, SubagentWhy } from "./subagent_status.ts";
@@ -65,7 +65,7 @@ export interface AdvisorCi {
   readonly id: string;
   readonly sha7: string;
   readonly branch: string | null;
-  readonly status: "watching" | "success" | "failure";
+  readonly status: "watching" | CiVerdictOutcome;
   readonly done: number;
   readonly total: number;
   readonly failed: readonly string[];
