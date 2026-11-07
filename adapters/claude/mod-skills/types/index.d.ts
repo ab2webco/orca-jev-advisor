@@ -147,7 +147,7 @@ export type CiWatchesState = {
     /** The first seven characters of the commit. */
     sha7: string
     branch: string | null
-    status: 'watching' | 'success' | 'failure'
+    status: 'watching' | 'success' | 'failure' | 'cancelled' | 'superseded'
     startedAtMs: number
     /** Runs finished and runs seen so far. */
     done: number
@@ -162,6 +162,8 @@ export type CiWatchesState = {
     /** How long the runs took, once finished. */
     durationMs: number | null
     finishedAtMs: number | null
+    /** The newer head's sha7 on a superseded row. */
+    supersededBy?: string
   }[]
 }
 
@@ -223,7 +225,7 @@ export type AdvisorState = {
     id: string
     sha7: string
     branch: string | null
-    status: 'watching' | 'success' | 'failure'
+    status: 'watching' | 'success' | 'failure' | 'cancelled' | 'superseded'
     done: number
     total: number
     failed: readonly string[]

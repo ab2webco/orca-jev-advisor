@@ -446,11 +446,22 @@ export function extendCiWatch(progress: CiWatchProgress): CiWatchProgress {
   return { ...progress, settleFromMs: progress.elapsedMs, signature: null, failedPolls: 0 };
 }
 
+/**
+ * How a watched sha's runs ended. A newer head on the same branch makes the
+ * sha superseded whatever its runs said (a merge queue or a push cancels
+ * them); with no newer head a failed run is failure, a cancelled one with no
+ * failure is cancelled, and only success, skipped and neutral are success.
+ */
+export type CiVerdictOutcome = "success" | "failure" | "cancelled" | "superseded";
+
 export interface CiVerdict {
-  readonly outcome: "success" | "failure";
+  readonly outcome: CiVerdictOutcome;
   readonly url: string;
   readonly workflows: number;
+  /** The failed workflows on failure, the cancelled ones on cancelled; empty otherwise. */
   readonly failed: readonly string[];
+  /** The newer head's sha7 when superseded, null otherwise. */
+  readonly supersededBy: string | null;
   /** From the first run created to the last one updated; null when gh gave no times. */
   readonly durationMs: number | null;
 }
@@ -476,14 +487,32 @@ function durationOf(runs: readonly CiRun[]): number | null {
   return Math.max(0, Math.max(...ends) - Math.min(...starts));
 }
 
-function verdictOf(runs: readonly CiRun[]): CiVerdict {
-  const failed = runs.filter((run) => !SUCCESS_CONCLUSIONS.has(run.conclusion ?? ""));
+/** The newest run on the watched runs' branch for another sha, created after them: a newer head. Null when the branch is unknown or there is none. */
+function newerHead(mine: readonly CiRun[], all: readonly CiRun[], target: string): CiRun | null {
+  const branch = mine.find((run) => run.branch.length > 0)?.branch;
+  if (branch === undefined) return null;
+  const latest = Math.max(...mine.map((run) => run.createdAtMs));
+  let newest: CiRun | null = null;
+  for (const run of all) {
+    if (run.branch !== branch || shaMatches(run.sha, target) || run.createdAtMs <= latest) continue;
+    if (newest === null || run.createdAtMs > newest.createdAtMs) newest = run;
+  }
+  return newest;
+}
+
+function verdictOf(mine: readonly CiRun[], all: readonly CiRun[], target: string): CiVerdict {
+  const base = { workflows: mine.length, durationMs: durationOf(mine) };
+  const newer = newerHead(mine, all, target);
+  if (newer !== null) return { ...base, outcome: "superseded", url: mine[0]?.url ?? "", failed: [], supersededBy: newer.sha.slice(0, 7) };
+  const notPassed = mine.filter((run) => !SUCCESS_CONCLUSIONS.has(run.conclusion ?? ""));
+  const failed = notPassed.filter((run) => run.conclusion !== "cancelled");
+  const shown = failed.length > 0 ? failed : notPassed;
   return {
-    outcome: failed.length === 0 ? "success" : "failure",
-    url: (failed[0] ?? runs[0])?.url ?? "",
-    workflows: runs.length,
-    failed: failed.map((run) => run.workflow),
-    durationMs: durationOf(runs),
+    ...base,
+    outcome: failed.length > 0 ? "failure" : notPassed.length > 0 ? "cancelled" : "success",
+    url: (shown[0] ?? mine[0])?.url ?? "",
+    failed: shown.map((run) => run.workflow),
+    supersededBy: null,
   };
 }
 
@@ -512,7 +541,7 @@ export function ciWatchStep(progress: CiWatchProgress, runs: readonly CiRun[] | 
   }
   if (open.length > 0) return schedule({ ...base, signature: null }, pollDelayMs(progress.polls), mine.length, open.length, open.map((run) => run.workflow));
   const signature = mine.map((run) => `${run.id}:${run.conclusion ?? ""}`).sort().join(",");
-  if (signature === progress.signature && progress.elapsedMs - progress.settleFromMs >= CI_SETTLE_MS) return { kind: "done", verdict: verdictOf(mine), progress: { ...base, signature } };
+  if (signature === progress.signature && progress.elapsedMs - progress.settleFromMs >= CI_SETTLE_MS) return { kind: "done", verdict: verdictOf(mine, runs, target.sha), progress: { ...base, signature } };
   return schedule({ ...base, signature }, CONFIRM_DELAY_MS, mine.length, 0, []);
 }
 
@@ -542,13 +571,18 @@ function namedList(names: readonly string[]): string {
 /** The one line the agent reads when the run has ended. English on purpose: it is for the model. */
 export function ciNoteText(label: CiLabel, verdict: CiVerdict): string {
   const where = label.branch === null ? "" : ` on ${label.branch}`;
-  const outcome = verdict.outcome === "failure" && verdict.failed.length > 0 ? `failure (${namedList(verdict.failed)})` : verdict.outcome;
+  const outcome =
+    verdict.outcome === "superseded" && verdict.supersededBy !== null
+      ? `superseded by ${verdict.supersededBy}`
+      : (verdict.outcome === "failure" || verdict.outcome === "cancelled") && verdict.failed.length > 0
+        ? `${verdict.outcome} (${namedList(verdict.failed)})`
+        : verdict.outcome;
   return `CI for ${label.sha7}${where}: ${outcome}, ${verdict.url}`;
 }
 
 /** Whether a prompt's text is the note ciNoteText writes. The hook also checks the prompt came from a plugin. */
 export function isCiWatchNote(text: string): boolean {
-  return /^CI for [0-9a-f]{7}( on \S+)?: (success|failure)\b/.test(text);
+  return /^CI for [0-9a-f]{7}( on \S+)?: (success|failure|cancelled|superseded)\b/.test(text);
 }
 
 /** One row of the band: a watch, running or lately ended. Plain data, kept in `$.state`. */
@@ -556,7 +590,7 @@ export interface CiBandRow {
   readonly id: string;
   readonly sha7: string;
   readonly branch: string | null;
-  readonly status: "watching" | "success" | "failure";
+  readonly status: "watching" | CiVerdictOutcome;
   readonly startedAtMs: number;
   readonly done: number;
   readonly total: number;
@@ -569,7 +603,11 @@ export interface CiBandRow {
   /** How long the runs took, once finished; null when gh gave no times (the watch's own clock is used). */
   readonly durationMs: number | null;
   readonly finishedAtMs: number | null;
+  /** The newer head's sha7 on a superseded row; absent on every other row. */
+  readonly supersededBy?: string;
 }
+
+const BAND_STATUSES: ReadonlySet<unknown> = new Set(["watching", "success", "failure", "cancelled", "superseded"]);
 
 /** How long a finished row stays in the band. */
 export const CI_ROW_KEEP_MS = 120_000;
@@ -584,7 +622,8 @@ function isBandRow(value: unknown): value is CiBandRow {
     typeof value["id"] === "string" &&
     typeof value["sha7"] === "string" &&
     (value["branch"] === null || typeof value["branch"] === "string") &&
-    (value["status"] === "watching" || value["status"] === "success" || value["status"] === "failure") &&
+    BAND_STATUSES.has(value["status"]) &&
+    (value["supersededBy"] === undefined || typeof value["supersededBy"] === "string") &&
     typeof value["startedAtMs"] === "number" &&
     typeof value["done"] === "number" &&
     typeof value["total"] === "number" &&
@@ -636,10 +675,12 @@ function quotedList(locale: Locale, names: readonly string[]): string {
   return names.map((name) => quoted(locale, name)).join(", ");
 }
 
-/** The line for a watch that ended: passed in so long, or failed with the workflows named and when. */
+/** The line for a watch that ended: passed in so long, failed or cancelled with the workflows named and when, or superseded by the newer head. */
 export function ciFinishedText(locale: Locale, row: CiBandRow): string {
   const elapsed = formatCiDuration(row.durationMs ?? Math.max(0, (row.finishedAtMs ?? row.startedAtMs) - row.startedAtMs));
   if (row.status === "success") return translate(CI_WATCH_CATALOG, locale, "band.passed", { label: labelOf(row), elapsed });
+  if (row.status === "superseded") return translate(CI_WATCH_CATALOG, locale, "band.superseded", { label: labelOf(row), sha7: row.supersededBy ?? "?", elapsed });
+  if (row.status === "cancelled") return translate(CI_WATCH_CATALOG, locale, "band.cancelled", { label: labelOf(row), workflows: row.failed.length > 0 ? ` ${quotedList(locale, row.failed)}` : "", elapsed });
   return translate(CI_WATCH_CATALOG, locale, "band.failed", { label: labelOf(row), workflows: row.failed.length > 0 ? ` ${quotedList(locale, row.failed)}` : "", elapsed });
 }
 
@@ -699,7 +740,7 @@ export function ciWatchDecisionFileName(atIso: string): string {
   return `ci-watch-decisions-${atIso.slice(0, 13)}.jsonl`;
 }
 
-export type CiWatchOutcome = "success" | "failure" | "no-runs" | "cap" | "gh-failed" | "gh-missing";
+export type CiWatchOutcome = CiVerdictOutcome | "no-runs" | "cap" | "gh-failed" | "gh-missing";
 
 export interface CiWatchRecordInput {
   readonly at: string;
@@ -757,7 +798,7 @@ export function ciWatchRecord(input: CiWatchRecordInput): CiWatchRecord {
 export interface CiWatchSummary {
   /** Watches that ended in the window, whatever the way. */
   readonly watches: number;
-  /** Of them, the ones whose run ended: success or failure. */
+  /** Of them, the ones whose run ended with a verdict: success, failure, cancelled or superseded. */
   readonly finished: number;
   readonly failed: number;
   readonly ghCalls: number;
@@ -785,7 +826,7 @@ export function summarizeCiWatchRows(rows: readonly unknown[], nowMs: number, wi
     const atMs = Date.parse(row["at"]);
     if (Number.isNaN(atMs) || atMs > nowMs || atMs < nowMs - windowMs) continue;
     watches += 1;
-    if (row["outcome"] === "success" || row["outcome"] === "failure") finished += 1;
+    if (row["outcome"] === "success" || row["outcome"] === "failure" || row["outcome"] === "cancelled" || row["outcome"] === "superseded") finished += 1;
     if (row["outcome"] === "failure") failed += 1;
     ghCalls += count(row["ghCalls"]);
     pollsReplaced += count(row["agentPolls"]);

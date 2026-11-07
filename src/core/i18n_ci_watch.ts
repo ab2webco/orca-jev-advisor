@@ -5,7 +5,7 @@
 // line says what runs, for how long, and how long it usually takes.
 import type { Catalog } from "./i18n.ts";
 
-export type CiWatchKey = "band.waiting" | "band.running" | "band.part.done" | "band.part.typical" | "band.part.typicalOf" | "band.part.slow" | "band.passed" | "band.failed";
+export type CiWatchKey = "band.waiting" | "band.running" | "band.part.done" | "band.part.typical" | "band.part.typicalOf" | "band.part.slow" | "band.passed" | "band.failed" | "band.cancelled" | "band.superseded";
 
 export const CI_WATCH_CATALOG: Catalog<CiWatchKey> = {
   es: {
@@ -17,6 +17,8 @@ export const CI_WATCH_CATALOG: Catalog<CiWatchKey> = {
     "band.part.slow": " · más lento que lo usual",
     "band.passed": "CI {{label}} · pasó en {{elapsed}}",
     "band.failed": "CI {{label}} · falló{{workflows}} tras {{elapsed}}",
+    "band.cancelled": "CI {{label}} · cancelado{{workflows}} tras {{elapsed}}",
+    "band.superseded": "CI {{label}} · reemplazado por {{sha7}} tras {{elapsed}}",
   },
   en: {
     "band.waiting": "CI {{label}} · waiting for GitHub to start CI for this commit ({{elapsed}}) · stops watching if none shows up in {{limit}} min",
@@ -27,5 +29,7 @@ export const CI_WATCH_CATALOG: Catalog<CiWatchKey> = {
     "band.part.slow": " · slower than usual",
     "band.passed": "CI {{label}} · passed in {{elapsed}}",
     "band.failed": "CI {{label}} · failed{{workflows}} after {{elapsed}}",
+    "band.cancelled": "CI {{label}} · cancelled{{workflows}} after {{elapsed}}",
+    "band.superseded": "CI {{label}} · superseded by {{sha7}} after {{elapsed}}",
   },
 };
