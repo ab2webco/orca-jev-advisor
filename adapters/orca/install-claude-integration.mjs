@@ -113,7 +113,7 @@
  * orca-jev-mod-skills (plus its own marker file), and our own bookkeeping
  * under ~/.config/orca-supervisor/.
  */
-import { lstat, readdir, readFile, readlink, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile, readlink, realpath, stat } from 'node:fs/promises'
 // Guarded stand-ins for the mutating fs/promises calls this file makes --
 // see guarded_fs.ts's module doc for why every write in this script goes
 // through them instead of node:fs/promises's own mkdir/writeFile/rename/rm/cp.
@@ -126,7 +126,7 @@ import {
 } from '../../src/core/guarded_fs.ts'
 import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { homedir, tmpdir } from 'node:os'
+import { homedir, tmpdir, userInfo } from 'node:os'
 import { delimiter, dirname, isAbsolute, join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { normalizePlatform, resolveConfigDirCandidates } from '../../src/core/paths.ts'
@@ -135,6 +135,7 @@ import { classifyNode, managedNodeRoots, nodeCandidatePaths } from '../../src/co
 import {
   ORCA_USER_DATA_ENV,
   accountConfigTarget,
+  borrowsAnotherInstallsVault,
   claudeAccountsDir,
   holdsClaudeConfig,
   homeConfigTarget,
@@ -272,6 +273,9 @@ async function discoverTargets () {
     orcaUserDataPath: process.env[ORCA_USER_DATA_ENV]
   })
   const accountsDir = claudeAccountsDir(PLATFORM, userData.path)
+  if (await borrowsReleaseVault(userData.path, accountsDir)) {
+    return { targets, userData, accountsDir, accountsFound: false, reason: 'BORROWED_VAULT' }
+  }
   let entries = []
   try {
     entries = await readdir(accountsDir, { withFileTypes: true })
@@ -293,6 +297,33 @@ async function discoverTargets () {
     if (holdsClaudeConfig(names)) targets.push(target)
   }
   return { targets, userData, accountsDir, accountsFound: true, reason: null }
+}
+
+async function realRoots (userDataPath, accountsDir) {
+  try {
+    return { userData: await realpath(userDataPath), accountsDir: await realpath(accountsDir) }
+  } catch {
+    return null
+  }
+}
+
+// ORCA-1131: a dev Orca links its claude-accounts to the release vault; hooks into the dev
+// profile must not land there. A dev Orca moves the worker's HOME, so the account's own home
+// is checked too.
+async function borrowsReleaseVault (userDataPath, accountsDir) {
+  const own = await realRoots(userDataPath, accountsDir)
+  if (own === null) return false
+  let accountHome = HOME
+  try { accountHome = userInfo().homedir } catch {}
+  const candidates = [
+    { home: HOME, appDataDir: process.env.APPDATA, xdgConfigHome: process.env.XDG_CONFIG_HOME },
+    { home: accountHome, appDataDir: process.env.APPDATA }
+  ]
+  const releases = await Promise.all(candidates.map((env) => {
+    const release = resolveOrcaUserDataDir(PLATFORM, env).path
+    return realRoots(release, claudeAccountsDir(PLATFORM, release))
+  }))
+  return borrowsAnotherInstallsVault(own, releases.filter((roots) => roots !== null))
 }
 
 /** State and backup files are per target, so one account's original shape is never mistaken for another's. */
