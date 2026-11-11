@@ -1,0 +1,1616 @@
+<!doctype html>
+<html lang="es" data-theme="system">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ajustes de Jev Advisor</title>
+<meta name="description" content="Prototipo estático del rediseño del panel de ajustes de Jev Advisor (JEVADV-121): las seis pestañas, la barra de guardado y sus estados de carga y vacío.">
+<style>
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: brand · redesign: full
+ * paper: oklch(100% 0 0) · accent: oklch(20.5% 0 0) · display: system-ui · body: system-ui
+ * nav: kept (title, six tabs) · signature: the module ledger, one state column for the whole plugin · states: data, loading, empty, saving, saved, error
+ * axes: light/grotesk-sans/neutral · posture: settled · contrast: pass · copy: verbatim · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H5 E4 S4 R4 V3 · weakest: V, the panel must keep Orca's neutral host palette and system face, so state colour (Activo, Solo medir, Apagado) is the only hue and carries the variety */
+/* Hallmark · answered F7 · inputs and buttons share one control recipe on purpose: a settings screen needs one control family; role shows through fill (primary, quiet, danger) */
+
+/* ---------- tokens ---------- */
+:root {
+  --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px;
+  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.125rem; --text-xl: 1.266rem; --text-2xl: 1.424rem; --text-fig: 1.602rem;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-micro: 120ms; --dur-short: 220ms;
+  --container: 1000px; --gutter: 32px;
+  --z-sticky: 200;
+  --radius-control: 6px; --radius-panel: 8px; --radius-pill: 999px; --rule-hair: 1px;
+  --font-body: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --color-paper: oklch(100% 0 0);
+  --color-paper-2: oklch(97.6% 0.002 90);
+  --color-paper-3: oklch(94.5% 0.003 90);
+  --color-ink: oklch(14.5% 0 0);
+  --color-ink-2: oklch(32% 0 0);
+  --color-muted: oklch(48% 0.005 90);
+  --color-rule: oklch(91.5% 0.003 90);
+  --color-rule-strong: oklch(83% 0.004 90);
+  --color-accent: oklch(20.5% 0 0);
+  --color-accent-ink: oklch(98.5% 0 0);
+  --color-focus: oklch(55% 0.17 250);
+  --color-skeleton: oklch(94% 0.003 90);
+  --color-shadow: oklch(0% 0 0 / 0.25);
+  --color-field: oklch(63% 0.005 90);
+
+  --color-on: oklch(42% 0.11 152);
+  --color-on-tint: oklch(95.5% 0.035 152);
+  --color-measure: oklch(46% 0.1 65);
+  --color-measure-tint: oklch(95.5% 0.045 85);
+  --color-off: oklch(40% 0.005 90);
+  --color-off-tint: oklch(94.5% 0.003 90);
+  --color-error: oklch(50% 0.19 27);
+  --color-error-tint: oklch(96% 0.025 27);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-paper: oklch(14.5% 0 0);
+    --color-paper-2: oklch(18.5% 0.002 90);
+    --color-paper-3: oklch(23% 0.003 90);
+    --color-ink: oklch(98.5% 0 0);
+    --color-ink-2: oklch(87% 0 0);
+    --color-muted: oklch(71% 0.005 90);
+    --color-rule: oklch(100% 0 0 / 0.09);
+    --color-rule-strong: oklch(100% 0 0 / 0.18);
+    --color-accent: oklch(92% 0 0);
+    --color-accent-ink: oklch(20.5% 0 0);
+    --color-focus: oklch(72% 0.14 250);
+    --color-skeleton: oklch(24% 0.003 90);
+    --color-field: oklch(52% 0.005 90);
+    --color-on: oklch(82% 0.13 152);
+    --color-on-tint: oklch(30% 0.05 152);
+    --color-measure: oklch(85% 0.11 80);
+    --color-measure-tint: oklch(31% 0.05 75);
+    --color-off: oklch(80% 0.005 90);
+    --color-off-tint: oklch(26% 0.003 90);
+    --color-error: oklch(74% 0.16 25);
+    --color-error-tint: oklch(29% 0.07 25);
+  }
+}
+:root[data-theme="dark"] {
+  --color-paper: oklch(14.5% 0 0);
+  --color-paper-2: oklch(18.5% 0.002 90);
+  --color-paper-3: oklch(23% 0.003 90);
+  --color-ink: oklch(98.5% 0 0);
+  --color-ink-2: oklch(87% 0 0);
+  --color-muted: oklch(71% 0.005 90);
+  --color-rule: oklch(100% 0 0 / 0.09);
+  --color-rule-strong: oklch(100% 0 0 / 0.18);
+  --color-accent: oklch(92% 0 0);
+  --color-accent-ink: oklch(20.5% 0 0);
+  --color-focus: oklch(72% 0.14 250);
+  --color-skeleton: oklch(24% 0.003 90);
+  --color-field: oklch(52% 0.005 90);
+  --color-on: oklch(82% 0.13 152);
+  --color-on-tint: oklch(30% 0.05 152);
+  --color-measure: oklch(85% 0.11 80);
+  --color-measure-tint: oklch(31% 0.05 75);
+  --color-off: oklch(80% 0.005 90);
+  --color-off-tint: oklch(26% 0.003 90);
+  --color-error: oklch(74% 0.16 25);
+  --color-error-tint: oklch(29% 0.07 25);
+}
+:root { color-scheme: light dark; }
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* ---------- base ---------- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { overflow-x: clip; }
+html { scrollbar-color: var(--color-rule-strong) var(--color-paper); }
+::selection { background: color-mix(in oklab, var(--color-focus) 25%, transparent); color: var(--color-ink); }
+body { caret-color: var(--color-ink); }
+body { margin: 0; background: var(--color-paper); color: var(--color-ink); font-family: var(--font-body); font-size: var(--text-md); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+[tabindex="-1"]:focus { outline: none; }
+h1, h2, h3 { margin: 0; font-family: var(--font-body); font-weight: 600; overflow-wrap: break-word; min-width: 0; text-wrap: balance; letter-spacing: -0.01em; line-height: 1.25; }
+p { margin: 0; text-wrap: pretty; }
+ul, ol { margin: 0; padding: 0; list-style: none; }
+dl, dd { margin: 0; }
+button, input, select, textarea { font: inherit; color: inherit; }
+code, .mono { font-family: var(--font-mono); font-size: 0.92em; overflow-wrap: anywhere; }
+[hidden] { display: none !important; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.num { font-variant-numeric: tabular-nums; }
+.container { width: 100%; max-width: var(--container); margin-inline: auto; padding-inline: var(--gutter); }
+
+/* ---------- prototype strip (not part of the panel) ---------- */
+.proto { background: var(--color-paper-2); border-bottom: var(--rule-hair) solid var(--color-rule); font-size: var(--text-sm); color: var(--color-ink-2); }
+.proto .container { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-lg); padding-block: var(--space-xs); }
+.proto-note { flex: 1 1 20rem; min-width: 0; color: var(--color-muted); }
+.proto-note strong { color: var(--color-ink-2); font-weight: 600; }
+.proto-controls { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-md); align-items: center; }
+.proto-group { display: inline-flex; align-items: center; gap: var(--space-2xs); border: 0; margin: 0; padding: 0; min-width: 0; }
+.proto-group legend { float: left; margin-right: var(--space-2xs); color: var(--color-muted); }
+.proto-group label { position: relative; }
+.proto-group input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.proto-group span { display: inline-block; padding: var(--space-2xs) var(--space-xs); border-radius: var(--radius-control); color: var(--color-ink-2); }
+.proto-group input:checked + span { background: var(--color-paper); color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-rule-strong); }
+.proto-group input:focus-visible + span { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.proto-check { display: inline-flex; align-items: center; gap: var(--space-2xs); }
+.proto-check input { accent-color: var(--color-accent); margin: 0; }
+
+/* ---------- panel header and tabs ---------- */
+.panel-head { padding-top: var(--space-lg); }
+.panel-head h1 { font-size: var(--text-xl); }
+.panel-head p { color: var(--color-muted); font-size: var(--text-sm); margin-top: var(--space-2xs); max-width: 75ch; }
+.tabbar { margin-top: var(--space-md); border-bottom: var(--rule-hair) solid var(--color-rule); }
+.tabs { display: flex; gap: var(--space-2xs); }
+.tab { appearance: none; background: none; border: 0; padding: var(--space-sm) var(--space-sm); font-size: var(--text-sm); color: var(--color-muted); cursor: pointer; position: relative; border-radius: var(--radius-control) var(--radius-control) 0 0; text-decoration: none; white-space: nowrap; }
+.tab:hover { color: var(--color-ink); background: var(--color-paper-2); }
+.tab[aria-selected="true"] { color: var(--color-ink); font-weight: 600; }
+.tab[aria-selected="true"]::after { content: ""; position: absolute; left: var(--space-sm); right: var(--space-sm); bottom: -1px; height: 2px; background: var(--color-ink); border-radius: 2px; }
+.tab:active { transform: translateY(1px); }
+
+/* ---------- layout ---------- */
+.tabpanel { padding-block: var(--space-lg) var(--space-2xl); }
+html.js .tabpanel:not(.is-active) { display: none; }
+.tab-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-xl); }
+.toc { display: none; }
+@media (min-width: 62rem) {
+  .tab-layout { grid-template-columns: 15rem minmax(0, 1fr); }
+  .toc { display: block; position: sticky; top: var(--space-md); align-self: start; font-size: var(--text-sm); }
+  .toc a { display: block; padding: var(--space-2xs) var(--space-xs); margin-left: calc(-1 * var(--space-xs)); color: var(--color-muted); text-decoration: none; border-radius: var(--radius-control); }
+  .toc a:hover { color: var(--color-ink); background: var(--color-paper-2); }
+}
+.tab-body { min-width: 0; max-width: 46rem; }
+
+/* ---------- sections ---------- */
+.section + .section { margin-top: var(--space-xl); padding-top: var(--space-xl); border-top: var(--rule-hair) solid var(--color-rule); }
+.section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2xs) var(--space-sm); }
+.section-head h2 { font-size: var(--text-lg); }
+.sample { font-size: var(--text-xs); color: var(--color-muted); border: var(--rule-hair) solid var(--color-rule); border-radius: var(--radius-pill); padding: 0 var(--space-xs); line-height: 1.6; }
+.lede { margin-top: var(--space-2xs); color: var(--color-muted); font-size: var(--text-sm); max-width: 62ch; }
+.what { margin-top: var(--space-2xs); font-size: var(--text-sm); }
+.what summary { cursor: pointer; color: var(--color-ink-2); text-decoration: underline; text-decoration-color: var(--color-rule-strong); text-underline-offset: 0.2em; display: inline-block; list-style: none; }
+.what summary::-webkit-details-marker { display: none; }
+.what summary:hover { text-decoration-color: currentColor; }
+.what[open] summary { color: var(--color-ink); }
+.what p { margin-top: var(--space-xs); padding: var(--space-sm) var(--space-md); background: var(--color-paper-2); border-radius: var(--radius-control); color: var(--color-ink-2); max-width: 62ch; }
+.section-body { margin-top: var(--space-md); }
+h3.sub { font-size: var(--text-md); margin-top: var(--space-lg); }
+
+/* ---------- controls ---------- */
+.btn { appearance: none; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-xs); min-height: 36px; padding: 0 var(--space-md); border-radius: var(--radius-control); border: var(--rule-hair) solid var(--color-rule-strong); background: var(--color-paper); color: var(--color-ink); font-size: var(--text-sm); font-weight: 500; cursor: pointer; text-decoration: none; transition: background-color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out); }
+.btn:hover { background: var(--color-paper-2); border-color: var(--color-muted); }
+.btn:active { transform: translateY(1px); }
+.btn[disabled], .btn[aria-disabled="true"] { background: var(--color-paper-2); color: var(--color-muted); border-color: var(--color-rule); cursor: not-allowed; transform: none; }
+.btn-primary { background: var(--color-accent); color: var(--color-accent-ink); border-color: var(--color-accent); }
+.btn-primary:hover { background: var(--color-ink-2); border-color: var(--color-ink-2); }
+.btn-quiet { border-color: transparent; background: transparent; color: var(--color-ink-2); padding: 0 var(--space-sm); }
+.btn-quiet:hover { background: var(--color-paper-2); border-color: transparent; }
+.btn-quiet[disabled] { background: transparent; border-color: transparent; color: var(--color-rule-strong); }
+.btn-danger { border-color: transparent; background: transparent; color: var(--color-error); padding: 0 var(--space-sm); }
+.btn-danger:hover { background: var(--color-error-tint); border-color: transparent; }
+.btn-icon { width: 36px; padding: 0; }
+.btn-icon svg { width: 16px; height: 16px; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); align-items: center; margin-top: var(--space-md); }
+
+.field { display: grid; gap: var(--space-2xs); min-width: 0; }
+.field > span, .field-label { font-size: var(--text-sm); color: var(--color-ink-2); font-weight: 500; }
+.field-hint { font-size: var(--text-sm); color: var(--color-muted); }
+input[type="text"], input[type="number"], input[type="password"], select, textarea { width: 100%; min-height: 36px; padding: var(--space-xs) var(--space-sm); border: var(--rule-hair) solid var(--color-field); border-radius: var(--radius-control); background: var(--color-paper); color: var(--color-ink); font-size: var(--text-sm); transition: border-color var(--dur-micro) var(--ease-out); }
+input:hover, select:hover, textarea:hover { border-color: var(--color-ink-2); }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 0; border-color: var(--color-focus); }
+input::placeholder, textarea::placeholder { color: var(--color-muted); }
+input[aria-invalid="true"] { border-color: var(--color-error); }
+textarea { resize: vertical; line-height: 1.5; }
+textarea.mono, input.mono { font-family: var(--font-mono); }
+.grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm) var(--space-md); }
+
+/* switch */
+.switch { appearance: none; flex: none; width: 36px; height: 20px; margin: 0; border-radius: var(--radius-pill); background: var(--color-rule-strong); position: relative; cursor: pointer; transition: background-color var(--dur-short) var(--ease-out); }
+.switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--color-paper); box-shadow: 0 1px 2px var(--color-shadow); transition: transform var(--dur-short) var(--ease-out); }
+.switch:checked { background: var(--color-on); }
+.switch:checked::before { transform: translateX(16px); }
+.switch:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+
+/* segmented state control (module states and small choices) */
+.seg-group { display: inline-flex; border: 0; margin: 0; padding: var(--space-3xs); min-width: 0; background: var(--color-paper-2); border-radius: var(--radius-control); box-shadow: inset 0 0 0 1px var(--color-rule); }
+.seg { position: relative; display: flex; }
+.seg input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.seg span { display: inline-flex; align-items: center; min-height: 30px; padding: 0 var(--space-sm); font-size: var(--text-sm); color: var(--color-muted); border-radius: 5px; white-space: nowrap; transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out); }
+.seg input:hover + span { color: var(--color-ink); }
+.seg input:checked + span { background: var(--color-paper); color: var(--color-ink); font-weight: 600; box-shadow: 0 0 0 1px var(--color-rule-strong); }
+.seg input[value="active"]:checked + span { background: var(--color-on-tint); color: var(--color-on); box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-on) 35%, transparent); }
+.seg input[value="shadow"]:checked + span, .seg input[value="measure"]:checked + span { background: var(--color-measure-tint); color: var(--color-measure); box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-measure) 35%, transparent); }
+.seg input[value="off"]:checked + span { background: var(--color-off-tint); color: var(--color-off); box-shadow: 0 0 0 1px var(--color-rule-strong); }
+.seg input:focus-visible + span { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+
+/* choice rows (radio with consequence) */
+.choices { display: grid; gap: var(--space-xs); border: 0; margin: 0; padding: 0; min-width: 0; }
+.choices.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.choices.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.choices legend { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink-2); margin-bottom: var(--space-xs); padding: 0; }
+.choice { position: relative; display: flex; gap: var(--space-sm); align-items: flex-start; padding: var(--space-sm) var(--space-md); border: var(--rule-hair) solid var(--color-rule-strong); border-radius: var(--radius-panel); cursor: pointer; min-width: 0; transition: border-color var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out); }
+.choice:hover { border-color: var(--color-muted); }
+.choice input { appearance: none; flex: none; width: 16px; height: 16px; margin: var(--space-2xs) 0 0; border-radius: 50%; border: 1.5px solid var(--color-muted); background: var(--color-paper); cursor: pointer; }
+.choice input:checked { border: 5px solid var(--color-ink); }
+.choice input:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.choice:has(input:checked) { border-color: var(--color-ink); background: var(--color-paper-2); }
+.choice-title { display: block; font-weight: 600; font-size: var(--text-sm); }
+.choice-desc { display: block; margin-top: var(--space-3xs); font-size: var(--text-sm); color: var(--color-muted); }
+
+/* setting row: label and description left, control right */
+.setting { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2xs) var(--space-lg); align-items: start; padding-block: var(--space-sm); }
+.setting + .setting { border-top: var(--rule-hair) solid var(--color-rule); }
+.setting-title { font-weight: 500; font-size: var(--text-sm); }
+.setting-desc { grid-column: 1; font-size: var(--text-sm); color: var(--color-muted); }
+.setting > .switch, .setting > .seg-group { grid-column: 2; grid-row: 1 / span 2; }
+
+/* callouts */
+.callout { display: grid; gap: var(--space-2xs); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-panel); background: var(--color-paper-2); font-size: var(--text-sm); color: var(--color-ink-2); }
+.callout.warn { background: var(--color-measure-tint); color: var(--color-ink); }
+.callout.danger { background: var(--color-error-tint); color: var(--color-ink); }
+.callout.empty { background: transparent; border: var(--rule-hair) dashed var(--color-rule-strong); color: var(--color-muted); }
+.status { font-size: var(--text-sm); color: var(--color-muted); min-height: 1.5em; }
+.status.is-error { color: var(--color-error); }
+.status.is-ok { color: var(--color-on); }
+
+/* skeletons (loading) */
+.skel { display: grid; gap: var(--space-sm); }
+.skel i { display: block; height: 14px; border-radius: 4px; background: var(--color-skeleton); animation: pulse 1.4s ease-in-out infinite; }
+.skel i.w-30 { width: 30%; } .skel i.w-50 { width: 50%; } .skel i.w-70 { width: 70%; } .skel i.w-90 { width: 90%; } .skel i.tall { height: 36px; }
+@keyframes pulse { 50% { opacity: 0.45; } }
+.loading-line { font-size: var(--text-sm); color: var(--color-muted); margin-bottom: var(--space-sm); }
+
+/* view switching (prototype states) */
+body[data-view="data"] .when-loading, body[data-view="data"] .when-empty,
+body[data-view="loading"] .when-data, body[data-view="loading"] .when-empty,
+body[data-view="empty"] .when-data, body[data-view="empty"] .when-loading { display: none !important; }
+body[data-view="data"] .when-not-data, body[data-view="loading"] .when-not-loading, body[data-view="empty"] .when-not-empty { display: none !important; }
+
+/* ---------- General: module ledger ---------- */
+.ledger-tally { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-md); font-size: var(--text-sm); color: var(--color-muted); margin-top: var(--space-sm); }
+.tally b { font-weight: 600; color: var(--color-ink); }
+.tally.on b { color: var(--color-on); } .tally.measure b { color: var(--color-measure); } .tally.off b { color: var(--color-off); }
+.ledger { margin-top: var(--space-sm); border-top: var(--rule-hair) solid var(--color-rule); }
+.mod { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2xs) var(--space-lg); padding-block: var(--space-md); border-bottom: var(--rule-hair) solid var(--color-rule); }
+.ledger > .mod:last-child { border-bottom: 0; padding-bottom: 0; }
+.mod-name { font-size: var(--text-md); }
+.mod-desc { grid-column: 1; font-size: var(--text-sm); color: var(--color-muted); max-width: 56ch; }
+.mod > .seg-group { grid-column: 2; grid-row: 1 / span 2; align-self: start; }
+.mod-more { grid-column: 1 / -1; font-size: var(--text-sm); }
+.mod-more summary { cursor: pointer; color: var(--color-ink-2); width: fit-content; list-style: none; display: inline-flex; align-items: center; gap: var(--space-2xs); }
+.mod-more summary::-webkit-details-marker { display: none; }
+.mod-more summary svg { width: 12px; height: 12px; transition: transform var(--dur-micro) var(--ease-out); }
+.mod-more[open] summary svg { transform: rotate(90deg); }
+.mod-more summary:hover { color: var(--color-ink); }
+.facts { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: var(--space-2xs) var(--space-md); margin-top: var(--space-xs); padding: var(--space-sm) var(--space-md); background: var(--color-paper-2); border-radius: var(--radius-control); }
+.facts dt { color: var(--color-muted); }
+.facts dd { color: var(--color-ink-2); min-width: 0; overflow-wrap: break-word; }
+.mod .callout { grid-column: 1 / -1; }
+
+/* credentials */
+.cred { display: grid; gap: var(--space-sm); }
+.cred-state { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-md); }
+.cred-state p { font-size: var(--text-sm); }
+.cred-state .mono { color: var(--color-ink); }
+.kv { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-lg); font-size: var(--text-sm); color: var(--color-muted); }
+.kv span b { font-weight: 500; color: var(--color-ink); font-family: var(--font-mono); }
+.subpanel { margin-top: var(--space-lg); padding: var(--space-md); border: var(--rule-hair) solid var(--color-rule); border-radius: var(--radius-panel); }
+.subpanel h3 { font-size: var(--text-md); }
+
+/* checks table (integration) */
+.checks { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.checks th, .checks td { text-align: left; vertical-align: top; padding: var(--space-xs) 0; border-bottom: var(--rule-hair) solid var(--color-rule); }
+.checks th { font-weight: 500; color: var(--color-ink-2); width: 38%; padding-right: var(--space-md); }
+.checks td { color: var(--color-muted); overflow-wrap: anywhere; }
+.checks tr.needs th { color: var(--color-ink); }
+.checks tr.needs td { color: var(--color-measure); font-weight: 600; }
+.checks tr.full td { color: var(--color-muted); }
+
+/* read-only figure */
+.figure-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-md); align-items: start; }
+.readout { display: grid; gap: var(--space-3xs); }
+.readout .val { font-size: var(--text-fig); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.2; }
+
+/* ---------- table-like lists (destinations, models, authorizations) ---------- */
+.rows { border-top: var(--rule-hair) solid var(--color-rule); }
+.row { border-bottom: var(--rule-hair) solid var(--color-rule); }
+.row > summary { list-style: none; cursor: pointer; display: grid; grid-template-columns: 16px minmax(0, 9rem) minmax(0, 1fr) minmax(0, 7rem); gap: var(--space-md); align-items: center; padding: var(--space-sm) var(--space-2xs); font-size: var(--text-sm); border-radius: var(--radius-control); }
+.row > summary::-webkit-details-marker { display: none; }
+.row > summary:hover { background: var(--color-paper-2); }
+.row > summary svg { width: 12px; height: 12px; color: var(--color-muted); transition: transform var(--dur-micro) var(--ease-out); }
+.row[open] > summary svg { transform: rotate(90deg); }
+.row-head { display: grid; grid-template-columns: 16px minmax(0, 9rem) minmax(0, 1fr) minmax(0, 7rem); gap: var(--space-md); padding: 0 var(--space-2xs) var(--space-xs); font-size: var(--text-xs); color: var(--color-muted); }
+.row-edit { display: grid; gap: var(--space-sm); padding-block: var(--space-xs) var(--space-md); padding-inline: calc(var(--space-md) * 2 + var(--space-2xs)) var(--space-md); }
+.row-edit .actions { margin-top: 0; justify-content: flex-end; }
+.cell-strong { font-weight: 600; color: var(--color-ink); overflow-wrap: anywhere; }
+.cell-muted { color: var(--color-muted); overflow-wrap: anywhere; }
+.proposals { margin-top: var(--space-md); padding: var(--space-md); border: var(--rule-hair) solid var(--color-rule-strong); border-radius: var(--radius-panel); display: grid; gap: var(--space-sm); }
+.proposal { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 12rem); gap: var(--space-sm); align-items: center; font-size: var(--text-sm); }
+.proposal input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--color-accent); }
+.proposal .mono { overflow-wrap: anywhere; }
+.proposal small { display: block; color: var(--color-muted); font-size: var(--text-xs); }
+
+/* policies */
+.lane + .lane { margin-top: var(--space-lg); }
+.lane-head { display: flex; align-items: baseline; gap: var(--space-xs); font-size: var(--text-sm); font-weight: 600; padding-bottom: var(--space-xs); }
+.lane-head .count { font-weight: 400; color: var(--color-muted); }
+.lane[data-kind="permits"] .lane-head { color: var(--color-on); }
+.lane[data-kind="requires_human"] .lane-head { color: var(--color-measure); }
+.lane[data-kind="prohibits"] .lane-head { color: var(--color-error); }
+.lane-empty { font-size: var(--text-sm); color: var(--color-muted); padding: var(--space-xs) var(--space-2xs); border-top: var(--rule-hair) solid var(--color-rule); }
+.policy > summary { grid-template-columns: 16px minmax(0, 1fr); align-items: start; }
+.policy > summary .pol-id { font-family: var(--font-mono); font-weight: 600; color: var(--color-ink); overflow-wrap: anywhere; }
+.policy > summary .pol-rule { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--color-muted); margin-top: var(--space-3xs); }
+.policy > summary svg { margin-top: var(--space-2xs); }
+.policy[open] > summary .pol-rule { display: none; }
+
+/* models ladder */
+.ladder { border-top: var(--rule-hair) solid var(--color-rule); }
+.rung { display: grid; grid-template-columns: 2.25rem minmax(0, 1fr) auto auto; gap: var(--space-sm) var(--space-md); align-items: center; padding: var(--space-sm) var(--space-2xs); border-bottom: var(--rule-hair) solid var(--color-rule); }
+.rung-rank { font-size: var(--text-lg); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--color-ink); text-align: center; }
+.rung-name { font-weight: 600; font-size: var(--text-sm); }
+.rung-meta { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-sm); font-size: var(--text-xs); color: var(--color-muted); margin-top: var(--space-3xs); }
+.rung-meta code { font-size: var(--text-xs); }
+.rung-avail { display: inline-flex; align-items: center; gap: var(--space-xs); font-size: var(--text-sm); color: var(--color-ink-2); cursor: pointer; }
+.rung-move { display: inline-flex; gap: var(--space-2xs); align-items: center; }
+.rung.is-unavailable .rung-name, .rung.is-unavailable .rung-rank { color: var(--color-muted); }
+.rung.is-unranked .rung-rank { font-size: var(--text-xs); font-weight: 500; color: var(--color-muted); }
+.more-menu { position: relative; }
+.more-menu summary { list-style: none; }
+.more-menu summary::-webkit-details-marker { display: none; }
+.more-menu .menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: var(--z-sticky); min-width: 13rem; padding: var(--space-2xs); background: var(--color-paper); border: var(--rule-hair) solid var(--color-rule-strong); border-radius: var(--radius-panel); display: grid; }
+.menu button { appearance: none; background: none; border: 0; text-align: left; padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-control); font-size: var(--text-sm); cursor: pointer; color: var(--color-ink); }
+.menu button:hover { background: var(--color-paper-2); }
+.menu button.danger { color: var(--color-error); }
+.add-form { margin-top: var(--space-md); }
+.add-form > summary { list-style: none; width: fit-content; }
+.add-form > summary::-webkit-details-marker { display: none; }
+.add-form .grid-2 { margin-top: var(--space-md); }
+.progress { display: grid; gap: var(--space-2xs); margin-top: var(--space-xs); }
+.bar { height: 6px; border-radius: var(--radius-pill); background: var(--color-paper-3); overflow: hidden; }
+.bar i { display: block; height: 100%; width: var(--p, 0%); min-width: 3px; background: var(--color-measure); border-radius: inherit; }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-md) var(--space-lg); margin-top: var(--space-md); }
+.stat { display: grid; gap: var(--space-3xs); align-content: start; }
+.stat dd { font-size: var(--text-fig); font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.15; order: -1; }
+.stat dt { font-size: var(--text-sm); color: var(--color-muted); }
+
+/* rules */
+.deny { border-top: var(--rule-hair) solid var(--color-rule); }
+.deny li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3xs) var(--space-lg); align-items: start; padding: var(--space-sm) var(--space-2xs); border-bottom: var(--rule-hair) solid var(--color-rule); }
+.deny label { font-size: var(--text-sm); font-weight: 500; cursor: pointer; }
+.deny p { grid-column: 1; font-size: var(--text-sm); color: var(--color-muted); }
+.deny .switch { grid-column: 2; grid-row: 1 / span 2; margin-top: var(--space-3xs); }
+.repo + .repo { margin-top: var(--space-lg); }
+.repo-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-xs); padding-bottom: var(--space-xs); }
+.repo-head h3 { font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.auth { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+.auth th { text-align: left; font-weight: 400; font-size: var(--text-xs); color: var(--color-muted); padding: var(--space-xs) var(--space-sm) var(--space-xs) 0; border-bottom: var(--rule-hair) solid var(--color-rule); }
+.auth td { padding: var(--space-xs) var(--space-sm) var(--space-xs) 0; border-bottom: var(--rule-hair) solid var(--color-rule); vertical-align: middle; }
+.auth td:last-child, .auth th:last-child { text-align: right; padding-right: 0; }
+.auth td.what-cell { color: var(--color-ink); font-weight: 500; }
+.auth td.num { color: var(--color-ink-2); white-space: nowrap; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.chip { display: inline-flex; align-items: center; gap: var(--space-2xs); padding-left: var(--space-sm); border: var(--rule-hair) solid var(--color-rule-strong); border-radius: var(--radius-pill); font-size: var(--text-sm); max-width: 100%; }
+.chip span { overflow-wrap: anywhere; }
+.chip .btn { min-height: 30px; border-radius: var(--radius-pill); font-size: var(--text-xs); color: var(--color-muted); }
+.add-inline { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-xs); align-items: end; margin-top: var(--space-md); max-width: 30rem; }
+
+/* ---------- save bar ---------- */
+.savebar { position: sticky; bottom: 0; z-index: var(--z-sticky); background: color-mix(in oklab, var(--color-paper) 92%, transparent); backdrop-filter: blur(8px); border-top: var(--rule-hair) solid var(--color-rule); }
+.savebar .container { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-xs) var(--space-md); padding-block: var(--space-sm); }
+.savebar .status { flex: 1 1 16rem; min-width: 0; min-height: 0; }
+.savebar-actions { display: flex; gap: var(--space-xs); margin-left: auto; }
+.savebar.is-dirty { border-top-color: var(--color-ink); }
+
+/* ---------- prototype notes ---------- */
+.tab-notes { display: none; margin-bottom: var(--space-lg); padding: var(--space-md); border-radius: var(--radius-panel); background: var(--color-paper-2); border: var(--rule-hair) solid var(--color-rule); font-size: var(--text-sm); color: var(--color-ink-2); }
+body[data-notes="on"] .tab-notes { display: grid; gap: var(--space-xs); }
+.tab-notes h2 { font-size: var(--text-md); color: var(--color-ink); }
+.tab-notes p { max-width: 70ch; }
+.tab-notes b { color: var(--color-ink); font-weight: 600; }
+
+/* ---------- responsive ---------- */
+@media (max-width: 48rem) {
+  :root { --gutter: 20px; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .choices.cols-3 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 40rem) {
+  :root { --gutter: 16px; }
+  .tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; }
+  .tab { min-height: 44px; padding-inline: var(--space-2xs); white-space: normal; text-align: center; }
+  .tab[aria-selected="true"]::after { left: var(--space-xs); right: var(--space-xs); }
+  .mod, .setting.stack-narrow { grid-template-columns: minmax(0, 1fr); }
+  .mod > .seg-group, .setting > .seg-group { grid-column: 1; grid-row: auto; width: 100%; margin-top: var(--space-xs); }
+  .mod > .seg-group .seg, .setting > .seg-group .seg { flex: 1; }
+  .mod > .seg-group .seg span, .setting > .seg-group .seg span { flex: 1; justify-content: center; min-height: 40px; padding-inline: var(--space-2xs); }
+  .choices.cols-2 { grid-template-columns: minmax(0, 1fr); }
+  .grid-2, .figure-row { grid-template-columns: minmax(0, 1fr); }
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .facts dd + dt { margin-top: var(--space-xs); }
+  .btn { min-height: 44px; }
+  .btn-icon { width: 44px; }
+  input[type="text"], input[type="number"], input[type="password"], select { min-height: 44px; }
+  .row-head { display: none; }
+  .row > summary { grid-template-columns: 16px minmax(0, 1fr) auto; gap: var(--space-3xs) var(--space-sm); min-height: 44px; }
+  .row > summary > :nth-child(3) { grid-column: 2; grid-row: 2; }
+  .row > summary > :nth-child(4) { grid-column: 3; grid-row: 1; }
+  .policy > summary { grid-template-columns: 16px minmax(0, 1fr); }
+  .row-edit { padding-left: var(--space-2xs); padding-right: var(--space-2xs); }
+  .proposal { grid-template-columns: auto minmax(0, 1fr); }
+  .proposal select { grid-column: 2; }
+  .rung { grid-template-columns: 2rem minmax(0, 1fr) auto; row-gap: var(--space-2xs); }
+  .rung-rank { grid-row: 1 / span 2; align-self: start; }
+  .rung-avail { grid-column: 2; grid-row: 2; }
+  .rung-move { grid-column: 3; grid-row: 2; }
+  .stats { gap: var(--space-md); }
+  .checks th, .checks td { display: block; width: auto; padding: 0; border: 0; }
+  .checks tr { display: block; padding: var(--space-xs) 0; border-bottom: var(--rule-hair) solid var(--color-rule); }
+  .auth thead { display: none; }
+  .auth, .auth tbody, .auth tr, .auth td { display: block; }
+  .auth tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 var(--space-sm); padding: var(--space-xs) 0; border-bottom: var(--rule-hair) solid var(--color-rule); }
+  .auth td { border: 0; padding: 0; }
+  .auth td.what-cell { grid-column: 1; }
+  .auth td.num { grid-column: 1; color: var(--color-muted); font-size: var(--text-xs); white-space: normal; }
+  .auth td.num::before { content: attr(data-label) " "; }
+  .auth td:last-child { grid-column: 2; grid-row: 1 / span 4; align-self: center; }
+  .deny li { padding-inline: 0; }
+  .savebar-actions { width: 100%; }
+  .savebar-actions .btn { flex: 1; }
+  .proto-group legend { float: none; display: block; width: 100%; margin-bottom: var(--space-3xs); }
+  .proto-group { flex-wrap: wrap; }
+}
+@media (pointer: coarse) { .seg span { min-height: 40px; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body data-view="data" data-notes="off">
+
+<!-- Prototype controls: these exist only in the prototype, never in the panel. -->
+<aside class="proto" aria-label="Controles del prototipo">
+  <div class="container">
+    <p class="proto-note"><strong>Prototipo JEVADV-121.</strong> No guarda nada. Las cifras son valores de ejemplo tomados del panel actual.</p>
+    <div class="proto-controls">
+      <fieldset class="proto-group" data-proto>
+        <legend>Estado</legend>
+        <label><input type="radio" name="proto-view" value="data" checked><span>Con datos</span></label>
+        <label><input type="radio" name="proto-view" value="loading"><span>Cargando</span></label>
+        <label><input type="radio" name="proto-view" value="empty"><span>Vacío</span></label>
+      </fieldset>
+      <fieldset class="proto-group" data-proto>
+        <legend>Tema</legend>
+        <label><input type="radio" name="proto-theme" value="system" checked><span>Orca</span></label>
+        <label><input type="radio" name="proto-theme" value="light"><span>Claro</span></label>
+        <label><input type="radio" name="proto-theme" value="dark"><span>Oscuro</span></label>
+      </fieldset>
+      <label class="proto-check"><input type="checkbox" id="proto-notes" data-proto> Notas del rediseño</label>
+      <label class="proto-check"><input type="checkbox" id="proto-fail" data-proto> Guardar falla</label>
+    </div>
+  </div>
+</aside>
+
+<header class="container panel-head">
+  <h1>Jev Advisor</h1>
+  <p>Ajustes del plugin, guardados a través de Orca. Este panel nunca llama a una URL externa.</p>
+  <nav class="tabbar" aria-label="Secciones de configuración">
+    <div class="tabs" role="tablist" aria-label="Secciones de configuración">
+      <a class="tab" role="tab" id="tab-general" href="#general" aria-controls="general" aria-selected="true">General</a>
+      <a class="tab" role="tab" id="tab-destinations" href="#destinations" aria-controls="destinations" aria-selected="false">Destinos</a>
+      <a class="tab" role="tab" id="tab-policies" href="#policies" aria-controls="policies" aria-selected="false">Políticas</a>
+      <a class="tab" role="tab" id="tab-models" href="#models" aria-controls="models" aria-selected="false">Modelos</a>
+      <a class="tab" role="tab" id="tab-modskills" href="#modskills" aria-controls="modskills" aria-selected="false">Mod de skills</a>
+      <a class="tab" role="tab" id="tab-rules" href="#rules" aria-controls="rules" aria-selected="false">Reglas</a>
+    </div>
+  </nav>
+</header>
+
+<form id="config" class="container" novalidate onsubmit="return false">
+
+<!-- ===================================================== GENERAL -->
+<section class="tabpanel is-active" id="general" role="tabpanel" aria-labelledby="tab-general">
+  <div class="tab-notes">
+    <h2>General: antes y ahora</h2>
+    <p><b>Antes.</b> Ocho módulos en tarjetas idénticas con borde, cada una con cuatro a seis párrafos grises del mismo tamaño y su fila de botones segmentados; las cinco secciones pesaban igual y sus títulos iban en mayúsculas espaciadas.</p>
+    <p><b>Ahora.</b> Los módulos son un registro: nombre, una línea de qué hace y el estado alineado en una sola columna, con color solo para el estado (Activo, Solo medir, Apagado). Arriba se cuentan los estados. El coste baja a «Detalles» por fila. La clave y Cloudflare son filas de credencial con su estado primero; la integración es una tabla de comprobaciones que resalta solo lo que pide acción; el techo es una cifra de solo lectura, no un campo deshabilitado.</p>
+    <p><b>Por qué.</b> El estado de todo el plugin se lee de un vistazo, y el texto largo deja de competir con las decisiones.</p>
+  </div>
+  <div class="tab-layout">
+    <nav class="toc" aria-label="En esta pestaña">
+      <a href="#sec-modules">Módulos</a>
+      <a href="#sec-secret">Clave de TypeSafe</a>
+      <a href="#sec-provider">Quién decide</a>
+      <a href="#sec-integration">Integración con Claude Code</a>
+      <a href="#sec-thresholds">Techo del gate y tamaño del log</a>
+    </nav>
+    <div class="tab-body">
+
+      <section class="section" id="sec-modules" aria-labelledby="h-modules">
+        <div class="section-head"><h2 id="h-modules">Módulos</h2><span class="sample when-data">valores de ejemplo</span></div>
+        <p class="lede">Apaga cada función, déjala en «Solo medir» o actívala. El cambio vale al instante.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Cada función se puede apagar para que no cueste nada: sin proceso de hook, sin llamadas a Jev y sin trabajo en segundo plano. «Solo medir» registra lo que haría, sin cambiar tus turnos. Lo que elijas vale al instante, sin recargar Claude Code. Una sesión que ya estaba abierta antes de actualizar el plugin conserva su mod anterior hasta que la reinicies.</p><p>Las cifras salen de una semana de uso real medido (odd/tasks/feature-modules.md); las tuyas dependen de cómo trabajes. El trabajo en segundo plano cuenta solo lo que el módulo hace por sí solo: los resúmenes que comparten varios módulos siguen mientras alguno esté encendido. Con todos los módulos encendidos son unos 730 procesos de node por hora con un panel abierto y unos 240 sin ninguno abierto.</p></details>
+
+        <div class="when-loading section-body">
+          <p class="loading-line" role="status">Leyendo el estado de los módulos…</p>
+          <div class="skel" aria-hidden="true"><i class="tall"></i><i class="tall"></i><i class="tall"></i><i class="tall"></i></div>
+        </div>
+
+        <div class="when-not-loading">
+          <p class="ledger-tally" id="tally" aria-live="polite">
+            <span class="tally on"><b class="num" data-tally="active">5</b> Activo</span>
+            <span class="tally measure"><b class="num" data-tally="shadow">2</b> Solo medir</span>
+            <span class="tally off"><b class="num" data-tally="off">1</b> Apagado</span>
+          </p>
+          <ul class="ledger">
+            <li class="mod" data-module="gate">
+              <h3 class="mod-name">Gate</h3>
+              <p class="mod-desc">Revisa cada comando de Bash y cada edición de archivos antes de que se ejecuten, te pregunta cuando una política lo pide y rechaza los comandos del nivel de bloqueo.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Gate</legend>
+                <label class="seg"><input type="radio" name="mod-gate" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-gate" value="active" checked><span>Activo</span></label>
+              </fieldset>
+              <div class="callout danger" data-gate-warn hidden><p>Con el gate apagado nada revisa los comandos de Bash ni las ediciones de archivos antes de que se ejecuten.</p></div>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>En uso</dt><dd>unas 9,3 llamadas a Jev por prompt y 1,9 procesos de hook por cada comando de Bash o edición de archivos (unos 0,6 s cada uno).</dd>
+                  <dt>Segundo plano</dt><dd>unos 236 procesos de node por hora con un panel abierto, ninguno sin panel abierto.</dd>
+                  <dt>Hooks</dt><dd>Hooks puestos (5), como elegiste.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="model-router">
+              <h3 class="mod-name">Enrutador de modelo</h3>
+              <p class="mod-desc">Elige un modelo para cada prompt y cada subagente, muestra la banda de subagentes y registra el uso de cada turno.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Enrutador de modelo</legend>
+                <label class="seg"><input type="radio" name="mod-model-router" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-model-router" value="shadow"><span>Solo medir</span></label>
+                <label class="seg"><input type="radio" name="mod-model-router" value="active" checked><span>Activo</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>En uso</dt><dd>unas 1,1 llamadas a Jev por prompt y, por cada subagente que arranca, 2 llamadas a Jev y 2 procesos de hook.</dd>
+                  <dt>Segundo plano</dt><dd>unos 240 procesos de node por hora.</dd>
+                  <dt>Hooks</dt><dd>Hooks puestos (3), como elegiste.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="steward">
+              <h3 class="mod-name">Guardián de contexto</h3>
+              <p class="mod-desc">Vigila cuánto ha crecido una sesión y la compacta, o sugiere /clear, cuando una tarea se cierra.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Guardián de contexto</legend>
+                <label class="seg"><input type="radio" name="mod-steward" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-steward" value="shadow"><span>Solo medir</span></label>
+                <label class="seg"><input type="radio" name="mod-steward" value="active" checked><span>Activo</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>En uso</dt><dd>unas 0,5 llamadas a Jev por prompt.</dd>
+                  <dt>Segundo plano</dt><dd>nada propio.</dd>
+                  <dt>Hooks</dt><dd>No tiene hooks en Claude Code: sigue al interruptor directamente.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="skill-selection">
+              <h3 class="mod-name">Selección de skill y herramienta</h3>
+              <p class="mod-desc">Deja que Jev elija la skill y la herramienta de un turno, en vez de que el modelo vea la lista completa.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Selección de skill y herramienta</legend>
+                <label class="seg"><input type="radio" name="mod-skill-selection" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-skill-selection" value="shadow"><span>Solo medir</span></label>
+                <label class="seg"><input type="radio" name="mod-skill-selection" value="active" checked><span>Activo</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>En uso</dt><dd>unas 7,4 llamadas a Jev por prompt.</dd>
+                  <dt>Segundo plano</dt><dd>nada propio.</dd>
+                  <dt>Hooks</dt><dd>No tiene hooks en Claude Code: sigue al interruptor directamente.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="board">
+              <h3 class="mod-name">Tablero</h3>
+              <p class="mod-desc">Mantiene el tablero: el estado en vivo de tus agentes, por proyecto y rama.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Tablero</legend>
+                <label class="seg"><input type="radio" name="mod-board" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-board" value="active" checked><span>Activo</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>En uso</dt><dd>ninguna llamada a Jev ni hooks.</dd>
+                  <dt>Segundo plano</dt><dd>unas 38 ejecuciones por hora del comando orca.</dd>
+                  <dt>Hooks</dt><dd>No tiene hooks en Claude Code: sigue al interruptor directamente.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="verify-done">
+              <h3 class="mod-name">Verificar «hecho»</h3>
+              <p class="mod-desc">Registra si un turno que editó archivos sin un test que pase dice que terminó.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Verificar «hecho»</legend>
+                <label class="seg"><input type="radio" name="mod-verify-done" value="off" checked><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-verify-done" value="shadow"><span>Solo medir</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>Qué hace</dt><dd>En los turnos que editaron archivos sin un test que pasara, pregunta a Jev si el mensaje final dice que el trabajo está hecho, y lo registra. Solo mide: no bloquea nada ni cambia ninguna respuesta. A Jev le envía el mensaje final, redactado y recortado, y los conteos del turno; nunca contenidos de archivos ni los comandos o rutas que usó el turno.</dd>
+                  <dt>En uso</dt><dd>una llamada a Jev por turno candidato, unas 0,1 llamadas a Jev por prompt.</dd>
+                  <dt>Segundo plano</dt><dd>nada propio.</dd>
+                  <dt>Hooks</dt><dd>No tiene hooks en Claude Code: sigue al interruptor directamente.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="ci-watch">
+              <h3 class="mod-name">Vigía de CI</h3>
+              <p class="mod-desc">Vigila la CI después de un push o un pull request y te avisa cuando termina.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Vigía de CI</legend>
+                <label class="seg"><input type="radio" name="mod-ci-watch" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-ci-watch" value="shadow" checked><span>Solo medir</span></label>
+                <label class="seg"><input type="radio" name="mod-ci-watch" value="active"><span>Activo</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>Qué hace</dt><dd>Después de un push, de abrir un pull request o de fusionarlo, vigila con gh la ejecución de CI y te avisa aquí cuando termina, con una línea sobre el prompt y un mensaje. En «Solo medir» no le envía nada al agente: solo cuenta las consultas de CI y las esperas largas que el agente hizo mientras tanto. En Activo, además, le avisa al agente una vez, cuando está libre, para que no tenga que consultar.</dd>
+                  <dt>En uso</dt><dd>como máximo 45 llamadas a gh por cada vigilancia (el tope de su calendario de consultas, no una medición), sin llamadas a Jev ni a ningún modelo.</dd>
+                  <dt>Últimos 7 días</dt><dd class="when-data">vigilancias 14, consultas de CI del agente mientras tanto 38, esperas largas 27 (lo que un aviso habría reemplazado).</dd><dd class="when-empty">ninguna vigilancia todavía.</dd>
+                  <dt>Segundo plano</dt><dd>nada propio.</dd>
+                  <dt>Hooks</dt><dd>No tiene hooks en Claude Code: sigue al interruptor directamente.</dd>
+                </dl>
+              </details>
+            </li>
+            <li class="mod" data-module="memory">
+              <h3 class="mod-name">Memoria</h3>
+              <p class="mod-desc">Al final de cada turno decide si hay algo que valga la pena recordar, y dónde.</p>
+              <fieldset class="seg-group"><legend class="visually-hidden">Estado de Memoria</legend>
+                <label class="seg"><input type="radio" name="mod-memory" value="off"><span>Apagado</span></label>
+                <label class="seg"><input type="radio" name="mod-memory" value="shadow" checked><span>Solo medir</span></label>
+                <label class="seg"><input type="radio" name="mod-memory" value="active"><span>Activo</span></label>
+              </fieldset>
+              <details class="mod-more"><summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>Detalles</summary>
+                <dl class="facts">
+                  <dt>En uso</dt><dd>una llamada a Haiku por turno respondido, más un fork de la sesión en algunos turnos.</dd>
+                  <dt>Segundo plano</dt><dd>nada propio.</dd>
+                  <dt>Hooks</dt><dd>No tiene hooks en Claude Code: sigue al interruptor directamente.</dd>
+                  <dt>Dónde guardaría</dt><dd>Engram, que está en marcha (sus herramientas están conectadas y respondió a la comprobación). Engram guardaría todo; la auto-memoria, solo feedback y user.</dd>
+                  <dt>Esta semana</dt><dd class="when-data">212 decisiones de Haiku, 20% para actualizar y 8 forks. Los forks redactaron 5 feedback, 1 user, 4 project y 1 reference. Tu hilo principal guardó 65 veces por su cuenta, y Haiku coincidió con él en 86% de los turnos.</dd><dd class="when-empty">todavía no hay nada registrado. Las filas aparecen después de los turnos respondidos.</dd>
+                </dl>
+              </details>
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" id="sec-secret" aria-labelledby="h-secret">
+        <div class="section-head"><h2 id="h-secret">Clave de TypeSafe</h2></div>
+        <div class="section-body cred">
+          <p class="loading-line when-loading" role="status">Comprobando…</p>
+          <div class="cred-state when-data">
+            <p>Clave configurada (termina en <span class="mono">…9f2a</span>).</p>
+            <span class="actions" style="margin-top:0">
+              <button type="button" class="btn" data-reveal="secret-new">Reemplazar clave</button>
+              <button type="button" class="btn btn-danger">Eliminar clave guardada</button>
+            </span>
+          </div>
+          <p class="cred-state when-empty">Sin clave configurada.</p>
+          <div id="secret-new" class="when-not-loading" data-reveal-target hidden>
+            <label class="field"><span>Nueva clave (se guarda cifrada; nunca se vuelve a mostrar completa)</span><input type="password" placeholder="api..." autocomplete="off" data-proto></label>
+            <div class="actions"><button type="button" class="btn">Guardar clave</button><button type="button" class="btn btn-quiet" data-reveal="secret-new">Cancelar</button></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-provider" aria-labelledby="h-provider">
+        <div class="section-head"><h2 id="h-provider">Quién decide</h2></div>
+        <p class="lede">Quién juzga cada comando: Jev, Clef (con cuota gratis diaria) o los dos.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Jev (TypeSafe) juzga cada comando hoy. Clef (Cloudflare Workers AI) habla el mismo contrato y tiene una cuota gratis diaria. En «Ambos», Clef responde primero y Jev responde cuando Clef duda, ve que podría aplicar una política, falla o se acaba la cuota del día.</p><p>Clef recibe lo mismo que Jev recibe del gate: el comando, con los secretos redactados, y el contexto del repositorio. El enrutador, las skills, las herramientas, la memoria y verify-done siguen siempre con Jev.</p></details>
+        <div class="section-body">
+          <p class="loading-line when-loading" role="status">Leyendo el proveedor guardado…</p>
+          <div class="when-not-loading">
+            <fieldset class="choices cols-3">
+              <legend>Proveedor del gate</legend>
+              <label class="choice"><input type="radio" name="provider" value="jev"><span><span class="choice-title">Solo Jev</span></span></label>
+              <label class="choice"><input type="radio" name="provider" value="both" checked><span><span class="choice-title">Ambos</span><span class="choice-desc">Clef responde primero y Jev responde cuando Clef duda.</span></span></label>
+              <label class="choice"><input type="radio" name="provider" value="clef"><span><span class="choice-title">Solo Clef</span></span></label>
+            </fieldset>
+            <div class="setting stack-narrow" style="margin-top:var(--space-md)">
+              <span class="setting-title">Modelo de Clef</span>
+              <span class="setting-desc">La cuota gratis diaria de Clef alcanza para cientos de llamadas del gate y nunca cobra.</span>
+              <fieldset class="seg-group"><legend class="visually-hidden">Modelo de Clef</legend>
+                <label class="seg"><input type="radio" name="clef-model" value="clef" checked><span>clef</span></label>
+                <label class="seg"><input type="radio" name="clef-model" value="clef-flash"><span>clef-flash</span></label>
+                <label class="seg"><input type="radio" name="clef-model" value="clef-omni"><span>clef-omni</span></label>
+              </fieldset>
+            </div>
+            <details class="what"><summary>¿Qué es esto?</summary><p>La cuota gratis de 10.000 neuronas al día alcanza, sin políticas, para unas 950 llamadas del gate con clef, 1.500 con clef-omni y 6.000 con clef-flash. Cada política alarga la pregunta: con unas 20, clef llega a unas 245 llamadas al día y clef-omni a unas 390. Clef se detiene en 9.000 neuronas para no facturar nunca, y vuelve a las 00:00 UTC; en «Ambos» Jev responde mientras tanto.</p></details>
+
+            <div class="subpanel">
+              <h3>Credenciales de Cloudflare</h3>
+              <div class="kv when-data" style="margin-top:var(--space-xs)"><span>Cuenta <b>…41c2</b></span><span>Token <b>…Qx7m</b></span></div>
+              <p class="kv when-empty" style="margin-top:var(--space-xs)">Sin credenciales de Cloudflare.</p>
+              <div class="grid-2" style="margin-top:var(--space-md)">
+                <label class="field"><span>ID de cuenta</span><input type="text" autocomplete="off" data-proto></label>
+                <label class="field"><span>Token de API (Workers AI)</span><input type="password" autocomplete="off" data-proto></label>
+              </div>
+              <div class="actions">
+                <button type="button" class="btn">Guardar credenciales</button>
+                <button type="button" class="btn when-data" data-busy="Probando…">Probar conexión</button>
+                <button type="button" class="btn btn-danger when-data">Eliminar credenciales</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-integration" aria-labelledby="h-integration">
+        <div class="section-head"><h2 id="h-integration">Integración con Claude Code</h2></div>
+        <p class="lede">Lo que este plugin escribe en Claude Code, y cómo configurarlo o deshacerlo.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Este plugin escribe ocho cosas fuera de sí mismo para que los hooks y el mod de skills funcionen en Claude Code: entradas en <code>~/.claude/settings.json</code>, una variable de entorno en ese mismo archivo, un archivo con la clave en texto plano con permisos restringidos, una copia del mod de skills, un espejo del catálogo de destinos en JSON legible (no es secreto), un espejo de las políticas del equipo en JSON legible (no es secreto), un espejo del catálogo de modelos en JSON legible (no es secreto) y el archivo de los módulos encendidos (no es secreto). Nada de esto se hace sin mostrarlo aquí. "Revertir todo" deshace las entradas de hooks, la variable de entorno y la copia del mod de skills; borrar la clave elimina el archivo de la clave; los tres espejos JSON nunca se borran, solo se sobrescriben con su siguiente guardado.</p></details>
+        <div class="section-body">
+          <p class="loading-line when-loading" role="status">Comprobando…</p>
+          <table class="checks when-not-loading">
+            <caption class="visually-hidden">Estado de la integración</caption>
+            <tbody>
+              <tr><th scope="row">Hook de Bash</th><td>puesto en 2 de 2 sitios donde Claude Code lee su configuración.</td></tr>
+              <tr class="needs"><th scope="row">Paneles de Orca</th><td>NO cubiertos. El hook no corre dentro de Orca.</td></tr>
+              <tr><th scope="row">Variable de entorno</th><td>no puesta.</td></tr>
+              <tr><th scope="row">Archivo de la clave</th><td>presente, permisos 600, en <span class="mono">/home/you/.config/orca-supervisor/env</span></td></tr>
+              <tr class="needs"><th scope="row">Mod de skills</th><td>no instalado. Usa «Configurar», abajo, para instalarlo.</td></tr>
+              <tr><th scope="row">Hooks de modelo del Agent</th><td>puestos en 2 de 2 sitios donde Claude Code lee su configuración.</td></tr>
+              <tr><th scope="row">Guarda de ediciones (reglas del propio gate)</th><td>puesta en 2 de 2 sitios donde Claude Code lee su configuración.</td></tr>
+              <tr class="full"><td colspan="2">Los hooks se ejecutan con Node v26.9.0 (<span class="mono">/opt/homebrew/bin/node</span>).</td></tr>
+            </tbody>
+          </table>
+          <div class="actions">
+            <button type="button" class="btn" data-busy="Configurando…" data-done="Listo.">Configurar</button>
+            <button type="button" class="btn btn-danger">Revertir todo</button>
+            <span class="status" role="status"></span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-thresholds" aria-labelledby="h-thresholds">
+        <div class="section-head"><h2 id="h-thresholds">Techo del gate y tamaño del log</h2><span class="sample when-data">valores de ejemplo</span></div>
+        <div class="section-body figure-row">
+          <div class="readout">
+            <span class="field-label">Techo de consecuencia</span>
+            <span class="val">1.78</span>
+            <span class="field-hint">El techo de consecuencia por defecto del gate. Sale de la medición, así que no se edita.</span>
+            <details class="what"><summary>¿Qué es esto?</summary><p>El techo de consecuencia que aplica la puerta de comandos por defecto. Un destino puede anular este número desde su propia fila en el catálogo de destinos (pestaña Destinos). No es editable aquí: viene de medición, no de preferencia (ver el comentario de GATE_CONSEQUENCE_CEILING en decisions.ts).</p></details>
+          </div>
+          <label class="field"><span>Tamaño máximo del log</span><input type="number" name="log-max" value="500" min="1" inputmode="numeric" class="num"></label>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== DESTINOS -->
+<section class="tabpanel" id="destinations" role="tabpanel" aria-labelledby="tab-destinations">
+  <div class="tab-notes">
+    <h2>Destinos: antes y ahora</h2>
+    <p><b>Antes.</b> Cada destino era una tarjeta cerrada que solo decía «service · app»; dos párrafos de ayuda colgaban bajo los botones y todo pesaba igual.</p>
+    <p><b>Ahora.</b> Una tabla con id, etiqueta y kind; la fila se abre para editar sus cinco campos en su lugar. «Buscar en Orca» deja las propuestas debajo, cada una con su kind. El límite de lo que Orca puede proponer pasa a «¿Qué es esto?».</p>
+    <p><b>Por qué.</b> Un catálogo se escanea por columnas; la edición aparece solo donde la pides.</p>
+  </div>
+  <div class="tab-layout">
+    <nav class="toc" aria-label="En esta pestaña"><a href="#sec-catalog">Catálogo de destinos</a></nav>
+    <div class="tab-body">
+      <section class="section" id="sec-catalog" aria-labelledby="h-catalog">
+        <div class="section-head"><h2 id="h-catalog">Catálogo de destinos</h2></div>
+        <p class="lede">Un destino por worktree que este plugin puede llegar a juzgar o enrutar.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Esta lista solo puede proponer un repositorio que Orca ya haya abierto como worktree; uno que Orca nunca ha tocado no es visible para este plugin.</p></details>
+        <div class="section-body">
+          <div class="skel when-loading" aria-hidden="true"><i class="tall"></i><i class="tall"></i></div>
+          <div class="when-not-loading">
+            <div class="row-head" aria-hidden="true"><span></span><span>id</span><span>Etiqueta</span><span>kind</span></div>
+            <div class="rows" id="dest-rows">
+              <details class="row when-data">
+                <summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span class="cell-strong mono">app</span><span class="cell-muted">app</span><span class="cell-muted">service</span></summary>
+                <div class="row-edit">
+                  <div class="grid-2">
+                    <label class="field"><span>id</span><input type="text" class="mono" value="app" placeholder="id-corto"></label>
+                    <label class="field"><span>Etiqueta</span><input type="text" value="app" placeholder="Nombre legible"></label>
+                    <label class="field"><span>kind</span><select><option selected>service</option><option>client-site</option><option>project</option><option>support</option></select></label>
+                    <label class="field"><span>worktreePath</span><input type="text" class="mono" placeholder="/ruta/exacta"></label>
+                    <label class="field"><span>terminalTitleMatch (opcional)</span><input type="text" placeholder="fragmento del título"></label>
+                  </div>
+                  <div class="actions"><button type="button" class="btn btn-danger" data-remove=".row">Quitar</button></div>
+                </div>
+              </details>
+              <details class="row when-data">
+                <summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span class="cell-strong mono">tooling</span><span class="cell-muted">tooling</span><span class="cell-muted">service</span></summary>
+                <div class="row-edit">
+                  <div class="grid-2">
+                    <label class="field"><span>id</span><input type="text" class="mono" value="tooling" placeholder="id-corto"></label>
+                    <label class="field"><span>Etiqueta</span><input type="text" value="tooling" placeholder="Nombre legible"></label>
+                    <label class="field"><span>kind</span><select><option selected>service</option><option>client-site</option><option>project</option><option>support</option></select></label>
+                    <label class="field"><span>worktreePath</span><input type="text" class="mono" placeholder="/ruta/exacta"></label>
+                    <label class="field"><span>terminalTitleMatch (opcional)</span><input type="text" placeholder="fragmento del título"></label>
+                  </div>
+                  <div class="actions"><button type="button" class="btn btn-danger" data-remove=".row">Quitar</button></div>
+                </div>
+              </details>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn" id="dest-add">+ Agregar destino</button>
+              <button type="button" class="btn" id="dest-search">Buscar en Orca</button>
+            </div>
+            <p class="field-hint" style="margin-top:var(--space-xs);max-width:62ch">Busca repositorios que Orca ya conoce y que tu catálogo todavía no tiene — nunca agrega nada por sí solo; lo que encuentre aparece en la lista de arriba.</p>
+            <p class="status" id="dest-status" role="status"></p>
+            <div class="proposals" id="dest-proposals" hidden>
+              <p>Orca conoce 2 repositorio(s) que tu catálogo no tiene. Elige el kind de cada uno para agregarlo; lo que no marques se queda sin agregar.</p>
+              <label class="proposal"><input type="checkbox" data-proto value="client-site-a-backend"><span><span class="mono">client-site-a-backend</span><small class="mono">/home/dev/Projects/client-site-a-backend</small></span><select data-proto aria-label="kind de client-site-a-backend"><option value="">(elige un kind)</option><option>service</option><option>client-site</option><option>project</option><option>support</option></select></label>
+              <label class="proposal"><input type="checkbox" data-proto value="client-site-b-be"><span><span class="mono">client-site-b-be</span><small class="mono">/home/dev/Projects/client-site-b-be</small></span><select data-proto aria-label="kind de client-site-b-be"><option value="">(elige un kind)</option><option>service</option><option>client-site</option><option>project</option><option>support</option></select></label>
+              <div class="actions" style="margin-top:0"><button type="button" class="btn" id="dest-add-marked">Agregar los marcados</button><span class="status" id="dest-prop-status" role="status"></span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== POLÍTICAS -->
+<section class="tabpanel" id="policies" role="tabpanel" aria-labelledby="tab-policies">
+  <div class="tab-notes">
+    <h2>Políticas: antes y ahora</h2>
+    <p><b>Antes.</b> Tarjetas iguales con la regla cortada a una línea y su tipo como texto gris pegado delante; las dos opciones de aprobación eran un botón negro y uno blanco.</p>
+    <p><b>Ahora.</b> Las políticas se agrupan por lo que hacen (Se hace sin preguntar, Lo decide una persona, No se hace nunca), con la regla en dos líneas y entera al abrirla; cambiar «Qué hace esta regla» la mueve de grupo. Las dos opciones de aprobación llevan su consecuencia escrita debajo.</p>
+    <p><b>Por qué.</b> Lo primero que se pregunta de una política es qué permite o prohíbe; ahora eso es la estructura, no una etiqueta.</p>
+  </div>
+  <div class="tab-layout">
+    <nav class="toc" aria-label="En esta pestaña">
+      <a href="#sec-team-policies">Políticas del equipo</a>
+      <a href="#sec-owners">Repositorios de tu equipo</a>
+      <a href="#sec-queue">Cuando una persona debe aprobar</a>
+    </nav>
+    <div class="tab-body">
+      <section class="section" id="sec-team-policies" aria-labelledby="h-team-policies">
+        <div class="section-head"><h2 id="h-team-policies">Políticas del equipo</h2></div>
+        <p class="lede">Cada fila es una decisión ya tomada: un id corto y la regla en una frase.</p>
+        <div class="section-body">
+          <div class="skel when-loading" aria-hidden="true"><i class="w-30"></i><i class="tall"></i><i class="tall"></i><i class="w-30"></i><i class="tall"></i></div>
+          <div class="when-not-loading" id="lanes">
+            <div class="rows" id="pol-unset" hidden></div>
+            <div class="lane" data-kind="permits">
+              <h3 class="lane-head">Se hace sin preguntar <span class="count num"></span></h3>
+              <div class="rows" data-lane>
+                <details class="row policy when-data">
+                  <summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span><span class="pol-id">read_and_test</span><span class="pol-rule">Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always. They're reversible and never leave the machine. This also covers deleting build output and reinstalling dependencies -- node_modules, dist, .next, cache folders -- and working freely with local, development and test databases, including dropping or recreating their tables, because none of it leaves the developer's machine and all of it regenerates with one command. It does not cover source files: discarding uncommitted changes to them is a different thing (see discard_uncommitted_work).</span></span></summary>
+                  <div class="row-edit">
+                    <label class="field"><span>id</span><input type="text" class="mono" value="read_and_test" placeholder="id-corto"></label>
+                    <label class="field"><span>rule</span><textarea rows="5" placeholder="La regla en una frase">Reading code, searching, running tests, linters, typecheck and local builds happens without asking, always. They're reversible and never leave the machine. This also covers deleting build output and reinstalling dependencies -- node_modules, dist, .next, cache folders -- and working freely with local, development and test databases, including dropping or recreating their tables, because none of it leaves the developer's machine and all of it regenerates with one command. It does not cover source files: discarding uncommitted changes to them is a different thing (see discard_uncommitted_work).</textarea></label>
+                    <div class="grid-2">
+                      <label class="field"><span>Qué hace esta regla</span><select data-kind-select><option value="">— Elegir —</option><option value="permits" selected>Se hace sin preguntar</option><option value="requires_human">Lo decide una persona</option><option value="prohibits">No se hace nunca</option></select></label>
+                      <label class="field"><span>Destinos (opcional)</span><input type="text" class="mono" placeholder="id-destino-1, id-destino-2"></label>
+                    </div>
+                    <p class="field-hint">Vacío = aplica a todos los destinos (comportamiento actual). Ids separados por comas para limitar esta política a destinos específicos.</p>
+                    <div class="actions"><button type="button" class="btn btn-danger" data-remove=".row">Quitar</button></div>
+                  </div>
+                </details>
+                <details class="row policy when-data">
+                  <summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span><span class="pol-id">own_branch</span><span class="pol-rule">All work goes on a feature branch. Work happens there without asking.</span></span></summary>
+                  <div class="row-edit">
+                    <label class="field"><span>id</span><input type="text" class="mono" value="own_branch" placeholder="id-corto"></label>
+                    <label class="field"><span>rule</span><textarea rows="2" placeholder="La regla en una frase">All work goes on a feature branch. Work happens there without asking.</textarea></label>
+                    <div class="grid-2">
+                      <label class="field"><span>Qué hace esta regla</span><select data-kind-select><option value="">— Elegir —</option><option value="permits" selected>Se hace sin preguntar</option><option value="requires_human">Lo decide una persona</option><option value="prohibits">No se hace nunca</option></select></label>
+                      <label class="field"><span>Destinos (opcional)</span><input type="text" class="mono" placeholder="id-destino-1, id-destino-2"></label>
+                    </div>
+                    <p class="field-hint">Vacío = aplica a todos los destinos (comportamiento actual). Ids separados por comas para limitar esta política a destinos específicos.</p>
+                    <div class="actions"><button type="button" class="btn btn-danger" data-remove=".row">Quitar</button></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+            <div class="lane" data-kind="requires_human">
+              <h3 class="lane-head">Lo decide una persona <span class="count num"></span></h3>
+              <div class="rows" data-lane></div>
+            </div>
+            <div class="lane" data-kind="prohibits">
+              <h3 class="lane-head">No se hace nunca <span class="count num"></span></h3>
+              <div class="rows" data-lane>
+                <details class="row policy when-data">
+                  <summary><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6"/></svg><span><span class="pol-id">never_write_to_main</span><span class="pol-rule">Never write directly on main, master or develop, not even a one-line fix: no editing their tracked files, committing, cherry-picking or merging local work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request.</span></span></summary>
+                  <div class="row-edit">
+                    <label class="field"><span>id</span><input type="text" class="mono" value="never_write_to_main" placeholder="id-corto"></label>
+                    <label class="field"><span>rule</span><textarea rows="4" placeholder="La regla en una frase">Never write directly on main, master or develop, not even a one-line fix: no editing their tracked files, committing, cherry-picking or merging local work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request.</textarea></label>
+                    <div class="grid-2">
+                      <label class="field"><span>Qué hace esta regla</span><select data-kind-select><option value="">— Elegir —</option><option value="permits">Se hace sin preguntar</option><option value="requires_human">Lo decide una persona</option><option value="prohibits" selected>No se hace nunca</option></select></label>
+                      <label class="field"><span>Destinos (opcional)</span><input type="text" class="mono" placeholder="id-destino-1, id-destino-2"></label>
+                    </div>
+                    <p class="field-hint">Vacío = aplica a todos los destinos (comportamiento actual). Ids separados por comas para limitar esta política a destinos específicos.</p>
+                    <div class="actions"><button type="button" class="btn btn-danger" data-remove=".row">Quitar</button></div>
+                  </div>
+                </details>
+              </div>
+            </div>
+            <div class="actions">
+              <button type="button" class="btn" id="pol-add">+ Agregar política</button>
+              <button type="button" class="btn" id="pol-import">Importar políticas base</button>
+            </div>
+            <p class="field-hint" style="margin-top:var(--space-xs);max-width:62ch">Agrega las políticas base incluidas con el plugin que todavía no tienes; lo que ya agregaste o editaste queda intacto.</p>
+            <p class="status" id="pol-status" role="status"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-owners" aria-labelledby="h-owners">
+        <div class="section-head"><h2 id="h-owners">Repositorios de tu equipo</h2></div>
+        <p class="lede">Repositorios de tu equipo: en ellos no se pregunta por subir ramas de trabajo ni abrir PRs.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Subir una rama de trabajo o abrir un pull request en un repositorio de estos dueños no llega al cliente, así que no se consulta a las políticas que piden a una persona. Fusionar, subir a main, forzar un push y cualquier repositorio fuera de esta lista se siguen consultando. Vacío = todo se decide como hasta ahora.</p></details>
+        <div class="section-body">
+          <div class="skel when-loading" aria-hidden="true"><i class="tall"></i></div>
+          <label class="field when-data"><span>Dueños en GitHub o GitLab (usuarios u organizaciones), uno por línea</span>
+            <textarea class="mono" rows="3" placeholder="tu-organizacion">acme-team
+acme-tools</textarea>
+          </label>
+          <label class="field when-empty"><span>Dueños en GitHub o GitLab (usuarios u organizaciones), uno por línea</span>
+            <textarea class="mono" rows="3" placeholder="tu-organizacion" data-proto></textarea>
+          </label>
+        </div>
+      </section>
+
+      <section class="section" id="sec-queue" aria-labelledby="h-queue">
+        <div class="section-head"><h2 id="h-queue">Cuando una persona debe aprobar</h2></div>
+        <div class="section-body">
+          <fieldset class="choices cols-2">
+            <legend>Qué hace el agente si una política pide a una persona</legend>
+            <label class="choice"><input type="radio" name="queue" value="ask"><span><span class="choice-title">Preguntar ahora</span></span></label>
+            <label class="choice"><input type="radio" name="queue" value="queue" checked><span><span class="choice-title">Dejarlo en espera y seguir</span><span class="choice-desc">En espera, la acción queda en el tablero y el agente sigue. Nunca se ejecuta sin ti.</span></span></label>
+          </fieldset>
+          <details class="what"><summary>¿Qué es esto?</summary><p>En espera: la acción no se ejecuta, queda en «Esperándote» en el tablero y el agente sigue con lo demás. Para soltarla, dile al agente en su sesión que la corra de nuevo: en ese momento se te pregunta. Nunca se ejecuta sin ti.</p></details>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== MODELOS -->
+<section class="tabpanel" id="models" role="tabpanel" aria-labelledby="tab-models">
+  <div class="tab-notes">
+    <h2>Modelos: antes y ahora</h2>
+    <p><b>Antes.</b> Cuatro tarjetas altas, cada una con cuatro botones (Subir, Bajar, Marcar sin clasificar, Quitar) y un «PUESTO 1» en mayúsculas; el formulario de agregar siempre abierto; la medición, ocho líneas grises.</p>
+    <p><b>Ahora.</b> Una escalera numerada: el puesto es la cifra grande, el modelo y su id al lado, «Disponible» como interruptor, Subir y Bajar como botones de icono y lo demás en «Más acciones». Agregar modelo queda plegado. La medición es una rejilla de cifras y el umbral del gancho clásico, una barra (3 de 1000).</p>
+    <p><b>Por qué.</b> El orden es lo que decide el enrutador; ahora el orden es lo que se ve primero.</p>
+  </div>
+  <div class="tab-layout">
+    <nav class="toc" aria-label="En esta pestaña">
+      <a href="#sec-catalog-models">Catálogo de modelos</a>
+      <a href="#sec-measure">Medición</a>
+      <a href="#sec-router">Enrutador de modelo de Jev</a>
+      <a href="#sec-explicit">Modelos fijados por un agente</a>
+    </nav>
+    <div class="tab-body">
+      <div class="callout warn" data-module-note="model-router" hidden style="margin-bottom:var(--space-lg)"><p></p></div>
+
+      <section class="section" id="sec-catalog-models" aria-labelledby="h-catalog-models">
+        <div class="section-head"><h2 id="h-catalog-models">Catálogo de modelos</h2></div>
+        <p class="lede">Los modelos entre los que elige el enrutador. Solo usa los marcados como disponibles.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Esta escalera es el conjunto de modelos disponibles para el enrutador de Jev: solo elige entre los marcados como disponibles. El interruptor del enrutador de cada cuenta (apagado, medir o activo), más abajo, decide si solo mide o si también actúa. El esfuerzo que pide cada etapa se ajusta en la tabla de cada cuenta.</p><p>Datos de los modelos tomados de la documentación de modelos de Anthropic.</p></details>
+        <div class="section-body">
+          <div class="skel when-loading" aria-hidden="true"><i class="tall"></i><i class="tall"></i><i class="tall"></i><i class="tall"></i></div>
+          <div class="callout empty when-empty"><p>El catálogo está vacío: por ahora cada llamada a una subtarea pasa sin cambios. Usa el formulario de abajo para agregar un modelo.</p></div>
+          <ol class="ladder when-data" id="ladder">
+            <li class="rung is-unavailable" data-id="claude-fable-5-1">
+              <span class="rung-rank" aria-label="Puesto 1">1</span>
+              <div><div class="rung-name">Claude Fable 5.1</div><div class="rung-meta"><code>claude-fable-5-1</code><span>anthropic</span><span>fable</span></div></div>
+              <label class="rung-avail"><input type="checkbox" class="switch" role="switch"> Disponible</label>
+              <span class="rung-move">
+                <button type="button" class="btn btn-quiet btn-icon" data-move="up" aria-label="Subir"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3.5 7.5L8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <button type="button" class="btn btn-quiet btn-icon" data-move="down" aria-label="Bajar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 8.5L8 13l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <details class="more-menu"><summary class="btn btn-quiet btn-icon" aria-label="Más acciones"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></summary><div class="menu"><button type="button" data-unrank>Marcar sin clasificar</button><button type="button" class="danger" data-remove=".rung">Quitar</button></div></details>
+              </span>
+            </li>
+            <li class="rung" data-id="claude-opus-5-5">
+              <span class="rung-rank" aria-label="Puesto 2">2</span>
+              <div><div class="rung-name">Claude Opus 5.5</div><div class="rung-meta"><code>claude-opus-5-5</code><span>anthropic</span><span>opus</span></div></div>
+              <label class="rung-avail"><input type="checkbox" class="switch" role="switch" checked> Disponible</label>
+              <span class="rung-move">
+                <button type="button" class="btn btn-quiet btn-icon" data-move="up" aria-label="Subir"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3.5 7.5L8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <button type="button" class="btn btn-quiet btn-icon" data-move="down" aria-label="Bajar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 8.5L8 13l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <details class="more-menu"><summary class="btn btn-quiet btn-icon" aria-label="Más acciones"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></summary><div class="menu"><button type="button" data-unrank>Marcar sin clasificar</button><button type="button" class="danger" data-remove=".rung">Quitar</button></div></details>
+              </span>
+            </li>
+            <li class="rung" data-id="claude-sonnet-5-5">
+              <span class="rung-rank" aria-label="Puesto 3">3</span>
+              <div><div class="rung-name">Claude Sonnet 5.5</div><div class="rung-meta"><code>claude-sonnet-5-5</code><span>anthropic</span><span>sonnet</span></div></div>
+              <label class="rung-avail"><input type="checkbox" class="switch" role="switch" checked> Disponible</label>
+              <span class="rung-move">
+                <button type="button" class="btn btn-quiet btn-icon" data-move="up" aria-label="Subir"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3.5 7.5L8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <button type="button" class="btn btn-quiet btn-icon" data-move="down" aria-label="Bajar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 8.5L8 13l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <details class="more-menu"><summary class="btn btn-quiet btn-icon" aria-label="Más acciones"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></summary><div class="menu"><button type="button" data-unrank>Marcar sin clasificar</button><button type="button" class="danger" data-remove=".rung">Quitar</button></div></details>
+              </span>
+            </li>
+            <li class="rung" data-id="claude-haiku-5-5">
+              <span class="rung-rank" aria-label="Puesto 4">4</span>
+              <div><div class="rung-name">Claude Haiku 5.5</div><div class="rung-meta"><code>claude-haiku-5-5</code><span>anthropic</span><span>haiku</span></div></div>
+              <label class="rung-avail"><input type="checkbox" class="switch" role="switch" checked> Disponible</label>
+              <span class="rung-move">
+                <button type="button" class="btn btn-quiet btn-icon" data-move="up" aria-label="Subir"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3.5 7.5L8 3l4.5 4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <button type="button" class="btn btn-quiet btn-icon" data-move="down" aria-label="Bajar"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 8.5L8 13l4.5-4.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+                <details class="more-menu"><summary class="btn btn-quiet btn-icon" aria-label="Más acciones"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="13" cy="8" r="1.4" fill="currentColor"/></svg></summary><div class="menu"><button type="button" data-unrank>Marcar sin clasificar</button><button type="button" class="danger" data-remove=".rung">Quitar</button></div></details>
+              </span>
+            </li>
+          </ol>
+
+          <details class="add-form when-not-loading" id="model-add">
+            <summary class="btn">+ Agregar modelo</summary>
+            <h3 class="sub">Agregar modelo</h3>
+            <div class="grid-2">
+              <label class="field"><span>id</span><input type="text" class="mono" placeholder="id-corto" data-proto data-f="id"></label>
+              <label class="field"><span>Etiqueta</span><input type="text" data-proto data-f="label"></label>
+              <label class="field"><span>provider</span><input type="text" data-proto data-f="provider"></label>
+              <label class="field"><span>agentModel</span><input type="text" placeholder="sonnet, opus, haiku, fable…" data-proto data-f="agent"></label>
+              <label class="field"><span>source (opcional)</span><input type="text" placeholder="https://…" data-proto></label>
+              <label class="field"><span>summary (opcional)</span><input type="text" data-proto></label>
+            </div>
+            <div class="actions"><button type="button" class="btn" id="model-add-btn">+ Agregar modelo</button><span class="status" id="model-add-status" role="status"></span></div>
+          </details>
+
+          <h3 class="sub when-not-loading">Gancho clásico de subtareas</h3>
+          <div class="when-not-loading">
+            <div class="setting">
+              <label class="setting-title" for="legacy-hook">Interruptor heredado: el gancho clásico de subtareas, para cuentas con el enrutador apagado</label>
+              <span class="setting-desc">El gancho clásico, anterior al enrutador. Solo actúa donde el enrutador no está activo.</span>
+              <input type="checkbox" class="switch" role="switch" id="legacy-hook">
+            </div>
+            <div class="progress when-data">
+              <span class="field-hint">Medición: 3 de 1000 decisiones comparables. Faltan 997.</span>
+              <span class="bar" role="img" aria-label="3 de 1000"><i style="--p:0.3%"></i></span>
+            </div>
+            <p class="field-hint when-empty">Medición: todavía sin decisiones comparables.</p>
+            <details class="what"><summary>¿Qué es esto?</summary><p>Es el interruptor anterior al enrutador y solo actúa donde el enrutador no está activo; donde el enrutador está activo, el gancho clásico se hace a un lado. Apagado: solo mide. Encendido: reescribe el modelo únicamente cuando la medición ya alcanzó su umbral de listo, Jev está seguro y no está de acuerdo con lo pedido, y la sesión corre en modo bypassPermissions; en cualquier otro caso solo mide, sin cambiar nada.</p></details>
+            <div class="setting" style="margin-top:var(--space-sm)">
+              <label class="setting-title" for="ready-override">Darla por lista (decisión del dueño)</label>
+              <span class="setting-desc">Encendido: el gancho clásico puede reescribir el modelo aunque la medición no haya alcanzado su umbral. Ningún arranque lo apaga; solo tú, aquí.</span>
+              <input type="checkbox" class="switch" role="switch" id="ready-override">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-measure" aria-labelledby="h-measure">
+        <div class="section-head"><h2 id="h-measure">Medición</h2><span class="sample when-data">valores de ejemplo</span></div>
+        <div class="section-body">
+          <div class="skel when-loading" aria-hidden="true"><i class="w-50 tall"></i><i class="w-50 tall"></i></div>
+          <p class="callout empty when-empty">Todavía no se ha medido ninguna llamada a una subtarea.</p>
+          <dl class="stats when-data">
+            <div class="stat"><dt>Decisiones</dt><dd>5</dd></div>
+            <div class="stat"><dt>Juzgadas por Jev</dt><dd>4</dd></div>
+            <div class="stat"><dt>Pasaron sin juzgar</dt><dd>1</dd></div>
+            <div class="stat"><dt>Coincidencia con el modelo pedido</dt><dd>50%</dd></div>
+            <div class="stat"><dt>Recomendó un modelo más grande</dt><dd>1</dd></div>
+            <div class="stat"><dt>Recomendó uno más chico</dt><dd>1</dd></div>
+            <div class="stat"><dt>De acuerdo con lo pedido</dt><dd>2</dd></div>
+            <div class="stat"><dt>Reescrituras aplicadas</dt><dd>0</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <section class="section" id="sec-router" aria-labelledby="h-router" data-module-section="model-router">
+        <div class="section-head"><h2 id="h-router">Enrutador de modelo de Jev</h2></div>
+        <p class="lede">Por cuenta: Medir solo registra qué modelo elegiría; Activo lo aplica en sesiones nuevas.</p>
+        <p class="lede">Guardián de contexto: compacta una sesión larga cuando se cierra una tarea, y conserva el plan.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Modo medir: decide y registra sin cambiar nada. Modo activo: aplica la elección al iniciar la sesión y en cada cambio de etapa. Los cambios se aplican a las sesiones nuevas.</p></details>
+        <div class="section-body">
+          <div class="skel when-loading" aria-hidden="true"><i class="tall"></i></div>
+          <div class="callout empty when-not-loading"><p>No se encontró ningún destino de Claude Code (ni este equipo ni una cuenta de Orca).</p></div>
+        </div>
+      </section>
+
+      <section class="section" id="sec-explicit" aria-labelledby="h-explicit" data-module-section="model-router">
+        <div class="section-head"><h2 id="h-explicit">Modelos fijados por un agente</h2></div>
+        <div class="section-body">
+          <fieldset class="choices cols-2">
+            <legend>Cuando la llamada o la definición de un agente fija su modelo</legend>
+            <label class="choice"><input type="radio" name="explicit" value="judge" checked><span><span class="choice-title">Juzgarlos</span><span class="choice-desc">Jev puede bajar un modelo fijado si la tarea es simple.</span></span></label>
+            <label class="choice"><input type="radio" name="explicit" value="keep"><span><span class="choice-title">Mantenerlos</span><span class="choice-desc">Se usa siempre el modelo fijado.</span></span></label>
+          </fieldset>
+          <details class="what"><summary>¿Qué es esto?</summary><p>Juzgarlos: con el enrutador en activo, Jev puede bajar ese modelo si la tarea es simple y está seguro. Nunca lo baja si duda, si la tarea es sensible o ya está fallando, y en el repositorio de un cliente nunca por debajo del modelo de la sesión. Mantenerlos: se usa siempre el modelo fijado.</p></details>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== MOD DE SKILLS -->
+<section class="tabpanel" id="modskills" role="tabpanel" aria-labelledby="tab-modskills">
+  <div class="tab-notes">
+    <h2>Mod de skills: antes y ahora</h2>
+    <p><b>Antes.</b> Una casilla del navegador y tres botones iguales, cada uno con su ayuda gris y su «¿Qué es esto?»; la medición, una línea más entre ellas.</p>
+    <p><b>Ahora.</b> La medición abre la sección como estado, porque es lo que decide si se puede activar. La skill es un interruptor; la herramienta son tres opciones con lo que hace cada una escrito debajo, sacado del texto largo actual. «Experimental» es una etiqueta, no parte del título.</p>
+    <p><b>Por qué.</b> La pestaña dice «no lo actives aún»; ahora lo dice antes de ofrecer el interruptor.</p>
+  </div>
+  <div class="tab-layout">
+    <nav class="toc" aria-label="En esta pestaña"><a href="#sec-skillsel">Selección de skill y herramienta</a></nav>
+    <div class="tab-body">
+      <div class="callout warn" data-module-note="skill-selection" hidden style="margin-bottom:var(--space-lg)"><p></p></div>
+      <section class="section" id="sec-skillsel" aria-labelledby="h-skillsel" data-module-section="skill-selection">
+        <div class="section-head"><h2 id="h-skillsel">Selección de skill y herramienta</h2><span class="sample">experimental</span></div>
+        <p class="lede">Jev elige la skill o la herramienta de cada turno. No las actives hasta que estén medidas.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Jev puede elegir qué skill o herramienta usar en cada turno, en vez de que el modelo vea la lista completa. La skill está en medición y la herramienta Apagada por defecto: activarlas hoy significaría aplicar un umbral de decisión que todavía nadie midió, el mismo error que ya se cometió una vez con el techo de consecuencia del gate (ver Techo del gate y tamaño del log, en la pestaña General). La línea de abajo dice cuánto falta.</p></details>
+        <div class="section-body">
+          <div class="callout"><p class="when-not-loading">Medición: todavía sin prompts comparables. Un prompt cuenta cuando Jev sugirió una skill Y se observó cuál cargó el modelo.</p><p class="when-loading">Medición: sin lectura todavía.</p></div>
+          <div class="setting" style="margin-top:var(--space-md)">
+            <label class="setting-title" for="skill-active">Dejar que Jev elija la skill (modo activo)</label>
+            <span class="setting-desc">Apagado: solo registra la skill que elegiría Jev. Encendido: el modelo recibe solo esa skill.</span>
+            <input type="checkbox" class="switch" role="switch" id="skill-active">
+          </div>
+          <details class="what"><summary>¿Qué es esto?</summary><p>Apagado (hoy): solo registra qué skill habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia. Encendido: retira la lista de skills del modelo e inyecta en su lugar las instrucciones de la skill ganadora.</p></details>
+          <fieldset class="choices cols-3" style="margin-top:var(--space-lg)">
+            <legend>Selección de herramienta</legend>
+            <label class="choice"><input type="radio" name="tools-mode" value="off" checked><span><span class="choice-title">Apagada</span><span class="choice-desc">Por defecto: no consulta a Jev ni registra nada.</span></span></label>
+            <label class="choice"><input type="radio" name="tools-mode" value="measure"><span><span class="choice-title">Medir</span><span class="choice-desc">Registra qué herramienta habría elegido Jev, en un registro local; nada de lo que ve el modelo cambia.</span></span></label>
+            <label class="choice"><input type="radio" name="tools-mode" value="active"><span><span class="choice-title">Activa</span><span class="choice-desc">Le sugiere al modelo qué herramienta usar en este turno, sin quitarle ni bloquearle ninguna herramienta.</span></span></label>
+          </fieldset>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+<!-- ===================================================== REGLAS -->
+<section class="tabpanel" id="rules" role="tabpanel" aria-labelledby="tab-rules">
+  <div class="tab-notes">
+    <h2>Reglas: antes y ahora</h2>
+    <p><b>Antes.</b> Nueve casillas azules del navegador; las autorizaciones en tarjetas con un «Olvidar» y una línea de metadatos unidos por puntos; cada programa de confianza, una tarjeta para una sola palabra.</p>
+    <p><b>Ahora.</b> El nivel de bloqueo es una lista de interruptores con la consecuencia debajo. Las autorizaciones son una tabla por repositorio (entrega, último uso, vence, usos). Los programas son fichas con «Quitar», y el campo de agregar valida en vivo con los mensajes reales del panel.</p>
+    <p><b>Por qué.</b> Cada bloque tenía una forma distinta de dato (interruptores, registro con fechas, lista de nombres) y ahora cada uno usa la suya.</p>
+  </div>
+  <div class="tab-layout">
+    <nav class="toc" aria-label="En esta pestaña">
+      <a href="#sec-deny">Nivel de bloqueo</a>
+      <a href="#sec-auth">Autorizaciones recordadas</a>
+      <a href="#sec-trusted">Programas de confianza</a>
+    </nav>
+    <div class="tab-body">
+      <section class="section" id="sec-deny" aria-labelledby="h-deny">
+        <div class="section-head"><h2 id="h-deny">Nivel de bloqueo (deny)</h2></div>
+        <p class="lede">Estos comandos se le niegan al agente en vez de preguntarte. Tú puedes correrlos igual.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Estos comandos se le niegan al agente en vez de preguntarte. Preguntar te detiene a ti y espera; negar le dice que no al modelo, que sigue con otra cosa. En el registro de este mismo gate, 3103 preguntas se respondieron que si y 1 que no, y 5 de 16 no se respondieron nunca: la pregunta costaba atencion, no compraba seguridad. Tu nunca estas bloqueado: corre el comando en tu terminal cuando quieras. Desmarcar uno no vuelve la regla silenciosa, la baja a preguntar, nunca a permitir.</p></details>
+        <div class="section-body">
+          <ul class="deny">
+            <li><label for="d1">Reescribir una rama con force push</label><p>El agente no lo hace. Rehace historia que otras personas ya pueden tener.</p><input type="checkbox" class="switch" role="switch" id="d1" checked></li>
+            <li><label for="d2">Empujar a main, master o production</label><p>El agente no lo hace. Publica en la rama de la que depende todo lo demas.</p><input type="checkbox" class="switch" role="switch" id="d2" checked></li>
+            <li><label for="d3">Borrar la raiz del sistema o tu directorio personal</label><p>El agente no lo hace. No hay deshacer ni frontera de repositorio.</p><input type="checkbox" class="switch" role="switch" id="d3" checked></li>
+            <li><label for="d4">Descartar trabajo sin confirmar</label><p>El agente no lo hace. Los cambios sin confirmar y los archivos sin seguimiento se pierden, y no hay reflog que los devuelva.</p><input type="checkbox" class="switch" role="switch" id="d4" checked></li>
+            <li><label for="d5">Eliminar o vaciar una tabla, base de datos o esquema</label><p>El agente no lo hace. Borra datos sin garantia de que exista un respaldo.</p><input type="checkbox" class="switch" role="switch" id="d5" checked></li>
+            <li><label for="d6">Borrar o vaciar recursos de Kubernetes</label><p>El agente no lo hace. Lo que cuesta depende por completo del namespace.</p><input type="checkbox" class="switch" role="switch" id="d6" checked></li>
+            <li><label for="d7">Aplicar cambios de infraestructura</label><p>El agente no lo hace. Crea y modifica recursos reales.</p><input type="checkbox" class="switch" role="switch" id="d7" checked></li>
+            <li><label for="d8">Destruir infraestructura</label><p>El agente no lo hace. Desmonta recursos reales que otros pueden estar usando.</p><input type="checkbox" class="switch" role="switch" id="d8" checked></li>
+            <li><label for="d9">Descargar algo y ejecutarlo de inmediato</label><p>El agente no lo hace. Ejecuta codigo remoto que nadie ha leido.</p><input type="checkbox" class="switch" role="switch" id="d9" checked></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" id="sec-auth" aria-labelledby="h-auth">
+        <div class="section-head"><h2 id="h-auth">Autorizaciones recordadas</h2><span class="sample when-data">valores de ejemplo</span></div>
+        <p class="lede">Entregas que el agente confirmó, por repositorio. Cada una vence a los 30 días sin uso.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Entregas que el agente confirmó después de un aviso, por repositorio. En ese repositorio, subir una rama de trabajo, un pull request o un release pasa sin un aviso nuevo. Cada una vence 30 días después de su último uso. Una política que pregunta o prohíbe, y el nivel de bloqueo de arriba, siempre siguen decidiendo.</p></details>
+        <div class="section-body">
+          <div class="when-loading"><p class="loading-line" role="status">Leyendo las autorizaciones recordadas…</p><div class="skel" aria-hidden="true"><i class="w-50"></i><i></i><i></i></div></div>
+          <p class="callout empty when-empty">Aún no hay nada recordado. Cuando el agente confirma la misma línea de entrega después de un aviso, queda recordada aquí para ese repositorio.</p>
+          <div class="when-data" id="auth-list">
+            <div class="repo">
+              <div class="repo-head"><h3>github.com/example/orca-supervisor</h3><button type="button" class="btn btn-quiet" data-forget-all>Olvidar todo</button></div>
+              <table class="auth">
+                <thead><tr><th scope="col">Entrega</th><th scope="col">Último uso</th><th scope="col">Vence</th><th scope="col">Usos</th><th scope="col"><span class="visually-hidden">Acciones</span></th></tr></thead>
+                <tbody>
+                  <tr><td class="what-cell">Subir una rama de trabajo</td><td class="num" data-label="Último uso:">21 sept 2026</td><td class="num" data-label="Vence:">21 oct 2026</td><td class="num" data-label="Usos:">1</td><td><button type="button" class="btn btn-quiet" data-forget>Olvidar</button></td></tr>
+                  <tr><td class="what-cell">Abrir un pull request</td><td class="num" data-label="Último uso:">21 sept 2026</td><td class="num" data-label="Vence:">21 oct 2026</td><td class="num" data-label="Usos:">1</td><td><button type="button" class="btn btn-quiet" data-forget>Olvidar</button></td></tr>
+                  <tr><td class="what-cell">Fusionar un pull request</td><td class="num" data-label="Último uso:">21 sept 2026</td><td class="num" data-label="Vence:">21 oct 2026</td><td class="num" data-label="Usos:">1</td><td><button type="button" class="btn btn-quiet" data-forget>Olvidar</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="repo">
+              <div class="repo-head"><h3>github.com/example/website</h3><button type="button" class="btn btn-quiet" data-forget-all>Olvidar todo</button></div>
+              <table class="auth">
+                <thead><tr><th scope="col">Entrega</th><th scope="col">Último uso</th><th scope="col">Vence</th><th scope="col">Usos</th><th scope="col"><span class="visually-hidden">Acciones</span></th></tr></thead>
+                <tbody>
+                  <tr><td class="what-cell">Crear un release</td><td class="num" data-label="Último uso:">22 sept 2026</td><td class="num" data-label="Vence:">22 oct 2026</td><td class="num" data-label="Usos:">1</td><td><button type="button" class="btn btn-quiet" data-forget>Olvidar</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <p class="callout empty" id="auth-empty" hidden>Aún no hay nada recordado. Cuando el agente confirma la misma línea de entrega después de un aviso, queda recordada aquí para ese repositorio.</p>
+          <p class="status" id="auth-status" role="status"></p>
+        </div>
+      </section>
+
+      <section class="section" id="sec-trusted" aria-labelledby="h-trusted">
+        <div class="section-head"><h2 id="h-trusted">Programas de confianza</h2></div>
+        <p class="lede">Programas tuyos que el gate deja pasar sin consultar a Jev cuando el resto de la línea solo lee.</p>
+        <details class="what"><summary>¿Qué es esto?</summary><p>Programas tuyos que el gate deja pasar sin consultar a Jev: una línea que empieza con uno de ellos pasa si lo demás es solo lectura o trabajo local. Escribe solo el nombre del programa (por ejemplo, el de una herramienta tuya). Una política que pregunta o prohíbe, y el nivel de bloqueo de arriba, siempre siguen decidiendo. Nada se agrega solo.</p></details>
+        <div class="section-body">
+          <div class="when-loading"><p class="loading-line" role="status">Leyendo los programas de confianza…</p><div class="skel" aria-hidden="true"><i class="w-30 tall"></i></div></div>
+          <div class="when-not-loading">
+            <ul class="chips when-data" id="trusted-list">
+              <li class="chip"><span class="mono">acme-notify</span><button type="button" class="btn btn-quiet" data-untrust aria-label="Quitar acme-notify">Quitar</button></li>
+              <li class="chip"><span class="mono">acme-scope</span><button type="button" class="btn btn-quiet" data-untrust aria-label="Quitar acme-scope">Quitar</button></li>
+            </ul>
+            <p class="callout warn" id="trusted-empty-live" hidden>No confías en ningún programa todavía. Si agregas uno, los comandos que empiezan con él pasan sin preguntar a Jev, y ese programa puede enviar mensajes o cambiar cosas fuera de esta máquina. Agrega solo programas tuyos que conozcas.</p>
+            <div class="add-inline">
+              <label class="field"><span>Nombre del programa</span><input type="text" class="mono" id="trusted-input" placeholder="mi-herramienta" autocomplete="off" data-proto aria-describedby="trusted-status"></label>
+              <button type="button" class="btn" id="trusted-add">Agregar</button>
+            </div>
+            <p class="status" id="trusted-status" role="status"></p>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>
+
+</form>
+
+<div class="savebar" id="savebar">
+  <div class="container">
+    <p class="status" id="save-status" role="status" aria-live="polite"></p>
+    <div class="savebar-actions">
+      <button type="button" class="btn btn-quiet" id="save-discard" hidden>Descartar</button>
+      <button type="button" class="btn" id="save-btn">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var body = document.body;
+  root.classList.add('js');
+  var form = document.getElementById('config');
+
+  /* ---------- tabs (state in the URL hash) ---------- */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+  var panels = tabs.map(function (t) { return document.getElementById(t.getAttribute('aria-controls')); });
+  function selectTab(key, focus) {
+    tabs.forEach(function (t, i) {
+      var on = t.getAttribute('aria-controls') === key;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      t.tabIndex = on ? 0 : -1;
+      panels[i].classList.toggle('is-active', on);
+      if (on && focus) t.focus();
+    });
+  }
+  function tabFromHash() {
+    var key = (location.hash || '').slice(1);
+    return tabs.some(function (t) { return t.getAttribute('aria-controls') === key; }) ? key : 'general';
+  }
+  tabs.forEach(function (t, i) {
+    t.addEventListener('click', function (e) {
+      e.preventDefault();
+      var key = t.getAttribute('aria-controls');
+      history.replaceState(null, '', '#' + key);
+      selectTab(key, false);
+      window.scrollTo(0, 0);
+    });
+    t.addEventListener('keydown', function (e) {
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (e.key === 'Home') d = -i; if (e.key === 'End') d = tabs.length - 1 - i;
+      if (!d) return;
+      e.preventDefault();
+      var next = tabs[(i + d + tabs.length) % tabs.length];
+      next.click(); next.focus();
+    });
+  });
+  selectTab(tabFromHash(), false);
+  window.addEventListener('hashchange', function () { if (tabs.some(function (t) { return '#' + t.getAttribute('aria-controls') === location.hash; })) selectTab(tabFromHash(), false); });
+
+  /* in-tab index: scroll without touching the tab hash */
+  document.querySelectorAll('.toc a').forEach(function (a) {
+    a.addEventListener('click', function (e) {
+      var target = document.querySelector(a.getAttribute('href'));
+      if (!target) return;
+      e.preventDefault();
+      target.scrollIntoView({ block: 'start' });
+      var h = target.querySelector('h2'); if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
+    });
+  });
+
+  /* ---------- prototype controls ---------- */
+  document.querySelectorAll('input[name="proto-view"]').forEach(function (r) {
+    r.addEventListener('change', function () { body.dataset.view = r.value; });
+  });
+  document.querySelectorAll('input[name="proto-theme"]').forEach(function (r) {
+    r.addEventListener('change', function () { root.dataset.theme = r.value; });
+  });
+  document.getElementById('proto-notes').addEventListener('change', function (e) { body.dataset.notes = e.target.checked ? 'on' : 'off'; });
+
+  /* ---------- dirty tracking and the save bar ---------- */
+  var structural = 0;
+  var snapshots = {};
+  var mutable = ['dest-rows', 'lanes', 'ladder'];
+  function snap() { mutable.forEach(function (id) { var el = document.getElementById(id); if (el) snapshots[id] = el.innerHTML; }); }
+  function trackedControls() {
+    return Array.prototype.filter.call(form.querySelectorAll('input, select, textarea'), function (el) {
+      return !el.hasAttribute('data-proto') && !el.closest('.when-loading, .when-empty');
+    });
+  }
+  function dirtyCount() {
+    var n = 0, radios = {};
+    trackedControls().forEach(function (el) {
+      if (el.type === 'radio') { if (el.checked !== el.defaultChecked) radios[el.name] = 1; }
+      else if (el.type === 'checkbox') { if (el.checked !== el.defaultChecked) n++; }
+      else if (el.tagName === 'SELECT') { if (Array.prototype.some.call(el.options, function (o) { return o.selected !== o.defaultSelected; })) n++; }
+      else if (el.value !== el.defaultValue) n++;
+    });
+    return n + Object.keys(radios).length + structural;
+  }
+  var saveBtn = document.getElementById('save-btn');
+  var discardBtn = document.getElementById('save-discard');
+  var saveStatus = document.getElementById('save-status');
+  var savebar = document.getElementById('savebar');
+  function setStatus(el, text, tone) { el.textContent = text || ''; el.classList.toggle('is-error', tone === 'error'); el.classList.toggle('is-ok', tone === 'ok'); }
+  function refreshBar() {
+    var n = dirtyCount();
+    saveBtn.textContent = n ? 'Guardar cambios (' + n + ')' : 'Guardar';
+    discardBtn.hidden = !n;
+    savebar.classList.toggle('is-dirty', !!n);
+    saveBtn.classList.toggle('btn-primary', !!n);
+  }
+  form.addEventListener('input', function () { setStatus(saveStatus, ''); refreshBar(); onModulesChanged(); });
+  form.addEventListener('change', function () { refreshBar(); onModulesChanged(); });
+
+  function commitDefaults() {
+    trackedControls().forEach(function (el) {
+      if (el.type === 'radio' || el.type === 'checkbox') el.defaultChecked = el.checked;
+      else if (el.tagName === 'SELECT') Array.prototype.forEach.call(el.options, function (o) { o.defaultSelected = o.selected; });
+      else el.defaultValue = el.value;
+    });
+    structural = 0; snap();
+  }
+  saveBtn.addEventListener('click', function () {
+    if (!dirtyCount()) { setStatus(saveStatus, 'Guardado.', 'ok'); return; }
+    saveBtn.disabled = true; discardBtn.disabled = true; saveBtn.textContent = 'Guardando…'; setStatus(saveStatus, '');
+    setTimeout(function () {
+      saveBtn.disabled = false; discardBtn.disabled = false;
+      if (document.getElementById('proto-fail').checked) {
+        setStatus(saveStatus, 'No se guardó: Las políticas.', 'error'); refreshBar(); return;
+      }
+      commitDefaults(); refreshBar(); setStatus(saveStatus, 'Guardado.', 'ok');
+    }, 700);
+  });
+  discardBtn.addEventListener('click', function () {
+    form.reset();
+    mutable.forEach(function (id) { var el = document.getElementById(id); if (el && snapshots[id] != null) el.innerHTML = snapshots[id]; });
+    structural = 0;
+    renumber(); countLanes(); refreshBar(); onModulesChanged();
+    setStatus(saveStatus, 'Se descartaron los cambios sin guardar.');
+  });
+
+  /* ---------- reveal toggles and busy buttons ---------- */
+  document.addEventListener('click', function (e) {
+    var t = e.target.closest('[data-reveal]');
+    if (t) { var el = document.getElementById(t.dataset.reveal); el.hidden = !el.hidden; if (!el.hidden) { var i = el.querySelector('input'); if (i) i.focus(); } }
+    var b = e.target.closest('[data-busy]');
+    if (b && !b.disabled) {
+      var label = b.textContent; var status = b.parentNode.querySelector('.status');
+      b.disabled = true; b.textContent = b.dataset.busy;
+      setTimeout(function () { b.disabled = false; b.textContent = label; if (status && b.dataset.done) setStatus(status, b.dataset.done, 'ok'); }, 900);
+    }
+    var rm = e.target.closest('[data-remove]');
+    if (rm) { var row = rm.closest(rm.dataset.remove); if (row) { row.remove(); structural++; renumber(); countLanes(); refreshBar(); } }
+  });
+
+  /* ---------- modules: tally, gate warning, notes on other tabs ---------- */
+  var NAMES = { 'model-router': 'Enrutador de modelo', 'skill-selection': 'Selección de skill y herramienta' };
+  function moduleState(key) { var r = form.querySelector('input[name="mod-' + key + '"]:checked'); return r ? r.value : null; }
+  function onModulesChanged() {
+    var counts = { active: 0, shadow: 0, off: 0 };
+    form.querySelectorAll('.mod').forEach(function (m) { var s = moduleState(m.dataset.module); if (s) counts[s]++; });
+    Object.keys(counts).forEach(function (k) { var el = document.querySelector('[data-tally="' + k + '"]'); if (el) el.textContent = counts[k]; });
+    document.querySelector('[data-gate-warn]').hidden = moduleState('gate') !== 'off';
+    Object.keys(NAMES).forEach(function (key) {
+      var s = moduleState(key);
+      var note = document.querySelector('[data-module-note="' + key + '"]');
+      note.hidden = s === 'active';
+      note.querySelector('p').textContent = s === 'off'
+        ? 'El módulo ' + NAMES[key] + ' está apagado, así que sus ajustes están ocultos. Enciéndelo en General, en Módulos.'
+        : 'El módulo ' + NAMES[key] + ' está en «Solo medir»: registra lo que haría, y no cambia tus turnos. Un ajuste «Activo» de aquí queda limitado a medir hasta que el módulo esté Activo.';
+      document.querySelectorAll('[data-module-section="' + key + '"]').forEach(function (sec) { sec.hidden = s === 'off'; });
+    });
+  }
+
+  /* ---------- destinations ---------- */
+  var destRows = document.getElementById('dest-rows');
+  var destTemplate = destRows.querySelector('.row').cloneNode(true);
+  document.getElementById('dest-add').addEventListener('click', function () {
+    var row = destTemplate.cloneNode(true);
+    row.classList.remove('when-data');
+    row.querySelectorAll('input').forEach(function (i) { i.value = ''; i.defaultValue = ''; });
+    row.querySelector('.cell-strong').textContent = 'id-corto'; row.querySelectorAll('.cell-muted')[0].textContent = '';
+    row.open = true; destRows.appendChild(row); structural++; refreshBar();
+    row.querySelector('input').focus();
+  });
+  destRows.addEventListener('input', function (e) {
+    var row = e.target.closest('.row'); if (!row) return;
+    var inputs = row.querySelectorAll('.row-edit input, .row-edit select');
+    row.querySelector('.cell-strong').textContent = inputs[0].value || 'id-corto';
+    row.querySelectorAll('.cell-muted')[0].textContent = inputs[1].value;
+    row.querySelectorAll('.cell-muted')[1].textContent = inputs[2].value;
+  });
+  var destStatus = document.getElementById('dest-status');
+  document.getElementById('dest-search').addEventListener('click', function (e) {
+    var b = e.currentTarget; b.disabled = true; b.textContent = 'Buscando…'; setStatus(destStatus, '');
+    setTimeout(function () {
+      b.disabled = false; b.textContent = 'Buscar en Orca';
+      if (body.dataset.view === 'empty') { setStatus(destStatus, 'No hay repositorios para proponer.'); return; }
+      setStatus(destStatus, 'Se encontraron 2 repositorio(s) para proponer, abajo.');
+      document.getElementById('dest-proposals').hidden = false;
+    }, 900);
+  });
+  document.getElementById('dest-add-marked').addEventListener('click', function () {
+    var st = document.getElementById('dest-prop-status');
+    var picks = Array.prototype.filter.call(document.querySelectorAll('#dest-proposals .proposal'), function (p) { return p.querySelector('input').checked; });
+    if (dirtyCount()) { setStatus(st, 'Tienes cambios sin guardar en los destinos. Guárdalos o descártalos antes de agregar los marcados.', 'error'); return; }
+    if (!picks.length) { setStatus(st, 'No marcaste ninguno, así que no se agregó nada.'); return; }
+    if (picks.some(function (p) { return !p.querySelector('select').value; })) { setStatus(st, 'Elige un kind para cada repositorio marcado antes de agregar.', 'error'); return; }
+    setStatus(st, 'Agregando…');
+    setTimeout(function () {
+      picks.forEach(function (p) {
+        var id = p.querySelector('input').value, kind = p.querySelector('select').value, path = p.querySelector('small').textContent;
+        var row = destTemplate.cloneNode(true); row.classList.remove('when-data');
+        var ins = row.querySelectorAll('.row-edit input');
+        ins[0].value = ins[0].defaultValue = id; ins[1].value = ins[1].defaultValue = id; ins[2].value = ins[2].defaultValue = path;
+        Array.prototype.forEach.call(row.querySelector('select').options, function (o) { o.selected = o.defaultSelected = (o.value === kind || o.textContent === kind); });
+        row.querySelector('.cell-strong').textContent = id; row.querySelectorAll('.cell-muted')[0].textContent = id; row.querySelectorAll('.cell-muted')[1].textContent = kind;
+        destRows.appendChild(row); p.remove();
+      });
+      snap();
+      setStatus(st, 'Se agregaron ' + picks.length + ' destino(s).', 'ok');
+      if (!document.querySelector('#dest-proposals .proposal')) document.getElementById('dest-proposals').hidden = true;
+    }, 700);
+  });
+
+  /* ---------- policies: lanes by kind ---------- */
+  function laneFor(kind) { var l = document.querySelector('.lane[data-kind="' + kind + '"] [data-lane]'); return l || document.getElementById('pol-unset'); }
+  function countLanes() {
+    var unset = document.getElementById('pol-unset');
+    document.querySelectorAll('.lane').forEach(function (l) {
+      var n = l.querySelectorAll('.policy:not(.when-empty)').length;
+      if (body.dataset.view === 'empty') n = 0;
+      l.querySelector('.count').textContent = '(' + n + ')';
+    });
+    unset.hidden = !unset.children.length;
+  }
+  var polTemplate = document.querySelector('.policy').cloneNode(true);
+  document.getElementById('lanes').addEventListener('change', function (e) {
+    if (!e.target.matches('[data-kind-select]')) return;
+    var row = e.target.closest('.policy');
+    var dest = laneFor(e.target.value);
+    var needs = row.querySelector('[data-needs-review]'); if (needs) needs.hidden = !!e.target.value;
+    dest.appendChild(row); row.open = true; e.target.focus(); countLanes();
+  });
+  document.getElementById('lanes').addEventListener('input', function (e) {
+    var row = e.target.closest('.policy'); if (!row) return;
+    if (e.target === row.querySelector('.row-edit input')) row.querySelector('.pol-id').textContent = e.target.value || 'id-corto';
+    if (e.target.tagName === 'TEXTAREA') row.querySelector('.pol-rule').textContent = e.target.value;
+  });
+  document.getElementById('pol-add').addEventListener('click', function () {
+    var row = polTemplate.cloneNode(true); row.classList.remove('when-data');
+    row.querySelectorAll('input, textarea').forEach(function (i) { i.value = ''; i.defaultValue = ''; });
+    var sel = row.querySelector('select'); Array.prototype.forEach.call(sel.options, function (o) { o.selected = o.defaultSelected = o.value === ''; });
+    row.querySelector('.pol-id').textContent = 'id-corto'; row.querySelector('.pol-rule').textContent = '';
+    var warn = document.createElement('p'); warn.className = 'callout warn'; warn.setAttribute('data-needs-review', '');
+    warn.textContent = 'Falta elegir qué hace esta política. Mientras tanto, esta fila se ignora al decidir y no se pierde.';
+    row.querySelector('.row-edit').insertBefore(warn, row.querySelector('.row-edit').firstChild);
+    row.open = true; document.getElementById('pol-unset').appendChild(row); structural++; countLanes(); refreshBar();
+    row.querySelector('input').focus();
+  });
+  document.getElementById('pol-import').addEventListener('click', function (e) {
+    var st = document.getElementById('pol-status');
+    if (dirtyCount()) { setStatus(st, 'Tienes cambios sin guardar en las políticas. Guárdalos o descártalos antes de importar o adoptar.', 'error'); return; }
+    var b = e.currentTarget; b.disabled = true; b.textContent = 'Importando…';
+    setTimeout(function () { b.disabled = false; b.textContent = 'Importar políticas base'; setStatus(st, 'No hay políticas nuevas para agregar.'); }, 800);
+  });
+
+  /* ---------- models ladder ---------- */
+  var ladder = document.getElementById('ladder');
+  function renumber() {
+    if (!ladder) return;
+    var ranked = Array.prototype.filter.call(ladder.children, function (r) { return !r.classList.contains('is-unranked'); });
+    ranked.forEach(function (r, i) {
+      var rank = r.querySelector('.rung-rank'); rank.textContent = i + 1; rank.setAttribute('aria-label', 'Puesto ' + (i + 1));
+      r.querySelector('[data-move="up"]').disabled = i === 0;
+      r.querySelector('[data-move="down"]').disabled = i === ranked.length - 1;
+    });
+    ladder.querySelectorAll('.rung').forEach(function (r) { r.classList.toggle('is-unavailable', !r.querySelector('.switch').checked); });
+  }
+  ladder.addEventListener('click', function (e) {
+    var mv = e.target.closest('[data-move]');
+    var rung = e.target.closest('.rung');
+    if (mv && rung) {
+      if (mv.dataset.move === 'up' && rung.previousElementSibling) ladder.insertBefore(rung, rung.previousElementSibling);
+      if (mv.dataset.move === 'down' && rung.nextElementSibling && !rung.nextElementSibling.classList.contains('is-unranked')) ladder.insertBefore(rung.nextElementSibling, rung);
+      structural++; renumber(); refreshBar(); mv.focus();
+    }
+    var un = e.target.closest('[data-unrank]');
+    if (un && rung) {
+      var unranked = rung.classList.toggle('is-unranked');
+      un.textContent = unranked ? 'Clasificar' : 'Marcar sin clasificar';
+      rung.querySelector('.rung-rank').textContent = unranked ? 'sin clasificar' : '';
+      rung.querySelector('.rung-move').querySelectorAll('[data-move]').forEach(function (b) { b.hidden = unranked; });
+      if (unranked) ladder.appendChild(rung); else ladder.insertBefore(rung, ladder.querySelector('.is-unranked:not([data-id="' + rung.dataset.id + '"])'));
+      rung.querySelector('.more-menu').open = false;
+      structural++; renumber(); refreshBar();
+    }
+  });
+  ladder.addEventListener('change', function () { renumber(); });
+  document.addEventListener('click', function (e) { document.querySelectorAll('.more-menu[open]').forEach(function (m) { if (!m.contains(e.target)) m.open = false; }); });
+  document.getElementById('model-add-btn').addEventListener('click', function () {
+    var st = document.getElementById('model-add-status');
+    var f = {}; document.querySelectorAll('#model-add [data-f]').forEach(function (i) { f[i.dataset.f] = i.value.trim(); });
+    if (!f.id || !f.label || !f.provider || !f.agent) { setStatus(st, 'Completa id, etiqueta, provider y agentModel.', 'error'); return; }
+    if (ladder.querySelector('[data-id="' + CSS.escape(f.id) + '"]')) { setStatus(st, 'Ya existe un modelo con ese id.', 'error'); return; }
+    var r = ladder.querySelector('.rung').cloneNode(true);
+    r.dataset.id = f.id; r.classList.add('is-unranked', 'is-unavailable'); r.classList.remove('when-data');
+    r.querySelector('.rung-name').textContent = f.label;
+    var meta = r.querySelector('.rung-meta'); meta.innerHTML = '';
+    [f.id, f.provider, f.agent].forEach(function (v, i) { var s = document.createElement(i ? 'span' : 'code'); s.textContent = v; meta.appendChild(s); });
+    var sw = r.querySelector('.switch'); sw.checked = sw.defaultChecked = false;
+    r.querySelector('.rung-rank').textContent = 'sin clasificar';
+    r.querySelectorAll('[data-move]').forEach(function (b) { b.hidden = true; });
+    r.querySelector('[data-unrank]').textContent = 'Clasificar';
+    ladder.appendChild(r); structural++; renumber(); refreshBar();
+    document.querySelectorAll('#model-add input').forEach(function (i) { i.value = ''; });
+    setStatus(st, 'Agregado, sin clasificar y no disponible — ajústalo abajo y guarda con la barra inferior.', 'ok');
+  });
+
+  /* ---------- rules: authorizations and trusted programs ---------- */
+  var authStatus = document.getElementById('auth-status');
+  document.getElementById('auth-list').addEventListener('click', function (e) {
+    var one = e.target.closest('[data-forget]'), all = e.target.closest('[data-forget-all]');
+    if (!one && !all) return;
+    var b = one || all; b.disabled = true; b.textContent = 'Olvidando…';
+    setTimeout(function () {
+      if (one) { var tr = one.closest('tr'); var repo = tr.closest('.repo'); tr.remove(); if (!repo.querySelector('tbody tr')) repo.remove(); }
+      else all.closest('.repo').remove();
+      setStatus(authStatus, 'Olvidado.', 'ok');
+      document.getElementById('auth-empty').hidden = !!document.querySelector('#auth-list .repo') || body.dataset.view !== 'data';
+    }, 600);
+  });
+  var trustedList = document.getElementById('trusted-list');
+  var trustedInput = document.getElementById('trusted-input');
+  var trustedStatus = document.getElementById('trusted-status');
+  var REFUSED = ['bash', 'sh', 'zsh', 'fish', 'dash', 'python', 'python3', 'node', 'ruby', 'perl', 'env', 'sudo', 'xargs', 'eval', 'npx', 'deno', 'bun'];
+  function trustedNames() { return Array.prototype.map.call(trustedList.querySelectorAll('.chip span'), function (s) { return s.textContent; }); }
+  function syncTrustedEmpty() { var shown = trustedList.classList.contains('when-data') && body.dataset.view !== 'data' ? 0 : trustedList.children.length; document.getElementById('trusted-empty-live').hidden = shown > 0; }
+  document.getElementById('trusted-add').addEventListener('click', function (e) {
+    var v = trustedInput.value.trim(); var reason = '';
+    if (!v) reason = 'Escribe el nombre de un programa.';
+    else if (/[\s\/\\;|&$`'"<>(){}*?]/.test(v)) reason = 'Solo el nombre del programa: sin ruta, sin espacios y sin caracteres del shell.';
+    else if (REFUSED.indexOf(v.toLowerCase()) !== -1) reason = 'Ese es un shell, un intérprete o una herramienta general: confiar en él dejaría pasar cualquier comando.';
+    else if (trustedNames().indexOf(v) !== -1) reason = 'Ese programa ya está en la lista.';
+    trustedInput.setAttribute('aria-invalid', reason ? 'true' : 'false');
+    if (reason) { setStatus(trustedStatus, reason, 'error'); trustedInput.focus(); return; }
+    var b = e.currentTarget; b.disabled = true; b.textContent = 'Agregando…';
+    setTimeout(function () {
+      var li = document.createElement('li'); li.className = 'chip';
+      var s = document.createElement('span'); s.className = 'mono'; s.textContent = v; li.appendChild(s);
+      var q = document.createElement('button'); q.type = 'button'; q.className = 'btn btn-quiet'; q.setAttribute('data-untrust', ''); q.setAttribute('aria-label', 'Quitar ' + v); q.textContent = 'Quitar'; li.appendChild(q);
+      if (body.dataset.view !== 'data' && trustedList.classList.contains('when-data')) { trustedList.innerHTML = ''; trustedList.classList.remove('when-data'); }
+      trustedList.appendChild(li);
+      b.disabled = false; b.textContent = 'Agregar'; trustedInput.value = '';
+      setStatus(trustedStatus, 'Agregado.', 'ok'); syncTrustedEmpty();
+    }, 600);
+  });
+  trustedInput.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); document.getElementById('trusted-add').click(); } });
+  trustedList.addEventListener('click', function (e) {
+    var q = e.target.closest('[data-untrust]'); if (!q) return;
+    q.disabled = true; q.textContent = 'Quitando…';
+    setTimeout(function () { q.closest('.chip').remove(); setStatus(trustedStatus, 'Quitado.', 'ok'); syncTrustedEmpty(); }, 500);
+  });
+
+  /* ---------- view switch side effects ---------- */
+  new MutationObserver(function () {
+    countLanes(); syncTrustedEmpty();
+    document.getElementById('auth-empty').hidden = true;
+  }).observe(body, { attributes: true, attributeFilter: ['data-view'] });
+
+  snap(); renumber(); countLanes(); onModulesChanged(); refreshBar();
+})();
+</script>
+</body>
+</html>
