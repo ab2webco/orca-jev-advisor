@@ -13,6 +13,7 @@ import {
   ORCA_USER_DATA_ENV,
   accountConfigDir,
   accountConfigTarget,
+  borrowsAnotherInstallsVault,
   claudeAccountsDir,
   homeConfigTarget,
   resolveOrcaUserDataDir,
@@ -122,4 +123,18 @@ test("settingsPathFor and skillsDirFor read Claude Code's own config-root conven
   const linux = homeConfigTarget("linux", "/home/dev");
   assert.equal(settingsPathFor("linux", linux), "/home/dev/.claude/settings.json");
   assert.equal(skillsDirFor("linux", linux), "/home/dev/.claude/skills");
+});
+
+// ORCA-1131: a dev Orca's claude-accounts symlinked to the release vault got dev hook paths
+// written into the release accounts' settings.json.
+test("borrowsAnotherInstallsVault: only a different userData whose accounts resolve to another install's", () => {
+  const release = { userData: "/u/Library/Application Support/orca", accountsDir: "/u/Library/Application Support/orca/claude-accounts" };
+  const dev = { userData: "/scratch/dev-userdata", accountsDir: release.accountsDir };
+  assert.equal(borrowsAnotherInstallsVault(dev, [release]), true);
+  assert.equal(borrowsAnotherInstallsVault(release, [release]), false, "the release Orca itself");
+  const moved = { userData: release.userData, accountsDir: "/Volumes/Big/claude-accounts" };
+  assert.equal(borrowsAnotherInstallsVault(moved, [moved]), false, "a release whose vault was moved and linked");
+  const ownDev = { userData: dev.userData, accountsDir: "/scratch/dev-userdata/claude-accounts" };
+  assert.equal(borrowsAnotherInstallsVault(ownDev, [release]), false, "a dev Orca with its own accounts");
+  assert.equal(borrowsAnotherInstallsVault(dev, []), false);
 });

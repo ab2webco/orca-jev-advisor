@@ -2066,3 +2066,54 @@ test('modules T3: with a strictly newer install in place, a module change still 
   assert.equal(result.reason, 'newer-install-present')
   assert.deepEqual(snapshotTree(home), before)
 })
+
+function runInstallWithUserData (home, userDataDir) {
+  const env = { ...process.env, HOME: home, ORCA_USER_DATA_PATH: userDataDir }
+  delete env.XDG_CONFIG_HOME
+  delete env.XDG_CACHE_HOME
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  return JSON.parse(execFileSync(process.execPath, [SCRIPT_PATH, 'install', PLUGIN_ROOT], { env, encoding: 'utf8' }))
+}
+
+// ORCA-1131: a dev Orca links <devUserData>/claude-accounts to the release vault so its panes
+// sign in. The installer then wrote hooks pointing into the dev profile into the release
+// accounts; real sessions ran dev hooks, then dead ones once the profile was deleted.
+test('install leaves the release vault alone when a dev userData links to it', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const releaseUserData = process.platform === 'darwin'
+    ? join(home, 'Library', 'Application Support', 'orca')
+    : join(home, '.config', 'orca-ide')
+  const releaseAuth = join(releaseUserData, 'claude-accounts', accountId, 'auth')
+  mkdirSync(releaseAuth, { recursive: true })
+  writeFileSync(join(releaseAuth, '.claude.json'), '{}\n', 'utf8')
+  const releaseSettings = join(releaseAuth, 'settings.json')
+  writeFileSync(releaseSettings, '{\n  "hooks": {}\n}\n', 'utf8')
+  const devUserData = join(home, 'dev-userdata')
+  mkdirSync(devUserData)
+  symlinkSync(join(releaseUserData, 'claude-accounts'), join(devUserData, 'claude-accounts'), 'dir')
+
+  const result = runInstallWithUserData(home, devUserData)
+
+  assert.equal(readFileSync(releaseSettings, 'utf8'), '{\n  "hooks": {}\n}\n')
+  assert.equal(result.orcaUserData.found, false)
+  assert.equal(result.orcaUserData.reason, 'BORROWED_VAULT')
+})
+
+test('install still covers a release Orca whose own accounts are linked from elsewhere', () => {
+  const home = makeHome()
+  const accountId = '11111111-2222-3333-4444-555555555555'
+  const releaseUserData = process.platform === 'darwin'
+    ? join(home, 'Library', 'Application Support', 'orca')
+    : join(home, '.config', 'orca-ide')
+  const movedVault = join(home, 'moved-vault')
+  mkdirSync(join(movedVault, accountId, 'auth'), { recursive: true })
+  writeFileSync(join(movedVault, accountId, 'auth', '.claude.json'), '{}\n', 'utf8')
+  mkdirSync(releaseUserData, { recursive: true })
+  symlinkSync(movedVault, join(releaseUserData, 'claude-accounts'), 'dir')
+
+  const result = runInstallWithUserData(home, releaseUserData)
+
+  assert.equal(result.orcaUserData.found, true)
+  assert.ok(existsSync(join(movedVault, accountId, 'auth', 'settings.json')), 'the release account got its hooks')
+})

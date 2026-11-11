@@ -103,6 +103,20 @@ export function resolveOrcaUserDataDir(platform: SupportedPlatform, env: OrcaEnv
   return { path: conventionalUserDataDir(platform, env), source: "convention" };
 }
 
+export interface RealOrcaRoots {
+  readonly userData: string;
+  readonly accountsDir: string;
+}
+
+/**
+ * True when this Orca's accounts folder is another install's vault: a dev Orca whose
+ * <userData>/claude-accounts links to the release Orca's (ORCA-1131). Inputs are real paths.
+ * A release whose own vault was moved and linked keeps its userData, so it is never borrowing.
+ */
+export function borrowsAnotherInstallsVault(own: RealOrcaRoots, releases: readonly RealOrcaRoots[]): boolean {
+  return releases.some((release) => release.userData !== own.userData && release.accountsDir === own.accountsDir);
+}
+
 /** The directory holding one sub-directory per Claude account Orca manages. */
 export function claudeAccountsDir(platform: SupportedPlatform, userDataDir: string): string {
   return joinerFor(platform)(userDataDir, "claude-accounts");
