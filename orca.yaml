@@ -1,0 +1,37 @@
+orchestratorGame:
+  todo:
+    provider: plane
+    project: 9a4257ce-3066-47d5-971a-ae323497ed6b
+    workspace: ab2web
+
+  actions:
+    - label: Check
+      command: check
+      prompt: |
+        Launch one member to run `npm run check` on a paired host with room (never this Mac):
+        `game launch check-main --on <host> --repo <its repo id> --prompt "Run npm run check on main and report each failing check with its output."`
+        Tell me pass/fail when it reports.
+    - label: Shots
+      command: shots
+      prompt: |
+        Launch one member on a paired host with room (never this Mac):
+        `game launch shots-main --on <host> --repo <its repo id> --prompt "Run npm run shots:all on main, read every screenshot at 1440, 768, 390 and 320, and report what looks broken."`
+    - label: Health
+      command: health
+      prompt: |
+        Launch one member on a paired host with room (never this Mac):
+        `game launch jev-health --on <host> --repo <its repo id> --prompt "Run npm run jev-health and summarize Jev's state in a few lines."`
+    - label: Routing
+      command: routing
+      prompt: |
+        Launch one member on a paired host with room (never this Mac):
+        `game launch member-routing --on <host> --repo <its repo id> --prompt "Run npm run measure-member-routing and summarize model, effort and tokens per member session."`
+
+  orchestrator:
+    autostart: true
+    rules: |
+      - JEVADV tickets live in Plane (workspace ab2web, project Jev Advisor). Members read them with `orca plane issue <id> --comments --json` and comment with `orca plane comment add`.
+      - Members run only on paired hosts, never on this Mac: imac (repo id:b4fe6338-a39a-48a1-a342-c513035203e1), koombea (id:183eea56-5181-4e41-a497-5b390dfd9fa4), orca-contabo (id:76b562a5-2968-496d-ab5d-5a20405f5e6f), m1 (clone it there first). Pass `--on <host> --repo <that id>`.
+      - Before every launch, read `game fleet`: hosts are shared with other projects' leads. Pick the host with the lowest load and most free memory; skip any marked busy or low memory.
+      - Never write to main: every change goes on a branch with a PR.
+      - Releases and marketplace publishing only with the owner's explicit OK.
