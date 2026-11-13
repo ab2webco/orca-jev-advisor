@@ -34,11 +34,19 @@ function initRepo(root: string): void {
 interface Fixture {
   readonly repo: string;
   readonly home: string;
+  /** The XDG_CONFIG_HOME git and the verifier both see; undefined when unset. */
+  readonly xdg: string | undefined;
   readonly git: GitRunner;
 }
 
-/** A repository with a tracked src/a.ts, `odd/` in .git/info/exclude, `tmp/` in a tracked .gitignore, `notes/` in the home's global excludes file, and a force-added odd/kept.md. */
-function fixture(): Fixture {
+/**
+ * A repository with a tracked src/a.ts, `odd/` in .git/info/exclude, `tmp/`
+ * in a tracked .gitignore, `notes/` in the home's global excludes file, and a
+ * force-added odd/kept.md. git reads $XDG_CONFIG_HOME/git/ignore instead of
+ * $HOME/.config/git/ignore when XDG_CONFIG_HOME is set (CI runners set it),
+ * so the fixture sets it or unsets it on purpose: `xdg` relative to the base.
+ */
+function fixture({ xdg }: { readonly xdg?: string } = {}): Fixture {
   const base = realpathSync(mkdtempSync(join(tmpdir(), "orca-jev-ignored-files-")));
   roots.push(base);
   const repo = join(base, "repo");
@@ -56,17 +64,21 @@ function fixture(): Fixture {
   fixtureGit(["commit", "-q", "-m", "files"], repo);
   mkdirSync(join(home, ".config", "git"), { recursive: true });
   writeFileSync(join(home, ".config", "git", "ignore"), "notes/\n");
+  const xdgDir = xdg === undefined ? undefined : join(base, xdg);
+  const env: Record<string, string | undefined> = { ...process.env, HOME: home };
+  delete env["XDG_CONFIG_HOME"];
+  if (xdgDir !== undefined) env["XDG_CONFIG_HOME"] = xdgDir;
   const git: GitRunner = (args, cwd, input) => {
-    const result = spawnSync("git", args, { cwd, input, encoding: "utf8", env: { ...gitSubprocessEnv(process.env), HOME: home } });
+    const result = spawnSync("git", args, { cwd, input, encoding: "utf8", env: gitSubprocessEnv(env) });
     return result.status === null ? null : { status: result.status, stdout: result.stdout };
   };
-  return { repo, home, git };
+  return { repo, home, xdg: xdgDir, git };
 }
 
 const file = (word: string): TrivialTarget => ({ word, kind: "file" });
 
 function verify(fx: Fixture, targets: readonly TrivialTarget[], git: GitRunner = fx.git, cwd: string = fx.repo) {
-  return verifyIgnoredTargets(targets, cwd, { home: fx.home, xdgConfigHome: undefined }, git);
+  return verifyIgnoredTargets(targets, cwd, { home: fx.home, xdgConfigHome: fx.xdg }, git);
 }
 
 test("verifyIgnoredTargets: every target ignored by exclude, .gitignore or the global excludes file, nothing tracked there", () => {
@@ -151,6 +163,21 @@ test("verifyIgnoredTargets: .git/info/exclude reached through a symlink into the
   symlinkSync(join(fx.repo, "odd", "exclude-rules"), join(fx.repo, ".git", "info", "exclude"));
   assert.equal(verify(fx, [file("odd/exclude-rules")]), null);
   assert.deepEqual(verify(fx, [file("odd/tasks/x.md")]), { allIgnored: true, ignored: ["odd/tasks/x.md"] });
+});
+
+// GitHub's Ubuntu runners set XDG_CONFIG_HOME: git then reads
+// $XDG_CONFIG_HOME/git/ignore, not $HOME/.config/git/ignore. The verifier
+// reads the same environment, and treats that file as an ignore source.
+test("verifyIgnoredTargets: with XDG_CONFIG_HOME set, git's XDG excludes file decides and is an ignore source", () => {
+  const fx = fixture({ xdg: "repo/odd/xdg" });
+  const xdg = fx.xdg ?? "";
+  mkdirSync(join(xdg, "git"), { recursive: true });
+  writeFileSync(join(xdg, "git", "ignore"), "scratch/\n");
+  assert.deepEqual(verify(fx, [file("scratch/a.md")]), { allIgnored: true, ignored: ["scratch/a.md"] });
+  // The home's default file is not read while XDG_CONFIG_HOME is set.
+  assert.deepEqual(verify(fx, [file("notes/b.md")]), { allIgnored: false, ignored: [] });
+  assert.equal(verify(fx, [file("odd/xdg/git/ignore")]), null);
+  assert.equal(verify(fx, [{ word: "odd/xdg", kind: "dirs" }]), null);
 });
 
 test("verifyIgnoredTargets: the global excludes file under the home's config dir is an ignore source even inside the repository", () => {
