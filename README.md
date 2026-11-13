@@ -16,6 +16,12 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.16
+
+- **Notes in git-ignored files on main go ahead.** From a checkout on main, a plain write to a file git ignores, such as `cat > odd/tasks/x.md <<'EOF'` into an excluded `odd/`, is no longer refused as a write on main. Only simple writes qualify (`cat`, `echo`, `printf`, `tee`, `cp`, `mv`, `mkdir`, `touch`), and git must confirm every file is ignored and untracked. Anything else is still judged as before: a `cd`, links, variables, scripts, `sed -i`, a symlink or hard link, a submodule, or a write to `.gitignore` or the excludes files.
+- **Writes inside a submodule are judged again.** On main, a write inside a submodule, or through a link into one, slipped past `never_write_to_main`. It is now asked about.
+- **A dev Orca no longer rewrites the release accounts' hooks.** A dev Orca whose accounts folder links to the release vault installs only its own home target.
+
 ## What changed in 0.13.15
 
 - **A cancelled CI run no longer reads as a failure.** When a newer commit on the same branch cancels a run, the CI notice says "superseded by" and names the newer commit, instead of failure. A run cancelled with no newer commit says "cancelled", never "passed". A real failure on your latest commit, a required check included, is still reported as failure.
