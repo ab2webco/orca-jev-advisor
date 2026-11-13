@@ -59,7 +59,7 @@
  * consequence-ceiling risk rule, substituting a per-destination ceiling
  * override when the matched destination's catalog entry carries one.
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { accessSync, appendFileSync, closeSync, constants as fsConstants, mkdirSync, openSync, readFileSync, readSync, realpathSync, renameSync, statSync, writeFileSync, writeSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -82,7 +82,7 @@ import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
-import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
+import { hasGitEntry, matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
 import { isContainedToTempRoots, isOwnTreeWork, tempRootsFromEnvironment, trustedProgramsRun } from '../../src/core/contained_effect.ts'
 import { localAllowReasonKey, localAllowStopReason } from '../../src/core/local_allow.ts'
 import type { LocalAllowKind } from '../../src/core/local_allow.ts'
@@ -96,6 +96,9 @@ import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
 import { parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { SHARED_BRANCH_NAMES, classifyClientReach } from '../../src/core/client_reach.ts'
 import { branchReachPlaces, namesProtectedBranch } from '../../src/core/branch_reach.ts'
+import { buildIgnoredPathsSentence, gitSubprocessEnv, verifyIgnoredTargets } from '../../src/core/ignored_files.ts'
+import type { GitResult } from '../../src/core/ignored_files.ts'
+import { trivialWriteTargets } from '../../src/core/trivial_write.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
 import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
@@ -975,6 +978,19 @@ function gitOutput(args: readonly string[], cwd: string): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * git for src/core/ignored_files.ts: `input` on stdin, the exit status kept
+ * (`check-ignore` exits 1 for "none ignored"), and an environment with no
+ * GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or GIT_CONFIG* of the hook's own
+ * (gitSubprocessEnv). Null when git cannot run, is killed or overruns
+ * GIT_TIMEOUT_MS: the caller fails closed.
+ */
+function sanitizedGit(args: readonly string[], cwd: string, input: string): GitResult | null {
+  const result = spawnSync('git', args, { cwd, input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], env: gitSubprocessEnv(process.env), timeout: GIT_TIMEOUT_MS, killSignal: 'SIGTERM' })
+  if (result.error !== undefined || result.status === null) return null
+  return { status: result.status, stdout: result.stdout }
 }
 
 /** The repository root for recoverability resolution, or null when `cwd` is not inside a git repository at all (no recoverability naming, the advice still says what it can). */
@@ -2475,12 +2491,33 @@ async function main(): Promise<void> {
   // (mentionOnly): `echo x > notes.md` on main still writes main.
   const pushes = !/\bpush\b/.test(inspected) ? [] : pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
   const namesProtected = namesProtectedBranch(inspected, SHARED_BRANCH_NAMES)
-  const reachBranches = branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) === null ? [] : [resolveBranchForCwd(place)]))
-  const scopedPolicies = filterPoliciesForBranchReach(
-    filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID),
-    SEED_SCOPE_BY_ID,
-    { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected, protectedBranches: SHARED_BRANCH_NAMES },
-  )
+  // A place with no `.git` above it is outside any repository and has no
+  // branch to protect. One under a `.git` whose root cannot be resolved (a
+  // submodule checkout, odd/tasks/gate-ignored-files-not-main.md) keeps
+  // the policy, like any place whose branch is unknown.
+  const reachBranches = branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) !== null ? [resolveBranchForCwd(place)] : hasGitEntry(place) ? [null] : []))
+  const commandPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+  const branchReach = { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected, protectedBranches: SHARED_BRANCH_NAMES }
+  const reachScoped = filterPoliciesForBranchReach(commandPolicies, SEED_SCOPE_BY_ID, branchReach)
+  const branchPolicyAsked = filterPoliciesForBranchReach(reachScoped, SEED_SCOPE_BY_ID, { ...branchReach, branches: [], namesProtected: false }).length < reachScoped.length
+  //
+  // odd/tasks/gate-ignored-files-not-main.md: a file git ignores or
+  // excludes is in no commit, so a write to it reaches no branch. The policy
+  // is set aside only for a trivially safe command (src/core/trivial_write.ts:
+  // no cd, link, assignment, eval, substitution, ... and only listed
+  // writers) whose every target git verifies as ignored and untracked, with
+  // no symlink, hard link, nested repository or ignore source on the way
+  // (src/core/ignored_files.ts). git runs once, and only when the policy
+  // would otherwise be asked. Anything else is judged exactly as before.
+  const trivialTargets = branchPolicyAsked && pushes.length === 0 ? trivialWriteTargets(command) : null
+  const ignoredTargets = trivialTargets === null || trivialTargets.length === 0 ? null : verifyIgnoredTargets(trivialTargets, cwd, { home: homedir(), xdgConfigHome: process.env.XDG_CONFIG_HOME }, sanitizedGit)
+  const scopedPolicies = ignoredTargets?.allIgnored === true ? filterPoliciesForBranchReach(commandPolicies, SEED_SCOPE_BY_ID, { ...branchReach, branches: [] }) : reachScoped
+  // When the policy is still asked, the context Jev reads (and the cache
+  // key) lists the repository paths of this same trivially safe command
+  // that git verified as ignored; Jev's violation question counts no other
+  // file as ignored. Never for any other shape: a cd or an assignment can
+  // move where a path lands.
+  const ignoredPaths = ignoredTargets !== null && !ignoredTargets.allIgnored ? ignoredTargets.ignored : []
 
   // 0.6.8 T3: a requires_human policy protects work that reaches a client,
   // and Jev, asked from the sentence alone, also asked about work that never
@@ -2617,7 +2654,8 @@ async function main(): Promise<void> {
   // copy carries it: the key already holds the destination (commandShape
   // keeps it literal) and the repository and branch it is pushed from.
   const repoFacts = readRepoFacts(actingCwd)
-  const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
+  const ignoredSentence = buildIgnoredPathsSentence(ignoredPaths)
+  const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '') + (ignoredSentence !== null ? ` ${ignoredSentence}` : '')
   // G6 (odd/tasks/gate-secret-guard.md): a temp-root path reads as one.
   const jevNames = createJevPseudonyms({ tempRoots: jevTempRoots() })
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
@@ -2626,7 +2664,8 @@ async function main(): Promise<void> {
   // request's review, or none for an API branch merge -- so a reviewed merge
   // is not judged by the checkout's branch. Jev's copy only, like the push.
   const mergeSentence = mentionOnly || !/\bgh\b/.test(inspected) ? null : buildGhMergeSentence(ghMerges(inspected, cwd, homedir()), jevNames)
-  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '') + (mergeSentence !== null ? ` ${mergeSentence}` : '')
+  const jevIgnoredSentence = buildIgnoredPathsSentence(ignoredPaths, jevNames)
+  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (jevIgnoredSentence !== null ? ` ${jevIgnoredSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '') + (mergeSentence !== null ? ` ${mergeSentence}` : '')
   // The destination is resolved once, above (folding in every target's own
   // repository too -- see pickStricterDestination): it is part of the cache
   // key, because two repositories with different thresholds must never

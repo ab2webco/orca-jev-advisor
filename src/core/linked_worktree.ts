@@ -61,6 +61,18 @@ function findGitEntry(cwd: string): { readonly path: string; readonly isDirector
 }
 
 /**
+ * Whether `cwd` sits under any `.git` entry (directory or file) within the
+ * same bound as findGitEntry. odd/tasks/gate-ignored-files-not-main.md: a
+ * place whose root resolveRepoRootForCwd cannot resolve, a submodule
+ * checkout for one (its `.git` file names the superproject's
+ * .git/modules/<name>, with no worktree back-pointer), is still inside a
+ * repository; only a place with no `.git` entry at all is outside one.
+ */
+export function hasGitEntry(cwd: string): boolean {
+  return findGitEntry(cwd) !== null;
+}
+
+/**
  * Parses a linked worktree's `.git` FILE for its `gitdir:` line, resolved
  * against the directory that contains the `.git` file when the path is
  * relative (git itself always writes an absolute one, but nothing here

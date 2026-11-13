@@ -14,7 +14,7 @@ import { devNull, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { after, test } from "node:test";
 
-import { matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveGitDirForHead, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from "./linked_worktree.ts";
+import { hasGitEntry, matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveGitDirForHead, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from "./linked_worktree.ts";
 import type { MatchableDestination } from "./destination_match.ts";
 
 /** Every temp root this file creates, removed once after every test has run. */
@@ -407,4 +407,24 @@ test("resolveBranchForCwd: nothing findable resolves to null, never throws", () 
   mkdirSync(plain, { recursive: true });
   assert.doesNotThrow(() => resolveBranchForCwd(plain));
   assert.equal(resolveBranchForCwd(plain), null);
+});
+
+// odd/tasks/gate-ignored-files-not-main.md: inside a submodule the root does
+// not resolve (its `.git` file points into the superproject's
+// .git/modules, with no worktree back-pointer), so the gate read a write
+// there as one outside any repository. hasGitEntry tells "no repository"
+// apart from "a repository this module cannot resolve".
+test("hasGitEntry: a submodule checkout has a .git entry though its root does not resolve; a plain folder has none", () => {
+  const base = makeTempRoot("git-entry-submodule-");
+  const origin = join(base, "origin");
+  const repo = join(base, "repo");
+  initRepo(origin);
+  initRepo(repo);
+  git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", origin, "sub"], repo);
+  assert.equal(resolveRepoRootForCwd(join(repo, "sub", "a.ts")), null);
+  assert.equal(hasGitEntry(join(repo, "sub", "a.ts")), true);
+  assert.equal(hasGitEntry(join(repo, "src", "a.ts")), true);
+  const plain = join(base, "just-a-folder");
+  mkdirSync(plain, { recursive: true });
+  assert.equal(hasGitEntry(join(plain, "a.ts")), false);
 });

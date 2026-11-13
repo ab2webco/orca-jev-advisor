@@ -234,7 +234,7 @@ function sortKeysDeep(value: unknown): unknown {
  *  loudly here instead of silently reaching an install that will never know
  *  the baseline changed -- see policy_seed_notice.ts's decidePolicySeedNotice,
  *  which decides `due` from `version` alone and never looks at content. */
-const PINNED_DIGEST = "d2cb5d91ca74e0f746fd090548b8967c32c891e0c36e5e9c6c55f770aa899264";
+const PINNED_DIGEST = "44a03ed632342edefa3b600fe28fa8f41d47f24ec0c866a23ea075d6c632215c";
 
 test("editing a shipped policy row without bumping the seed version fails loudly", () => {
   // Pinned together on purpose: a row edit changes the digest, and the
@@ -253,7 +253,7 @@ test("editing a shipped policy row without bumping the seed version fails loudly
   );
   assert.equal(
     parseSeedVersion(seedFile),
-    6,
+    7,
     'seed/policies.json\'s "version" changed -- update the expected version above (and re-pin ' +
       "PINNED_DIGEST once the rows for that release are final).",
   );
@@ -285,7 +285,21 @@ const NEVER_WRITE_TO_MAIN_V5 =
 const NEVER_WRITE_TO_MAIN_V6 =
   "Never write directly on main, master or develop, not even a one-line fix: no editing their tracked files, committing, cherry-picking or merging local work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Merging a reviewed pull request on the host (gh pr merge, including --squash, --auto and --match-head-commit) is that path and is allowed. Rebasing, committing or force-pushing a feature branch is not writing to them, even in a detached worktree or one based on origin/main. Files git ignores (tmp/, scratch notes, handoff files) are not their files. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch.";
 
-test("0.13.10 (JEVADV-107): never_write_to_main ships the owner's text, which allows reviewed PR merges, feature-branch rebases and git-ignored files", () => {
+/** odd/tasks/gate-ignored-files-not-main.md T4: seed version 7. */
+const NEVER_WRITE_TO_MAIN_V7 =
+  "Never write directly on main, master or develop, not even a one-line fix: no editing their tracked files, no creating files there that git would track, no committing, cherry-picking or merging local work into them, and no pushing to them. That work goes on a feature branch and reaches them through a pull request. Merging a reviewed pull request on the host (gh pr merge, including --squash, --auto and --match-head-commit) is that path and is allowed. Rebasing, committing or force-pushing a feature branch is not writing to them, even in a detached worktree or one based on origin/main. Files git ignores or excludes (by .gitignore, .git/info/exclude or the global excludes file, such as tmp/, scratch notes, task notes and handoff files) are in no commit, so creating, editing or deleting them is not writing to them; the gate asks git which files those are, and a command saying so does not make it so. Files outside the repository are not theirs either. Keeping them in sync with their own remote is not writing to them and is fine: switching to them, git fetch, git pull, merging or rebasing their own remote branch into them (origin/main into main), and gh pr update-branch, which only updates the pull request's own branch.";
+
+test("0.13.16: never_write_to_main says new files git would track count, and files git ignores or excludes, or outside the repository, do not", () => {
+  // On 2026-11-13 a write to an excluded odd/tasks/*.md on main was refused.
+  // The gate now asks git (gate-bash.ts); the rule says the same thing.
+  const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "never_write_to_main");
+  assert.ok(row, "no never_write_to_main row in the shipped seed");
+  assert.equal(row.rule, NEVER_WRITE_TO_MAIN_V7);
+  assert.equal(row.kind, "prohibits");
+  assert.equal(row.scope, "protected-branch");
+});
+
+test("0.13.10 (JEVADV-107): never_write_to_main still allows reviewed PR merges, feature-branch rebases and git-ignored files", () => {
   // The owner edited the policies.json mirror by hand on 2026-10-22 and Orca
   // rewrote it from storage on the next start, so the gate kept refusing
   // `gh pr merge`, rebases of feature branches and writes to tmp/handoff.md.
@@ -293,16 +307,17 @@ test("0.13.10 (JEVADV-107): never_write_to_main ships the owner's text, which al
   // differing row in the Advisor panel.
   const row = parseSeedPolicies(seedFile).find((policy) => policy.id === "never_write_to_main");
   assert.ok(row, "no never_write_to_main row in the shipped seed");
-  assert.equal(row.rule, NEVER_WRITE_TO_MAIN_V6);
-  assert.equal(row.kind, "prohibits");
-  assert.equal(row.scope, "protected-branch");
+  for (const kept of ["gh pr merge", "Rebasing, committing or force-pushing a feature branch is not writing to them", "Files git ignores"]) {
+    assert.ok(row.rule.includes(kept), `the rule no longer says: ${kept}`);
+    assert.ok(NEVER_WRITE_TO_MAIN_V6.includes(kept), `v6 did not say: ${kept}`);
+  }
 });
 
-test("0.13.10 (JEVADV-107): an install that stored the v5 never_write_to_main sees it as differing, and adopting it stores the new text", () => {
+for (const [version, storedRule] of [["v5", NEVER_WRITE_TO_MAIN_V5], ["v6", NEVER_WRITE_TO_MAIN_V6]] as const) test(`0.13.16: an install that stored the ${version} never_write_to_main sees it as differing, and adopting it stores the new text`, () => {
   const seeds = parseSeedPolicies(seedFile);
   const shipped = seeds.find((policy) => policy.id === "never_write_to_main");
   assert.ok(shipped, "no never_write_to_main row in the shipped seed");
-  const stored = seeds.map((policy) => (policy.id === "never_write_to_main" ? { ...policy, rule: NEVER_WRITE_TO_MAIN_V5 } : policy));
+  const stored = seeds.map((policy) => (policy.id === "never_write_to_main" ? { ...policy, rule: storedRule } : policy));
 
   const merge = mergePolicySeeds(stored, seeds);
   assert.deepEqual(
@@ -313,7 +328,7 @@ test("0.13.10 (JEVADV-107): an install that stored the v5 never_write_to_main se
 
   const { result, replaced } = applyPolicySeedChoices(merge.merged, seeds, ["never_write_to_main"]);
   assert.equal(replaced, 1);
-  assert.equal(result.find((policy) => policy.id === "never_write_to_main")?.rule, NEVER_WRITE_TO_MAIN_V6);
+  assert.equal(result.find((policy) => policy.id === "never_write_to_main")?.rule, NEVER_WRITE_TO_MAIN_V7);
   assert.deepEqual(mergePolicySeeds(result, seeds).differing, []);
 });
 

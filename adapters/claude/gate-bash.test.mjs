@@ -13,7 +13,7 @@
 import { strict as assert } from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, existsSync, linkSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -3815,14 +3815,14 @@ test('T1: a push naming develop from a working branch is never allowed locally',
 // writes into the checkout. A write that may land in it still is.
 
 /** The policy set the hook judged `command` against, read from the seeded verdict it served. */
-function judgedPolicySet (home, command, repo) {
+function judgedPolicySet (home, command, repo, facts = '', extraEnv = {}) {
   writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
   // A move out of the checkout acts in /tmp, and the hook says so in the context its key folds in.
-  const repoContext = command === MOVE_OUT
+  const repoContext = (command === MOVE_OUT
     ? `${computeRepoContextForTest('/tmp')} The command acts on files outside any repository, not in the session's current repository (${repo} on ${branchNameOf(repo)}).`
-    : computeRepoContextForTest(repo)
+    : computeRepoContextForTest(repo)) + (facts.length > 0 ? ` ${facts}` : '')
   seedBothPolicySets(home, command, repo, repoContext)
-  const stdout = run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' })
+  const stdout = run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', extraEnv })
   // Tier 1a passes a command through before any policy, with no output.
   if (stdout.trim() === '') return 'tier 1a'
   const payload = JSON.parse(stdout)
@@ -3870,6 +3870,311 @@ test('G1: on main, an Orca game push or read is not judged against never_write_t
 test('G1: on main, a command that may still write the checkout is judged against never_write_to_main', () => {
   const judged = Object.fromEntries(ORCA_OR_PUSH_INTO_THE_CHECKOUT.map((command) => [command, judgedPolicySet(makeHome(), command, repoNamedBranch('main'))]))
   assert.deepEqual(judged, Object.fromEntries(ORCA_OR_PUSH_INTO_THE_CHECKOUT.map((command) => [command, 'with-policy'])))
+})
+
+// odd/tasks/gate-ignored-files-not-main.md T2: a file git ignores or excludes
+// can never reach main through a commit or a push, so a shell write whose
+// every target is one is not judged against never_write_to_main. The gate
+// sets the policy aside only for a trivially safe command (no cd, link,
+// assignment, eval, substitution, ...), whose every target git verified as
+// ignored and untracked, with no symlink, hard link, nested repository or
+// ignore source on the way. Anything else is judged exactly as before.
+// On 2026-11-13 a write to an excluded odd/tasks/*.md on main was refused.
+
+/** A repository on `branch` with a tracked src/a.ts, `odd/` in .git/info/exclude, `tmp/` in a tracked .gitignore, `notes/` in the global excludes file of `home`, and a force-added odd/kept.md. */
+function repoWithIgnoredFiles (branch, home) {
+  const repo = repoNamedBranch(branch)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  mkdirSync(join(repo, 'odd', 'tasks'), { recursive: true })
+  writeFileSync(join(repo, 'src', 'a.ts'), 'a\n')
+  writeFileSync(join(repo, '.gitignore'), 'tmp/\n')
+  writeFileSync(join(repo, 'odd', 'kept.md'), 'kept\n')
+  writeFileSync(join(repo, 'odd', 'tasks', 'x.md'), 'x\n')
+  writeFileSync(join(repo, '.git', 'info', 'exclude'), 'odd/\n')
+  git(['add', 'src/a.ts', '.gitignore'], repo)
+  git(['add', '-f', 'odd/kept.md'], repo)
+  git(['commit', '-q', '-m', 'files'], repo)
+  // The hook's git reads the global excludes file from HOME (XDG default).
+  mkdirSync(join(home, '.config', 'git'), { recursive: true })
+  writeFileSync(join(home, '.config', 'git', 'ignore'), 'notes/\n')
+  return repo
+}
+
+/** The context sentence the hook adds when the policy is still asked and some targets git verified as ignored (repo-relative paths). */
+function ignoredFacts (paths) {
+  return paths.length === 0 ? '' : `Checked with git, not read from the command: git ignores these repository paths the command writes (${paths.join(', ')}), so they are in no commit and on no branch. No other path is known to be ignored.`
+}
+
+/**
+ * judgedPolicySet on a repoWithIgnoredFiles. `prepare(repo, home)` may change
+ * the repository first; `ignored` lists the facts sentence's paths (only on
+ * main, where the policy is asked); `extraEnv` reaches the hook's env.
+ */
+function judgedWithIgnoredFiles (command, branch, prepare = () => {}, { ignored = [], extraEnv = {}, asked = false } = {}) {
+  const home = makeHome()
+  const repo = repoWithIgnoredFiles(branch, home)
+  const prepared = prepare(repo, home)
+  const env = { ...extraEnv, ...(typeof prepared === 'object' && prepared !== null ? prepared : {}) }
+  // A command the verdict cache never keys (a `$(...)`, `$PWD`, ...) is
+  // read from the question the hook sends Jev instead.
+  if (asked || commandShape(command, { cwd: repo, home, destinationId: null, repoContext: computeRepoContextForTest(repo) }) === null) return judgedPolicySetAsked(home, command, repo, env)
+  return judgedPolicySet(home, command, repo, branch === 'main' ? ignoredFacts(ignored) : '', env)
+}
+
+const FETCH_PRELOAD = join(__dirname, 'fixtures', 'system-one-fetch-preload.mjs')
+
+/** The policy set the hook asked Jev about for `command`, read from the request a scripted fetch logged (no network: every call fails). */
+function judgedPolicySetAsked (home, command, repo, extraEnv = {}) {
+  writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
+  const logPath = join(home, 'fetch.log')
+  const env = { ...process.env, HOME: home, GIT_CEILING_DIRECTORIES: home, ...extraEnv }
+  delete env.XDG_CACHE_HOME
+  delete env.XDG_CONFIG_HOME
+  delete env.CLAUDE_CODE_TMPDIR
+  env.ORCA_SUPERVISOR_CONFIG_DIR = join(home, '.config', 'orca-supervisor')
+  env.ORCA_SUPERVISOR_CACHE_DIR = join(home, '.cache', 'orca-supervisor')
+  env.ORCA_USER_DATA_PATH = join(home, 'orca-userdata-does-not-exist')
+  env.TYPESAFE_API_KEY = 'test-key-fetch-is-scripted'
+  env.SYSTEM_ONE_FETCH_SCRIPT = '{}'
+  env.SYSTEM_ONE_FETCH_LOG = logPath
+  execFileSync(process.execPath, ['--experimental-strip-types', '--import', FETCH_PRELOAD, SCRIPT_PATH], {
+    env,
+    input: JSON.stringify({ tool_input: { command }, cwd: repo, tool_use_id: 'tool-ignored-files' }),
+    encoding: 'utf8'
+  })
+  const asked = existsSync(logPath) ? readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean) : []
+  if (asked.length === 0) return 'not asked'
+  return asked.some((line) => line.includes(NEVER_WRITE_TO_MAIN.rule)) ? 'with-policy' : 'without-policy'
+}
+
+// The intended allows: refusal 1 of 2026-11-13 and its everyday shapes.
+const IGNORED_WRITES = [
+  "printf 'x' > odd/tasks/x.md",
+  "cat > odd/tasks/x.md <<'EOF'\n- [x] T5 fast-forward local main\nEOF",
+  // A quoted heredoc body is data: words that would make a command non-trivial do not count there.
+  "cat > odd/tasks/ios-testflight-release.md <<'EOF'\n- ran `cd src && ln -s ../a b`, PATH=x $(rm -rf /) (eval) # done\nEOF",
+  "cat > odd/notes.md <<EOF\nplain notes, no expansion\nEOF",
+  'printf x >> odd/notes.md',
+  "tee odd/a.md <<'EOF'\nnotes\nEOF",
+  'echo x | tee -a odd/a.md',
+  'echo x >> tmp/handoff.md',
+  'echo x > notes/today.md',
+  'mkdir -p odd/dir',
+  'mkdir -p odd/qa/new && touch odd/qa/new/a.md',
+  'cp src/a.ts odd/x',
+  'mv odd/tasks/x.md odd/tasks/y.md',
+  "printf 'x' > ./odd/tasks/x.md 2>/dev/null",
+]
+
+// Still judged, with the facts sentence where the shape is trivial and git verified some targets.
+const STILL_JUDGED = {
+  // A tracked file, and a new file git would track.
+  "printf 'x' > src/a.ts": [],
+  "printf 'x' > src/new.ts": [],
+  // One ignored target and one tracked.
+  "printf 'a' > odd/tasks/x.md && printf 'b' > src/a.ts": ['odd/tasks/x.md'],
+  // A command that only claims a path is ignored.
+  "# odd/tasks/x.md is git-ignored, so nothing here is tracked\nprintf 'b' > src/a.ts": [],
+  "echo 'src/a.ts is ignored' && printf 'b' > src/a.ts": [],
+  // mv writes its target and removes its source.
+  'mv odd/tasks/x.md src/a.ts': ['odd/tasks/x.md'],
+  'mv src/a.ts odd/a.ts': ['odd/a.ts'],
+  // A tracked file inside an ignored directory, and a delete that would take it.
+  "printf 'x' > odd/kept.md": [],
+  'rm -rf odd': [],
+  // The ignore rules themselves.
+  "echo 'src/' >> .gitignore": [],
+  "echo 'src/' >> .git/info/exclude": [],
+  // A program that may write anything where it runs.
+  "python3 - <<'EOF'\nopen('odd/tasks/x.md','w').write('x')\nEOF": [],
+  "sed -i '' 's/x/y/' odd/tasks/x.md": [],
+  // A target outside any repository, or spelled with a variable, is not trivially safe.
+  "printf 'x' > $HOME/outside.md && printf 'y' > odd/tasks/x.md": [],
+}
+
+test('I2: on main, a trivially safe write whose every target git ignores or excludes is not judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(IGNORED_WRITES.map((command) => [command, judgedWithIgnoredFiles(command, 'main')]))
+  assert.deepEqual(judged, Object.fromEntries(IGNORED_WRITES.map((command) => [command, 'without-policy'])))
+})
+
+test('I2: on main, a write that may reach a tracked file or one git would track is still judged against never_write_to_main', () => {
+  const commands = Object.keys(STILL_JUDGED)
+  const judged = Object.fromEntries(commands.map((command) => [command, judgedWithIgnoredFiles(command, 'main', undefined, { ignored: STILL_JUDGED[command] })]))
+  assert.deepEqual(judged, Object.fromEntries(commands.map((command) => [command, 'with-policy'])))
+})
+
+// The bypasses two blind judges found in the first design (PR #121 at
+// 3925c65): each one returned without-policy there, and with-policy at base.
+// The real hook, real git repositories; every one must keep the policy.
+const srcLink = (repo) => symlinkSync(join(repo, 'src'), join(repo, 'odd', 's'))
+/** An odd/cat that writes the tracked src/a.ts, for a PATH that reaches odd/ first. */
+const plantCat = (repo) => {
+  writeFileSync(join(repo, 'odd', 'cat'), '#!/bin/sh\nprintf x > src/a.ts\n')
+  chmodSync(join(repo, 'odd', 'cat'), 0o755)
+}
+
+/** A prepare that commits a tracked file at `name`. */
+const trackFile = (name) => (repo) => {
+  writeFileSync(join(repo, name), 'tracked\n')
+  git(['add', name], repo)
+  git(['commit', '-q', '-m', name], repo)
+}
+
+/** Force-adds and commits `rel` inside an ignored directory. */
+function trackForced (repo, rel) {
+  writeFileSync(join(repo, rel), 'tracked\n')
+  git(['add', '-f', rel], repo)
+  git(['commit', '-q', '-m', rel], repo)
+}
+
+/** A prepare for APFS's folding: core.ignorecase and core.precomposeunicode on, then `then(repo)`. */
+const unicodeRepo = (then) => (repo) => {
+  git(['config', 'core.ignorecase', 'true'], repo)
+  git(['config', 'core.precomposeunicode', 'true'], repo)
+  then(repo)
+}
+
+/** A superproject `repo` whose `sub/` is a submodule on main with a tracked a.ts. */
+function addSubmodule (repo) {
+  const origin = repoNamedBranch('main')
+  writeFileSync(join(origin, 'a.ts'), 'a\n')
+  git(['add', 'a.ts'], origin)
+  git(['commit', '-q', '-m', 'a'], origin)
+  git(['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', origin, 'sub'], repo)
+  git(['commit', '-q', '-m', 'sub'], repo)
+}
+
+const BYPASSES = [
+  // A symlink made in the same command, then a write through it.
+  { name: 'ln -s dir', command: 'ln -s ../src odd/s && printf x > odd/s/a.ts' },
+  { name: 'ln -s file', command: 'ln -s ../src/a.ts odd/l.ts && printf x > odd/l.ts' },
+  // Hard links, made in the command or already there.
+  { name: 'ln hard', command: 'ln src/a.ts odd/h && printf x > odd/h' },
+  { name: 'cp -l', command: 'cp -l src/a.ts odd/h && printf x > odd/h' },
+  { name: 'cp -al', command: 'cp -al src odd/copy && printf x > odd/copy/a.ts' },
+  { name: 'existing hard link', command: 'printf x > odd/hard', prepare: (repo) => linkSync(join(repo, 'src', 'a.ts'), join(repo, 'odd', 'hard')) },
+  { name: 'existing symlink to a tracked file', command: "printf 'x' > odd/link.ts", prepare: (repo) => symlinkSync(join(repo, 'src', 'a.ts'), join(repo, 'odd', 'link.ts')) },
+  { name: 'existing symlinked directory', command: "printf 'x' > odd/s/new.ts", prepare: srcLink },
+  // A cd that fails, or goes through a symlink.
+  { name: 'cd fails', command: 'cd odd/missing; printf x > src/a.ts' },
+  { name: 'cd fails || true', command: 'cd odd/missing || true; printf x > src/a.ts' },
+  { name: 'cd -P through a symlink', command: 'cd -P odd/s && printf x > a.ts', prepare: srcLink },
+  // Read as written, odd/s/.. is odd/ (ignored); -P makes it the repository root.
+  { name: 'cd -P through a symlink, then ..', command: 'cd -P odd/s/.. && printf x > src/a.ts', prepare: srcLink },
+  // Assignments that change how a name resolves.
+  { name: 'PATH prefix', command: "PATH=odd:/usr/bin cat > odd/x.md <<'EOF'\nx\nEOF", prepare: plantCat },
+  { name: 'HOME assignment', command: 'HOME=$PWD/src; printf x > ~/a.ts' },
+  // printf -v assigns too: the same PATH bypass, every word plain.
+  { name: 'printf -v PATH', command: "printf -v PATH odd:/usr/bin; cat > odd/x.md <<'EOF'\nx\nEOF", prepare: plantCat },
+  { name: 'CDPATH assignment', command: 'CDPATH=src; cd odd/tasks && printf x > x.md', prepare: (repo) => mkdirSync(join(repo, 'src', 'odd', 'tasks'), { recursive: true }) },
+  // Writing an ignore source in the same command.
+  { name: 'global excludes file', command: "printf '' > ~/.config/git/ignore; printf x > notes/today.md" },
+  {
+    name: 'core.excludesFile',
+    command: "printf '' > odd/rules; printf x > scratch/a.md",
+    prepare: (repo) => { writeFileSync(join(repo, 'odd', 'rules'), 'scratch/\n'); git(['config', 'core.excludesFile', join(repo, 'odd', 'rules')], repo) },
+  },
+  // A submodule or a nested repository: another repository's main.
+  { name: 'symlink into a submodule', command: 'printf x > odd/sublink/a.ts', prepare: (repo) => { addSubmodule(repo); symlinkSync(join(repo, 'sub'), join(repo, 'odd', 'sublink')) } },
+  { name: 'inside a submodule', command: 'printf x > sub/a.ts', prepare: addSubmodule },
+  {
+    name: 'nested repository in an ignored directory',
+    command: 'printf x > odd/inner/a.ts',
+    prepare: (repo) => { const inner = join(repo, 'odd', 'inner'); initRepo(inner); writeFileSync(join(inner, 'a.ts'), 'a\n'); git(['add', 'a.ts'], inner); git(['commit', '-q', '-m', 'a'], inner); git(['branch', '-M', 'main'], inner) },
+  },
+  // `>&word` and `n>&word` write the file `word` unless it is only an fd number or `-`.
+  { name: '>& with a word that starts with a digit', command: 'printf x >&2x.ts; printf y > odd/tasks/x.md', prepare: trackFile('2x.ts') },
+  { name: '1>& with a word that starts with digits', command: 'printf x 1>&404.html; printf y > odd/tasks/x.md', prepare: trackFile('404.html') },
+  { name: '>& with a word, then &&', command: 'echo x >&2fa.ts && echo y >> odd/notes.md', prepare: trackFile('2fa.ts') },
+  { name: '>& with a word that starts with -', command: 'printf x >&-foo; printf y > odd/tasks/x.md' },
+  // APFS folds case and Unicode normalization; git's icase folds ASCII only.
+  { name: 'non-ASCII case alias of a tracked file', command: "printf x > 'odd/ñ.md'", prepare: unicodeRepo((repo) => trackForced(repo, 'odd/Ñ.md')) },
+  { name: 'NFD spelling of an NFC tracked file', command: `printf x > 'odd/${'e\u0301'}.md'`, prepare: unicodeRepo((repo) => trackForced(repo, 'odd/\u00e9.md')) },
+  {
+    name: 'non-ASCII case alias of a re-included tracked file',
+    command: "printf x > 'docs/über.md'",
+    prepare: unicodeRepo((repo) => {
+      mkdirSync(join(repo, 'docs'), { recursive: true })
+      writeFileSync(join(repo, '.gitignore'), 'tmp/\ndocs/*\n!docs/Über.md\n')
+      writeFileSync(join(repo, 'docs', 'Über.md'), 'u\n')
+      git(['add', '.gitignore', 'docs/Über.md'], repo)
+      git(['commit', '-q', '-m', 'docs'], repo)
+    }),
+  },
+  // An unquoted heredoc runs its command substitutions.
+  { name: 'unquoted heredoc substitution', command: 'cat > odd/x.md <<EOF\n$(printf x > src/a.ts)\nEOF' },
+  // The hook's own git environment must not decide: a decoy GIT_DIR that ignores everything.
+  {
+    name: 'GIT_DIR in the environment',
+    command: "printf 'x' > src/a.ts",
+    prepare: () => {
+      const decoy = repoNamedBranch('main')
+      writeFileSync(join(decoy, '.git', 'info', 'exclude'), '*\n')
+      return { GIT_DIR: join(decoy, '.git'), GIT_INDEX_FILE: join(decoy, '.git', 'index-none') }
+    },
+  },
+]
+
+// Read from the question Jev is sent, so the facts sentence plays no part.
+for (const { name, command, prepare } of BYPASSES) {
+  test(`I2 bypass (${name}): still judged against never_write_to_main on main`, () => {
+    assert.equal(judgedWithIgnoredFiles(command, 'main', prepare, { asked: true }), 'with-policy')
+  })
+}
+
+// Refusal 2 of 2026-11-13 stays judged as at base: an assignment and a cd
+// to a variable are never trivially safe.
+test('I2: on main, an assignment then a cd to it is still judged against never_write_to_main', () => {
+  assert.equal(judgedWithIgnoredFiles("J=src\ncd $J && printf x > a.ts", 'main'), 'with-policy')
+})
+
+// Constructs that are never trivially safe: judged as before, with no facts sentence.
+const NEVER_TRIVIAL = [
+  "eval 'printf x > src/a.ts'; printf y > odd/x.md",
+  "exec 3> src/a.ts; printf y > odd/x.md",
+  'env printf x > odd/x.md',
+  'source odd/x.sh; printf y > odd/x.md',
+  '. odd/x.sh; printf y > odd/x.md',
+  'export FOO=1; printf y > odd/x.md',
+  '(printf x > odd/x.md)',
+  'f() { printf x > src/a.ts; }; f > odd/x.md',
+  'printf x > odd/x.md; tee odd/y.md < <(printf x)',
+  'echo `printf x > src/a.ts` > odd/x.md',
+  'pushd odd && printf x > x.md',
+  'builtin cd odd; printf x > x.md',
+  'install -t odd src/a.ts',
+  'cp -t odd src/a.ts',
+  'cp -s src/a.ts odd/s.ts',
+  'cp --link src/a.ts odd/s.ts',
+]
+
+test('I2: on main, a command with any construct that changes resolution is judged as before, with no facts sentence', () => {
+  const judged = Object.fromEntries(NEVER_TRIVIAL.map((command) => [command, judgedWithIgnoredFiles(command, 'main')]))
+  assert.deepEqual(judged, Object.fromEntries(NEVER_TRIVIAL.map((command) => [command, 'with-policy'])))
+})
+
+// The facts sentence resolved the command's words from the acting directory
+// and missed its own later cd: here it told Jev odd/tasks/x.md was ignored,
+// though the second write lands in src/odd/tasks/x.md, which git would track.
+test('I2: a command with a cd gets no facts sentence', () => {
+  const command = "printf x > odd/tasks/x.md; cd src && printf y > odd/tasks/x.md"
+  assert.equal(judgedWithIgnoredFiles(command, 'main', (repo) => mkdirSync(join(repo, 'src', 'odd', 'tasks'), { recursive: true })), 'with-policy')
+})
+
+test('I2: on a working branch, nothing here is judged against never_write_to_main', () => {
+  const commands = [...IGNORED_WRITES, ...Object.keys(STILL_JUDGED)]
+  const judged = Object.fromEntries(commands.map((command) => [command, judgedWithIgnoredFiles(command, 'feat/x') !== 'with-policy']))
+  assert.deepEqual(judged, Object.fromEntries(commands.map((command) => [command, true])))
+})
+
+// Detached HEAD: the branch is unknown, so every place keeps the policy as
+// before (the checkout may sit on main's commit and be pushed as HEAD:main),
+// except a file git ignores, which belongs to no commit on any branch.
+test('I2: on a detached HEAD, an ignored target is not judged against never_write_to_main and a tracked one still is', () => {
+  const detach = (repo) => { git(['checkout', '-q', '--detach'], repo) }
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > odd/tasks/x.md", 'main', detach), 'without-policy')
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > src/a.ts", 'main', detach), 'with-policy')
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > src/new.ts", 'main', detach), 'with-policy')
 })
 
 // ---------------------------------------------------------------------------

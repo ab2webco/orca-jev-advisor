@@ -133,3 +133,21 @@ test('feature modules T2: an Edit or Write of the module state file is refused',
     assert.match(payload.hookSpecificOutput.permissionDecisionReason, /^REFUSED: edits the gate's own rules \(~\/\.config\/orca-supervisor\/feature-modules\.json\)/, tool_name)
   }
 })
+
+// odd/tasks/gate-ignored-files-not-main.md: the file tools never reach the
+// Bash gate, so never_write_to_main is not judged for them at all (this hook
+// guards only the gate's own files). An Edit or Write of an ignored file in a
+// checkout on main therefore passes in silence, with no git call and no Jev.
+test('an Edit or Write of a git-ignored file in a checkout on main passes in silence', () => {
+  const home = makeHome()
+  const repo = join(home, 'repo')
+  mkdirSync(join(repo, '.git', 'info'), { recursive: true })
+  writeFileSync(join(repo, '.git', 'HEAD'), 'ref: refs/heads/main\n')
+  writeFileSync(join(repo, '.git', 'info', 'exclude'), 'odd/\n')
+  for (const payload of [
+    { tool_name: 'Write', tool_input: { file_path: join(repo, 'odd', 'tasks', 'x.md'), content: 'x' }, cwd: repo },
+    { tool_name: 'Edit', tool_input: { file_path: 'odd/tasks/x.md', old_string: 'x', new_string: 'y' }, cwd: repo }
+  ]) {
+    assert.equal(run(home, payload), '', JSON.stringify(payload))
+  }
+})
