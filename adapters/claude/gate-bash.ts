@@ -96,7 +96,7 @@ import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
 import { parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { SHARED_BRANCH_NAMES, classifyClientReach } from '../../src/core/client_reach.ts'
 import { branchReachWrites, namesProtectedBranch } from '../../src/core/branch_reach.ts'
-import { verifiedIgnoredFiles } from '../../src/core/ignored_files.ts'
+import { buildIgnoredPathsSentence, mentionPath, pathMentions, verifiedIgnoredFiles } from '../../src/core/ignored_files.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
 import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
@@ -2506,6 +2506,14 @@ async function main(): Promise<void> {
     SEED_SCOPE_BY_ID,
     { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected, protectedBranches: SHARED_BRANCH_NAMES },
   )
+  // T3: when a protected-branch policy is still asked, the context lists the
+  // paths the command names (heredoc bodies included) that git verified as
+  // ignored; Jev's violation question counts no other file as ignored. In
+  // the clear context too, so the cache key changes when git's answer does.
+  const branchPolicyAsked = hasBranchPolicy && filterPoliciesForBranchReach(scopedPolicies, SEED_SCOPE_BY_ID, { branches: [], namesProtected: false, protectedBranches: SHARED_BRANCH_NAMES }).length < scopedPolicies.length
+  const namedPaths = branchPolicyAsked ? pathMentions(command).map((word) => ({ word, path: mentionPath(word, actingCwd, homedir()) })).filter((named) => resolveRepoRootForCwd(named.path) !== null) : []
+  const namedIgnored = namedPaths.length === 0 ? new Set<string>() : verifiedIgnoredFiles(namedPaths.map((named) => named.path), resolveRepoRootForCwd, gitOutputWithInput)
+  const ignoredWords = namedPaths.filter((named) => namedIgnored.has(named.path)).map((named) => named.word)
 
   // 0.6.8 T3: a requires_human policy protects work that reaches a client,
   // and Jev, asked from the sentence alone, also asked about work that never
@@ -2642,7 +2650,8 @@ async function main(): Promise<void> {
   // copy carries it: the key already holds the destination (commandShape
   // keeps it literal) and the repository and branch it is pushed from.
   const repoFacts = readRepoFacts(actingCwd)
-  const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '')
+  const ignoredSentence = buildIgnoredPathsSentence(ignoredWords)
+  const context = renderRepoContext(repoFacts, IDENTITY_NAMES) + (crossRepoSentence !== null ? ` ${crossRepoSentence}` : '') + (ignoredSentence !== null ? ` ${ignoredSentence}` : '')
   // G6 (odd/tasks/gate-secret-guard.md): a temp-root path reads as one.
   const jevNames = createJevPseudonyms({ tempRoots: jevTempRoots() })
   const jevCrossRepoSentence = targetLocations.length > 0 ? buildCrossRepoSentence(sessionLocation, targetLocations, jevNames) : null
@@ -2651,7 +2660,8 @@ async function main(): Promise<void> {
   // request's review, or none for an API branch merge -- so a reviewed merge
   // is not judged by the checkout's branch. Jev's copy only, like the push.
   const mergeSentence = mentionOnly || !/\bgh\b/.test(inspected) ? null : buildGhMergeSentence(ghMerges(inspected, cwd, homedir()), jevNames)
-  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '') + (mergeSentence !== null ? ` ${mergeSentence}` : '')
+  const jevIgnoredSentence = buildIgnoredPathsSentence(ignoredWords, jevNames)
+  const jevContext = renderRepoContext(repoFacts, jevNames) + (jevCrossRepoSentence !== null ? ` ${jevCrossRepoSentence}` : '') + (jevIgnoredSentence !== null ? ` ${jevIgnoredSentence}` : '') + (pushSentence !== null ? ` ${pushSentence}` : '') + (mergeSentence !== null ? ` ${mergeSentence}` : '')
   // The destination is resolved once, above (folding in every target's own
   // repository too -- see pickStricterDestination): it is part of the cache
   // key, because two repositories with different thresholds must never

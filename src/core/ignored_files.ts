@@ -15,7 +15,9 @@
 // A write that lands outside any repository counts too: it has no branch.
 // Anything git cannot answer does not count, so the policy stays.
 import { lstatSync, realpathSync } from "node:fs";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+
+import { IDENTITY_NAMES, type JevNames } from "./jev_pseudonyms.ts";
 
 /** Runs git in `cwd` with `input` on stdin; its stdout, or null when it fails or exits non-zero. */
 export type GitWithInput = (args: readonly string[], cwd: string, input: string) => string | null;
@@ -88,4 +90,42 @@ export function verifiedIgnoredFiles(paths: readonly string[], repoRootOf: (path
     });
   }
   return verified;
+}
+
+// T3: when never_write_to_main is still asked (the command runs a program
+// that may write anything, or also writes a tracked file), Jev reads which of
+// the paths the command names git verified as ignored. The paths come from
+// the text; that they are ignored comes from git. Jev's violation question
+// counts a file as ignored only when this sentence lists it.
+
+/** A path-like word: optional `~/`, `./`, `../` or `/`, then name parts joined by `/`. It never starts inside another word. */
+const PATH_LIKE = /(?<![\w.\/~$@:+-])(?:~\/|\.\.?\/|\/)?[\w@+-][\w.@+-]*(?:\/[\w.@+-]+)*\/?/g;
+/** A file extension that starts with a letter (`.md`, `.ts`), not a version (`1.2.3`). */
+const EXTENSION = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
+const MAX_MENTIONS = 32;
+
+/** The path-like words in `command`, heredoc bodies included, in order, once each, at most 32: a word with a `/`, or a name with an extension. Options, URLs, `$VAR` paths and package specs are left out. */
+export function pathMentions(command: string): readonly string[] {
+  const mentions: string[] = [];
+  for (const match of command.matchAll(PATH_LIKE)) {
+    const word = match[0];
+    const next = command[match.index + word.length] ?? "";
+    // `name@1.2` and `https://...` are not paths; a word glued to `$`, `:` or `=` is part of something else.
+    if (word.includes("@") || next === ":" || (!word.includes("/") && !EXTENSION.test(word))) continue;
+    if (!mentions.includes(word)) mentions.push(word);
+    if (mentions.length === MAX_MENTIONS) break;
+  }
+  return mentions;
+}
+
+/** The context sentence naming the paths git verified as ignored, as written in the command; null for none. `names` swaps any absolute path for Jev's copy. */
+export function buildIgnoredPathsSentence(paths: readonly string[], names: JevNames = IDENTITY_NAMES): string | null {
+  if (paths.length === 0) return null;
+  return names.redactText(`Checked with git, not read from the command: git ignores these paths the command names (${paths.join(", ")}), so they are in no commit and on no branch. No other path is known to be ignored.`);
+}
+
+/** A pathMentions word as an absolute path, read from `dir` (`~/` from `home`). */
+export function mentionPath(word: string, dir: string, home: string): string {
+  if (word.startsWith("~/")) return join(home, word.slice(2));
+  return isAbsolute(word) ? resolve(word) : resolve(dir, word);
 }

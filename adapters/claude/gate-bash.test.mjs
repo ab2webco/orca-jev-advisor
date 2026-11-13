@@ -3815,12 +3815,12 @@ test('T1: a push naming develop from a working branch is never allowed locally',
 // writes into the checkout. A write that may land in it still is.
 
 /** The policy set the hook judged `command` against, read from the seeded verdict it served. */
-function judgedPolicySet (home, command, repo) {
+function judgedPolicySet (home, command, repo, facts = '') {
   writePoliciesMirror(home, [NEVER_WRITE_TO_MAIN])
   // A move out of the checkout acts in /tmp, and the hook says so in the context its key folds in.
-  const repoContext = command === MOVE_OUT
+  const repoContext = (command === MOVE_OUT
     ? `${computeRepoContextForTest('/tmp')} The command acts on files outside any repository, not in the session's current repository (${repo} on ${branchNameOf(repo)}).`
-    : computeRepoContextForTest(repo)
+    : computeRepoContextForTest(repo)) + (facts.length > 0 ? ` ${facts}` : '')
   seedBothPolicySets(home, command, repo, repoContext)
   const stdout = run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit' })
   // Tier 1a passes a command through before any policy, with no output.
@@ -3902,7 +3902,21 @@ function judgedWithIgnoredFiles (command, branch, prepare = () => {}) {
   const home = makeHome()
   const repo = repoWithIgnoredFiles(branch, home)
   prepare(repo)
-  return judgedPolicySet(home, command, repo)
+  // T3: when the policy is still asked, the context lists the paths the
+  // command names that git verified as ignored; the key folds it in.
+  // On a working branch the policy is set aside, so there is no sentence.
+  const named = branch === 'main' ? (IGNORED_NAMED[command] ?? []) : []
+  const facts = named.length > 0 ? `Checked with git, not read from the command: git ignores these paths the command names (${named.join(', ')}), so they are in no commit and on no branch. No other path is known to be ignored.` : ''
+  return judgedPolicySet(home, command, repo, facts)
+}
+
+/** odd/tasks/gate-ignored-files-not-main.md T3: the ignored paths each still-judged command names, as git verifies them. */
+const IGNORED_NAMED = {
+  "printf 'a' > odd/tasks/x.md && printf 'b' > src/a.ts": ['odd/tasks/x.md'],
+  "# odd/tasks/x.md is git-ignored, so nothing here is tracked\nprintf 'b' > src/a.ts": ['odd/tasks/x.md'],
+  'mv odd/tasks/x.md src/a.ts': ['odd/tasks/x.md'],
+  "python3 - <<'EOF'\nopen('odd/tasks/x.md','w').write('x')\nEOF": ['odd/tasks/x.md'],
+  "sed -i '' 's/x/y/' odd/tasks/x.md": ['odd/tasks/x.md'],
 }
 
 const IGNORED_WRITES = [
