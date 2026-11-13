@@ -2,6 +2,16 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.16
+
+- **On main, a plain write to a file git ignores is no longer judged as a write on main** (#121, `odd/tasks/gate-ignored-files-not-main.md`, `src/core/trivial_write.ts`, `src/core/ignored_files.ts`, seed version 7). From a checkout on main, `cat > odd/tasks/x.md <<'EOF'` into a file `.git/info/exclude` covers was refused under `never_write_to_main`, though such a file is in no commit and can never reach main.
+  - **What goes ahead.** A trivially safe command: `cat`, `echo`, `printf` or `true` with redirections, or `tee -a`, `cp`, `mv`, `install`, `mkdir -p` and `touch` with their plain options. Every file it writes must be one git verifies as ignored (`.gitignore`, `.git/info/exclude` or the global excludes file) with nothing tracked there.
+  - **Everything else is still judged (fail closed).** That covers `cd`, links, assignments, `eval`, substitutions, interpreter code and `sed -i`. It also covers any target reached through a symlink, a hard link, a nested repository, a submodule or a non-ASCII name, and any write to an ignore source such as `.gitignore`, the excludes files or anything in `.git`. git runs once per check, with the hook's `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and `GIT_CONFIG*` removed. If git fails or times out, the policy is asked.
+  - **Jev gets verified facts.** When the policy is still asked for a trivially safe command that also writes a tracked file, the context lists the repository paths git verified as ignored. The violation question counts no other file as ignored. `GATE_DECISION_RULES_VERSION` 9 -> 10, so earlier cached verdicts are judged again.
+  - **Submodules.** A write inside a submodule, or through a symlink into one, was read as a write outside any repository, so `never_write_to_main` was not asked. A place under a `.git` the gate cannot resolve now keeps the policy.
+  - **Seed v7.** The shipped `never_write_to_main` row says new files git would track count as writing to main, and files git ignores or excludes do not. The Advisor panel offers it as a changed team policy.
+- **A dev Orca linked to the release accounts vault no longer gets dev hooks written into it** (ORCA-1131, #119, `src/core/orca_accounts.ts`). When `ORCA_USER_DATA_PATH` is not the conventional Orca userData and its `claude-accounts` is a symlink to the conventional install's vault, the installer skips that vault and installs only the home target. Real sessions had run the dev profile's hooks.
+
 ## 0.13.15
 
 - **A CI run cancelled by a newer commit no longer reads as a failure** (ORCA-1010, #117, `src/core/ci_watch.ts`). The CI watcher called every conclusion other than success, skipped or neutral a failure, and stayed on the pushed sha without checking for a newer one. Three runs on one branch were cancelled by a newer merge, and Jev reported failure for each of them. Only one had a failed job: the verify gate.
