@@ -1,131 +1,209 @@
-// odd/tasks/gate-ignored-files-not-main.md T2: which files a command writes
-// that git ignores or excludes (.gitignore, .git/info/exclude, the global
-// excludes file). Such a file is in no commit, so it cannot reach main
-// through a commit or a push, and writing it is not writing on the branch.
+// odd/tasks/gate-ignored-files-not-main.md: whether every target of a
+// trivially safe write (trivial_write.ts) is a file git ignores or excludes
+// (.gitignore, .git/info/exclude, the global excludes file). Such a file is
+// in no commit, so writing it cannot reach main through a commit or a push.
 //
 // The answer comes from git and the filesystem, never from the command's
-// text. A file counts only when all of these hold:
-//   - the path the write lands on, every symlink resolved, is known (a
-//     dangling link writes its target, so it does not count);
-//   - it is neither the repository root nor inside a `.git` directory (a
-//     ref or the ignore rules themselves);
-//   - `git check-ignore` reports it ignored;
-//   - `git ls-files` finds no tracked file at it or under it (a tracked file
-//     can sit in an ignored directory, `git add -f`).
-// A write that lands outside any repository counts too: it has no branch.
-// Anything git cannot answer does not count, so the policy stays.
-import { lstatSync, realpathSync } from "node:fs";
+// text, and anything that cannot be answered fails closed (null: the policy
+// is asked, and Jev is told nothing). A command passes only when:
+//   - its directory resolves, through git, to one repository root that is
+//     not a submodule;
+//   - each target, read from that directory, lies inside the root, with no
+//     `..` and no `.git` component;
+//   - no existing component from the root to the target is a symlink, and
+//     no directory on the way holds a `.git` (a submodule or a nested
+//     repository: another repository's main);
+//   - an existing target is a regular file with one link (a hard link to a
+//     tracked file writes it), or for a directory target a real directory;
+//   - no target is an ignore source: a `.gitignore`, anything in `.git`,
+//     the configured core.excludesFile or the default global excludes file
+//     (emptying one would make a path git now ignores trackable);
+//   - `git check-ignore` reports it ignored and `git ls-files` finds nothing
+//     tracked at it or under it (a tracked file can sit in an ignored
+//     directory, `git add -f`).
+// Every git call runs with gitSubprocessEnv: the hook's GIT_DIR,
+// GIT_WORK_TREE, GIT_INDEX_FILE and GIT_CONFIG* must not choose the
+// repository, the index or the ignore rules git answers from.
+import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { IDENTITY_NAMES, type JevNames } from "./jev_pseudonyms.ts";
+import type { TrivialTarget } from "./trivial_write.ts";
 
-/** Runs git in `cwd` with `input` on stdin; its stdout, or null when it fails or exits non-zero. */
-export type GitWithInput = (args: readonly string[], cwd: string, input: string) => string | null;
+/** What git printed and how it exited. */
+export interface GitResult {
+  readonly status: number;
+  readonly stdout: string;
+}
 
-/** The path a write to `path` (absolute) lands on, every symlink resolved; null when a link on the way cannot be resolved. */
-export function landingPath(path: string): string | null {
-  const tail: string[] = [];
-  let at = path;
-  for (;;) {
-    let exists: boolean;
-    try {
-      lstatSync(at);
-      exists = true;
-    } catch {
-      exists = false;
-    }
-    if (exists) {
-      try {
-        return join(realpathSync.native(at), ...tail.reverse());
-      } catch {
-        return null;
-      }
-    }
-    const parent = dirname(at);
-    if (parent === at) return null;
-    tail.push(basename(at));
-    at = parent;
+/** Runs git in `cwd` with `input` on stdin; null when it could not run, was killed or ran past its timeout. */
+export type GitRunner = (args: readonly string[], cwd: string, input: string) => GitResult | null;
+
+/** The git verdict for a command's targets. `ignored` lists, repository-relative and in order, the targets git verified as ignored with nothing tracked there. */
+export interface IgnoredTargets {
+  readonly allIgnored: boolean;
+  readonly ignored: readonly string[];
+}
+
+/** Where the default global excludes file is read from. */
+export interface ExcludesHome {
+  readonly home: string;
+  readonly xdgConfigHome: string | undefined;
+}
+
+/** Variables that point git at another repository, index, object store or config. */
+const MOVES_GIT = new Set(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_PREFIX"]);
+
+/** The environment for every git call here: `env` without MOVES_GIT nor any GIT_CONFIG* variable, and with optional locks off (these calls only read). */
+export function gitSubprocessEnv(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const clean: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (value === undefined || MOVES_GIT.has(name) || name.startsWith("GIT_CONFIG")) continue;
+    clean[name] = value;
+  }
+  clean["GIT_OPTIONAL_LOCKS"] = "0";
+  return clean;
+}
+
+/** `git` through `run`, never a throw: a runner that throws counts as a failed call. */
+function callGit(run: GitRunner, args: readonly string[], cwd: string, input = ""): GitResult | null {
+  try {
+    return run(args, cwd, input);
+  } catch {
+    return null;
   }
 }
 
-/** Whether `inner` is `outer` itself or inside it. */
-function within(outer: string, inner: string): boolean {
-  return inner === outer || inner.startsWith(outer.endsWith(sep) ? outer : `${outer}${sep}`);
+/** lstat, or null when nothing is there; undefined when it cannot be read (fail closed). */
+function lstatOrNull(path: string): Stats | null | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined;
+  }
+}
+
+/** `path` with the symlinks of its existing part resolved, lower-cased for a case-insensitive comparison. */
+function canonical(path: string): string {
+  const tail: string[] = [];
+  let at = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync.native(at), ...tail.reverse()).toLowerCase();
+    } catch {
+      const parent = dirname(at);
+      if (parent === at) return resolve(path).toLowerCase();
+      tail.push(basename(at));
+      at = parent;
+    }
+  }
+}
+
+/** The repository root `dir` sits in, through git; null outside one, inside a submodule, or when git cannot say. */
+function repositoryRoot(dir: string, git: GitRunner): string | null {
+  const out = callGit(git, ["rev-parse", "--show-toplevel", "--show-superproject-working-tree"], dir);
+  if (out === null || out.status !== 0) return null;
+  const lines = out.stdout.split("\n").filter((line) => line.length > 0);
+  // A second line is the superproject: `dir` is in a submodule.
+  if (lines.length !== 1) return null;
+  const root = lines[0] ?? "";
+  if (!isAbsolute(root) || /\0/.test(root)) return null;
+  return root;
+}
+
+/** The ignore files git reads beyond the repository: core.excludesFile when set, and the default global excludes file either way. Null when git cannot say. */
+function excludesFiles(root: string, home: ExcludesHome, git: GitRunner): readonly string[] | null {
+  const out = callGit(git, ["config", "--path", "--default", "", "--get", "core.excludesFile"], root);
+  if (out === null || out.status !== 0) return null;
+  const configured = out.stdout.replace(/\n$/, "");
+  if (configured.length > 0 && (!isAbsolute(configured) || /[\0\n]/.test(configured))) return null;
+  const xdg = home.xdgConfigHome !== undefined && home.xdgConfigHome.length > 0 ? [join(home.xdgConfigHome, "git", "ignore")] : [];
+  return [...(configured.length > 0 ? [configured] : []), ...xdg, join(home.home, ".config", "git", "ignore")];
 }
 
 /**
- * The subset of `paths` (absolute) whose writes land on a file git ignores
- * with nothing tracked at or under it, or outside any repository.
- * `repoRootOf` resolves a path's checkout root (null outside any).
+ * The repository-relative paths `target` writes, after the filesystem
+ * checks above; null when one fails. A `dirs` target adds each missing
+ * directory it creates.
  */
-export function verifiedIgnoredFiles(paths: readonly string[], repoRootOf: (path: string) => string | null, git: GitWithInput): ReadonlySet<string> {
-  const verified = new Set<string>();
-  const byRoot = new Map<string, { path: string; landing: string }[]>();
-  for (const path of paths) {
-    const landing = landingPath(path);
-    if (landing === null || /[\n\0]/.test(landing)) continue;
-    const root = repoRootOf(landing);
-    if (root === null) {
-      verified.add(path);
-      continue;
+function checkedPaths(target: TrivialTarget, cwd: string, root: string): readonly string[] | null {
+  if (target.word.split("/").includes("..")) return null;
+  const path = isAbsolute(target.word) ? resolve(target.word) : resolve(cwd, target.word);
+  const rel = relative(root, path);
+  if (rel.length === 0 || rel.startsWith("..") || isAbsolute(rel)) return null;
+  const parts = rel.split(sep);
+  if (parts.some((part) => part.toLowerCase() === ".git") || (parts.at(-1) ?? "").toLowerCase() === ".gitignore") return null;
+  const created: string[] = [];
+  let at = root;
+  for (let index = 0; index < parts.length; index++) {
+    at = join(at, parts[index] ?? "");
+    const last = index === parts.length - 1;
+    const stat = lstatOrNull(at);
+    if (stat === undefined) return null;
+    if (stat === null) {
+      // Missing from here on; `mkdir -p` creates each of these.
+      if (target.kind === "dirs") created.push(...parts.slice(index, -1).map((_, offset) => parts.slice(0, index + offset + 1).join("/")));
+      break;
     }
-    const rel = relative(root, landing);
-    if (rel.length === 0 || rel.startsWith("..") || rel.split(sep).includes(".git")) continue;
-    byRoot.set(root, [...(byRoot.get(root) ?? []), { path, landing }]);
+    if (stat.isSymbolicLink()) return null;
+    if (!last) {
+      if (!stat.isDirectory()) return null;
+    } else if (target.kind === "file" || target.kind === "removed") {
+      if (!stat.isFile() || stat.nlink !== 1) return null;
+    } else if (!stat.isDirectory()) {
+      return null;
+    }
+    if (stat.isDirectory() && lstatOrNull(join(at, ".git")) !== null) return null;
   }
-  for (const [root, entries] of byRoot) {
-    const out = git(["check-ignore", "-z", "--stdin"], root, entries.map((entry) => entry.landing).join("\0") + "\0");
-    if (out === null) continue;
-    const ignored = new Set(out.split("\0").filter((line) => line.length > 0));
-    const candidates = entries.filter((entry) => ignored.has(entry.landing));
-    if (candidates.length === 0) continue;
-    const rels = candidates.map((entry) => relative(root, entry.landing).split(sep).join("/"));
-    // Case-insensitive: on a case-insensitive filesystem `ODD/x` writes `odd/x`.
-    const tracked = git(["ls-files", "-z", "--", ...rels.map((rel) => `:(literal,icase)${rel}`)], root, "");
-    if (tracked === null) continue;
-    const trackedFiles = tracked.split("\0").filter((line) => line.length > 0).map((line) => line.toLowerCase());
-    candidates.forEach((entry, at) => {
-      const rel = (rels[at] ?? "").toLowerCase();
-      if (!trackedFiles.some((file) => file === rel || file.startsWith(`${rel}/`))) verified.add(entry.path);
-    });
-  }
-  return verified;
+  return [...created, parts.join("/")];
 }
 
-// T3: when never_write_to_main is still asked (the command runs a program
-// that may write anything, or also writes a tracked file), Jev reads which of
-// the paths the command names git verified as ignored. The paths come from
-// the text; that they are ignored comes from git. Jev's violation question
-// counts a file as ignored only when this sentence lists it.
-
-/** A path-like word: optional `~/`, `./`, `../` or `/`, then name parts joined by `/`. It never starts inside another word. */
-const PATH_LIKE = /(?<![\w.\/~$@:+-])(?:~\/|\.\.?\/|\/)?[\w@+-][\w.@+-]*(?:\/[\w.@+-]+)*\/?/g;
-/** A file extension that starts with a letter (`.md`, `.ts`), not a version (`1.2.3`). */
-const EXTENSION = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
-const MAX_MENTIONS = 32;
-
-/** The path-like words in `command`, heredoc bodies included, in order, once each, at most 32: a word with a `/`, or a name with an extension. Options, URLs, `$VAR` paths and package specs are left out. */
-export function pathMentions(command: string): readonly string[] {
-  const mentions: string[] = [];
-  for (const match of command.matchAll(PATH_LIKE)) {
-    const word = match[0];
-    const next = command[match.index + word.length] ?? "";
-    // `name@1.2` and `https://...` are not paths; a word glued to `$`, `:` or `=` is part of something else.
-    if (word.includes("@") || next === ":" || (!word.includes("/") && !EXTENSION.test(word))) continue;
-    if (!mentions.includes(word)) mentions.push(word);
-    if (mentions.length === MAX_MENTIONS) break;
+/**
+ * Whether git verifies every target as ignored with nothing tracked there
+ * (see the module comment); null when anything fails, so the policy is
+ * asked and no facts are given. `cwd` is the directory the command runs in.
+ */
+export function verifyIgnoredTargets(targets: readonly TrivialTarget[], cwd: string, home: ExcludesHome, git: GitRunner): IgnoredTargets | null {
+  if (targets.length === 0) return null;
+  let dir: string;
+  try {
+    dir = realpathSync.native(cwd);
+  } catch {
+    return null;
   }
-  return mentions;
+  const root = repositoryRoot(dir, git);
+  if (root === null || relative(root, dir).startsWith("..")) return null;
+  const perTarget: { readonly rel: string; readonly paths: readonly string[] }[] = [];
+  for (const target of targets) {
+    const paths = checkedPaths(target, dir, root);
+    if (paths === null) return null;
+    perTarget.push({ rel: paths.at(-1) ?? "", paths });
+  }
+  const excludes = excludesFiles(root, home, git);
+  if (excludes === null) return null;
+  const sources = excludes.map(canonical);
+  for (const { paths } of perTarget) {
+    for (const rel of paths) {
+      const written = canonical(join(root, rel));
+      if (sources.some((source) => source === written || source.startsWith(`${written}${sep}`))) return null;
+    }
+  }
+  const all = [...new Set(perTarget.flatMap((entry) => entry.paths))];
+  // check-ignore exits 1 when it ignores none of them: an answer, not a failure.
+  const ignoredOut = callGit(git, ["check-ignore", "-z", "--stdin"], root, all.join("\0") + "\0");
+  if (ignoredOut === null || (ignoredOut.status !== 0 && ignoredOut.status !== 1)) return null;
+  const ignored = new Set(ignoredOut.stdout.split("\0").filter((line) => line.length > 0));
+  // Case-insensitive: on a case-insensitive filesystem `ODD/x` writes `odd/x`.
+  const trackedOut = callGit(git, ["ls-files", "-z", "--", ...all.map((rel) => `:(literal,icase)${rel}`)], root);
+  if (trackedOut === null || trackedOut.status !== 0) return null;
+  const tracked = trackedOut.stdout.split("\0").filter((line) => line.length > 0).map((line) => line.toLowerCase());
+  const verified = (rel: string): boolean => ignored.has(rel) && !tracked.some((file) => file === rel.toLowerCase() || file.startsWith(`${rel.toLowerCase()}/`));
+  const passing = perTarget.filter((entry) => entry.paths.every(verified)).map((entry) => entry.rel);
+  return { allIgnored: passing.length === perTarget.length, ignored: [...new Set(passing)] };
 }
 
-/** The context sentence naming the paths git verified as ignored, as written in the command; null for none. `names` swaps any absolute path for Jev's copy. */
+/** The context sentence naming the repository paths git verified as ignored; null for none. `names` swaps any absolute path for Jev's copy. */
 export function buildIgnoredPathsSentence(paths: readonly string[], names: JevNames = IDENTITY_NAMES): string | null {
   if (paths.length === 0) return null;
-  return names.redactText(`Checked with git, not read from the command: git ignores these paths the command names (${paths.join(", ")}), so they are in no commit and on no branch. No other path is known to be ignored.`);
-}
-
-/** A pathMentions word as an absolute path, read from `dir` (`~/` from `home`). */
-export function mentionPath(word: string, dir: string, home: string): string {
-  if (word.startsWith("~/")) return join(home, word.slice(2));
-  return isAbsolute(word) ? resolve(word) : resolve(dir, word);
+  return names.redactText(`Checked with git, not read from the command: git ignores these repository paths the command writes (${paths.join(", ")}), so they are in no commit and on no branch. No other path is known to be ignored.`);
 }
