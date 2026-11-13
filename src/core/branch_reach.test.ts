@@ -4,7 +4,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { branchReachPlaces, namesProtectedBranch } from "./branch_reach.ts";
+import { branchReachPlaces, branchReachWrites, namesProtectedBranch } from "./branch_reach.ts";
+import { withoutHeredocBodies } from "./command_text.ts";
 import { buildSeedScopeIndex, filterPoliciesForBranchReach, type Policy } from "./decisions.ts";
 import { pushTargets } from "./deny_rule_shapes.ts";
 import type { ImplicitPushDestination } from "./push_remote.ts";
@@ -410,4 +411,58 @@ test("G1: real writes to main keep never_write_to_main next to an Orca push", ()
   assert.equal(namesProtectedBranch("orca game push && git push origin main", PROTECTED), true);
   assert.equal(namesProtectedBranch("git push origin HEAD:main", PROTECTED), true);
   assert.deepEqual(pushTargets("orca game push && git push origin main", REPO, HOME, NO_REMOTE, NO_IMPLICIT).map((push) => push.branch), ["main"]);
+});
+
+// odd/tasks/gate-ignored-files-not-main.md T1: gate-bash.ts drops a place
+// that git ignores only when it is a file the command names or redirects to,
+// never a directory where a program may write anything. These pin which is
+// which; the check against git is the gate's (gate-bash.test.mjs I-tests).
+const file = (path: string): { path: string; file: boolean } => ({ path, file: true });
+const dir = (path: string | null): { path: string | null; file: boolean } => ({ path, file: false });
+
+test("I1: redirect targets and the files a listed program names are file places", () => {
+  // gate-bash.ts reads the command without its heredoc bodies, as here.
+  assert.deepEqual(branchReachWrites(withoutHeredocBodies("cat > odd/tasks/x.md <<'EOF'\nhello main\nEOF"), REPO, HOME), [file(`${REPO}/odd/tasks/x.md`)]);
+  assert.deepEqual(branchReachWrites("printf 'a' > odd/x.md && echo b >> src/a.ts", REPO, HOME), [file(`${REPO}/odd/x.md`), file(`${REPO}/src/a.ts`)]);
+  assert.deepEqual(branchReachWrites("echo hi | tee odd/x.md", REPO, HOME), [file(`${REPO}/odd/x.md`)]);
+  assert.deepEqual(branchReachWrites("cp src/a odd/b", REPO, HOME), [file(`${REPO}/odd/b`)]);
+  assert.deepEqual(branchReachWrites("mv odd/a src/b", REPO, HOME), [file(`${REPO}/odd/a`), file(`${REPO}/src/b`)]);
+  assert.deepEqual(branchReachWrites("mkdir -p odd/a/b && touch odd/a/b/c", REPO, HOME), [file(`${REPO}/odd/a/b`), file(`${REPO}/odd/a/b/c`)]);
+});
+
+test("I1: a program that may write anything where it runs is a directory place, never a file", () => {
+  assert.deepEqual(branchReachWrites(withoutHeredocBodies("python3 - <<'EOF'\nopen('odd/x','w').write('x')\nEOF"), REPO, HOME), [dir(REPO)]);
+  assert.deepEqual(branchReachWrites("sed -i '' 's/a/b/' odd/x.md", REPO, HOME), [dir(REPO)]);
+  // Its redirect target is a directory place too: the program writes more than it.
+  assert.deepEqual(branchReachWrites("cd odd && node build.mjs > out.log", REPO, HOME), [dir(`${REPO}/odd`), dir(`${REPO}/odd/out.log`)]);
+  assert.deepEqual(branchReachWrites("git commit -m x > odd/log", REPO, HOME), [dir(REPO), dir(`${REPO}/odd/log`)]);
+  // `ln -s /a` links into the directory it runs in.
+  assert.deepEqual(branchReachWrites("ln -s /tmp/a", REPO, HOME), [dir(REPO)]);
+  // A file the text does not settle counts its directory.
+  assert.deepEqual(branchReachWrites("echo x > $OUT", REPO, HOME), [dir(REPO)]);
+});
+
+test("I1: a place that is both a file and a directory is a directory", () => {
+  assert.deepEqual(branchReachWrites("echo x > odd/y && cd odd/y && python3 x.py", REPO, HOME), [dir(`${REPO}/odd/y`)]);
+  assert.deepEqual(branchReachWrites("python3 x.py; echo x > .", REPO, HOME), [dir(REPO)]);
+});
+
+test("I1: branchReachPlaces is the paths of branchReachWrites", () => {
+  for (const command of ["cat > odd/x.md", "mv odd/a src/b", "python3 x.py", "echo x > $OUT && cp a odd/b", "git add x"]) {
+    assert.deepEqual(branchReachPlaces(command, REPO, HOME), branchReachWrites(command, REPO, HOME).map((place) => place.path), command);
+  }
+});
+
+// Refusal 2 of 2026-11-13: `J=<scratchpad clone>` on its own line counted
+// the session's main checkout as a place it writes.
+test("I1: a segment of bare assignments writes only its redirect targets", () => {
+  assert.deepEqual(branchReachPlaces("J=/tmp/jd14", REPO, HOME), []);
+  assert.deepEqual(branchReachPlaces("A=1 B='two words'", REPO, HOME), []);
+  assert.deepEqual(branchReachPlaces("J=/tmp/x\ncd /tmp/x && echo hi > f", REPO, HOME), ["/tmp/x/f"]);
+  assert.deepEqual(branchReachPlaces("J=x > out.txt", REPO, HOME), [`${REPO}/out.txt`]);
+  // The command a substitution runs is still read as its own segment.
+  assert.ok(ASKED(branchReachPlaces("J=$(touch src/x)", REPO, HOME)));
+  assert.ok(ASKED(branchReachPlaces("J=`node build.mjs`", REPO, HOME)));
+  // A prefix assignment does not make its program write nothing.
+  assert.ok(ASKED(branchReachPlaces("J=1 python3 x.py", REPO, HOME)));
 });

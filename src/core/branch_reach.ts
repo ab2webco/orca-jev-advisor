@@ -339,22 +339,44 @@ function splitRedirections(marked: string): { readonly words: readonly string[];
 }
 
 /**
+ * A place a command writes in. `file` is true for a redirect target or a file
+ * a listed program names: the command writes that path and nothing else
+ * there. Every other place is a directory where a program may write any file
+ * (a program on neither list, git, an unknown target), or null where it
+ * cannot be known. odd/tasks/gate-ignored-files-not-main.md: gate-bash.ts may
+ * drop a file place git ignores, never a directory place.
+ */
+export interface ReachPlace {
+  readonly path: string | null;
+  readonly file: boolean;
+}
+
+/**
  * The places a segment of a program on the two lists writes: its redirect
  * targets and the files it names. A file the text does not settle counts
  * the directory, as every write did before (rm and cp keep an unknown place
  * beside the files they name, as before). Null when the program is on
  * neither list, or a word cannot be read, so its directory counts.
+ *
+ * A segment of bare `NAME=value` assignments (refusal 2 of 2026-11-13,
+ * `J=<clone>` on its own line) writes only its redirect targets: a
+ * substitution in a value is walked as its own segment.
  */
-function listedProgramPlaces(segment: string, dir: string, cwd: string, home: string): readonly (string | null)[] | null {
+function listedProgramPlaces(segment: string, dir: string, cwd: string, home: string): readonly ReachPlace[] | null {
   const marked = markSubstitutions(segment);
   const split = splitRedirections(marked);
   if (split === null) return null;
   const [program, ...args] = split.words;
-  if (program === undefined || program !== wordText(program)) return null;
+  if (program === undefined) {
+    if (rawWords(marked).length === 0) return null;
+    const targets = split.targets.map((raw) => resolveWord(raw, dir, home));
+    return targets.map((path): ReachPlace => (path === null ? { path: dir, file: false } : { path, file: true }));
+  }
+  if (program !== wordText(program)) return null;
   const writesNone = WRITES_NO_FILE.has(program) ? writesNoFile(program, args) : orcaGameWritesNoFile(program, args, dir, cwd);
   const named = writesNone ? { files: [], writesDir: false, parentsCount: false } : WRITES_NO_FILE.has(program) ? null : namedWrites(program, args);
   if (named === null) return null;
-  const places: (string | null)[] = named.writesDir ? [dir] : [];
+  const places: ReachPlace[] = named.writesDir ? [{ path: dir, file: false }] : [];
   // A variable may hold an option (`cp $OPTS a b` may be `cp -t src a b`).
   let unknown = !writesNone && !WRITES_NO_FILE.has(program) && args.some((raw) => hasExpansion(homeRest(raw) ?? raw));
   for (const raw of [...named.files, ...split.targets]) {
@@ -363,10 +385,10 @@ function listedProgramPlaces(segment: string, dir: string, cwd: string, home: st
       unknown = true;
       continue;
     }
-    places.push(path);
-    if (named.parentsCount && named.files.includes(raw)) for (const inner of [dir, cwd]) if (holds(path, inner)) places.push(inner);
+    places.push({ path, file: true });
+    if (named.parentsCount && named.files.includes(raw)) for (const inner of [dir, cwd]) if (holds(path, inner)) places.push({ path: inner, file: false });
   }
-  if (unknown) places.push((program === "rm" || program === "cp") && places.length > 0 ? null : dir);
+  if (unknown) places.push({ path: (program === "rm" || program === "cp") && places.length > 0 ? null : dir, file: false });
   return places;
 }
 
@@ -379,9 +401,20 @@ function listedProgramPlaces(segment: string, dir: string, cwd: string, home: st
  * branch the commit lands on. `cd -` goes to a directory the text does not name.
  */
 export function branchReachPlaces(command: string, cwd: string, home: string): readonly (string | null)[] {
-  const places: (string | null)[] = [];
-  const add = (place: string | null): void => {
-    if (!places.includes(place)) places.push(place);
+  return branchReachWrites(command, cwd, home).map((place) => place.path);
+}
+
+/**
+ * branchReachPlaces with each place tagged as a file or a directory
+ * (ReachPlace), once each. A path written both as a file and as a directory
+ * place is a directory place.
+ */
+export function branchReachWrites(command: string, cwd: string, home: string): readonly ReachPlace[] {
+  const places: ReachPlace[] = [];
+  const add = (path: string | null, file = false): void => {
+    const at = places.findIndex((place) => place.path === path);
+    if (at === -1) places.push({ path, file });
+    else if (!file) places[at] = { path, file: false };
   };
   for (const { segment, outer, dir } of locateCommandSegments(command, cwd, home, { dashUnknown: true })) {
     // `outer` reads each substitution as one inert word; for a tool whose safety hangs on its arguments that word may be `-delete`.
@@ -394,7 +427,7 @@ export function branchReachPlaces(command: string, cwd: string, home: string): r
     }
     const listed = git === null ? listedProgramPlaces(segment, base, resolve(cwd), home) : null;
     if (listed !== null) {
-      for (const place of listed) add(place);
+      for (const place of listed) add(place.path, place.file);
       continue;
     }
     add(base);
