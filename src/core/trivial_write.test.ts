@@ -116,5 +116,11 @@ test("trivialWriteTargets: links, cd and its kin, assignments, eval and the like
     "cp src/a.ts",
     "touch -r src/a.ts odd/a.md",
     "printf x >",
+    // printf -v assigns a variable (PATH here), and zsh expands =name from PATH.
+    "printf -v PATH odd:/usr/bin; cat > odd/x.md",
+    "printf -vPATH odd; cat > odd/x.md",
+    "printf -- x > odd/x.md",
+    "cat =ls > odd/x.md",
+    "printf x > =odd",
   ]) assert.equal(trivialWriteTargets(command), null, command);
 });

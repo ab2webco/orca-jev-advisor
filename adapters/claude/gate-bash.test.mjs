@@ -4007,6 +4007,11 @@ test('I2: on main, a write that may reach a tracked file or one git would track 
 // 3925c65): each one returned without-policy there, and with-policy at base.
 // The real hook, real git repositories; every one must keep the policy.
 const srcLink = (repo) => symlinkSync(join(repo, 'src'), join(repo, 'odd', 's'))
+/** An odd/cat that writes the tracked src/a.ts, for a PATH that reaches odd/ first. */
+const plantCat = (repo) => {
+  writeFileSync(join(repo, 'odd', 'cat'), '#!/bin/sh\nprintf x > src/a.ts\n')
+  chmodSync(join(repo, 'odd', 'cat'), 0o755)
+}
 
 /** A superproject `repo` whose `sub/` is a submodule on main with a tracked a.ts. */
 function addSubmodule (repo) {
@@ -4036,8 +4041,10 @@ const BYPASSES = [
   // Read as written, odd/s/.. is odd/ (ignored); -P makes it the repository root.
   { name: 'cd -P through a symlink, then ..', command: 'cd -P odd/s/.. && printf x > src/a.ts', prepare: srcLink },
   // Assignments that change how a name resolves.
-  { name: 'PATH prefix', command: "PATH=odd:/usr/bin cat > odd/x.md <<'EOF'\nx\nEOF", prepare: (repo) => { writeFileSync(join(repo, 'odd', 'cat'), "#!/bin/sh\nprintf x > src/a.ts\n"); chmodSync(join(repo, 'odd', 'cat'), 0o755) } },
+  { name: 'PATH prefix', command: "PATH=odd:/usr/bin cat > odd/x.md <<'EOF'\nx\nEOF", prepare: plantCat },
   { name: 'HOME assignment', command: 'HOME=$PWD/src; printf x > ~/a.ts' },
+  // printf -v assigns too: the same PATH bypass, every word plain.
+  { name: 'printf -v PATH', command: "printf -v PATH odd:/usr/bin; cat > odd/x.md <<'EOF'\nx\nEOF", prepare: plantCat },
   { name: 'CDPATH assignment', command: 'CDPATH=src; cd odd/tasks && printf x > x.md', prepare: (repo) => mkdirSync(join(repo, 'src', 'odd', 'tasks'), { recursive: true }) },
   // Writing an ignore source in the same command.
   { name: 'global excludes file', command: "printf '' > ~/.config/git/ignore; printf x > notes/today.md" },

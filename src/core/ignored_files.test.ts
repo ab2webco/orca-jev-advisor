@@ -132,6 +132,15 @@ test("verifyIgnoredTargets: an ignore source, a path in .git, the root or a path
   assert.equal(verify(fx, []), null);
 });
 
+test("verifyIgnoredTargets: .git/info/exclude reached through a symlink into the worktree is an ignore source", () => {
+  const fx = fixture();
+  writeFileSync(join(fx.repo, "odd", "exclude-rules"), "odd/\n");
+  rmSync(join(fx.repo, ".git", "info", "exclude"));
+  symlinkSync(join(fx.repo, "odd", "exclude-rules"), join(fx.repo, ".git", "info", "exclude"));
+  assert.equal(verify(fx, [file("odd/exclude-rules")]), null);
+  assert.deepEqual(verify(fx, [file("odd/tasks/x.md")]), { allIgnored: true, ignored: ["odd/tasks/x.md"] });
+});
+
 test("verifyIgnoredTargets: the global excludes file under the home's config dir is an ignore source even inside the repository", () => {
   const fx = fixture();
   const xdg = join(fx.repo, "odd", "xdg");

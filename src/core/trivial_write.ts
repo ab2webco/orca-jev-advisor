@@ -12,11 +12,13 @@
 //
 // Trivially safe means all of this holds:
 //   - Every segment (split on `;`, `&&`, `||`, `|` and newlines) runs one of
-//     PRINTERS, which write no file, or one of the named writers below, with
-//     only the options listed for it, or is only redirections.
+//     PRINTERS, which write no file (`printf` with no option: `-v` assigns),
+//     or one of the named writers below, with only the options listed for
+//     it, or is only redirections.
 //   - The program is a plain word: no path, no quoting, no `NAME=value`.
 //   - No word outside quotes holds `$`, a backtick, `\`, `~`, a glob or
-//     brace character, `#`, `!` or parentheses; double quotes hold no `$`,
+//     brace character, `#`, `!` or parentheses, or starts with `=` (zsh's
+//     `=name` is a path from PATH); double quotes hold no `$`,
 //     backtick or `\`; no quoted string spans lines. So there is no
 //     expansion, substitution, subshell, group, function or comment.
 //   - Redirections are `>`, `>>`, `>|` (optionally with an fd), `<`, a
@@ -83,7 +85,8 @@ function readWord(command: string, at: number): { readonly word: Word; readonly 
       continue;
     }
     if (c === " " || c === "\t" || c === "\n" || c === ";" || c === "&" || c === "|" || c === "<" || c === ">") break;
-    if (!PLAIN.test(c)) return null;
+    // zsh expands an unquoted word that starts with `=` to a path from PATH.
+    if (!PLAIN.test(c) || (c === "=" && i === at)) return null;
     text += c;
     i++;
   }
@@ -278,6 +281,8 @@ function segmentTargets(words: readonly Word[], writes: readonly Word[]): readon
   const [program, ...rest] = words;
   if (program === undefined) return targets;
   if (program.quoted) return null;
+  // `printf -v NAME` assigns a variable (PATH, HOME, ...), like `NAME=value`.
+  if (program.text === "printf" && (rest[0]?.text ?? "").startsWith("-")) return null;
   if (PRINTERS.has(program.text)) return targets;
   const options = WRITERS.get(program.text);
   if (options === undefined) return null;

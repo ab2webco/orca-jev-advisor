@@ -16,8 +16,9 @@
 //   - an existing target is a regular file with one link (a hard link to a
 //     tracked file writes it), or for a directory target a real directory;
 //   - no target is an ignore source: a `.gitignore`, anything in `.git`,
-//     the configured core.excludesFile or the default global excludes file
-//     (emptying one would make a path git now ignores trackable);
+//     the file .git/info/exclude resolves to, the configured
+//     core.excludesFile or the default global excludes file (emptying one
+//     would make a path git now ignores trackable);
 //   - `git check-ignore` reports it ignored and `git ls-files` finds nothing
 //     tracked at it or under it (a tracked file can sit in an ignored
 //     directory, `git add -f`).
@@ -99,16 +100,16 @@ function canonical(path: string): string {
   }
 }
 
-/** The repository root `dir` sits in, through git; null outside one, inside a submodule, or when git cannot say. */
-function repositoryRoot(dir: string, git: GitRunner): string | null {
-  const out = callGit(git, ["rev-parse", "--show-toplevel", "--show-superproject-working-tree"], dir);
+/** The repository root `dir` sits in and its info/exclude file, through git; null outside one, inside a submodule, or when git cannot say. */
+function repositoryRoot(dir: string, git: GitRunner): { readonly root: string; readonly infoExclude: string } | null {
+  const out = callGit(git, ["rev-parse", "--show-toplevel", "--path-format=absolute", "--git-path", "info/exclude", "--show-superproject-working-tree"], dir);
   if (out === null || out.status !== 0) return null;
   const lines = out.stdout.split("\n").filter((line) => line.length > 0);
-  // A second line is the superproject: `dir` is in a submodule.
-  if (lines.length !== 1) return null;
-  const root = lines[0] ?? "";
-  if (!isAbsolute(root) || /\0/.test(root)) return null;
-  return root;
+  // A third line is the superproject: `dir` is in a submodule.
+  if (lines.length !== 2) return null;
+  const [root, infoExclude] = lines as [string, string];
+  if (!isAbsolute(root) || !isAbsolute(infoExclude) || /\0/.test(root) || /\0/.test(infoExclude)) return null;
+  return { root, infoExclude };
 }
 
 /** The ignore files git reads beyond the repository: core.excludesFile when set, and the default global excludes file either way. Null when git cannot say. */
@@ -171,8 +172,10 @@ export function verifyIgnoredTargets(targets: readonly TrivialTarget[], cwd: str
   } catch {
     return null;
   }
-  const root = repositoryRoot(dir, git);
-  if (root === null || relative(root, dir).startsWith("..")) return null;
+  const repository = repositoryRoot(dir, git);
+  if (repository === null) return null;
+  const { root, infoExclude } = repository;
+  if (relative(root, dir).startsWith("..")) return null;
   const perTarget: { readonly rel: string; readonly paths: readonly string[] }[] = [];
   for (const target of targets) {
     const paths = checkedPaths(target, dir, root);
@@ -181,7 +184,8 @@ export function verifyIgnoredTargets(targets: readonly TrivialTarget[], cwd: str
   }
   const excludes = excludesFiles(root, home, git);
   if (excludes === null) return null;
-  const sources = excludes.map(canonical);
+  // info/exclude is in .git, but a symlink there can make a worktree file one.
+  const sources = [...excludes, infoExclude].map(canonical);
   for (const { paths } of perTarget) {
     for (const rel of paths) {
       const written = canonical(join(root, rel));
