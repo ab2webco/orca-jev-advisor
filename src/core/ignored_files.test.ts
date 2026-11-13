@@ -132,6 +132,18 @@ test("verifyIgnoredTargets: an ignore source, a path in .git, the root or a path
   assert.equal(verify(fx, []), null);
 });
 
+test("verifyIgnoredTargets: a non-ASCII target fails closed (APFS folds case and normalization, git icase folds ASCII only)", () => {
+  const fx = fixture();
+  fixtureGit(["config", "core.ignorecase", "true"], fx.repo);
+  fixtureGit(["config", "core.precomposeunicode", "true"], fx.repo);
+  writeFileSync(join(fx.repo, "odd", "\u00d1.md"), "n");
+  fixtureGit(["add", "-f", "odd/\u00d1.md"], fx.repo);
+  assert.equal(verify(fx, [file("odd/\u00f1.md")]), null);
+  assert.equal(verify(fx, [file("odd/e\u0301.md")]), null);
+  assert.equal(verify(fx, [{ word: "odd/\u00fcber/x", kind: "dirs" }]), null);
+  assert.deepEqual(verify(fx, [file("odd/plain.md")]), { allIgnored: true, ignored: ["odd/plain.md"] });
+});
+
 test("verifyIgnoredTargets: .git/info/exclude reached through a symlink into the worktree is an ignore source", () => {
   const fx = fixture();
   writeFileSync(join(fx.repo, "odd", "exclude-rules"), "odd/\n");

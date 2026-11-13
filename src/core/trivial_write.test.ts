@@ -122,5 +122,11 @@ test("trivialWriteTargets: links, cd and its kin, assignments, eval and the like
     "printf -- x > odd/x.md",
     "cat =ls > odd/x.md",
     "printf x > =odd",
+    // `>&word` writes the file `word` unless it is only digits or `-`.
+    "printf x >&2x.ts; printf y > odd/tasks/x.md",
+    "printf x 1>&404.html",
+    "echo x >&2fa.ts && echo y >> odd/notes.md",
+    "printf x >&-foo",
+    "cat <&3x",
   ]) assert.equal(trivialWriteTargets(command), null, command);
 });

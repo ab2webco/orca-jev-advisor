@@ -4013,6 +4013,27 @@ const plantCat = (repo) => {
   chmodSync(join(repo, 'odd', 'cat'), 0o755)
 }
 
+/** A prepare that commits a tracked file at `name`. */
+const trackFile = (name) => (repo) => {
+  writeFileSync(join(repo, name), 'tracked\n')
+  git(['add', name], repo)
+  git(['commit', '-q', '-m', name], repo)
+}
+
+/** Force-adds and commits `rel` inside an ignored directory. */
+function trackForced (repo, rel) {
+  writeFileSync(join(repo, rel), 'tracked\n')
+  git(['add', '-f', rel], repo)
+  git(['commit', '-q', '-m', rel], repo)
+}
+
+/** A prepare for APFS's folding: core.ignorecase and core.precomposeunicode on, then `then(repo)`. */
+const unicodeRepo = (then) => (repo) => {
+  git(['config', 'core.ignorecase', 'true'], repo)
+  git(['config', 'core.precomposeunicode', 'true'], repo)
+  then(repo)
+}
+
 /** A superproject `repo` whose `sub/` is a submodule on main with a tracked a.ts. */
 function addSubmodule (repo) {
   const origin = repoNamedBranch('main')
@@ -4060,6 +4081,25 @@ const BYPASSES = [
     name: 'nested repository in an ignored directory',
     command: 'printf x > odd/inner/a.ts',
     prepare: (repo) => { const inner = join(repo, 'odd', 'inner'); initRepo(inner); writeFileSync(join(inner, 'a.ts'), 'a\n'); git(['add', 'a.ts'], inner); git(['commit', '-q', '-m', 'a'], inner); git(['branch', '-M', 'main'], inner) },
+  },
+  // `>&word` and `n>&word` write the file `word` unless it is only an fd number or `-`.
+  { name: '>& with a word that starts with a digit', command: 'printf x >&2x.ts; printf y > odd/tasks/x.md', prepare: trackFile('2x.ts') },
+  { name: '1>& with a word that starts with digits', command: 'printf x 1>&404.html; printf y > odd/tasks/x.md', prepare: trackFile('404.html') },
+  { name: '>& with a word, then &&', command: 'echo x >&2fa.ts && echo y >> odd/notes.md', prepare: trackFile('2fa.ts') },
+  { name: '>& with a word that starts with -', command: 'printf x >&-foo; printf y > odd/tasks/x.md' },
+  // APFS folds case and Unicode normalization; git's icase folds ASCII only.
+  { name: 'non-ASCII case alias of a tracked file', command: "printf x > 'odd/ñ.md'", prepare: unicodeRepo((repo) => trackForced(repo, 'odd/Ñ.md')) },
+  { name: 'NFD spelling of an NFC tracked file', command: `printf x > 'odd/${'e\u0301'}.md'`, prepare: unicodeRepo((repo) => trackForced(repo, 'odd/\u00e9.md')) },
+  {
+    name: 'non-ASCII case alias of a re-included tracked file',
+    command: "printf x > 'docs/über.md'",
+    prepare: unicodeRepo((repo) => {
+      mkdirSync(join(repo, 'docs'), { recursive: true })
+      writeFileSync(join(repo, '.gitignore'), 'tmp/\ndocs/*\n!docs/Über.md\n')
+      writeFileSync(join(repo, 'docs', 'Über.md'), 'u\n')
+      git(['add', '.gitignore', 'docs/Über.md'], repo)
+      git(['commit', '-q', '-m', 'docs'], repo)
+    }),
   },
   // An unquoted heredoc runs its command substitutions.
   { name: 'unquoted heredoc substitution', command: 'cat > odd/x.md <<EOF\n$(printf x > src/a.ts)\nEOF' },

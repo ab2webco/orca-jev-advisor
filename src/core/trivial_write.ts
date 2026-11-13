@@ -22,7 +22,8 @@
 //     backtick or `\`; no quoted string spans lines. So there is no
 //     expansion, substitution, subshell, group, function or comment.
 //   - Redirections are `>`, `>>`, `>|` (optionally with an fd), `<`, a
-//     heredoc, a here-string, or an fd duplication (`2>&1`, `>&2`, `>&-`).
+//     heredoc, a here-string, or an fd duplication whose whole word is
+//     digits or `-` (`2>&1`, `>&2`, `>&-`; `>&2x.ts` writes 2x.ts).
 //     `&>`, `<>`, `>&file` and process substitution are not trivial.
 //   - An unquoted heredoc body holds no `$`, backtick or `\` (it would
 //     expand); a quoted one is data and is not read at all.
@@ -168,12 +169,8 @@ function readRedirection(command: string, at: number, tokens: Token[], pending: 
   let i = at + 1;
   if (c === ">") {
     if (command[i] === "(") return null;
-    if (command[i] === "&") {
-      // `>&2`, `>&-`: an fd duplication, no file. `>& file` writes the file.
-      const target = command.slice(i + 1).match(/^([0-9]+|-)/);
-      if (target === null) return null;
-      return i + 1 + (target[1] ?? "").length;
-    }
+    // `>&2`, `>&-`: an fd duplication, no file. Any other word (`>&2x.ts`, `>&-foo`, `>& file`) is a file bash and zsh write.
+    if (command[i] === "&") return fdDuplication(command, i + 1);
     if (command[i] === ">" || command[i] === "|") i++;
     const start = skipBlanks(command, i);
     const read = readWord(command, start);
@@ -182,11 +179,7 @@ function readRedirection(command: string, at: number, tokens: Token[], pending: 
     return read.end;
   }
   if (command[i] === "(" || command[i] === ">") return null;
-  if (command[i] === "&") {
-    const source = command.slice(i + 1).match(/^([0-9]+|-)/);
-    if (source === null) return null;
-    return i + 1 + (source[1] ?? "").length;
-  }
+  if (command[i] === "&") return fdDuplication(command, i + 1);
   if (command[i] === "<") {
     i++;
     if (command[i] === "<") {
@@ -207,6 +200,13 @@ function readRedirection(command: string, at: number, tokens: Token[], pending: 
   const read = readWord(command, skipBlanks(command, i));
   if (read === null) return null;
   tokens.push({ type: "read" });
+  return read.end;
+}
+
+/** The index after the word of an fd duplication at `at`; null unless the whole word is digits or exactly `-`. */
+function fdDuplication(command: string, at: number): number | null {
+  const read = readWord(command, at);
+  if (read === null || read.word.quoted || !/^([0-9]+|-)$/.test(read.word.text)) return null;
   return read.end;
 }
 

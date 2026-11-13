@@ -9,7 +9,8 @@
 //   - its directory resolves, through git, to one repository root that is
 //     not a submodule;
 //   - each target, read from that directory, lies inside the root, with no
-//     `..` and no `.git` component;
+//     `..` and no `.git` component, and is all ASCII (APFS treats `ñ`/`Ñ`
+//     and NFC/NFD spellings as one file; git's icase folds ASCII only);
 //   - no existing component from the root to the target is a symlink, and
 //     no directory on the way holds a `.git` (a submodule or a nested
 //     repository: another repository's main);
@@ -132,6 +133,8 @@ function checkedPaths(target: TrivialTarget, cwd: string, root: string): readonl
   const path = isAbsolute(target.word) ? resolve(target.word) : resolve(cwd, target.word);
   const rel = relative(root, path);
   if (rel.length === 0 || rel.startsWith("..") || isAbsolute(rel)) return null;
+  // APFS folds case and Unicode normalization; git's icase and core.ignorecase fold ASCII only, so `odd/ñ.md` may be a tracked `odd/Ñ.md`.
+  if (/[^\x00-\x7f]/.test(rel)) return null;
   const parts = rel.split(sep);
   if (parts.some((part) => part.toLowerCase() === ".git") || (parts.at(-1) ?? "").toLowerCase() === ".gitignore") return null;
   const created: string[] = [];
