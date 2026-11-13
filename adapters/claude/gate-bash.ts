@@ -95,7 +95,8 @@ import { IDENTITY_NAMES, createJevPseudonyms } from '../../src/core/jev_pseudony
 import type { JevNames } from '../../src/core/jev_pseudonyms.ts'
 import { parseGitConfigRemotes } from '../../src/core/push_remote.ts'
 import { SHARED_BRANCH_NAMES, classifyClientReach } from '../../src/core/client_reach.ts'
-import { branchReachPlaces, namesProtectedBranch } from '../../src/core/branch_reach.ts'
+import { branchReachWrites, namesProtectedBranch } from '../../src/core/branch_reach.ts'
+import { verifiedIgnoredFiles } from '../../src/core/ignored_files.ts'
 import type { ReachRemote } from '../../src/core/client_reach.ts'
 import { QUEUE_MODE_MIRROR_FILE, parseQueueMode } from '../../src/core/queue_mode.ts'
 import { HUMAN_QUEUE_FILE, buildAskedEntry, buildQueuedItem, humanQueueKey, isQueuedInSession, parseHumanQueue, serializeHumanQueueEntry } from '../../src/core/human_queue.ts'
@@ -972,6 +973,15 @@ const GIT_TIMEOUT_MS = 1500
 function gitOutput(args: readonly string[], cwd: string): string | null {
   try {
     return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: GIT_TIMEOUT_MS, killSignal: 'SIGTERM' })
+  } catch {
+    return null
+  }
+}
+
+/** gitOutput with `input` on stdin (`git check-ignore --stdin`); null when git fails, exits non-zero or overruns. */
+function gitOutputWithInput(args: readonly string[], cwd: string, input: string): string | null {
+  try {
+    return execFileSync('git', args, { cwd, input, encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' }, timeout: GIT_TIMEOUT_MS, killSignal: 'SIGTERM' })
   } catch {
     return null
   }
@@ -2475,9 +2485,24 @@ async function main(): Promise<void> {
   // (mentionOnly): `echo x > notes.md` on main still writes main.
   const pushes = !/\bpush\b/.test(inspected) ? [] : pushTargets(inspected, cwd, homedir(), (push, dir) => resolvePushRemoteIsLocal({ command: push, cwd: dir }), (dir, head) => resolveImplicitPushDestination({ cwd: dir, head }))
   const namesProtected = namesProtectedBranch(inspected, SHARED_BRANCH_NAMES)
-  const reachBranches = branchReachPlaces(inspected, cwd, homedir()).flatMap((place): readonly (string | null)[] => (place === null ? [null] : resolveRepoRootForCwd(place) === null ? [] : [resolveBranchForCwd(place)]))
+  //
+  // odd/tasks/gate-ignored-files-not-main.md T2: a file the command writes
+  // (a redirect target, a file a listed program names) that git ignores or
+  // excludes is in no commit, so it reaches no branch. git decides that
+  // (src/core/ignored_files.ts), never the command's text, and only when it
+  // can change the outcome: a protected-branch policy is in scope, nothing
+  // names a protected branch, and every other place and push already stays
+  // off protected branches.
+  const commandPolicies = filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID)
+  const reachesProtected = (branch: string | null): boolean => branch === null || SHARED_BRANCH_NAMES.has(branch.toLowerCase())
+  const located = branchReachWrites(inspected, cwd, homedir()).flatMap((place) => (place.path === null ? [{ ...place, branch: null }] : resolveRepoRootForCwd(place.path) === null ? [] : [{ ...place, branch: resolveBranchForCwd(place.path) }]))
+  const ignorable = located.flatMap((place) => (place.file && place.path !== null && reachesProtected(place.branch) ? [place.path] : []))
+  const othersReach = namesProtected || pushes.some((push) => reachesProtected(push.branch)) || located.some((place) => reachesProtected(place.branch) && (!place.file || place.path === null))
+  const hasBranchPolicy = filterPoliciesForBranchReach(commandPolicies, SEED_SCOPE_BY_ID, { branches: [], namesProtected: false, protectedBranches: SHARED_BRANCH_NAMES }).length < commandPolicies.length
+  const ignoredWrites = ignorable.length === 0 || othersReach || !hasBranchPolicy ? new Set<string>() : verifiedIgnoredFiles(ignorable, resolveRepoRootForCwd, gitOutputWithInput)
+  const reachBranches = located.filter((place) => place.path === null || !place.file || !ignoredWrites.has(place.path)).map((place) => place.branch)
   const scopedPolicies = filterPoliciesForBranchReach(
-    filterPoliciesForCommandScope(filterPoliciesForDestination(policiesMirror, matchedDestination?.id ?? null), SEED_SCOPE_BY_ID),
+    commandPolicies,
     SEED_SCOPE_BY_ID,
     { branches: [...reachBranches, ...pushes.map((push) => push.branch)], namesProtected, protectedBranches: SHARED_BRANCH_NAMES },
   )

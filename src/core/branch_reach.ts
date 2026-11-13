@@ -385,7 +385,8 @@ function listedProgramPlaces(segment: string, dir: string, cwd: string, home: st
       unknown = true;
       continue;
     }
-    places.push({ path, file: true });
+    // `odd/link/../x` is read by the kernel through the link, not as written; resolve() reads it as written.
+    places.push({ path, file: !wordText(homeRest(raw) ?? raw).split("/").includes("..") });
     if (named.parentsCount && named.files.includes(raw)) for (const inner of [dir, cwd]) if (holds(path, inner)) places.push({ path: inner, file: false });
   }
   if (unknown) places.push({ path: (program === "rm" || program === "cp") && places.length > 0 ? null : dir, file: false });

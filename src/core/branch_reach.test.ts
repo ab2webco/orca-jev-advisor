@@ -442,6 +442,11 @@ test("I1: a program that may write anything where it runs is a directory place, 
   assert.deepEqual(branchReachWrites("echo x > $OUT", REPO, HOME), [dir(REPO)]);
 });
 
+test("I1: a file named through `..` is a directory place: the kernel reads `..` after a symlink, not as written", () => {
+  assert.deepEqual(branchReachWrites("echo x > odd/link/../a.ts", REPO, HOME), [dir(`${REPO}/odd/a.ts`)]);
+  assert.deepEqual(branchReachWrites("echo x > ../repo/odd/a.md", REPO, HOME), [dir(`${REPO}/odd/a.md`)]);
+});
+
 test("I1: a place that is both a file and a directory is a directory", () => {
   assert.deepEqual(branchReachWrites("echo x > odd/y && cd odd/y && python3 x.py", REPO, HOME), [dir(`${REPO}/odd/y`)]);
   assert.deepEqual(branchReachWrites("python3 x.py; echo x > .", REPO, HOME), [dir(REPO)]);

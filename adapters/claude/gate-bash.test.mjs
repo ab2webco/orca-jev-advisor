@@ -3872,6 +3872,113 @@ test('G1: on main, a command that may still write the checkout is judged against
   assert.deepEqual(judged, Object.fromEntries(ORCA_OR_PUSH_INTO_THE_CHECKOUT.map((command) => [command, 'with-policy'])))
 })
 
+// odd/tasks/gate-ignored-files-not-main.md T2: a file git ignores or excludes
+// can never reach main through a commit or a push, so a shell write whose
+// every target is one is not judged against never_write_to_main. The gate
+// asks git, never the command text. On 2026-11-13 a write to an excluded
+// odd/tasks/*.md on main was refused under the policy.
+
+/** A repository on `branch` with a tracked src/a.ts, `odd/` in .git/info/exclude, `tmp/` in a tracked .gitignore, `notes/` in the global excludes file of `home`, and a force-added odd/kept.md. */
+function repoWithIgnoredFiles (branch, home) {
+  const repo = repoNamedBranch(branch)
+  mkdirSync(join(repo, 'src'), { recursive: true })
+  mkdirSync(join(repo, 'odd', 'tasks'), { recursive: true })
+  writeFileSync(join(repo, 'src', 'a.ts'), 'a\n')
+  writeFileSync(join(repo, '.gitignore'), 'tmp/\n')
+  writeFileSync(join(repo, 'odd', 'kept.md'), 'kept\n')
+  writeFileSync(join(repo, 'odd', 'tasks', 'x.md'), 'x\n')
+  writeFileSync(join(repo, '.git', 'info', 'exclude'), 'odd/\n')
+  git(['add', 'src/a.ts', '.gitignore'], repo)
+  git(['add', '-f', 'odd/kept.md'], repo)
+  git(['commit', '-q', '-m', 'files'], repo)
+  // The hook's git reads the global excludes file from HOME (XDG default).
+  mkdirSync(join(home, '.config', 'git'), { recursive: true })
+  writeFileSync(join(home, '.config', 'git', 'ignore'), 'notes/\n')
+  return repo
+}
+
+/** judgedPolicySet on a repoWithIgnoredFiles; `prepare` may change the repository first. */
+function judgedWithIgnoredFiles (command, branch, prepare = () => {}) {
+  const home = makeHome()
+  const repo = repoWithIgnoredFiles(branch, home)
+  prepare(repo)
+  return judgedPolicySet(home, command, repo)
+}
+
+const IGNORED_WRITES = [
+  "printf 'x' > odd/tasks/x.md",
+  "cat > odd/tasks/ios-testflight-release.md <<'EOF'\n- [x] T5 fast-forward local main\nEOF",
+  "tee odd/tasks/new.md <<'EOF'\nnotes\nEOF",
+  'echo x >> tmp/handoff.md',
+  'echo x > notes/today.md',
+  'mkdir -p odd/qa/new && touch odd/qa/new/a.md',
+  'cp src/a.ts odd/a.ts.copy',
+  'mv odd/tasks/x.md odd/tasks/y.md',
+  `printf 'x' > ${'$'}HOME/outside.md && printf 'y' > odd/tasks/x.md`,
+]
+
+const STILL_JUDGED = [
+  // A tracked file.
+  "printf 'x' > src/a.ts",
+  // A new file git would track.
+  "printf 'x' > src/new.ts",
+  // One ignored target and one tracked.
+  "printf 'a' > odd/tasks/x.md && printf 'b' > src/a.ts",
+  // A command that only claims a path is ignored.
+  "# odd/tasks/x.md is git-ignored, so nothing here is tracked\nprintf 'b' > src/a.ts",
+  "echo 'src/a.ts is ignored' && printf 'b' > src/a.ts",
+  // Moving an ignored file onto a tracked path.
+  'mv odd/tasks/x.md src/a.ts',
+  // A tracked file inside an ignored directory, and a delete that would take it.
+  "printf 'x' > odd/kept.md",
+  'rm -rf odd',
+  // The ignore rules themselves: .gitignore is tracked, .git is never a file git ignores.
+  "echo 'src/' >> .gitignore",
+  "echo 'src/' >> .git/info/exclude",
+  // A program that may write anything where it runs: Jev is still asked.
+  "python3 - <<'EOF'\nopen('odd/tasks/x.md','w').write('x')\nEOF",
+  "sed -i '' 's/x/y/' odd/tasks/x.md",
+]
+
+test('I2: on main, a write whose every target git ignores or excludes is not judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(IGNORED_WRITES.map((command) => [command, judgedWithIgnoredFiles(command, 'main')]))
+  assert.deepEqual(judged, Object.fromEntries(IGNORED_WRITES.map((command) => [command, 'without-policy'])))
+})
+
+test('I2: on main, a write that may reach a tracked file or one git would track is still judged against never_write_to_main', () => {
+  const judged = Object.fromEntries(STILL_JUDGED.map((command) => [command, judgedWithIgnoredFiles(command, 'main')]))
+  assert.deepEqual(judged, Object.fromEntries(STILL_JUDGED.map((command) => [command, 'with-policy'])))
+})
+
+test('I2: on main, an ignored path reached through a symlink is judged by where the write lands', () => {
+  const toTracked = (repo) => symlinkSync(join(repo, 'src', 'a.ts'), join(repo, 'odd', 'link.ts'))
+  const dangling = (repo) => symlinkSync(join(repo, 'src', 'gone.ts'), join(repo, 'odd', 'dangling.ts'))
+  const dirToSrc = (repo) => symlinkSync(join(repo, 'src'), join(repo, 'odd', 'srclink'))
+  const toIgnored = (repo) => symlinkSync(join(repo, 'odd', 'tasks', 'x.md'), join(repo, 'tmp-link.md'))
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > odd/link.ts", 'main', toTracked), 'with-policy')
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > odd/dangling.ts", 'main', dangling), 'with-policy')
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > odd/srclink/new.ts", 'main', dirToSrc), 'with-policy')
+  // A tracked-looking name whose write lands in an excluded file. The link
+  // itself is untracked and not ignored, but the shell writes its target.
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > tmp-link.md", 'main', toIgnored), 'without-policy')
+})
+
+test('I2: on a working branch, nothing here is judged against never_write_to_main', () => {
+  const commands = [...IGNORED_WRITES, ...STILL_JUDGED]
+  const judged = Object.fromEntries(commands.map((command) => [command, judgedWithIgnoredFiles(command, 'feat/x') !== 'with-policy']))
+  assert.deepEqual(judged, Object.fromEntries(commands.map((command) => [command, true])))
+})
+
+// Detached HEAD: the branch is unknown, so every place keeps the policy as
+// before (the checkout may sit on main's commit and be pushed as HEAD:main),
+// except a file git ignores, which belongs to no commit on any branch.
+test('I2: on a detached HEAD, an ignored target is not judged against never_write_to_main and a tracked one still is', () => {
+  const detach = (repo) => git(['checkout', '-q', '--detach'], repo)
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > odd/tasks/x.md", 'main', detach), 'without-policy')
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > src/a.ts", 'main', detach), 'with-policy')
+  assert.equal(judgedWithIgnoredFiles("printf 'x' > src/new.ts", 'main', detach), 'with-policy')
+})
+
 // ---------------------------------------------------------------------------
 // 0.6.28 T2: a command whose only effect is inside a temp root is allowed
 // locally (stopReason `contained`), after the local deny rules and before
