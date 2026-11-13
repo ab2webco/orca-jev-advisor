@@ -22,11 +22,11 @@ The owner: anything that really writes to main (tracked files, new files git wou
 - Not included: `sed -i` (GNU and BSD sed read `-i ''` differently, so the written files cannot be known from the text), interpreter code (`python3 -`, `node -e`), and `cd $VAR` after a literal assignment. Those keep asking Jev, now with the verified facts.
 
 ## Checklist
-- [ ] T1 RED/GREEN: tagged places; bare assignment writes nothing.
-- [ ] T2 RED/GREEN: gate-bash integration on real repositories (excluded file allowed; tracked, new non-ignored, mixed, claim-only still judged; feature branch unchanged; detached HEAD).
-- [ ] T3 RED/GREEN: violation question wording; facts sentence in the context.
-- [ ] T4 RED/GREEN: seed v7 text, digest re-pinned, offered as a differing row.
-- [ ] `npm run typecheck`, `npm test`.
+- [x] T1 RED: `branchReachWrites` missing; `J=/tmp/x` gave `["/work/repo"]`, `odd/link/../a.ts` was a file place. GREEN: `branch_reach.test.ts` 43/43.
+- [x] T2 RED: every ignored write on main judged `with-policy`, detached HEAD too. GREEN: `gate-bash.test.mjs` I2 5/5 (excluded, `.gitignore` and global-excludes targets allowed; tracked, new non-ignored, mixed, claim-only, `mv` onto tracked, tracked file in ignored dir, `rm -rf` of it, `.gitignore`/`.git/info/exclude` themselves, python3 and `sed -i ''`, symlinks to tracked and dangling still judged; feature branch unchanged; detached HEAD).
+- [x] T3 RED: wording and rules-version tests failed; the still-judged commands naming an ignored path missed the facts sentence in the key. GREEN: `decisions.test.ts`, `ignored_files.test.ts`, I2.
+- [x] T4 RED: seed v6 failed the v7 tests and the digest pin. GREEN: `policy_seed.test.ts` 27/27.
+- [x] `npm run typecheck` passes; `npm test` passes (see the PR).
 
 ## Acceptance criteria
 - On main, a shell write whose every target is ignored or excluded is not judged against `never_write_to_main`.
