@@ -370,3 +370,64 @@ export function subagentShareTrigger(subagentShare: number | null): SubagentShar
   if (subagentShare === null) return null;
   return { subagentSharePercent: subagentShare * 100, overThreshold: subagentShare > SUBAGENT_SHARE_THRESHOLD };
 }
+
+// ---------------------------------------------------------------------------
+// JEVADV-109: main steps that re-read more than 200k, per day
+// ---------------------------------------------------------------------------
+
+/** A main step re-reading more than this many cached tokens is a long step (the context steward's settled tier opens here). */
+export const LONG_STEP_REREAD_TOKENS = 200_000;
+
+export interface LongStepDay {
+  /** The local calendar day, `YYYY-MM-DD`. */
+  readonly day: string;
+  /** Main steps that reported their cache read that day. */
+  readonly steps: number;
+  /** Of those, the ones that re-read more than LONG_STEP_REREAD_TOKENS. */
+  readonly above: number;
+  /** above / steps; null on a day with no step. */
+  readonly share: number | null;
+  /** Cache read on the long steps, in tokens. */
+  readonly rereadAbove: number;
+  /** What the long steps would have saved held at LONG_STEP_REREAD_TOKENS each (the ticket's upper bound). */
+  readonly excessAbove: number;
+}
+
+function localDay(ms: number, offsetMinutes: number): string {
+  return new Date(ms + offsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+/**
+ * The share of main steps whose cache read passed LONG_STEP_REREAD_TOKENS,
+ * for each of the `days` calendar days ending today (oldest first, today
+ * included, a day with no step included as zero). Days are local to
+ * `offsetMinutes` east of UTC. A step without a cache read is not counted:
+ * it is no step "under 200k" either.
+ */
+export function longStepsByDay(records: readonly TurnUsageRecord[], nowMs: number, days: number, offsetMinutes: number): readonly LongStepDay[] {
+  const byDay = new Map<string, { steps: number; above: number; rereadAbove: number; excessAbove: number }>();
+  const order: string[] = [];
+  for (let back = days - 1; back >= 0; back -= 1) {
+    const day = localDay(nowMs - back * 86_400_000, offsetMinutes);
+    if (byDay.has(day)) continue;
+    byDay.set(day, { steps: 0, above: 0, rereadAbove: 0, excessAbove: 0 });
+    order.push(day);
+  }
+  for (const record of records) {
+    if (record.agent !== "main" || record.cacheRead === null) continue;
+    const atMs = Date.parse(record.at);
+    if (Number.isNaN(atMs) || atMs > nowMs) continue;
+    const bucket = byDay.get(localDay(atMs, offsetMinutes));
+    if (bucket === undefined) continue;
+    bucket.steps += 1;
+    if (record.cacheRead > LONG_STEP_REREAD_TOKENS) {
+      bucket.above += 1;
+      bucket.rereadAbove += record.cacheRead;
+      bucket.excessAbove += record.cacheRead - LONG_STEP_REREAD_TOKENS;
+    }
+  }
+  return order.map((day) => {
+    const bucket = byDay.get(day) as { steps: number; above: number; rereadAbove: number; excessAbove: number };
+    return { day, ...bucket, share: bucket.steps === 0 ? null : bucket.above / bucket.steps };
+  });
+}

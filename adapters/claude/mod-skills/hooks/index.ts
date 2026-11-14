@@ -181,8 +181,8 @@ import { decideSubagent, subagentStepEffort } from '../../../../src/core/model_r
 import type { SubagentDecision } from '../../../../src/core/model_router_subagent.ts'
 import { isPersonPromptOrigin } from '../../../../src/core/model_router_origin.ts'
 import type { MemoryShadowState, RouterCacheState, RouterPromptOrigin, RouterSessionStats, RouterSticky, StewardColdState, StewardState } from '../types/index.d.ts'
-import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, withStewardPayment, preColdInstructions, softTierFires, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
-import type { PreColdRecordFields, StewardActivity, StewardDecision, StewardJudgment, StewardMode, StewardNotApplied, StewardTier } from '../../../../src/core/context_steward.ts'
+import { buildStewardQuestions, buildStewardState, collectStewardFacts, decideSteward, interpretSteward, withStewardPayment, preColdInstructions, settledBoundary, settledInstructions, softTierFires, stewardClearHint, stewardDecisionFileName, stewardDecisionRecord, stewardGate, stewardInstructions, stewardStatusPart, summarizeStewardActivity } from '../../../../src/core/context_steward.ts'
+import type { PreColdRecordFields, SettledHold, StewardActivity, StewardDecision, StewardJudgment, StewardMode, StewardNotApplied, StewardTier } from '../../../../src/core/context_steward.ts'
 import { stewardFromSettings } from '../../../../src/core/model_router_mode.ts'
 import { PRE_COLD_MAX_WAKES, PRE_COLD_TTL_MS, decidePreCold, engineIdleCompactMinTokens, inEngineZone, isEngineIdleCompaction, preColdCompactCost, preColdEarliestMs, preColdMode } from '../../../../src/core/steward_pre_cold.ts'
 import type { PreColdJudgment } from '../../../../src/core/steward_pre_cold.ts'
@@ -2158,6 +2158,8 @@ interface StewardPlan {
   readonly wouldFire: StewardTier | null
   /** 0.6.22 T1 (JEVADV-97): the verdict's top-two probability gap; absent when Jev gave none. */
   readonly margin?: number
+  /** JEVADV-109: at or above 200k, what kept the turn from a settled boundary (null: settled); absent below. */
+  readonly settledHold?: SettledHold | null
 }
 
 /**
@@ -2266,7 +2268,9 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
     const { jev, payment } = await askStewardJudgment($, options, messages, contextTokens, turnsSinceCompaction)
     await rememberStewardJudgment($, jev, state.personTurns)
     const softActive = effectiveMode(moduleStewardState, switchMode(settings.softMode === 'active')) === 'active'
-    const decision = withStewardPayment(decideSteward({ jev, hardLimit: gate.hardLimit, softLimit: gate.softLimit, softActive }), payment)
+    // JEVADV-109: above 200k the turn's own shape, not Jev's verdict, says whether compacting now is safe.
+    const boundary = gate.settledLimit ? settledBoundary(messages) : null
+    const decision = withStewardPayment(decideSteward({ jev, hardLimit: gate.hardLimit, softLimit: gate.softLimit, softActive, settledLimit: gate.settledLimit, settled: boundary?.settled === true }), payment)
     // The soft tier ships measured: while its switch is on measure, a turn it
     // would have compacted is decided as before and logged as `wouldFire`.
     const wouldFire: StewardTier | null = !softActive && !decision.compact && softTierFires({ jev, softLimit: gate.softLimit }) ? 'soft-400k' : null
@@ -2276,7 +2280,7 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       project: baseName(await $.session.root()),
       contextBefore: contextTokens,
       decision,
-      instructions: decision.compact ? stewardInstructions(collectStewardFacts(messages)) : '',
+      instructions: !decision.compact ? '' : decision.decision === 'settled-limit' ? settledInstructions(collectStewardFacts(messages)) : stewardInstructions(collectStewardFacts(messages)),
       personTurns: state.personTurns,
       locale: await resolveLocale($),
       verdict: jev?.verdict ?? null,
@@ -2285,6 +2289,7 @@ async function stewardAfterTurn($: EngineInterface, options: PluginOptions, host
       currentModel: models.currentModel,
       wouldFire,
       ...(jev?.margin === undefined ? {} : { margin: jev.margin }),
+      ...(boundary === null ? {} : { settledHold: boundary.settled ? null : boundary.hold }),
     }
     if (mode === 'active' && decision.compact) {
       await attemptStewardCompaction($, plan, 1, host)
@@ -2342,6 +2347,7 @@ async function finishSteward($: EngineInterface, plan: StewardPlan, applied: boo
     at, account: plan.account, project: plan.project, mode: plan.mode, contextBefore: plan.contextBefore, decision: plan.decision, applied, contextAfter, notApplied,
     verdict: plan.verdict, sessionId: plan.sessionId, turnIndex: plan.personTurns, mainWindow: plan.mainWindow, currentModel: plan.currentModel, wouldFire: plan.wouldFire,
     ...(plan.margin === undefined ? {} : { margin: plan.margin }),
+    ...(plan.settledHold === undefined ? {} : { settledHold: plan.settledHold }),
   })
   await appendStewardDecision($, at, `${JSON.stringify(record)}\n`)
   host.show(stewardStatusPart(plan.locale, { mode: plan.mode, decision: plan.decision.decision, applied, before: plan.contextBefore, after: contextAfter }))

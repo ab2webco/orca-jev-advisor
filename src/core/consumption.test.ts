@@ -15,6 +15,8 @@ import {
   claudeMdSizeTrigger,
   LONG_SESSION_CONTEXT_THRESHOLD_TOKENS,
   longSessionTrigger,
+  LONG_STEP_REREAD_TOKENS,
+  longStepsByDay,
   mcpServerCountTrigger,
   parseQuota,
   SUBAGENT_SHARE_THRESHOLD,
@@ -344,4 +346,35 @@ test("byModel carries each model's token total, null when it reported no figure 
   const byModel = new Map(summary.byModel.map((m) => [m.model, m]));
   assert.equal(byModel.get("claude-sonnet-5")?.tokens, 101);
   assert.equal(byModel.get("gateway")?.tokens, null);
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-109: main steps over 200k re-read, per day
+// ---------------------------------------------------------------------------
+
+test("long steps: per local day, the share of main steps whose cache read passed 200k", () => {
+  assert.equal(LONG_STEP_REREAD_TOKENS, 200_000);
+  const records = [
+    step({ at: "2026-09-26T19:00:00.000Z", cacheRead: 250_000 }),
+    step({ at: "2026-09-26T18:00:00.000Z", cacheRead: 200_000 }), // exactly 200k is not over
+    step({ at: "2026-09-26T17:00:00.000Z", cacheRead: 90_000 }),
+    step({ at: "2026-09-26T16:00:00.000Z", cacheRead: 300_000 }),
+    step({ at: "2026-09-25T12:00:00.000Z", cacheRead: 210_000 }),
+    step({ at: "2026-09-26T19:30:00.000Z", cacheRead: 900_000, agent: "subagent" }), // subagents are not counted
+    step({ at: "2026-09-26T19:40:00.000Z", cacheRead: null }), // no reading, no step
+    step({ at: "2026-09-20T12:00:00.000Z", cacheRead: 900_000 }), // before the first day
+    step({ at: "2026-09-26T21:00:00.000Z", cacheRead: 900_000 }), // after now
+  ];
+  assert.deepEqual(longStepsByDay(records, NOW, 3, 0), [
+    { day: "2026-09-24", steps: 0, above: 0, rereadAbove: 0, excessAbove: 0, share: null },
+    { day: "2026-09-25", steps: 1, above: 1, rereadAbove: 210_000, excessAbove: 10_000, share: 1 },
+    { day: "2026-09-26", steps: 4, above: 2, rereadAbove: 550_000, excessAbove: 150_000, share: 0.5 },
+  ]);
+});
+
+test("long steps: days are local to the offset given", () => {
+  // 03:00Z on the 26th is still the 25th at UTC-5.
+  const records = [step({ at: "2026-09-26T03:00:00.000Z", cacheRead: 300_000 })];
+  const days = longStepsByDay(records, NOW, 2, -300);
+  assert.deepEqual(days.map((d) => [d.day, d.above]), [["2026-09-25", 1], ["2026-09-26", 0]]);
 });

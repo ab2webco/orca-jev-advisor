@@ -17,7 +17,7 @@ import type { Answer, JsonValue, Question } from "./jev.ts";
 import { translate } from "./i18n.ts";
 import type { Locale } from "./i18n.ts";
 import { CONTEXT_STEWARD_CATALOG } from "./i18n_context_steward.ts";
-import { summarizeSinceLastPrompt } from "./model_router_stage.ts";
+import { isFailingTestRun, isTestRun, messagesSinceLastPrompt, summarizeSinceLastPrompt } from "./model_router_stage.ts";
 import type { ActivityMessage } from "./model_router_stage.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
 import type { PreColdSkipReason } from "./steward_pre_cold.ts";
@@ -42,6 +42,15 @@ export const HARD_LIMIT_TOKENS = 600_000;
 export const SOFT_LIMIT_TOKENS = 400_000;
 /** How sure Jev must be that the work is mid-task for the soft tier to wait. */
 export const SOFT_MID_TASK_FLOOR = 0.8;
+/**
+ * JEVADV-109: the settled tier. From here up, a turn that ended at a settled
+ * boundary (settledBoundary: no tool call without its result, no failed
+ * edit, no failing test after the last edit, no background task) is
+ * compacted even when Jev says the work is mid-task. Steps above 200k were
+ * 45% of the main agents' steps and 66% of their re-read (2026-10-15..22),
+ * and 49% of the steward's checks waited on a mid-task verdict.
+ */
+export const SETTLED_LIMIT_TOKENS = 200_000;
 
 /** Whether the soft tier compacts (`active`) or only logs what it would do (`measure`, the default). */
 export type StewardSoftMode = "measure" | "active";
@@ -92,7 +101,7 @@ export interface StewardGateInput {
 
 export type StewardSkipReason = "off" | "subagent" | "no-usage" | "below-threshold" | "cooldown";
 
-export type StewardGate = { readonly ask: true; readonly hardLimit: boolean; readonly softLimit: boolean } | { readonly ask: false; readonly reason: StewardSkipReason };
+export type StewardGate = { readonly ask: true; readonly hardLimit: boolean; readonly softLimit: boolean; readonly settledLimit: boolean } | { readonly ask: false; readonly reason: StewardSkipReason };
 
 export function stewardGate(input: StewardGateInput): StewardGate {
   if (input.mode === "off") return { ask: false, reason: "off" };
@@ -103,7 +112,9 @@ export function stewardGate(input: StewardGateInput): StewardGate {
   const softLimit = limit !== null && !hardLimit && input.contextTokens >= SOFT_LIMIT_TOKENS;
   if (input.contextTokens < input.threshold && !hardLimit && !softLimit) return { ask: false, reason: "below-threshold" };
   if (input.turnsSinceCompaction !== null && input.turnsSinceCompaction < STEWARD_COOLDOWN_TURNS) return { ask: false, reason: "cooldown" };
-  return { ask: true, hardLimit, softLimit };
+  // Only once the turn is asked about anyway: a threshold set above 200k keeps the tier quiet below it.
+  const settledLimit = !hardLimit && input.contextTokens >= SETTLED_LIMIT_TOKENS;
+  return { ask: true, hardLimit, softLimit, settledLimit };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +230,7 @@ export function interpretSteward(answers: Record<string, Answer>): StewardJudgme
 // ---------------------------------------------------------------------------
 
 /** Track S: `pre-cold` is the idle tier firing (or, measured, would); `pre-cold-skip` a due wake it stood down on. */
-export type StewardDecisionKind = "boundary" | "new-topic" | "hard-limit" | "soft-limit" | "mid-task" | "low-confidence" | "jev-failed" | "jev-payment" | "pre-cold" | "pre-cold-skip";
+export type StewardDecisionKind = "boundary" | "new-topic" | "hard-limit" | "soft-limit" | "settled-limit" | "mid-task" | "low-confidence" | "jev-failed" | "jev-payment" | "pre-cold" | "pre-cold-skip";
 
 /** G8: a steward decision made without Jev because Jev answered 402 (no credit) is named `jev-payment`. */
 export function withStewardPayment(decision: StewardDecision, payment: boolean): StewardDecision {
@@ -241,12 +252,62 @@ export function softTierFires(input: { readonly jev: StewardJudgment | null; rea
   return !(input.jev !== null && input.jev.verdict === "mid-task" && input.jev.confidence >= SOFT_MID_TASK_FLOOR);
 }
 
+// ---------------------------------------------------------------------------
+// JEVADV-109: the settled boundary
+// ---------------------------------------------------------------------------
+
+/** Why a turn did not end at a settled boundary. */
+export type SettledHold = "no-turn" | "pending-tool" | "background-task" | "edit-failed" | "tests-failing";
+
+export type SettledBoundary = { readonly settled: true } | { readonly settled: false; readonly hold: SettledHold };
+
+const SETTLED_EDIT_TOOLS: ReadonlySet<string> = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+/**
+ * Whether the turn since the person's last prompt ended where compacting
+ * loses nothing the next step needs, even with the task unfinished: every
+ * tool call has its result, no call was sent to the background (its result
+ * is still to come), the last edit landed, and no test run after the last
+ * edit failed (a fix in progress). Pure; conservative: anything it cannot
+ * read as settled is a hold.
+ */
+export function settledBoundary(messages: readonly ActivityMessage[]): SettledBoundary {
+  const turn = messagesSinceLastPrompt(messages);
+  if (turn === null) return { settled: false, hold: "no-turn" };
+  const results = new Map<string, boolean>();
+  for (const message of turn) for (const result of message.toolResults ?? []) if (result.tool_use_id !== undefined) results.set(result.tool_use_id, result.isError === true);
+  let editFailed = false;
+  let testsFailing = false;
+  for (const message of turn) {
+    for (const use of message.toolUses) {
+      const id = use.tool_use_id;
+      const answered = use.text !== undefined || use.isError === true || (id !== undefined && results.has(id));
+      if (!answered) return { settled: false, hold: "pending-tool" };
+      if (use.input.run_in_background === true) return { settled: false, hold: "background-task" };
+      const failed = use.isError === true || (id !== undefined && results.get(id) === true);
+      if (SETTLED_EDIT_TOOLS.has(use.tool)) {
+        // The last edit decides: a failed one redone later is settled, and a new edit sets the tests aside.
+        editFailed = failed;
+        testsFailing = false;
+      } else if (isTestRun(use)) {
+        testsFailing = failed || isFailingTestRun(use);
+      }
+    }
+  }
+  if (editFailed) return { settled: false, hold: "edit-failed" };
+  if (testsFailing) return { settled: false, hold: "tests-failing" };
+  return { settled: true };
+}
+
 /**
  * The decision. `softActive` is the soft tier's own switch (0.6.15 T4,
  * measure by default): off, a soft-tier turn is decided as before and only
- * its log says the tier would have fired.
+ * its log says the tier would have fired. `settledLimit` and `settled`
+ * (JEVADV-109): at or above SETTLED_LIMIT_TOKENS, a turn that ended at a
+ * settled boundary compacts whatever Jev says; one that did not never does
+ * on this tier.
  */
-export function decideSteward(input: { readonly jev: StewardJudgment | null; readonly hardLimit: boolean; readonly softLimit?: boolean; readonly softActive?: boolean }): StewardDecision {
+export function decideSteward(input: { readonly jev: StewardJudgment | null; readonly hardLimit: boolean; readonly softLimit?: boolean; readonly softActive?: boolean; readonly settledLimit?: boolean; readonly settled?: boolean }): StewardDecision {
   const jev = input.jev;
   const confidence = jev?.confidence ?? null;
   const confident = jev !== null && jev.confidence >= STEWARD_CONFIDENCE_FLOOR;
@@ -254,6 +315,7 @@ export function decideSteward(input: { readonly jev: StewardJudgment | null; rea
   if (confident && jev.verdict === "new-topic") return { decision: "new-topic", compact: true, suggestClear: true, confidence };
   if (input.hardLimit) return { decision: "hard-limit", compact: true, suggestClear: false, confidence };
   if (input.softActive === true && softTierFires({ jev, softLimit: input.softLimit === true })) return { decision: "soft-limit", compact: true, suggestClear: false, confidence };
+  if (input.settledLimit === true && input.settled === true) return { decision: "settled-limit", compact: true, suggestClear: false, confidence };
   if (jev === null) return { decision: "jev-failed", compact: false, suggestClear: false, confidence };
   return { decision: confident ? "mid-task" : "low-confidence", compact: false, suggestClear: false, confidence };
 }
@@ -328,6 +390,17 @@ export function stewardInstructions(facts: StewardFacts): string {
   return instructionsAfter("A unit of work just closed. Summarize so the work can continue without re-reading anything, and keep, verbatim where they are names:", facts);
 }
 
+/** JEVADV-109: the keep-list for a compaction made while the task is still open, at a settled boundary. */
+export function settledInstructions(facts: StewardFacts): string {
+  return [
+    instructionsAfter(
+      "The task is NOT finished: the conversation is long, so it is compacted at a settled point between two steps. Summarize so the work continues from exactly where it stopped without re-reading anything, and keep, verbatim where they are names:",
+      facts,
+    ),
+    "- The step in progress: the files being changed and what is left to change in each, the last command run and its result, and the exact next action.",
+  ].join("\n");
+}
+
 /** Track S: the same keep-list for a compaction made while the session is idle, before its prompt cache expires. */
 export function preColdInstructions(facts: StewardFacts): string {
   return instructionsAfter(
@@ -352,12 +425,13 @@ function instructionsAfter(lead: string, facts: StewardFacts): string {
 // ---------------------------------------------------------------------------
 
 /** The tier that fires a compaction, as the research names them (odd/research/steward-1m.md §6). */
-export type StewardTier = "boundary" | "new-topic" | "soft-400k" | "hard-600k" | "pre-cold";
+export type StewardTier = "boundary" | "new-topic" | "soft-400k" | "settled-200k" | "hard-600k" | "pre-cold";
 
 /** The tier behind a decision that compacts (or, measuring, would), or null. */
 export function stewardTier(decision: StewardDecisionKind): StewardTier | null {
   if (decision === "boundary" || decision === "new-topic") return decision;
   if (decision === "soft-limit") return "soft-400k";
+  if (decision === "settled-limit") return "settled-200k";
   if (decision === "hard-limit") return "hard-600k";
   if (decision === "pre-cold") return "pre-cold";
   return null;
@@ -405,6 +479,8 @@ export interface StewardRecord {
   readonly wouldFire: StewardTier | null;
   /** 0.6.22 T1 (JEVADV-97): the verdict's top-two probability gap; absent when there is none. */
   readonly margin?: number;
+  /** JEVADV-109: at or above SETTLED_LIMIT_TOKENS, what kept the turn from a settled boundary (null: it was settled); absent below. */
+  readonly settledHold?: SettledHold | null;
   /** Track S: present on the idle tier's rows only, which the turn-end summary leaves out. */
   readonly trigger?: "pre-cold";
   /** Why a due pre-cold wake stood down; null when it fired (or would). */
@@ -442,6 +518,7 @@ export interface StewardRecordInput {
   readonly currentModel: string | null;
   readonly wouldFire: StewardTier | null;
   readonly margin?: number;
+  readonly settledHold?: SettledHold | null;
   readonly preCold?: PreColdRecordFields;
 }
 
@@ -467,6 +544,7 @@ export function stewardDecisionRecord(input: StewardRecordInput): StewardRecord 
     tier: stewardTier(input.decision.decision),
     wouldFire: input.wouldFire,
     ...(input.margin === undefined ? {} : { margin: input.margin }),
+    ...(input.settledHold === undefined ? {} : { settledHold: input.settledHold }),
     ...(input.preCold === undefined ? {} : { trigger: "pre-cold", ...input.preCold }),
   };
 }
@@ -485,7 +563,7 @@ export interface StewardStatusInput {
 
 /** The steward's part of the status line, or null when nothing was (or, measuring, would be) compacted. */
 export function stewardStatusPart(locale: Locale, input: StewardStatusInput): string | null {
-  if (input.decision !== "boundary" && input.decision !== "new-topic" && input.decision !== "hard-limit" && input.decision !== "soft-limit") return null;
+  if (input.decision !== "boundary" && input.decision !== "new-topic" && input.decision !== "hard-limit" && input.decision !== "soft-limit" && input.decision !== "settled-limit") return null;
   const why = translate(CONTEXT_STEWARD_CATALOG, locale, `why.${input.decision}`);
   const before = formatContextTokens(input.before);
   if (input.mode === "measure") return translate(CONTEXT_STEWARD_CATALOG, locale, "status.measure", { before, why });
