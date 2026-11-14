@@ -29,6 +29,21 @@ import type { GateStopReason } from "./gate_measurement.ts";
 
 export type ApprovalOutcome = "approved" | "rejected";
 
+/**
+ * What the gate answered when it stopped the command (JEVADV-110).
+ *
+ * `"deny"` is a refusal the gate already answered itself: the model was told
+ * why and what to do instead, the command never runs, and no outcome hook
+ * can ever fire for it -- it is not a question waiting on anybody. `"ask"`
+ * is a real prompt waiting on a person. `null` is a row written before this
+ * field existed and not inferable from its stopReason.
+ *
+ * Measured before this field (2026-10-15 to 10-22): 131 gate-pending rows and
+ * 0 outcomes, 130 of them refusals (72 discard rule, 52 never_write_to_main,
+ * 1 production_data) -- read as 130 "held approvals nobody answered".
+ */
+export type PendingVerdict = "deny" | "ask";
+
 /** Written when the gate stops a command, and resolved later by the outcome hook. */
 export interface PendingApprovalRecord {
   readonly type: "gate-pending";
@@ -58,6 +73,19 @@ export interface PendingApprovalRecord {
   readonly stopReason: GateStopReason;
   /** The policy that resolved this stop -- non-null only when `stopReason` is `"policy"`. The id only, never the command or the policy's rule text. */
   readonly policyId: string | null;
+  /** See {@link PendingVerdict}. Null only on rows written before 0.13.17 that {@link inferLegacyVerdict} cannot place. */
+  readonly verdict: PendingVerdict | null;
+}
+
+/**
+ * The verdict of a row written before `verdict` was recorded, from what it
+ * did record. Only `local-rule` is certain: every path that writes a
+ * local-rule pending (the gate's own files, a deny-tier rule) denies, and a
+ * toggled-off rule advises without writing one. A policy or cache stop may
+ * have been either, so it stays unknown rather than guessed.
+ */
+export function inferLegacyVerdict(stopReason: unknown): PendingVerdict | null {
+  return stopReason === "local-rule" ? "deny" : null;
 }
 
 export interface ApprovalOutcomeRecord {
@@ -168,6 +196,13 @@ export interface ApprovalSummary {
    * bucket every one of those percentages is missing.
    */
   readonly awaiting: number;
+  /**
+   * Refused by the gate itself ({@link PendingVerdict} `"deny"`): the model
+   * got the reason and a way forward, so nobody was ever asked and no answer
+   * is owed. Counted apart from `notRun` because this one is a fact, not a
+   * classification. approved + rejected + notRun + awaiting + refused = asked.
+   */
+  readonly refused: number;
   readonly labelled: readonly LabelledDecision[];
 }
 
@@ -201,11 +236,13 @@ export function summarizeApprovals(
   let rejected = 0;
   let notRun = 0;
   let awaiting = 0;
+  let refused = 0;
 
   for (const p of pending) {
     const outcome = byId.get(p.toolUseId);
     if (outcome === undefined) {
-      if (now - Date.parse(p.at) > UNRESOLVED_AFTER_MS) notRun += 1;
+      if (p.verdict === "deny") refused += 1;
+      else if (now - Date.parse(p.at) > UNRESOLVED_AFTER_MS) notRun += 1;
       else awaiting += 1;
       continue;
     }
@@ -224,7 +261,7 @@ export function summarizeApprovals(
     }
   }
 
-  return { asked: pending.length, approved, rejected, notRun, awaiting, labelled };
+  return { asked: pending.length, approved, rejected, notRun, awaiting, refused, labelled };
 }
 
 export interface CeilingEvidence {

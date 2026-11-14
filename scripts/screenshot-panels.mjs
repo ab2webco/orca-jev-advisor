@@ -264,7 +264,7 @@ function emptyWindow (key) {
     clefLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
     interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
     approvals: {
-      asked: 0, approved: 0, rejected: 0, notRun: 0, awaiting: 0,
+      asked: 0, approved: 0, rejected: 0, notRun: 0, awaiting: 0, refused: 0,
       ceiling: { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 },
     },
     providers: emptyProviderCounts(),
@@ -565,8 +565,9 @@ const READY = {
       asked: 43,
       approved: 27,
       rejected: 1,
-      notRun: 15,
+      notRun: 3,
       awaiting: 0,
+      refused: 12,
       corruptLines: 0,
       ceiling: {
         highestApproved: null,

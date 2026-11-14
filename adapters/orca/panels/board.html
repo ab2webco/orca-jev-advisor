@@ -693,6 +693,10 @@
           // este momento. Sin este cuarto grupo, approved+rejected+notRun no
           // sumaba `asked` mientras cualquier aviso siguiera pendiente.
           'approvals.awaiting': 'Esperando respuesta',
+          // JEVADV-110: rechazos que el gate respondió él mismo (el modelo
+          // recibió el motivo y qué hacer en su lugar); nadie los espera.
+          'approvals.refused': 'Rechazadas por el gate',
+          'approvals.refusedHint': 'Rechazadas por el gate: el agente recibió el motivo y una forma segura de seguir. Nadie tiene que responderlas.',
           'approvals.highestApproved': 'Más alto aprobado',
           'approvals.lowestRejected': 'Más bajo rechazado',
           'approvals.suggestedCeiling': 'Techo sugerido',
@@ -981,6 +985,10 @@
           // now. Without this fourth bucket, approved+rejected+notRun did
           // not sum to `asked` for as long as any prompt stayed unanswered.
           'approvals.awaiting': 'Awaiting',
+          // JEVADV-110: refusals the gate answered itself (the model got the
+          // reason and what to do instead); nobody is waited on.
+          'approvals.refused': 'Refused by the gate',
+          'approvals.refusedHint': 'Refused by the gate: the agent got the reason and a safe way to go on. Nobody has to answer these.',
           'approvals.highestApproved': 'Highest approved',
           'approvals.lowestRejected': 'Lowest rejected',
           'approvals.suggestedCeiling': 'Suggested ceiling',
@@ -1965,12 +1973,15 @@
           // The fourth bucket: asked, still inside the wait window, with no
           // answer yet. Without it the bar/legend covered only part of
           // `asked` for as long as any prompt was still pending.
-          { value: approvals.awaiting || 0, cls: 'v2', label: t('approvals.awaiting') }
+          { value: approvals.awaiting || 0, cls: 'v2', label: t('approvals.awaiting') },
+          // JEVADV-110: answered by the gate itself, never waiting on anyone.
+          { value: approvals.refused || 0, cls: 'v3', label: t('approvals.refused') }
         ]
         var parts = [stackedBar(segments, asked), legendList(segments, asked)]
         // P7: the uncertainty stays in the copy, and only when the count is
         // non-zero -- explaining zero of something is noise.
         if ((approvals.notRun || 0) > 0) parts.push(line(t('approvals.notRunHint')))
+        if ((approvals.refused || 0) > 0) parts.push(line(t('approvals.refusedHint')))
 
         var ceiling = approvals.ceiling || {}
         if (ceiling.suggestedCeiling != null) {

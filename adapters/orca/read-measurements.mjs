@@ -46,7 +46,7 @@ import { normalizePlatform, resolveCacheDir } from '../../src/core/paths.ts'
 import { foldGateDecisions, summarizeGateTally } from '../../src/core/gate_stats.ts'
 import { addGateDecisions, gateHealthOf } from '../../src/core/gate_decision_totals.ts'
 import { canonicalCommandFamily } from '../../src/core/gate_measurement.ts'
-import { ceilingEvidence, summarizeApprovals } from '../../src/core/approval_record.ts'
+import { ceilingEvidence, inferLegacyVerdict, summarizeApprovals } from '../../src/core/approval_record.ts'
 import { foldAbResults } from '../../src/core/ab_report.ts'
 import { DEFAULT_MOD_SKILLS_READINESS_THRESHOLDS, evaluateModSkillsReadiness } from '../../src/core/mod_skills_readiness.ts'
 import { modSkillsProjectName } from '../../src/core/project_name.ts'
@@ -229,6 +229,7 @@ function approvalsSummary (pending, outcomes, now) {
     rejected: summary.rejected,
     notRun: summary.notRun,
     awaiting: summary.awaiting,
+    refused: summary.refused,
     ceiling: ceilingEvidence(summary.labelled),
   }
 }
@@ -627,6 +628,9 @@ function toPendingApprovalRecord (row) {
     external: row.external,
     consequence: row.consequence,
     ceiling: row.ceiling,
+    // JEVADV-110: a refusal is not a question waiting on anybody. Rows
+    // written before the field existed are placed only where it is certain.
+    verdict: row.verdict === 'deny' || row.verdict === 'ask' ? row.verdict : inferLegacyVerdict(row.stopReason),
   }
 }
 
