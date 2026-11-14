@@ -2,6 +2,25 @@
 
 Every release of Jev Advisor, newest first.
 
+## 0.13.17
+
+- **A risk advice the model always re-runs unchanged becomes a silent judgement** (JEVADV-111, #123, `src/core/gate_advice_outcomes.ts`). A risk advice that the model simply re-ran as written cost a step, stopped autonomy and changed nothing.
+  - **Outcomes are learned.** Per project and advice key, the gate records whether each risk advice was followed by an identical retry inside the 10-minute retry window ("same") or not ("changed"), in `gate-advice-outcomes.json` (v2). The advice key is the program and subcommand words of the single command that runs, such as `gh pr view` or `git branch`, never an argument or a path.
+  - **Silent.** Once the last 8 risk advices for a (project, key) were all "same", a later risk advice there runs right away: the advice reaches the model as context, and the log row is `stopReason: "silent"` with verdict `allow`. One "changed" outcome, or 14 days with no outcome, ends it.
+  - **Never silenced.** Any deny, local rule or policy (`prohibits`, `requires_human`, the queue), the deploy/publish floor, and any command with no key: compound lines, substitutions, heredocs and paths; shells, interpreters, remote shells, runners, task runners and package scripts; network-transfer and deploy tools; `git push`, `gh api` and every `gh` subcommand that is not a read; any subcommand that deletes, merges, releases, publishes, deploys, installs or controls a service; and the irreversible families.
+  - **Replay.** `npm run measure-advice-outcomes -- [--from D --to D] [--dir <cache>] [--totals] [--json]` lists the would-be-silent advices per key and counts those whose next command changed. Keep per-key output out of public places; `--totals` leaves it out.
+- **A refusal the gate already made is recorded as refused, not as a held approval, and names a safe form** (JEVADV-110, #124, `src/core/approval_record.ts`, `adapters/claude/gate-bash.ts`). Every stop wrote a `gate-pending` row, denies included, and a denied command never runs, so those rows never got an outcome and read as unanswered approvals.
+  - **Recorded verdict.** Each `gate-pending` row carries `verdict: "deny" | "ask"`. A deny counts as `refused`, apart from awaiting and not run. Older local-rule rows count as denies; older policy and cache rows stay unknown. The Board's calibration card shows the new bucket.
+  - **Discard refusal.** A discard the check cannot read (`bash -c`, `xargs`, `ssh`, `$(...)`) now names a tagged, reversible `git stash push -u -m 'jev-discard-…'` and a plain retry the check can read, instead of only "let the person run it".
+  - **`never_write_to_main` refusal.** It points to a feature branch or worktree and a pull request, also for cached verdicts that stored their rule. No stop is removed and every deny stays a deny.
+- **Above 200k, the context steward compacts at a settled boundary** (JEVADV-109, #125, `src/core/context_steward.ts`, `src/core/consumption.ts`). At or above `SETTLED_LIMIT_TOKENS` (200k), a turn that ended at a settled boundary compacts at turn end whatever Jev says (`settled-limit`, tier `settled-200k`), with a keep-list for unfinished work. It follows the steward's mode (measure only logs), threshold and cooldown.
+  - **Settled boundary.** A turn is not settled when it ends on a tool call without its result, a background call, a failed last edit, or a failing test run after the last edit. Rows at or above 200k log why in `settledHold`.
+  - **Board.** The Consumption tab shows main-agent steps re-reading over 200k per day (last 8 local days) and the 7-day re-read above 200k.
+- **The skill listing is withheld when no skill fits well below the bar, and measured** (JEVADV-112, #126, `src/core/skill_decisions.ts`, `src/core/skill_listing_measure.ts`, `odd/tasks/jevadv-112.md`). The listing is sent once per session, on its first turn, and re-read by every later request.
+  - **Rule.** When both stages answered, the gate said a skill may be needed, and every fit is below `withholdBelow` (0.15 by default, half the 0.3 threshold), active mode withholds the listing and injects nothing. Measurement mode only records `nothingFitsWellBelow`; `withholdBelow: 0` turns it off.
+  - **New rows.** Decisions get `withholdReason` (`skill`, `nothing-fits` or null), a `listing` row records what the session's listing was, and a `withheld-use` row records each skill loaded after a withhold.
+  - **Board.** "Listing characters not sent" now counts only real withholds. The Modules tab shows sessions without the listing because no skill fit, and skills used anyway. `npm run measure-skill-listing` reads the transcripts and the mod's rows.
+
 ## 0.13.16
 
 - **On main, a plain write to a file git ignores is no longer judged as a write on main** (#121, `odd/tasks/gate-ignored-files-not-main.md`, `src/core/trivial_write.ts`, `src/core/ignored_files.ts`, seed version 7). From a checkout on main, `cat > odd/tasks/x.md <<'EOF'` into a file `.git/info/exclude` covers was refused under `never_write_to_main`, though such a file is in no commit and can never reach main.

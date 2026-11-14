@@ -16,6 +16,13 @@ The judgement is made by [Jev](https://typesafe.ai) (TypeSafe), which
 answers small typed questions in a few hundred milliseconds for a fraction
 of a cent — not by a large model reasoning about your shell.
 
+## What changed in 0.13.17
+
+- **Advice you always re-run unchanged stops interrupting.** When the gate's risk advice for the same simple command, such as `gh pr view`, was re-run unchanged the last 8 times in a project, the next one goes ahead and the advice is passed along quietly. Anything denied by a rule or policy, deploys and publishes, compound or scripted commands, pushes, merges and deletes are never quieted.
+- **Refusals say what to do instead.** A discard the gate cannot read now suggests a reversible `git stash` and a plain retry, and a refused write on main points to a branch or worktree and a pull request. The Board counts these as refused by the gate rather than as approvals left waiting.
+- **Long sessions compact at a safe moment.** Past 200k tokens of context, the context steward compacts at the end of a turn that finished cleanly, never in the middle of a running tool, a failed edit or failing tests. The Board shows how many steps re-read more than 200k each day.
+- **The skill list is left out when nothing fits.** When no skill comes close to fitting the first prompt, the long list of skills is not sent, which saves tokens on every later step. The Board shows how often that happened and whether a skill was used anyway.
+
 ## What changed in 0.13.16
 
 - **Notes in git-ignored files on main go ahead.** From a checkout on main, a plain write to a file git ignores, such as `cat > odd/tasks/x.md <<'EOF'` into an excluded `odd/`, is no longer refused as a write on main. Only simple writes qualify (`cat`, `echo`, `printf`, `tee`, `cp`, `mv`, `mkdir`, `touch`), and git must confirm every file is ignored and untracked. Anything else is still judged as before: a `cd`, links, variables, scripts, `sed -i`, a symlink or hard link, a submodule, or a write to `.gitignore` or the excludes files.
