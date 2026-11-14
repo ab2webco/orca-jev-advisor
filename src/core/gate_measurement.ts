@@ -196,6 +196,14 @@ export interface GateDecisionRecord {
   readonly escalation?: Escalation;
   /** A sampled, confident Clef answer that Jev was also asked: whether Jev's verdict agreed (review note 12). */
   readonly shadowAgrees?: boolean;
+  /**
+   * JEVADV-111: the advice key (src/core/gate_advice_outcomes.ts's adviceKey)
+   * of a risk advice, its identical retry and a silent judgement: the program
+   * and subcommand words of the one command that ran (`gh pr view`), plain
+   * lowercase words only, never an argument. Absent when the command has no
+   * key, on every other record, and on records written before it existed.
+   */
+  readonly adviceKey?: string;
 }
 
 /** The family for discarding uncommitted work. Records written before checkout and restore joined it carry `LEGACY_DISCARD_FAMILY`. */
@@ -388,6 +396,8 @@ export interface BuildGateDecisionRecordInput {
   readonly provider?: ProviderId;
   readonly escalation?: Escalation | null;
   readonly shadowAgrees?: boolean | null;
+  /** JEVADV-111 -- see GateDecisionRecord.adviceKey. Absent or null writes no key. */
+  readonly adviceKey?: string | null;
 }
 
 export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): GateDecisionRecord {
@@ -426,7 +436,19 @@ export function buildGateDecisionRecord(input: BuildGateDecisionRecordInput): Ga
     ...(input.provider !== undefined ? { provider: input.provider } : {}),
     ...(input.escalation !== undefined && input.escalation !== null ? { escalation: input.escalation } : {}),
     ...(typeof input.shadowAgrees === "boolean" ? { shadowAgrees: input.shadowAgrees } : {}),
+    ...(typeof input.adviceKey === "string" && isAdviceKeyShape(input.adviceKey) ? { adviceKey: input.adviceKey } : {}),
   };
+}
+
+/**
+ * JEVADV-111: the shape of an advice key -- one program word and at most two
+ * subcommand words, plain lowercase. Kept here, not imported from
+ * gate_advice_outcomes.ts (which imports this module), so a record can never
+ * carry an argument, a path or a secret in that field.
+ */
+export function isAdviceKeyShape(value: string): boolean {
+  const words = value.split(" ");
+  return words.length <= 3 && /^[a-z][a-z0-9._+-]{0,23}$/.test(words[0] ?? "") && words.slice(1).every((word) => /^[a-z][a-z0-9-]{0,30}$/.test(word));
 }
 
 export function serializeGateRecord(record: GateDecisionRecord): string {
@@ -500,7 +522,8 @@ function isGateDecisionRecord(value: unknown): value is GateDecisionRecord {
     (record.teamInternal === undefined || record.teamInternal === true) &&
     (record.provider === undefined || record.provider === "jev" || record.provider === "clef") &&
     (record.escalation === undefined || isEscalation(record.escalation)) &&
-    (record.shadowAgrees === undefined || typeof record.shadowAgrees === "boolean")
+    (record.shadowAgrees === undefined || typeof record.shadowAgrees === "boolean") &&
+    (record.adviceKey === undefined || (typeof record.adviceKey === "string" && isAdviceKeyShape(record.adviceKey)))
   );
 }
 

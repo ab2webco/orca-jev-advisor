@@ -69,7 +69,7 @@ import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQ
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
-import { ADVICE_OUTCOMES_FILE, EMPTY_ADVICE_OUTCOMES, isSilentFamily, parseAdviceOutcomes, recordAdviceIssued as recordOutcomeAdviceIssued, recordIdenticalRetry, type AdviceOutcomeStore } from '../../src/core/gate_advice_outcomes.ts'
+import { ADVICE_OUTCOMES_FILE, EMPTY_ADVICE_OUTCOMES, adviceKey, isSilentKey, parseAdviceOutcomes, recordAdviceIssued as recordOutcomeAdviceIssued, recordIdenticalRetry, type AdviceOutcomeStore } from '../../src/core/gate_advice_outcomes.ts'
 import { affectedSegments, composeAdviceText, modelRiskReasonFor } from '../../src/core/gate_advice_text.ts'
 import { assessDiscard, stashCommandFor } from '../../src/core/discard_loss.ts'
 import type { DiscardLossDetail } from '../../src/core/discard_loss.ts'
@@ -991,19 +991,24 @@ function writeAdviceOutcomes(store: AdviceOutcomeStore): void {
   }
 }
 
-/** A risk advice was issued: wait for its identical retry, or for its window to close. */
-function learnAdviceIssued(sessionId: string | null, command: string, actingCwd: string): void {
+/** A risk advice with advice key `key` was issued: wait for its identical retry, or for its window to close. */
+function learnAdviceIssued(sessionId: string | null, command: string, actingCwd: string, key: string): void {
   if (sessionId === null) return
-  writeAdviceOutcomes(recordOutcomeAdviceIssued(readAdviceOutcomes(), adviceRetryKey(sessionId, command), projectName(actingCwd), commandFamily(command), Date.now()))
+  writeAdviceOutcomes(recordOutcomeAdviceIssued(readAdviceOutcomes(), adviceRetryKey(sessionId, command), projectName(actingCwd), key, Date.now()))
 }
 
-/** The identical command was retried: its advice changed nothing. Only a pending risk advice is counted. */
-function learnIdenticalRetry(sessionId: string | null, command: string): void {
-  if (sessionId === null) return
+/**
+ * The identical command was retried: its advice changed nothing. Only a
+ * pending risk advice is counted; returns whether this was one, so the retry's
+ * own log row carries the advice key the replay links it by.
+ */
+function learnIdenticalRetry(sessionId: string | null, command: string): boolean {
+  if (sessionId === null) return false
   const store = readAdviceOutcomes()
   const key = adviceRetryKey(sessionId, command)
-  if (store.pending[key] === undefined) return
+  if (store.pending[key] === undefined) return false
   writeAdviceOutcomes(recordIdenticalRetry(store, key, Date.now()))
+  return true
 }
 
 /**
@@ -1183,8 +1188,8 @@ function tryAdviceRetryPass(command: string, sessionCwd: string, cwd: string, se
   // the gate remembers for the repository. Never a local rule's own advice:
   // only the risk stage's advice may ever be relaxed later.
   if (source !== 'local-rule') learnAuthorization(command, sessionCwd, cwd)
-  learnIdenticalRetry(sessionId, command)
-  appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal)
+  const learned = learnIdenticalRetry(sessionId, command)
+  appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal, null, learned ? adviceKey(command) : null)
   emit('allow', `${judgeName()}: identical retry within the advice window; proceeding.`, tJudged('advisedRetryLine', { segment: jevSegmentFor(command) }))
   return true
 }
@@ -1283,23 +1288,24 @@ function tryAuthorizedPass(input: {
 }
 
 /**
- * JEVADV-111: a risk advice in a project and family whose last advices were
- * all re-run unchanged is judged silently: an allow, the advice handed to
- * the model as context in one directive line, the log row `silent`. Nothing
- * is shown to the person; the decision log records it (`npm run
- * measure-advice-outcomes`). Never a policy, a local rule,
- * the deploy/publish floor or a NEVER_SILENT_FAMILIES family.
+ * JEVADV-111: a risk advice in a project whose last advices with the same
+ * advice key (gate_advice_outcomes.ts) were all re-run unchanged is judged
+ * silently: an allow, the advice handed to the model as context in one
+ * directive line, the log row `silent`. Nothing is shown to the person; the
+ * decision log records it (`npm run measure-advice-outcomes`). Never a
+ * policy, a local rule, the deploy/publish floor, or a command with no key.
  */
 function trySilentJudgement(input: {
   readonly command: string
+  readonly key: string
   readonly actingCwd: string
   readonly reasonsEnglish: readonly string[]
   readonly source: GateSource
   readonly latencyMs: number | null
   readonly teamInternal: boolean
 }): boolean {
-  if (!isSilentFamily(readAdviceOutcomes(), projectName(input.actingCwd), commandFamily(input.command), Date.now())) return false
-  appendGateRecord(input.actingCwd, input.command, input.source, 'allow', input.latencyMs, 'silent', null, input.teamInternal)
+  if (!isSilentKey(readAdviceOutcomes(), projectName(input.actingCwd), input.key, Date.now())) return false
+  appendGateRecord(input.actingCwd, input.command, input.source, 'allow', input.latencyMs, 'silent', null, input.teamInternal, null, input.key)
   const advice = input.reasonsEnglish.filter((reason) => reason.length > 0).join(' · ')
   const payload = {
     hookSpecificOutput: {
@@ -1348,20 +1354,20 @@ function resolveAdviceOutcome(input: {
   readonly teamInternal?: boolean
   /** 0.6.28: a risk advice with no policy behind it (fresh, floored or replayed from the cache), which a remembered authorization may turn into an allow. Never set for a local rule's advice. */
   readonly authorizable?: boolean
-  /** JEVADV-111: a risk-stage advice (never the deploy/publish floor, a policy or a local rule) whose family may be learned and judged silently. */
+  /** JEVADV-111: a risk-stage advice (never the deploy/publish floor, a policy or a local rule) that may be learned and judged silently when the command has an advice key. */
   readonly silenceable?: boolean
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
   const teamInternal = input.teamInternal ?? false
   if (tryAdviceRetryPass(command, cwd, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
   if (input.authorizable === true && tryAuthorizedPass({ command, cwd, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
-  const silenceable = input.silenceable === true && stopReason === 'risk'
-  if (silenceable && trySilentJudgement({ command, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
+  const key = input.silenceable === true && stopReason === 'risk' ? adviceKey(command) : null
+  if (key !== null && trySilentJudgement({ command, key, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
-  appendGateRecord(input.actingCwd ?? cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
+  appendGateRecord(input.actingCwd ?? cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal, null, key)
   recordAdviceIssued(sessionId, command)
-  if (silenceable) learnAdviceIssued(sessionId, command, input.actingCwd ?? cwd)
+  if (key !== null) learnAdviceIssued(sessionId, command, input.actingCwd ?? cwd, key)
   emitAdvice(segment, advice.effectSummary, advice.modelText)
 }
 
@@ -1793,7 +1799,7 @@ const SEED_SCOPE_BY_ID = readSeedScopeById()
  * failure is counted in GATE_APPEND_FAILURES_PATH, which the board's "is the
  * gate working?" card shows.
  */
-function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false, failure: GateFailure | null = null): void {
+function appendGateRecord(cwd: string, command: string, source: GateSource, verdict: GateVerdict, latencyMs: number | null, stopReason: GateStopReason, policyId: string | null, teamInternal = false, failure: GateFailure | null = null, adviceKeyValue: string | null = null): void {
   const at = new Date().toISOString()
   try {
     mkdirSync(CACHE_DIR, { recursive: true })
@@ -1813,6 +1819,9 @@ function appendGateRecord(cwd: string, command: string, source: GateSource, verd
       // 0.6.8 T3: the requires_human policies were set aside for this
       // command -- see main()'s own note where that is decided.
       teamInternal,
+      // JEVADV-111: the advice key of a risk advice, its retry or a silent
+      // judgement, so the replay can link them without the command.
+      adviceKey: adviceKeyValue,
       // BuildGateDecisionRecordInput declares this required -- true for
       // every caller that already knows its own build's version. This is
       // the one caller that resolves it from disk, so it stays honest about

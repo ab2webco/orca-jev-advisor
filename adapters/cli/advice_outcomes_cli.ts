@@ -4,10 +4,13 @@
 //
 // Usage (also `npm run measure-advice-outcomes -- <args>`):
 //
-//   node --experimental-strip-types adapters/cli/advice_outcomes_cli.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dir <cache dir>] [--json]
+//   node --experimental-strip-types adapters/cli/advice_outcomes_cli.ts [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dir <cache dir>] [--totals] [--json]
 //
 // Read-only: it reads gate-decisions*.jsonl from the cache directory and
-// prints a Markdown table (or the replay as JSON). The logic lives in
+// prints the totals and a table per advice key (or the replay as JSON). The
+// per-key table names the commands that ran: keep it local, and use
+// --totals for anything public. When no decision falls in the range, it says
+// so and names the dates the files do hold. The logic lives in
 // src/core/gate_advice_outcomes.ts and is unit-tested there.
 
 import { readdirSync, readFileSync } from "node:fs";
@@ -39,8 +42,10 @@ function day(value: string | undefined, flag: string): number | null {
 function main(): void {
   const argv = process.argv.slice(2);
   if (argv.includes("--help") || argv.includes("-h")) {
-    console.log("Usage: measure-advice-outcomes [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dir <cache dir>] [--json]");
-    console.log("  Per command family: risk advices, how many were re-run unchanged, and how many the silent-judgement rule would have let run.");
+    console.log("Usage: measure-advice-outcomes [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--dir <cache dir>] [--totals] [--json]");
+    console.log("  Per advice key (program and subcommand): risk advices, how many were re-run unchanged, how many the");
+    console.log("  silent-judgement rule would have let run, and how many of those were followed by a different command.");
+    console.log("  --totals prints the totals only (the per-key table names the commands that ran: keep it local).");
     return;
   }
   const valueOf = (flag: string) => {
@@ -64,19 +69,35 @@ function main(): void {
   } catch {
     // Nothing recorded: an empty table.
   }
-  const records = gateDecisionFilesToRead(names).flatMap((name) => {
+  const files = gateDecisionFilesToRead(names);
+  const all = files.flatMap((name) => {
     try {
       return [...parseGateDecisionRecords(readFileSync(join(dir, name), "utf8"))];
     } catch {
       return [];
     }
-  }).filter((record) => {
+  });
+  const times = all.map((record) => record.at).sort();
+  const records = all.filter((record) => {
     const at = Date.parse(record.at);
     return (fromMs === null || at >= fromMs) && (toMs === null || at < toMs);
   });
+  const coverage = {
+    from: valueOf("--from") ?? null,
+    to: valueOf("--to") ?? null,
+    filesRead: files.length,
+    recordsInRange: records.length,
+    oldest: times[0] ?? null,
+    newest: times.at(-1) ?? null,
+  };
   const replay = replayAdviceOutcomes(records);
-  if (argv.includes("--json")) console.log(JSON.stringify(replay, null, 2));
-  else process.stdout.write(formatAdviceReplayMarkdown(replay));
+  if (argv.includes("--json")) {
+    const totalsOnly = argv.includes("--totals");
+    console.log(JSON.stringify({ coverage, ...replay, keys: totalsOnly ? undefined : replay.keys }, null, 2));
+  } else {
+    process.stdout.write(formatAdviceReplayMarkdown(replay, coverage, { totalsOnly: argv.includes("--totals") }));
+  }
+  if (records.length === 0) process.exitCode = 1;
 }
 
 main();

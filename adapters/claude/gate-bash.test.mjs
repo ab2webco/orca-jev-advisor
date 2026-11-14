@@ -4957,10 +4957,11 @@ test('L1: the hook never writes or locks the index of the checkout it judges', (
 
 // ---------------------------------------------------------------------------
 // JEVADV-111: advice that never changes the next command becomes a silent
-// judgement. Once a project's last SILENT_AFTER risk advices in one command
-// family were all re-run unchanged, a later risk advice there runs, with the
-// advice handed to the model as context. A policy, a local rule and the
-// deploy/publish floor are never silenced.
+// judgement. Once a project's last SILENT_AFTER risk advices with one advice
+// key (the program and subcommand of the one command that runs) were all
+// re-run unchanged, a later risk advice there runs, with the advice handed to
+// the model as context. A policy, a local rule, the deploy/publish floor, a
+// container, a compound line and an outward subcommand are never silenced.
 // ---------------------------------------------------------------------------
 
 function adviceOutcomesPath (home) {
@@ -4971,17 +4972,21 @@ function readAdviceOutcomesFile (home) {
   return existsSync(adviceOutcomesPath(home)) ? JSON.parse(readFileSync(adviceOutcomesPath(home), 'utf8')) : null
 }
 
-/** A store in which (project, family)'s last eight advices were all retried unchanged. */
-function writeSilentFamily (home, project, family) {
+/** A store in which (project, key)'s last eight advices were all retried unchanged. */
+function writeSilentKey (home, project, key) {
   mkdirSync(dirname(adviceOutcomesPath(home)), { recursive: true })
   const lastAt = new Date().toISOString()
-  writeFileSync(adviceOutcomesPath(home), JSON.stringify({ version: 1, families: { [`${project}\u0000${family}`]: { recent: Array(8).fill('same'), lastAt } }, pending: {} }))
+  writeFileSync(adviceOutcomesPath(home), JSON.stringify({ version: 2, keys: { [`${project}\u0000${key}`]: { recent: Array(8).fill('same'), lastAt } }, pending: {} }))
+}
+
+function gateRecords (home) {
+  return gateLogText(home).trim().split('\n').map((line) => JSON.parse(line))
 }
 
 test('JEVADV-111: eight risk advices retried unchanged make the ninth a silent judgement', () => {
   const home = makeHome()
   const repo = repoWithOrigin('https://github.com/acme/widgets.git')
-  const commands = Array.from({ length: 9 }, (_, i) => `python3 scripts/job.py --batch ${i}`)
+  const commands = Array.from({ length: 9 }, (_, i) => `migrate-tool sync --batch ${i}`)
   seedAdvice(home, repo, commands, { entry: { decision: 'advise', reason: 'it writes to the shared staging database', at: Date.now() } })
   for (let i = 0; i < 8; i++) {
     const first = JSON.parse(run(home, commands[i], { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: `silent-s${i}` }))
@@ -4990,8 +4995,10 @@ test('JEVADV-111: eight risk advices retried unchanged make the ninth a silent j
     assert.equal(retry.hookSpecificOutput.permissionDecision, 'allow')
   }
   const store = readAdviceOutcomesFile(home)
-  assert.deepEqual(store.families['widgets\u0000python3'].recent, Array(8).fill('same'))
+  assert.deepEqual(store.keys['widgets\u0000migrate-tool'].recent, Array(8).fill('same'))
   assert.deepEqual(store.pending, {})
+  const records = gateRecords(home)
+  assert.deepEqual(records.map((record) => `${record.stopReason}:${record.adviceKey}`), Array(8).fill(['risk:migrate-tool', 'advice-retry:migrate-tool']).flat(), 'the advice and its retry carry the key, never an argument')
 
   const ninth = JSON.parse(run(home, commands[8], { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-s8' }))
   assert.equal(ninth.hookSpecificOutput.permissionDecision, 'allow', 'no refused attempt')
@@ -5000,27 +5007,46 @@ test('JEVADV-111: eight risk advices retried unchanged make the ninth a silent j
   const record = lastGateRecord(home)
   assert.equal(record.verdict, 'allow')
   assert.equal(record.stopReason, 'silent')
-  assert.equal(record.commandFamily, 'python3')
+  assert.equal(record.adviceKey, 'migrate-tool')
 })
 
-test('JEVADV-111: a silent family in one project still advises in another', () => {
+test('JEVADV-111: a silent key in one project still advises in another', () => {
   const home = makeHome()
   const repo = repoWithOrigin('https://github.com/acme/gadgets.git')
-  writeSilentFamily(home, 'widgets', 'python3')
-  const command = 'python3 scripts/job.py --batch 1'
+  writeSilentKey(home, 'widgets', 'migrate-tool')
+  const command = 'migrate-tool sync --batch 1'
   seedAdvice(home, repo, [command])
   const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-other' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.equal(lastGateRecord(home).stopReason, 'risk')
-  assert.deepEqual(Object.values(readAdviceOutcomesFile(home).pending).map((item) => item.key), ['gadgets\u0000python3'], 'the advice waits for its outcome')
+  assert.deepEqual(Object.values(readAdviceOutcomesFile(home).pending).map((item) => item.key), ['gadgets\u0000migrate-tool'], 'the advice waits for its outcome')
+})
+
+test('JEVADV-111: an outward subcommand, a container or a compound line is never silenced, whatever the store says', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  const commands = ['gh pr merge 45 --squash', "bash -c 'migrate-tool sync'", 'echo go && migrate-tool sync', 'python3 scripts/job.py']
+  mkdirSync(dirname(adviceOutcomesPath(home)), { recursive: true })
+  const lastAt = new Date().toISOString()
+  const keys = Object.fromEntries(['gh pr merge', 'gh', 'bash', 'echo', 'migrate-tool', 'python3'].map((key) => [`widgets\u0000${key}`, { recent: Array(8).fill('same'), lastAt }]))
+  writeFileSync(adviceOutcomesPath(home), JSON.stringify({ version: 2, keys, pending: {} }))
+  seedAdvice(home, repo, commands)
+  for (const [i, command] of commands.entries()) {
+    const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: `silent-never-${i}` }))
+    assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', `${command} is still advised`)
+    const record = lastGateRecord(home)
+    assert.equal(record.stopReason, 'risk', command)
+    assert.equal(record.adviceKey, undefined, `${command} has no advice key`)
+  }
+  assert.deepEqual(readAdviceOutcomesFile(home).pending, {}, 'none of them is learned')
 })
 
 test('JEVADV-111: the deploy/publish floor is never silenced', () => {
   const home = makeHome()
   const repo = repoWithOrigin('https://github.com/acme/widgets.git')
-  writeSilentFamily(home, 'widgets', 'gh cli')
-  const command = 'gh release create v1.2.3 --notes x'
-  seedAdvice(home, repo, [command], { entry: { decision: 'advise', reason: 'creates a GitHub release', deployPublishKind: 'publish', at: Date.now() } })
+  writeSilentKey(home, 'widgets', 'migrate-tool')
+  const command = 'migrate-tool sync --batch 1'
+  seedAdvice(home, repo, [command], { entry: { decision: 'advise', reason: 'publishes a package', deployPublishKind: 'publish', at: Date.now() } })
   const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-release' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.equal(lastGateRecord(home).stopReason, 'risk')
@@ -5030,17 +5056,18 @@ test('JEVADV-111: the deploy/publish floor is never silenced', () => {
 test('JEVADV-111: a policy ask is never silenced', () => {
   const home = makeHome()
   const repo = repoWithOrigin('https://github.com/acme/widgets.git')
-  writeSilentFamily(home, 'widgets', 'gh cli')
+  writeSilentKey(home, 'widgets', 'migrate-tool')
   writePoliciesMirror(home, [QUEUE_POLICY])
-  seedAdvice(home, repo, [MERGE_45], { policies: [QUEUE_POLICY], entry: { decision: 'ask', reason: 'covered by the client_always_asks policy', policyId: 'client_always_asks', at: Date.now() } })
-  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-policy' }))
+  const command = 'migrate-tool sync --batch 1'
+  seedAdvice(home, repo, [command], { policies: [QUEUE_POLICY], entry: { decision: 'ask', reason: 'covered by the client_always_asks policy', policyId: 'client_always_asks', at: Date.now() } })
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-policy' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
 })
 
 test('JEVADV-111: a local rule is never silenced', () => {
   const home = makeHome()
   const repo = repoWithOrigin('https://github.com/acme/widgets.git')
-  writeSilentFamily(home, 'widgets', 'git push')
+  writeSilentKey(home, 'widgets', 'git push')
   const payload = JSON.parse(run(home, 'git push --force origin main', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-local' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.equal(lastGateRecord(home).stopReason, 'local-rule')
