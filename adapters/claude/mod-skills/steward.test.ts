@@ -917,3 +917,64 @@ test("steward, game mode: the /clear suggestion is published as a notice, the to
   assert.deepEqual(advisor?.notices.map((notice) => [notice.level, notice.text]), [["info", "tarea cerrada: /clear libera todo el contexto"]]);
   assert.match(advisor?.line ?? "", /^jev · /);
 });
+
+// ---------------------------------------------------------------------------
+// JEVADV-109: the settled tier, through turn.complete and the steward's timer
+// ---------------------------------------------------------------------------
+
+const SETTLED_TURN: unknown[] = [
+  { role: "user", text: "sigue con odd/tasks/feature-a.md", toolUses: [] },
+  { role: "assistant", text: "", toolUses: [{ tool_use_id: "e", tool: "Edit", input: { file_path: "src/a.ts" }, text: "The file src/a.ts has been updated." }] },
+  { role: "assistant", text: "", toolUses: [{ tool_use_id: "t", tool: "Bash", input: { command: "npm test" }, text: "# pass 40\n# fail 0" }] },
+  { role: "assistant", text: "Tests pass; next I wire the panel.", toolUses: [] },
+];
+
+test("JEVADV-109, active: above 200k a settled turn compacts on a confident mid-task, keeping the step in progress", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.usage = { tokens: 250_000, percent: 25, window: 1_000_000 };
+  host.compactResult = { messages: [], tokensBefore: 250_000, tokensAfter: 60_000 };
+  host.messages = SETTLED_TURN;
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.95));
+  assert.equal(host.compactCalls.length, 1);
+  const instructions = host.compactCalls[0]?.instructions ?? "";
+  for (const needle of ["NOT finished", "exact next action", "odd/tasks/feature-a.md"]) assert.ok(instructions.includes(needle), `keeps ${needle}`);
+  const row = stewardLog(host)[0];
+  assert.deepEqual({ decision: row?.decision, tier: row?.tier, applied: row?.applied, verdict: row?.verdict, settledHold: row?.settledHold, contextAfter: row?.contextAfter }, { decision: "settled-limit", tier: "settled-200k", applied: true, verdict: "mid-task", settledHold: null, contextAfter: 60_000 });
+  assert.ok(host.statusLines.some((line) => line?.includes("250k → 60k (más de 200k, entre dos pasos)")), `status: ${host.statusLines.join(" | ")}`);
+});
+
+test("JEVADV-109, active: above 200k a turn with its tests failing after the last edit is held, and the row says why", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.usage = { tokens: 250_000, percent: 25, window: 1_000_000 };
+  host.messages = [...SETTLED_TURN.slice(0, 2), { role: "assistant", text: "", toolUses: [{ tool_use_id: "t", tool: "Bash", input: { command: "npm test" }, text: "✖ a fails\n# fail 1" }] }];
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.95));
+  assert.equal(host.compactCalls.length, 0);
+  const row = stewardLog(host)[0];
+  assert.deepEqual({ decision: row?.decision, applied: row?.applied, settledHold: row?.settledHold }, { decision: "mid-task", applied: false, settledHold: "tests-failing" });
+});
+
+test("JEVADV-109, measure: the settled tier only logs what it would do", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "measure");
+  host.usage = { tokens: 250_000, percent: 25, window: 1_000_000 };
+  host.messages = SETTLED_TURN;
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.95));
+  assert.equal(host.compactCalls.length, 0);
+  const row = stewardLog(host)[0];
+  assert.deepEqual({ decision: row?.decision, mode: row?.mode, compact: row?.compact, applied: row?.applied, notApplied: row?.notApplied, settledHold: row?.settledHold }, { decision: "settled-limit", mode: "measure", compact: true, applied: false, notApplied: "measure", settledHold: null });
+});
+
+test("JEVADV-109: below 200k nothing changes and the row carries no settledHold", async () => {
+  const host = makeHost();
+  const engine = load(host);
+  setSteward(host, "active");
+  host.messages = SETTLED_TURN;
+  await personTurn(host, engine, "sigue", verdict("mid-task", 0.95));
+  assert.equal(host.compactCalls.length, 0);
+  assert.ok(!("settledHold" in (stewardLog(host)[0] ?? {})));
+});
