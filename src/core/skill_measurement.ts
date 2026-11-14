@@ -14,6 +14,7 @@
 
 import { isRecord, isString } from "../guards.ts";
 import type { ModSkillsReadiness } from "./mod_skills_readiness.ts";
+import type { ListingWithholdReason } from "./skill_decisions.ts";
 import { redactSecretsForJev } from "./secret_redaction.ts";
 
 export type MeasurementMode = "measurement" | "active";
@@ -59,6 +60,17 @@ export interface DecisionRecord {
    * field existed.
    */
   readonly listingWithheld: boolean;
+  /**
+   * JEVADV-112: why this decision asked for the listing to be left out
+   * ('skill': its pick was injected; 'nothing-fits': every fit came back
+   * well below the threshold in active mode), or null. Asking is not
+   * withholding: the engine sends its listing once per session, so only a
+   * decision on the turn that carries it takes anything out. The `listing`
+   * row says what the turn actually did.
+   */
+  readonly withholdReason: ListingWithholdReason | null;
+  /** JEVADV-112: whether every fit was well below the threshold, in either mode, so measurement mode shows how often active mode would withhold. */
+  readonly nothingFitsWellBelow: boolean;
   readonly wide: WideMeasurement | null;
   readonly fit: FitMeasurement | null;
   readonly decision: { readonly name: string | null; readonly reason: string };
@@ -83,7 +95,33 @@ export interface ObservationRecord {
   readonly skill: string;
 }
 
-export type MeasurementRecord = DecisionRecord | ObservationRecord;
+/**
+ * JEVADV-112: what the main conversation's `skill_listing` actually was,
+ * written once per answer the engine asks for (the first turn of a session,
+ * and again after a resume or a compaction). `chars` is the listing's own
+ * text length, as the engine rendered it, and `withheld` why it was left
+ * out, or null when it went through. A withheld listing stays out for every
+ * later request of that session, not only this turn's.
+ */
+export interface ListingRecord {
+  readonly type: "listing";
+  readonly at: string;
+  readonly sessionId: string | null;
+  readonly decisionId: string | null;
+  readonly chars: number;
+  readonly withheld: ListingWithholdReason | null;
+}
+
+/** JEVADV-112: a skill loaded in a session whose listing was left out, for the missed-skill count. */
+export interface WithheldUseRecord {
+  readonly type: "withheld-use";
+  readonly at: string;
+  readonly sessionId: string | null;
+  readonly skill: string;
+  readonly reason: ListingWithholdReason;
+}
+
+export type MeasurementRecord = DecisionRecord | ObservationRecord | ListingRecord | WithheldUseRecord;
 
 export interface BuildDecisionRecordInput {
   readonly id: string;
@@ -94,6 +132,8 @@ export interface BuildDecisionRecordInput {
   readonly candidateCount: number;
   readonly listingChars: number;
   readonly listingWithheld: boolean;
+  readonly withholdReason: ListingWithholdReason | null;
+  readonly nothingFitsWellBelow: boolean;
   readonly wide: WideMeasurement | null;
   readonly fit: FitMeasurement | null;
   readonly decision: { readonly name: string | null; readonly reason: string };
@@ -108,6 +148,14 @@ export function buildDecisionRecord(input: BuildDecisionRecordInput): DecisionRe
 
 export function buildObservationRecord(id: string, skill: string, at: string): ObservationRecord {
   return { type: "observation", id, at, skill };
+}
+
+export function buildListingRecord(input: Omit<ListingRecord, "type">): ListingRecord {
+  return { type: "listing", ...input };
+}
+
+export function buildWithheldUseRecord(input: Omit<WithheldUseRecord, "type">): WithheldUseRecord {
+  return { type: "withheld-use", ...input };
 }
 
 /** One JSONL line, newline-terminated, ready to append. */

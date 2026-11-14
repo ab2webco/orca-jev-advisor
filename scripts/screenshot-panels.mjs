@@ -476,6 +476,10 @@ const READY = {
       listingCharsTotal: null,
       listingCharsAvgPerPrompt: null,
       listingCharsSampleCount: 0,
+      listingsAsked: 0,
+      listingsWithheld: 0,
+      listingsWithheldNothingFits: 0,
+      skillUsesAfterNothingFits: 0,
       wideLatencyMeanMs: null,
       fitLatencyMeanMs: null,
       byProject: [],
@@ -490,7 +494,7 @@ const READY = {
         reason: 'not-enough-samples',
         thresholds: { minComparable: 1000, minMatchRate: 0.7 },
       },
-      windows: everyWindow(() => ({ decisions: 0, suggestedCount: 0, comparableCount: 0, matchedCount: 0, matchRate: null, listingCharsTotal: null }), { kept: null }),
+      windows: everyWindow(() => ({ decisions: 0, suggestedCount: 0, comparableCount: 0, matchedCount: 0, matchRate: null, listingCharsTotal: null, listingsAsked: 0, listingsWithheld: 0, listingsWithheldNothingFits: 0, skillUsesAfterNothingFits: 0 }), { kept: null }),
     },
     // Twenty real paired samples: Jev's median against the model's, and the
     // model NAMED -- the user was explicit that "the big model" is not a name.
@@ -966,7 +970,9 @@ function skillsLogRows () {
         orcaContext: project.orcaContext,
         candidateCount,
         listingChars: candidateCount * 460 + n * 13,
-        listingWithheld: active && skill !== null,
+        listingWithheld: active && skill !== null || (n % 4 === 1 && n % 3 === 0),
+        withholdReason: active && skill !== null ? 'skill' : n % 4 === 1 && n % 3 === 0 ? 'nothing-fits' : null,
+        nothingFitsWellBelow: n % 4 === 1 && n % 3 === 0,
         wide: {
           ranked: [
             { name: skill ?? 'ship', probability: 0.41 },
@@ -986,6 +992,18 @@ function skillsLogRows () {
         // another one, so the match rate is not 100%.
         const loaded = n % 5 === 0 ? 'orca-cli' : skill
         rows.push({ type: 'observation', id, at: new Date(Date.parse(at) + 90 * 1000).toISOString(), skill: loaded })
+      }
+      // JEVADV-112: every fourth decision opens a session, so its turn
+      // carries the listing: a `listing` row says what it was. Most go
+      // through; now and then nothing fit (withheld), and once in a while a
+      // skill is still loaded in that session afterwards.
+      if (n % 4 === 1) {
+        const sessionId = `session-${n}`
+        const withheld = n % 3 === 0 ? 'nothing-fits' : active && skill !== null ? 'skill' : null
+        rows.push({ type: 'listing', at: new Date(Date.parse(at) + 5 * 1000).toISOString(), sessionId, decisionId: id, chars: candidateCount * 460, withheld })
+        if (withheld === 'nothing-fits' && n % 9 === 0) {
+          rows.push({ type: 'withheld-use', at: new Date(Date.parse(at) + 20 * 60 * 1000).toISOString(), sessionId, skill: 'orca-cli', reason: 'nothing-fits' })
+        }
       }
     }
   }

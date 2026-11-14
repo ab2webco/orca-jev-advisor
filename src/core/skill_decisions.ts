@@ -281,3 +281,46 @@ export function decideSkill(wide: WideResult | null, fit: FitResult | null, fitA
     reason: `stage 2${fitOfWinner === undefined ? "" : `, fits ${fitOfWinner.toFixed(2)}`}`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Withholding the engine's listing when nothing fits (JEVADV-112)
+// ---------------------------------------------------------------------------
+//
+// Measured on 14 transcripts before writing this: the engine sends its
+// `skill_listing` once per session, as one `isInitial` row in the first
+// turn (never again on later prompts, whatever their count), and a
+// `prompt.attachment` answer holds for that row for the whole process. So a
+// withhold is not per prompt: answered on the first prompt it takes the
+// listing out of every later step of every later turn, and answered on a
+// later prompt it changes nothing, since no listing row is being asked
+// about then. A skill a later prompt needs then reaches the model only
+// through active mode's own injection.
+//
+// That is why the bar is "well below" the fits threshold, not just below
+// it: a prompt near the threshold keeps the listing.
+
+/** Withhold the listing when nothing fits only below this best `fits` value (half of DEFAULT_FITS_THRESHOLD). */
+export const DEFAULT_WITHHOLD_BELOW = 0.15;
+
+/** Why a decision asks for the engine's listing to be left out, or null when it should go through. */
+export type ListingWithholdReason = "skill" | "nothing-fits";
+
+/**
+ * Whether a decision with no skill should still leave the listing out: Jev
+ * answered both stages, the gate said a skill may be needed, and every
+ * candidate's `fits` came back below `withholdBelow` (and below the fits
+ * threshold). A missing answer anywhere, an empty `fits`, or a best fit
+ * between `withholdBelow` and the threshold keeps the listing.
+ */
+export function nothingFitsWellBelow(
+  wide: WideResult | null,
+  fit: FitResult | null,
+  fitsThreshold: number = DEFAULT_FITS_THRESHOLD,
+  withholdBelow: number = DEFAULT_WITHHOLD_BELOW,
+): boolean {
+  if (wide === null || !wide.needsSkill || fit === null) return false;
+  const values = Object.values(fit.fits).filter((value) => Number.isFinite(value));
+  if (values.length === 0) return false;
+  const best = Math.max(...values);
+  return best < Math.min(withholdBelow, fitsThreshold);
+}

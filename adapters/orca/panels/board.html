@@ -628,6 +628,8 @@
           'stats.skillMatchFew': 'Acierto en modo medición: {{matched}} de {{n}} prompts comparables; hacen falta {{min}} antes de que signifique algo',
           'stats.skillMatchEnough': 'Acierto en modo medición: {{percent}}% sobre {{n}} prompts comparables',
           'stats.listingChars': 'Caracteres de listado no enviados',
+          'stats.listingsWithheldNothingFits': 'Sesiones sin listado: ninguna skill encajaba',
+          'stats.skillUsesAfterNothingFits': 'Skills usadas pese a ello',
           'activity.heading': 'Actividad por proyecto',
           'activity.empty': 'Todavía no hay actividad.',
           'activity.unavailable': 'No se pudo calcular la actividad esta vez. Se vuelve a intentar en el próximo refresco.',
@@ -925,6 +927,8 @@
           'stats.skillMatchFew': 'Measurement-mode match rate: {{matched}} of {{n}} comparable prompts; {{min}} are needed before it means anything',
           'stats.skillMatchEnough': 'Measurement-mode match rate: {{percent}}% over {{n}} comparable prompts',
           'stats.listingChars': 'Listing characters not sent',
+          'stats.listingsWithheldNothingFits': 'Sessions without the listing: no skill fit',
+          'stats.skillUsesAfterNothingFits': 'Skills used anyway',
           'activity.heading': 'Activity by project',
           'activity.empty': 'No activity yet.',
           'activity.unavailable': 'Activity could not be calculated this time. It will try again on the next refresh.',
@@ -2088,6 +2092,13 @@
         var rows = [{ label: t('stats.skillSuggestions'), value: figuresOf.suggestedCount || 0 }]
         if (figuresOf.listingCharsTotal != null) {
           rows.push({ label: t('stats.listingChars'), value: figuresOf.listingCharsTotal })
+        }
+        // JEVADV-112: listings withheld because nothing fit, and the skills
+        // loaded after one was (the missed-skill count). Only once the
+        // worker records listing rows; an older summary shows neither.
+        if (typeof figuresOf.listingsAsked === 'number' && figuresOf.listingsAsked > 0) {
+          rows.push({ label: t('stats.listingsWithheldNothingFits'), value: figuresOf.listingsWithheldNothingFits || 0 })
+          rows.push({ label: t('stats.skillUsesAfterNothingFits'), value: figuresOf.skillUsesAfterNothingFits || 0 })
         }
         var parts = [figures(rows)]
         // #11: a rate on a handful of samples is noise, so below the

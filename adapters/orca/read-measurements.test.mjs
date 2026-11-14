@@ -177,6 +177,31 @@ test('modSkills.listingChars: sums only decisions where listingWithheld === true
   assert.equal(result.modSkills.listingCharsAvgPerPrompt, 100)
 })
 
+// JEVADV-112: the engine sends its listing once per session, so a decision
+// that carries `withholdReason` counts nothing itself; the `listing` row of
+// the turn that carried the listing does.
+test('modSkills.listingChars: JEVADV-112 decisions count only through their listing rows, and the missed-skill count is reported', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [
+    { ...decisionRow('a', '2026-09-19T00:00:00.000Z'), listingChars: 900, listingWithheld: true, withholdReason: 'nothing-fits', nothingFitsWellBelow: true },
+    { type: 'listing', at: '2026-09-19T00:00:01.000Z', sessionId: 's1', decisionId: 'a', chars: 800, withheld: 'nothing-fits' },
+    { ...decisionRow('b', '2026-09-19T01:00:00.000Z'), listingChars: 900, listingWithheld: true, withholdReason: 'skill', nothingFitsWellBelow: false },
+    { ...decisionRow('c', '2026-09-19T02:00:00.000Z'), listingChars: 900, listingWithheld: false, withholdReason: null, nothingFitsWellBelow: false },
+    { type: 'listing', at: '2026-09-19T02:00:01.000Z', sessionId: 's2', decisionId: 'c', chars: 700, withheld: null },
+    { type: 'withheld-use', at: '2026-09-19T03:00:00.000Z', sessionId: 's1', skill: 'graft', reason: 'nothing-fits' },
+  ])
+  const result = run(home)
+  assert.equal(result.modSkills.listingCharsTotal, 800, 'only the listing actually left out counts, once for its session')
+  assert.equal(result.modSkills.listingCharsSampleCount, 1)
+  assert.equal(result.modSkills.listingsAsked, 2)
+  assert.equal(result.modSkills.listingsWithheld, 1)
+  assert.equal(result.modSkills.listingsWithheldNothingFits, 1)
+  assert.equal(result.modSkills.skillUsesAfterNothingFits, 1)
+  assert.equal(result.modSkills.totalDecisions, 3)
+  const all = result.modSkills.windows.all
+  assert.deepEqual([all.listingsAsked, all.listingsWithheld, all.listingsWithheldNothingFits, all.skillUsesAfterNothingFits, all.listingCharsTotal], [2, 1, 1, 1, 800], 'the board reads the same counts per window')
+})
+
 test('modSkills.listingChars: a record from before listingWithheld existed keeps being counted (documented backward-compat choice)', () => {
   const home = makeHome()
   writeModSkillsLog(home, [
@@ -878,8 +903,8 @@ test('W1: modSkills.windows count each window\'s own prompts, and the all-time r
   ])
   const { modSkills } = run(home)
   const strip = ({ available, sinceMs, coverageSinceMs, pluginVersion, ...figures }) => figures
-  assert.deepEqual(strip(modSkills.windows.day), { decisions: 1, suggestedCount: 1, comparableCount: 1, matchedCount: 1, matchRate: 1, listingCharsTotal: 120 })
-  assert.deepEqual(strip(modSkills.windows.week), { decisions: 2, suggestedCount: 2, comparableCount: 2, matchedCount: 1, matchRate: 0.5, listingCharsTotal: 240 })
+  assert.deepEqual(strip(modSkills.windows.day), { decisions: 1, suggestedCount: 1, comparableCount: 1, matchedCount: 1, matchRate: 1, listingCharsTotal: 120, listingsAsked: 0, listingsWithheld: 0, listingsWithheldNothingFits: 0, skillUsesAfterNothingFits: 0 })
+  assert.deepEqual(strip(modSkills.windows.week), { decisions: 2, suggestedCount: 2, comparableCount: 2, matchedCount: 1, matchRate: 0.5, listingCharsTotal: 240, listingsAsked: 0, listingsWithheld: 0, listingsWithheldNothingFits: 0, skillUsesAfterNothingFits: 0 })
   assert.equal(modSkills.windows.all.coverageSinceMs, null, 'the skills log is never pruned')
   assert.equal(modSkills.totalDecisions, 2)
   assert.equal(modSkills.readiness.comparableShortfall > 0, true)

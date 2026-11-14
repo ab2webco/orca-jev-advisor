@@ -34,7 +34,14 @@
  *     mode additionally withholds the listing and injects the winner's
  *     SKILL.md as context the model reads -- but only once that
  *     SKILL.md was actually read successfully (see `pendingListingWithheld`
- *     above).
+ *     above). JEVADV-112: active mode also withholds the listing, with
+ *     nothing injected, when every candidate's `fits` came back well below
+ *     the threshold (`withholdBelow`, src/core/skill_decisions.ts
+ *     nothingFitsWellBelow). The engine sends its listing once per
+ *     session and the answer holds for the process, so that withhold
+ *     lasts the whole session; each withhold and each skill loaded after
+ *     one is recorded (`listing` and `withheld-use` rows) so missed skills
+ *     can be counted.
  *
  * skill.prompt is hooked purely to observe: whether the skill the model
  * actually loaded (typed, through the Skill tool, or preloaded into a
@@ -92,14 +99,16 @@ import {
   buildFitState,
   buildWideQuestions,
   buildWideState,
+  DEFAULT_WITHHOLD_BELOW,
   decideSkill,
   interpretFit,
   interpretWide,
   listingCharsFor,
+  nothingFitsWellBelow,
   shortlistOf,
 } from '../../../../src/core/skill_decisions.ts'
-import type { FitResult, SkillCandidate, SkillCandidateDetail, WideResult } from '../../../../src/core/skill_decisions.ts'
-import { buildDecisionRecord, buildObservationRecord, computeComparableStats, serializeRecord } from '../../../../src/core/skill_measurement.ts'
+import type { FitResult, ListingWithholdReason, SkillCandidate, SkillCandidateDetail, WideResult } from '../../../../src/core/skill_decisions.ts'
+import { buildDecisionRecord, buildListingRecord, buildObservationRecord, buildWithheldUseRecord, computeComparableStats, serializeRecord } from '../../../../src/core/skill_measurement.ts'
 import { shouldSamplePrompt } from '../../../../src/core/mod_skills_sampling.ts'
 import { listToolInventory } from '../../../../src/core/tool_inventory.ts'
 import type { ToolLister, ToolSummary } from '../../../../src/core/tool_inventory.ts'
@@ -3988,6 +3997,8 @@ export function register(on: On, options: PluginOptions): void {
   const budgetMs = number('budgetMs', DEFAULT_BUDGET_MS)
   const gateThreshold = number('gateThreshold', DEFAULT_GATE_THRESHOLD)
   const fitsThreshold = number('fitsThreshold', DEFAULT_FITS_THRESHOLD)
+  // JEVADV-112: active mode leaves the listing out when every `fits` is below this; 0 turns it off.
+  const withholdBelow = number('withholdBelow', DEFAULT_WITHHOLD_BELOW)
   const shortlistSize = Math.max(1, Math.round(number('shortlist', DEFAULT_SHORTLIST)))
   const excerptChars = Math.max(0, Math.round(number('excerptChars', DEFAULT_EXCERPT_CHARS)))
 
@@ -4039,11 +4050,20 @@ export function register(on: On, options: PluginOptions): void {
   // JEVADV-4: whether THIS turn's prompt.submit (below) actually injected a
   // skill in place of the engine's own listing -- the only thing
   // prompt.attachment (right below) may now withhold for. Reset at the top
-  // of every prompt.submit and set true only once a skill's SKILL.md was
-  // read successfully, so a turn that never gets that far (measurement
-  // mode, an unsampled prompt, no skill needed, nothing fit, or a failed
-  // read) always leaves this false and the real listing goes through.
-  let pendingListingWithheld = false
+  // of every prompt.submit and set only once a skill's SKILL.md was read
+  // successfully ('skill') or, JEVADV-112, every fit came back well below
+  // the threshold in active mode ('nothing-fits'). Any other turn
+  // (measurement mode, an unsampled prompt, no skill needed, a fit near the
+  // threshold, a failed read) leaves it null and the real listing goes
+  // through. The turn's decision id, set whenever a decision was recorded,
+  // goes into the `listing` row prompt.attachment writes.
+  let pendingListingWithheld: ListingWithholdReason | null = null
+  let pendingListingDecisionId: string | null = null
+  // JEVADV-112: what prompt.attachment last answered for the main
+  // conversation's listing. The engine sends the listing once per session
+  // and the answer holds for the process, so this is the session's state:
+  // a skill loaded while it is set is recorded as a `withheld-use` row.
+  let sessionListingWithheld: ListingWithholdReason | null = null
 
   // The status line is one entry per plugin: the skill/tool path's text
   // (prompt.submit) and the router's (turn.step) are kept apart here and
@@ -4110,8 +4130,24 @@ export function register(on: On, options: PluginOptions): void {
     // skill.prompt.
     if (e.agentId !== undefined) return next(e)
     const withhold = pendingListingWithheld
-    pendingListingWithheld = false
-    if (!withhold) return next(e)
+    const decisionId = pendingListingDecisionId
+    pendingListingWithheld = null
+    pendingListingDecisionId = null
+    sessionListingWithheld = withhold
+    // JEVADV-112: what this session's listing actually was, best-effort, and
+    // only on a turn that recorded a decision (an unsampled prompt records
+    // nothing). One row per answer the engine asks for: once per session,
+    // again on a resume or after a compaction.
+    try {
+      if (decisionId !== null && moduleState(await resolveFeatureModules($, modulesFile), 'skill-selection') !== 'off') {
+        const at = new Date(await $.clock.now()).toISOString()
+        const sessionId = await readSessionId($)
+        await appendMeasurement($, at, serializeRecord(buildListingRecord({ at, sessionId, decisionId, chars: e.text.length, withheld: withhold })))
+      }
+    } catch {
+      // Recording never changes the answer below.
+    }
+    if (withhold === null) return next(e)
     return { text: null }
   })
 
@@ -4148,8 +4184,9 @@ export function register(on: On, options: PluginOptions): void {
     // Reset every turn, before anything below can set it: whatever exits
     // this handler early (an empty prompt, a slash command, no API key, an
     // unsampled measurement-mode prompt, a thrown error) must never leave a
-    // stale `true` from an earlier turn for prompt.attachment to read.
-    pendingListingWithheld = false
+    // stale withhold from an earlier turn for prompt.attachment to read.
+    pendingListingWithheld = null
+    pendingListingDecisionId = null
 
     // The CI watcher's own note (origin: this plugin): nothing to route and no skill to pick, so no Jev call.
     if (ciWatchNote) return next(e)
@@ -4331,7 +4368,11 @@ export function register(on: On, options: PluginOptions): void {
             }
           }
         }
-        const listingWithheld = block !== null
+        // JEVADV-112: with no skill injected, active mode still leaves the
+        // listing out when every candidate's fit is well below the bar.
+        const wellBelow = nothingFitsWellBelow(wide, fit, fitsThreshold, withholdBelow)
+        const withholdReason: ListingWithholdReason | null = block !== null ? 'skill' : activeMode && decision.name === null && wellBelow ? 'nothing-fits' : null
+        const listingWithheld = withholdReason !== null
 
         const measurementId = crypto.randomUUID()
         const at = new Date(await $.clock.now()).toISOString()
@@ -4358,6 +4399,8 @@ export function register(on: On, options: PluginOptions): void {
               candidateCount: candidates.length,
               listingChars: listingCharsFor(candidates),
               listingWithheld,
+              withholdReason,
+              nothingFitsWellBelow: wellBelow,
               wide: wide === null ? null : { ranked: wide.ranked, gate: wide.gate, needsSkill: wide.needsSkill },
               fit: fit === null ? null : { winner: fit.winner, fits: fit.fits },
               decision: { name: decision.name, reason: decision.reason },
@@ -4367,7 +4410,8 @@ export function register(on: On, options: PluginOptions): void {
           ),
         )
         pendingMeasurementId = measurementId
-        pendingListingWithheld = listingWithheld
+        pendingListingWithheld = withholdReason
+        pendingListingDecisionId = measurementId
 
         // 0.6.2 E8: applied only when the winner's SKILL.md was injected.
         game.orca.skill = decision.name
@@ -4376,7 +4420,7 @@ export function register(on: On, options: PluginOptions): void {
         // Fail open, always: any unexpected error leaves the prompt
         // exactly as it was, with no partial measurement or injection, and
         // nothing withheld (pendingListingWithheld was already reset to
-        // false at the top of prompt.submit, and nothing here sets it).
+        // null at the top of prompt.submit, and nothing here sets it).
         return { block: null, status: null }
       }
     })()
@@ -4526,6 +4570,19 @@ export function register(on: On, options: PluginOptions): void {
   })
 
   on('skill.prompt', async ($, e, next) => {
+    // JEVADV-112: a skill loaded in a session whose listing was left out,
+    // the missed-skill count, recorded whether or not a decision is pending.
+    if (sessionListingWithheld !== null) {
+      const reason = sessionListingWithheld
+      try {
+        if (moduleState(await resolveFeatureModules($, modulesFile), 'skill-selection') !== 'off') {
+          const at = new Date(await $.clock.now()).toISOString()
+          await appendMeasurement($, at, serializeRecord(buildWithheldUseRecord({ at, sessionId: await readSessionId($), skill: e.skill, reason })))
+        }
+      } catch {
+        // Best-effort, like the observation below.
+      }
+    }
     if (pendingMeasurementId !== null) {
       const id = pendingMeasurementId
       pendingMeasurementId = null
