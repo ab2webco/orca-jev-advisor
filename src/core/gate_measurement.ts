@@ -103,6 +103,11 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
  *                    so the person was asked, the file named (verdict
  *                    "ask", source "local-rule"). Only a policy deny is
  *                    stronger; never cached and never authorized.
+ *   "silent"      -- JEVADV-111: a risk advice (never a policy, a local
+ *                    rule or the deploy/publish floor) in a project and
+ *                    family whose recent advices were all re-run unchanged
+ *                    (src/core/gate_advice_outcomes.ts); the verdict is
+ *                    "allow" and the advice reached the model as context.
  *
  * Reuses GateSource's own vocabulary wherever the two line up exactly
  * (local-rule, cache) rather than inventing parallel names for the same
@@ -120,7 +125,7 @@ export type GateVerdict = "allow" | "ask" | "deny" | "advise";
 export type GateFailure = JevFailure | ClefFailure | { readonly kind: "oversized" } | { readonly kind: "budget" };
 export type GateFailureClass = GateFailure["kind"];
 
-export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained" | "own-tree" | "trusted" | "secret-publish";
+export type GateStopReason = "policy" | "local-rule" | "local-allow" | "risk" | "unreachable" | "cache" | "advice-retry" | "queue" | "authorized" | "contained" | "own-tree" | "trusted" | "secret-publish" | "silent";
 
 export interface GateDecisionRecord {
   readonly type: "gate-decision";
@@ -450,7 +455,8 @@ function isGateStopReason(value: unknown): value is GateStopReason {
     value === "contained" ||
     value === "own-tree" ||
     value === "trusted" ||
-    value === "secret-publish"
+    value === "secret-publish" ||
+    value === "silent"
   );
 }
 

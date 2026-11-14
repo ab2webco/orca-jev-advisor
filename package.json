@@ -21,7 +21,8 @@
     "jev-health": "node --experimental-strip-types adapters/cli/jev_health_cli.ts",
     "measure-module-cost": "node --experimental-strip-types scripts/measure-module-cost.mjs",
     "measure-member-routing": "node --experimental-strip-types adapters/cli/member_routing_measure_cli.ts",
-    "measure-skill-listing": "node --experimental-strip-types adapters/cli/skill_listing_measure_cli.ts"
+    "measure-skill-listing": "node --experimental-strip-types adapters/cli/skill_listing_measure_cli.ts",
+    "measure-advice-outcomes": "node --experimental-strip-types adapters/cli/advice_outcomes_cli.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.0",

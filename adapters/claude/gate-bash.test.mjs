@@ -4954,3 +4954,94 @@ test('L1: the hook never writes or locks the index of the checkout it judges', (
   assert.equal(statSync(index).mtimeMs, before, 'the index is unchanged, so git never took its lock')
   assert.equal(existsSync(join(repo, '.git', 'index.lock')), false)
 })
+
+// ---------------------------------------------------------------------------
+// JEVADV-111: advice that never changes the next command becomes a silent
+// judgement. Once a project's last SILENT_AFTER risk advices in one command
+// family were all re-run unchanged, a later risk advice there runs, with the
+// advice handed to the model as context. A policy, a local rule and the
+// deploy/publish floor are never silenced.
+// ---------------------------------------------------------------------------
+
+function adviceOutcomesPath (home) {
+  return join(home, '.cache', 'orca-supervisor', 'gate-advice-outcomes.json')
+}
+
+function readAdviceOutcomesFile (home) {
+  return existsSync(adviceOutcomesPath(home)) ? JSON.parse(readFileSync(adviceOutcomesPath(home), 'utf8')) : null
+}
+
+/** A store in which (project, family)'s last eight advices were all retried unchanged. */
+function writeSilentFamily (home, project, family) {
+  mkdirSync(dirname(adviceOutcomesPath(home)), { recursive: true })
+  const lastAt = new Date().toISOString()
+  writeFileSync(adviceOutcomesPath(home), JSON.stringify({ version: 1, families: { [`${project}\u0000${family}`]: { recent: Array(8).fill('same'), lastAt } }, pending: {} }))
+}
+
+test('JEVADV-111: eight risk advices retried unchanged make the ninth a silent judgement', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  const commands = Array.from({ length: 9 }, (_, i) => `python3 scripts/job.py --batch ${i}`)
+  seedAdvice(home, repo, commands, { entry: { decision: 'advise', reason: 'it writes to the shared staging database', at: Date.now() } })
+  for (let i = 0; i < 8; i++) {
+    const first = JSON.parse(run(home, commands[i], { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: `silent-s${i}` }))
+    assert.equal(first.hookSpecificOutput.permissionDecision, 'deny', `advice ${i} is still given`)
+    const retry = JSON.parse(run(home, commands[i], { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: `silent-s${i}` }))
+    assert.equal(retry.hookSpecificOutput.permissionDecision, 'allow')
+  }
+  const store = readAdviceOutcomesFile(home)
+  assert.deepEqual(store.families['widgets\u0000python3'].recent, Array(8).fill('same'))
+  assert.deepEqual(store.pending, {})
+
+  const ninth = JSON.parse(run(home, commands[8], { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-s8' }))
+  assert.equal(ninth.hookSpecificOutput.permissionDecision, 'allow', 'no refused attempt')
+  assert.match(ninth.hookSpecificOutput.additionalContext, /it writes to the shared staging database/, 'the advice still reaches the model')
+  assert.equal(ninth.systemMessage, undefined, 'nothing is shown to the person')
+  const record = lastGateRecord(home)
+  assert.equal(record.verdict, 'allow')
+  assert.equal(record.stopReason, 'silent')
+  assert.equal(record.commandFamily, 'python3')
+})
+
+test('JEVADV-111: a silent family in one project still advises in another', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/gadgets.git')
+  writeSilentFamily(home, 'widgets', 'python3')
+  const command = 'python3 scripts/job.py --batch 1'
+  seedAdvice(home, repo, [command])
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-other' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'risk')
+  assert.deepEqual(Object.values(readAdviceOutcomesFile(home).pending).map((item) => item.key), ['gadgets\u0000python3'], 'the advice waits for its outcome')
+})
+
+test('JEVADV-111: the deploy/publish floor is never silenced', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeSilentFamily(home, 'widgets', 'gh cli')
+  const command = 'gh release create v1.2.3 --notes x'
+  seedAdvice(home, repo, [command], { entry: { decision: 'advise', reason: 'creates a GitHub release', deployPublishKind: 'publish', at: Date.now() } })
+  const payload = JSON.parse(run(home, command, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-release' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'risk')
+  assert.deepEqual(readAdviceOutcomesFile(home).pending, {}, 'the floor teaches nothing either')
+})
+
+test('JEVADV-111: a policy ask is never silenced', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeSilentFamily(home, 'widgets', 'gh cli')
+  writePoliciesMirror(home, [QUEUE_POLICY])
+  seedAdvice(home, repo, [MERGE_45], { policies: [QUEUE_POLICY], entry: { decision: 'ask', reason: 'covered by the client_always_asks policy', policyId: 'client_always_asks', at: Date.now() } })
+  const payload = JSON.parse(run(home, MERGE_45, { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-policy' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'ask')
+})
+
+test('JEVADV-111: a local rule is never silenced', () => {
+  const home = makeHome()
+  const repo = repoWithOrigin('https://github.com/acme/widgets.git')
+  writeSilentFamily(home, 'widgets', 'git push')
+  const payload = JSON.parse(run(home, 'git push --force origin main', { cwd: repo, apiKey: 'test-key-unused-on-cache-hit', sessionId: 'silent-local' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
+  assert.equal(lastGateRecord(home).stopReason, 'local-rule')
+})

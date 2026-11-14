@@ -69,6 +69,7 @@ import { GATE_CONSEQUENCE_CEILING, GATE_DECISION_RULES_VERSION, buildActionGateQ
 import type { GateActionReason, GateActionResult, Policy, PolicyScope } from '../../src/core/decisions.ts'
 import { gatePolicyFingerprint } from '../../src/core/gate_policy_fingerprint.ts'
 import { adviceRetryKey, isAdviceRetryFresh, pruneAdviceRetryState } from '../../src/core/gate_advice_retry.ts'
+import { ADVICE_OUTCOMES_FILE, EMPTY_ADVICE_OUTCOMES, isSilentFamily, parseAdviceOutcomes, recordAdviceIssued as recordOutcomeAdviceIssued, recordIdenticalRetry, type AdviceOutcomeStore } from '../../src/core/gate_advice_outcomes.ts'
 import { affectedSegments, composeAdviceText, modelRiskReasonFor } from '../../src/core/gate_advice_text.ts'
 import { assessDiscard, stashCommandFor } from '../../src/core/discard_loss.ts'
 import type { DiscardLossDetail } from '../../src/core/discard_loss.ts'
@@ -198,6 +199,9 @@ const APPROVALS_PATH = join(CACHE_DIR, 'gate-approvals.jsonl')
 // Never the real ~/.config or ~/.cache paths in a test -- same
 // ORCA_SUPERVISOR_CACHE_DIR override every other path in this file honors.
 const ADVICE_RETRY_PATH = join(CACHE_DIR, 'gate-advice-retry.json')
+// JEVADV-111: what each risk advice led to, per project and command family
+// (src/core/gate_advice_outcomes.ts).
+const ADVICE_OUTCOMES_PATH = join(CACHE_DIR, ADVICE_OUTCOMES_FILE)
 // 0.6.28: the delivery classes each repository already confirmed -- see
 // src/core/gate_authorizations.ts. One of the gate's own files
 // (gate_own_paths.ts), so the model cannot write itself an authorization.
@@ -964,6 +968,44 @@ function recordAdviceIssued(sessionId: string | null, command: string): void {
   writeAdviceRetryState({ ...state, [adviceRetryKey(sessionId, command)]: Date.now() })
 }
 
+// JEVADV-111: the advice-outcome store. Every read fails open to an empty
+// store and every write is best effort: a store that cannot be read only
+// means the advice is given as before.
+function readAdviceOutcomes(): AdviceOutcomeStore {
+  try {
+    return parseAdviceOutcomes(JSON.parse(readFileSync(ADVICE_OUTCOMES_PATH, 'utf8')))
+  } catch {
+    return EMPTY_ADVICE_OUTCOMES
+  }
+}
+
+/** Written to a temporary file and renamed over the store, so a reader never sees half a file. */
+function writeAdviceOutcomes(store: AdviceOutcomeStore): void {
+  const temporary = `${ADVICE_OUTCOMES_PATH}.${process.pid}.tmp`
+  try {
+    mkdirSync(dirname(ADVICE_OUTCOMES_PATH), { recursive: true })
+    writeFileSync(temporary, JSON.stringify(store), 'utf8')
+    renameSync(temporary, ADVICE_OUTCOMES_PATH)
+  } catch {
+    // Not learned this time; the advice is still given as before.
+  }
+}
+
+/** A risk advice was issued: wait for its identical retry, or for its window to close. */
+function learnAdviceIssued(sessionId: string | null, command: string, actingCwd: string): void {
+  if (sessionId === null) return
+  writeAdviceOutcomes(recordOutcomeAdviceIssued(readAdviceOutcomes(), adviceRetryKey(sessionId, command), projectName(actingCwd), commandFamily(command), Date.now()))
+}
+
+/** The identical command was retried: its advice changed nothing. Only a pending risk advice is counted. */
+function learnIdenticalRetry(sessionId: string | null, command: string): void {
+  if (sessionId === null) return
+  const store = readAdviceOutcomes()
+  const key = adviceRetryKey(sessionId, command)
+  if (store.pending[key] === undefined) return
+  writeAdviceOutcomes(recordIdenticalRetry(store, key, Date.now()))
+}
+
 /**
  * 0.6.19 M4 (JEVADV-70): how long one git call may take before it is killed.
  * Every call below reads something the gate can do without (a project name,
@@ -1141,6 +1183,7 @@ function tryAdviceRetryPass(command: string, sessionCwd: string, cwd: string, se
   // the gate remembers for the repository. Never a local rule's own advice:
   // only the risk stage's advice may ever be relaxed later.
   if (source !== 'local-rule') learnAuthorization(command, sessionCwd, cwd)
+  learnIdenticalRetry(sessionId, command)
   appendGateRecord(cwd, command, source, 'allow', latencyMs, 'advice-retry', null, teamInternal)
   emit('allow', `${judgeName()}: identical retry within the advice window; proceeding.`, tJudged('advisedRetryLine', { segment: jevSegmentFor(command) }))
   return true
@@ -1240,6 +1283,37 @@ function tryAuthorizedPass(input: {
 }
 
 /**
+ * JEVADV-111: a risk advice in a project and family whose last advices were
+ * all re-run unchanged is judged silently: an allow, the advice handed to
+ * the model as context in one directive line, the log row `silent`. Nothing
+ * is shown to the person; the decision log records it (`npm run
+ * measure-advice-outcomes`). Never a policy, a local rule,
+ * the deploy/publish floor or a NEVER_SILENT_FAMILIES family.
+ */
+function trySilentJudgement(input: {
+  readonly command: string
+  readonly actingCwd: string
+  readonly reasonsEnglish: readonly string[]
+  readonly source: GateSource
+  readonly latencyMs: number | null
+  readonly teamInternal: boolean
+}): boolean {
+  if (!isSilentFamily(readAdviceOutcomes(), projectName(input.actingCwd), commandFamily(input.command), Date.now())) return false
+  appendGateRecord(input.actingCwd, input.command, input.source, 'allow', input.latencyMs, 'silent', null, input.teamInternal)
+  const advice = input.reasonsEnglish.filter((reason) => reason.length > 0).join(' · ')
+  const payload = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      permissionDecisionReason: `${judgeName()}: allowed; advice given as context.`,
+      additionalContext: `${judgeName()} (runs, not a block): ${advice.length > 0 ? advice : 'check the result before going on.'}`,
+    },
+  }
+  writeSync(1, JSON.stringify(payload))
+  return true
+}
+
+/**
  * The single choke point every advice path (the risk stage, fresh or
  * replayed from the shape cache; a local rule whose deny-tier switch is
  * off; an interpreter-code-only local-rule match) resolves through: the
@@ -1274,15 +1348,20 @@ function resolveAdviceOutcome(input: {
   readonly teamInternal?: boolean
   /** 0.6.28: a risk advice with no policy behind it (fresh, floored or replayed from the cache), which a remembered authorization may turn into an allow. Never set for a local rule's advice. */
   readonly authorizable?: boolean
+  /** JEVADV-111: a risk-stage advice (never the deploy/publish floor, a policy or a local rule) whose family may be learned and judged silently. */
+  readonly silenceable?: boolean
 }): void {
   const { command, cwd, sessionId, reasonsEnglish, effectSource, segment, source, stopReason } = input
   const teamInternal = input.teamInternal ?? false
   if (tryAdviceRetryPass(command, cwd, input.actingCwd ?? cwd, sessionId, source, input.latencyMs ?? null, teamInternal)) return
   if (input.authorizable === true && tryAuthorizedPass({ command, cwd, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
+  const silenceable = input.silenceable === true && stopReason === 'risk'
+  if (silenceable && trySilentJudgement({ command, actingCwd: input.actingCwd ?? cwd, reasonsEnglish, source, latencyMs: input.latencyMs ?? null, teamInternal })) return
   const sessionEligible = sessionId !== null
   const advice = buildAdviceForCommand(command, cwd, reasonsEnglish, sessionEligible, effectSource)
   appendGateRecord(input.actingCwd ?? cwd, command, source, 'advise', input.latencyMs ?? null, stopReason, null, teamInternal)
   recordAdviceIssued(sessionId, command)
+  if (silenceable) learnAdviceIssued(sessionId, command, input.actingCwd ?? cwd)
   emitAdvice(segment, advice.effectSummary, advice.modelText)
 }
 
@@ -2739,7 +2818,7 @@ async function main(): Promise<void> {
       // empty status line.
       const effectSource: Omit<ResolvePersonEffectInput, 'recoverability'> =
         hit.deployPublishKind !== undefined ? { deployPublishKind: hit.deployPublishKind } : { riskReasonKeys: cachedRiskReasonKeys(hit) }
-      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal, authorizable: true })
+      resolveAdviceOutcome({ command, cwd, actingCwd, sessionId, toolUseId, reasonsEnglish: [hit.reason], effectSource, segment: jevSegmentFor(command), source: 'cache', stopReason: 'risk', teamInternal, authorizable: true, silenceable: hit.deployPublishKind === undefined })
       return
     }
     // 0.6.8 T4: a cached requires_human ask is queued the same way a fresh
@@ -2886,7 +2965,7 @@ async function main(): Promise<void> {
       reasonsEnglish: resolved.riskAdviceReasonsEnglish,
       effectSource: { riskReasonKeys: resolved.riskAdviceReasonKeys },
       segment: jevSegmentFor(command),
-      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal, authorizable: true,
+      source: 'jev', stopReason: 'risk', latencyMs: jevLatencyMs, teamInternal, authorizable: true, silenceable: true,
     })
     return
   }
