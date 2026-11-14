@@ -479,7 +479,7 @@ function listingRowCharsNotSent (row) {
   return typeof row.withheld === 'string' && typeof row.chars === 'number' && Number.isFinite(row.chars) ? row.chars : null
 }
 
-function modSkillsFigures (decisions, listings, observationById, window, now) {
+function modSkillsFigures (decisions, listings, withheldUses, observationById, window, now) {
   let count = 0
   let suggestedCount = 0
   let comparableCount = 0
@@ -503,15 +503,25 @@ function modSkillsFigures (decisions, listings, observationById, window, now) {
       if (suggestedName !== null && suggestedName === observation.skill) matchedCount += 1
     }
   }
-  for (const row of listings) {
+  let listingsAsked = 0
+  let listingsWithheld = 0
+  let listingsWithheldNothingFits = 0
+  const inWindow = (row) => {
     const ms = typeof row.at === 'string' ? atMs(row.at) : null
-    if (ms === null ? window.sinceMs !== null : !isInWindow(ms, window, now)) continue
+    return ms === null ? window.sinceMs === null : isInWindow(ms, window, now)
+  }
+  for (const row of listings) {
+    if (!inWindow(row)) continue
+    listingsAsked += 1
     const chars = listingRowCharsNotSent(row)
     if (chars !== null) {
       listing += chars
       listingSamples += 1
+      listingsWithheld += 1
+      if (row.withheld === 'nothing-fits') listingsWithheldNothingFits += 1
     }
   }
+  const skillUsesAfterNothingFits = withheldUses.filter((row) => row.reason === 'nothing-fits' && inWindow(row)).length
   return {
     decisions: count,
     suggestedCount,
@@ -519,6 +529,11 @@ function modSkillsFigures (decisions, listings, observationById, window, now) {
     matchedCount,
     matchRate: comparableCount > 0 ? matchedCount / comparableCount : null,
     listingCharsTotal: listingSamples > 0 ? listing : null,
+    // JEVADV-112: per window, like every figure above.
+    listingsAsked,
+    listingsWithheld,
+    listingsWithheldNothingFits,
+    skillUsesAfterNothingFits,
   }
 }
 
@@ -639,7 +654,7 @@ async function aggregateModSkills (windows, now) {
     byProject: topByCount(byProject, 10),
     readiness,
     // The skills log is never pruned: every window speaks for all it asks.
-    windows: perBoardWindow(windows, now, null, (window) => modSkillsFigures(decisions, listings, observationById, window, now)),
+    windows: perBoardWindow(windows, now, null, (window) => modSkillsFigures(decisions, listings, withheldUses, observationById, window, now)),
   }
 }
 

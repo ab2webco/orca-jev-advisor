@@ -198,6 +198,8 @@ test('modSkills.listingChars: JEVADV-112 decisions count only through their list
   assert.equal(result.modSkills.listingsWithheldNothingFits, 1)
   assert.equal(result.modSkills.skillUsesAfterNothingFits, 1)
   assert.equal(result.modSkills.totalDecisions, 3)
+  const all = result.modSkills.windows.all
+  assert.deepEqual([all.listingsAsked, all.listingsWithheld, all.listingsWithheldNothingFits, all.skillUsesAfterNothingFits, all.listingCharsTotal], [2, 1, 1, 1, 800], 'the board reads the same counts per window')
 })
 
 test('modSkills.listingChars: a record from before listingWithheld existed keeps being counted (documented backward-compat choice)', () => {
@@ -901,8 +903,8 @@ test('W1: modSkills.windows count each window\'s own prompts, and the all-time r
   ])
   const { modSkills } = run(home)
   const strip = ({ available, sinceMs, coverageSinceMs, pluginVersion, ...figures }) => figures
-  assert.deepEqual(strip(modSkills.windows.day), { decisions: 1, suggestedCount: 1, comparableCount: 1, matchedCount: 1, matchRate: 1, listingCharsTotal: 120 })
-  assert.deepEqual(strip(modSkills.windows.week), { decisions: 2, suggestedCount: 2, comparableCount: 2, matchedCount: 1, matchRate: 0.5, listingCharsTotal: 240 })
+  assert.deepEqual(strip(modSkills.windows.day), { decisions: 1, suggestedCount: 1, comparableCount: 1, matchedCount: 1, matchRate: 1, listingCharsTotal: 120, listingsAsked: 0, listingsWithheld: 0, listingsWithheldNothingFits: 0, skillUsesAfterNothingFits: 0 })
+  assert.deepEqual(strip(modSkills.windows.week), { decisions: 2, suggestedCount: 2, comparableCount: 2, matchedCount: 1, matchRate: 0.5, listingCharsTotal: 240, listingsAsked: 0, listingsWithheld: 0, listingsWithheldNothingFits: 0, skillUsesAfterNothingFits: 0 })
   assert.equal(modSkills.windows.all.coverageSinceMs, null, 'the skills log is never pruned')
   assert.equal(modSkills.totalDecisions, 2)
   assert.equal(modSkills.readiness.comparableShortfall > 0, true)

@@ -69,6 +69,9 @@ Both read from `npm run measure-skill-listing` after a week of the new rows.
   decisions; older rows keep their count. The aggregate adds
   `listingsAsked`, `listingsWithheld`, `listingsWithheldNothingFits` and
   `skillUsesAfterNothingFits`.
+- [x] The board's Modules tab shows, per window, "Sessions without the
+  listing: no skill fit" and "Skills used anyway" once listing rows exist
+  (read at 1440, 768, 390 and 320, light and dark).
 - [x] `npm run measure-skill-listing`: listing rows per session and requests
   re-reading them from transcripts, and tokens kept out and skills used after
   each withhold from the mod's rows.
@@ -86,3 +89,11 @@ Both read from `npm run measure-skill-listing` after a week of the new rows.
   A member's first prompt is the Orca brief, judged like any prompt: if no
   skill comes near, the member runs without the listing. Live check in a lead
   and a member pane not done here (no install on this machine).
+
+## Follow-ups (release QA on the owner's Mac)
+- [ ] Live check in an orca-game lead pane and a member pane (`game launch`
+  with a no-op prompt): the Panel, the member band and the HUD keep working.
+- [ ] After a week of the new rows, `npm run measure-skill-listing`: the
+  share of first prompts withheld for nothing-fits, the tokens kept out, and
+  `skillUsesAfterNothingFits` against the baseline's 11 skill uses; confirm
+  that a compaction re-sends the listing.
