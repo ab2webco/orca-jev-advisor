@@ -27,6 +27,8 @@ export type GateKey =
   | "localRule"
   | "localRuleDeny"
   | "localRuleDenyLoss"
+  | "localRuleDenyDiscard"
+  | "policyDenyMain"
   | "policyDeny"
   | "advisedLine"
   | "advisedRetryLine"
@@ -90,12 +92,19 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // model, not by a person. See the note on the English one.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     localRuleDenyLoss: "REFUSED: discards uncommitted work: {{loss}}. Those changes exist only in the working tree, so nothing could bring them back. Do not run this command as written, and do not delete or overwrite the same files by another command, tool or script. {{next}} Continue with the rest of the work.",
+    // JEVADV-110: the discard rule's refusal when the check could not read the
+    // tree. It names the safe form (keep the work, then a plain discard the
+    // check can read) instead of sending the agent to a person.
+    localRuleDenyDiscard: "REFUSED: {{why}}. The gate could not read what this would discard, so it refuses it as written. Do not reach the same result by another command, tool or script. A safe way on: keep the work first, as a command of its own: `{{stash}}` (reversible: `git stash apply` brings it back), or commit it if it is real work. Then run the discard again as a plain git command in that repository, with no `bash -c`, `$(...)`, xargs, ssh, script or GIT_ variable around it, so the gate can read the tree; with nothing left to lose it goes through. If it runs on another machine, keep the work there the same way first. Continue with the rest of the work.",
     // 0.6.17 T2: the file tools' counterpart of localRuleDeny, English in both catalogs for the same reason.
     ownFileEditDeny: "REFUSED: {{why}}. You cannot make this edit. Do not retry it, and do not reach the same result by another tool, command or script. If it genuinely needs to change, say so and let the person change it in the Advisor panel. Continue with the rest of the work.",
     // A `prohibits` team policy match: the same REFUSED wording pattern as
     // localRuleDeny above, naming the policy instead of a local rule -- also
     // deliberately identical in both catalogs (model-facing, never a person).
     // No retry clause: this is a hard stop, not an advice.
+    // JEVADV-110: never_write_to_main's own refusal names the safe form (a
+    // feature branch and a pull request) instead of sending the agent to a person.
+    policyDenyMain: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command on this branch. Do not retry it here, and do not reach the same result by another command, tool or script. A safe way on: do this work on a feature branch (`git switch -c <branch>`) or in a worktree of one, and let it reach the protected branch through a pull request. Continue with the rest of the work.",
     policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     // 0.5.2: the person must read, in one line, WHAT Jev decided and ON
     // WHICH command -- "jev · avisó al modelo: si sale mal, habrá que
@@ -224,8 +233,15 @@ export const GATE_CATALOG: Catalog<GateKey> = {
     // by another route, which is the outcome the rule exists to prevent.
     localRuleDeny: "REFUSED: {{why}}. You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     localRuleDenyLoss: "REFUSED: discards uncommitted work: {{loss}}. Those changes exist only in the working tree, so nothing could bring them back. Do not run this command as written, and do not delete or overwrite the same files by another command, tool or script. {{next}} Continue with the rest of the work.",
+    // JEVADV-110: the discard rule's refusal when the check could not read the
+    // tree. It names the safe form (keep the work, then a plain discard the
+    // check can read) instead of sending the agent to a person.
+    localRuleDenyDiscard: "REFUSED: {{why}}. The gate could not read what this would discard, so it refuses it as written. Do not reach the same result by another command, tool or script. A safe way on: keep the work first, as a command of its own: `{{stash}}` (reversible: `git stash apply` brings it back), or commit it if it is real work. Then run the discard again as a plain git command in that repository, with no `bash -c`, `$(...)`, xargs, ssh, script or GIT_ variable around it, so the gate can read the tree; with nothing left to lose it goes through. If it runs on another machine, keep the work there the same way first. Continue with the rest of the work.",
     // 0.6.17 T2: the file tools' counterpart of localRuleDeny, English in both catalogs for the same reason.
     ownFileEditDeny: "REFUSED: {{why}}. You cannot make this edit. Do not retry it, and do not reach the same result by another tool, command or script. If it genuinely needs to change, say so and let the person change it in the Advisor panel. Continue with the rest of the work.",
+    // JEVADV-110: never_write_to_main's own refusal names the safe form (a
+    // feature branch and a pull request) instead of sending the agent to a person.
+    policyDenyMain: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command on this branch. Do not retry it here, and do not reach the same result by another command, tool or script. A safe way on: do this work on a feature branch (`git switch -c <branch>`) or in a worktree of one, and let it reach the protected branch through a pull request. Continue with the rest of the work.",
     policyDeny: "REFUSED: forbidden by the team policy {{policyId}} ({{rule}}). You cannot run this command. Do not retry it, and do not reach the same result by another command, tool or script — the refusal is about the effect, not the spelling. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.",
     advisedLine: "jev · advised the model before `{{segment}}`: {{effect}}",
     advisedRetryLine: "jev · the model confirmed it and it ran: `{{segment}}`",

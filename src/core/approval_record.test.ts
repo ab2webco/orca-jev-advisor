@@ -8,6 +8,7 @@ import {
   ceilingEvidence,
   parsePendingToolUseIds,
   serializeApprovalRecord,
+  inferLegacyVerdict,
   summarizeApprovals,
 } from "./approval_record.ts";
 import type { LabelledDecision, PendingApprovalRecord } from "./approval_record.ts";
@@ -20,7 +21,7 @@ const NOW = Date.parse("2026-09-23T12:30:00.000Z");
 // every helper call below defaults to the risk stage, the most common
 // shape, and the stopReason/policyId-specific tests further down override
 // it explicitly.
-function pending(toolUseId: string, consequence: number | null, at = AT, stopReason: PendingApprovalRecord["stopReason"] = "risk", policyId: string | null = null): PendingApprovalRecord {
+function pending(toolUseId: string, consequence: number | null, at = AT, stopReason: PendingApprovalRecord["stopReason"] = "risk", policyId: string | null = null, verdict: PendingApprovalRecord["verdict"] = "ask"): PendingApprovalRecord {
   return buildPendingApprovalRecord({
     toolUseId,
     at,
@@ -34,6 +35,7 @@ function pending(toolUseId: string, consequence: number | null, at = AT, stopRea
     ceiling: 1.78,
     stopReason,
     policyId,
+    verdict,
   });
 }
 
@@ -100,7 +102,7 @@ test("awaiting, together with approved/rejected/notRun, always sums to asked", (
   assert.equal(s.rejected, 1);
   assert.equal(s.notRun, 1);
   assert.equal(s.awaiting, 1);
-  assert.equal(s.approved + s.rejected + s.notRun + s.awaiting, s.asked);
+  assert.equal(s.approved + s.rejected + s.notRun + s.awaiting + s.refused, s.asked);
 });
 
 test("notRun is a classification, not a fact -- a labelled outcome always wins even after the TTL has passed", () => {
@@ -237,4 +239,34 @@ test("a pending record carries no command, only stopReason/policyId as ids -- ne
   assert.ok(!line.includes("/Users/"), "a path leaked");
   const parsed: unknown = JSON.parse(line);
   assert.deepEqual(Object.keys(parsed as object).includes("command"), false);
+});
+
+// JEVADV-110: 130 of the 131 "held approvals" measured were refusals the gate
+// had already answered itself. They are not waiting on anybody.
+test("a refusal is counted as refused, never as awaiting or notRun, however old", () => {
+  const old = new Date(NOW - UNRESOLVED_AFTER_MS - 1000).toISOString();
+  const s = summarizeApprovals(
+    [pending("fresh", null, AT, "local-rule", null, "deny"), pending("old", null, old, "policy", "never_write_to_main", "deny"), pending("ask", 1.9, AT)],
+    [],
+    NOW,
+  );
+  assert.equal(s.refused, 2);
+  assert.equal(s.awaiting, 1, "only the real ask is still waiting on a person");
+  assert.equal(s.notRun, 0);
+  assert.equal(s.asked, 3);
+  assert.equal(s.approved + s.rejected + s.notRun + s.awaiting + s.refused, s.asked);
+});
+
+test("a legacy row with no verdict keeps the old classification", () => {
+  const old = new Date(NOW - UNRESOLVED_AFTER_MS - 1000).toISOString();
+  const s = summarizeApprovals([pending("a", 1.9, old, "policy", "others_pr", null)], [], NOW);
+  assert.equal(s.refused, 0);
+  assert.equal(s.notRun, 1);
+});
+
+test("a legacy row's verdict is inferred only where it is certain", () => {
+  assert.equal(inferLegacyVerdict("local-rule"), "deny", "every local-rule pending was written by a deny");
+  assert.equal(inferLegacyVerdict("policy"), null, "a policy stop may have been a deny or an ask");
+  assert.equal(inferLegacyVerdict("cache"), null);
+  assert.equal(inferLegacyVerdict(undefined), null);
 });

@@ -335,6 +335,25 @@ test('approvals.awaiting -- a pending record still inside the wait window is rep
   assert.equal(result.approvals.approved + result.approvals.rejected + result.approvals.notRun, 0)
 })
 
+// JEVADV-110: a refusal the gate answered itself is not a held question.
+// New rows carry `verdict`; a legacy local-rule row is always a deny; a
+// legacy policy row may have been either, so it keeps the old reading.
+test('approvals.refused -- refusals are counted apart, from the verdict or a certain legacy stopReason', () => {
+  const home = makeHome()
+  const old = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString()
+  writeApprovalsLog(home, [
+    { ...pendingRow('new-deny', old), stopReason: 'policy', policyId: 'never_write_to_main', verdict: 'deny' },
+    { ...pendingRow('legacy-rule', old), stopReason: 'local-rule', policyId: null },
+    { ...pendingRow('legacy-policy', old), stopReason: 'policy', policyId: 'others_pr' },
+    { ...pendingRow('new-ask', new Date().toISOString()), stopReason: 'policy', policyId: 'others_pr', verdict: 'ask' },
+  ])
+  const result = run(home)
+  assert.equal(result.approvals.asked, 4)
+  assert.equal(result.approvals.refused, 2)
+  assert.equal(result.approvals.notRun, 1, 'the legacy policy row is not guessed into a refusal')
+  assert.equal(result.approvals.awaiting, 1)
+})
+
 // ---------------------------------------------------------------------------
 // odd/tasks/advisor-board-charts.md T2 -- an `abBenchmark` aggregate,
 // folded from ab-benchmark-results.jsonl (adapters/cli/ab_benchmark_cli.ts,

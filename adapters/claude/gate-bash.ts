@@ -80,6 +80,7 @@ import { detectDeployPublish } from '../../src/core/deploy_publish.ts'
 import { detectBranchEffect, syncActingDirectories } from '../../src/core/branch_effect.ts'
 import { parseSeedPolicies } from '../../src/core/policy_seed.ts'
 import { buildPendingApprovalRecord, serializeApprovalRecord } from '../../src/core/approval_record.ts'
+import type { PendingVerdict } from '../../src/core/approval_record.ts'
 import { commandShape } from '../../src/core/command_shape.ts'
 import { orcaUserDataPath, pluginDisabledInOrca } from './orca-plugin-enablement.ts'
 import { hasGitEntry, matchDestinationForCwd, resolveBranchForCwd, resolveGitDirForConfig, resolveLinkedWorktreeMainCheckout, resolveRepoRootForCwd } from '../../src/core/linked_worktree.ts'
@@ -399,7 +400,9 @@ function resolveGateActionReasonEnglish(reason: GateActionReason): string {
  */
 function policyDenyReasonEnglish(gate: GateActionResult): string {
   const rule = gate.reasons.find((r) => r.key === 'policy.forbidden')?.params?.rule ?? ''
-  return tEnglish('policyDeny', { policyId: gate.policyId ?? '', rule })
+  // JEVADV-110: the one shipped prohibits policy with a safe form an agent can
+  // take on its own says so, instead of sending the agent to a person.
+  return tEnglish(gate.policyId === 'never_write_to_main' ? 'policyDenyMain' : 'policyDeny', { policyId: gate.policyId ?? '', rule })
 }
 
 type Decision = 'allow' | 'deny' | 'ask'
@@ -647,6 +650,15 @@ function discardWayForward(loss: DiscardLossDetail): string {
   const stash = stashCommandFor(loss, `jev-discard-${Date.now().toString(36)}`)
   if (stash === null) return 'If the changes are not needed, commit or stash them first, as a separate command, then run the discard again.'
   return `If the changes are not needed, set them aside first with this command, on its own: \`${stash}\` (a stash is reversible: \`git stash pop\` brings it back), then run the discard again. If they are real work, commit them instead. If these are files a tool regenerates on its own, say so and the person can list them in the Advisor panel.`
+}
+
+/**
+ * JEVADV-110: the whole-tree stash for a refused discard whose loss the check
+ * could not read (so there are no paths to name). Tagged like
+ * discardWayForward's, because the stash stack is shared across worktrees.
+ */
+function discardStashCommand(): string {
+  return `git stash push -u -m 'jev-discard-${Date.now().toString(36)}'`
 }
 
 /** What would be lost, in words: "2 modified files, e.g. src/x.ts", in the language `translator` speaks. */
@@ -1614,6 +1626,7 @@ function appendPendingApproval(
   ceiling: number,
   stopReason: GateStopReason,
   policyId: string | null,
+  verdict: PendingVerdict,
 ): void {
   if (toolUseId === null) return
   try {
@@ -1634,6 +1647,7 @@ function appendPendingApproval(
           ceiling,
           stopReason,
           policyId,
+          verdict,
         }),
       ),
     )
@@ -2266,7 +2280,7 @@ function readSecretPublish(command: string, cwd: string): SecretPublishResult {
  */
 function emitSecretPublishAsk(finding: SecretPublishFinding, command: string, actingCwd: string, toolUseId: string | null, teamInternal: boolean): void {
   appendGateRecord(actingCwd, command, 'local-rule', 'ask', null, 'secret-publish', null, teamInternal)
-  appendPendingApproval(toolUseId, actingCwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'secret-publish', null)
+  appendPendingApproval(toolUseId, actingCwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'secret-publish', null, 'ask')
   const segment = truncateForPersonLine(affectedSegments(command)[0] ?? command)
   emit('ask', t(`secretPublish.${finding.kind}`, { file: finding.path, commit: finding.commit ?? '' }), t('secretPublishLine', { file: finding.path, segment }))
 }
@@ -2295,7 +2309,7 @@ async function main(): Promise<void> {
   const ownFile = gateOwnFileWritten(command, cwd)
   if (ownFile !== null) {
     appendGateRecord(cwd, command, 'local-rule', 'deny', null, 'local-rule', null)
-    appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
+    appendPendingApproval(toolUseId, cwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null, 'deny')
     const file = displayPath(ownFile)
     emit('deny', tEnglish('localRuleDeny', { why: tEnglish('rule.ownConfig', { file }) }), t('blockedLine', { segment: truncateForPersonLine(affectedSegments(command)[0] ?? command), rule: t('rule.ownConfig', { file }) }))
     return
@@ -2355,7 +2369,7 @@ async function main(): Promise<void> {
     }
     if (readDenyTierConfig()[denyToggle]) {
       appendGateRecord(actingCwd, command, 'local-rule', 'deny', null, 'local-rule', null)
-      appendPendingApproval(toolUseId, actingCwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null)
+      appendPendingApproval(toolUseId, actingCwd, command, null, null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'local-rule', null, 'deny')
       // 0.5.2: the person-facing line names the command and the rule in
       // plain words -- never the model-facing REFUSED text (which used to
       // be reused verbatim for both readers, in English, even in `es`).
@@ -2371,7 +2385,12 @@ async function main(): Promise<void> {
         return
       }
       const segment = matchedSegmentForRule(inspected, cwd, why === 'rule.resetClean' ? resetCleanSpelling : evaluate)
-      emit('deny', tEnglish('localRuleDeny', { why: tEnglish(why) }), t('blockedLine', { segment, rule: t(why) }))
+      // JEVADV-110: a discard the check could not read still names the safe
+      // form, so an unattended agent goes on without waiting for a person.
+      const modelText = why === 'rule.resetClean'
+        ? tEnglish('localRuleDenyDiscard', { why: tEnglish(why), stash: discardStashCommand() })
+        : tEnglish('localRuleDeny', { why: tEnglish(why) })
+      emit('deny', modelText, t('blockedLine', { segment, rule: t(why) }))
       return
     }
     if (firstAdvice === null) firstAdvice = { why, kind: 'toggle-off', evaluate }
@@ -2735,7 +2754,7 @@ async function main(): Promise<void> {
       // is the honest, complete stopReason on its own -- it does not know,
       // and does not claim to know, which sub-reason produced the original
       // verdict it is replaying.
-      appendPendingApproval(toolUseId, actingCwd, command, key, matchedDestination?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null)
+      appendPendingApproval(toolUseId, actingCwd, command, key, matchedDestination?.id ?? null, { reversible: null, external: null, consequence: null }, GATE_CONSEQUENCE_CEILING, 'cache', null, hit.decision)
     }
     // A cached deny/ask can only ever have been a policy verdict (see
     // askJev's own note: the risk stage never returns 'deny', and its own
@@ -2752,7 +2771,13 @@ async function main(): Promise<void> {
     // -- Claude Code shows this to the PERSON, not the model, for an 'ask'
     // verdict) is rebuilt the same way as the systemMessage below, never
     // replayed from `hit.reason` -- see policyAskReason's own doc.
-    const cacheHitReason = hit.decision === 'ask' ? t('policyAskReason', { policyId: hit.policyId ?? '', segment: cacheHitSegment }) : hit.reason
+    // JEVADV-110: a never_write_to_main refusal cached before its safe form
+    // existed is rebuilt from its stored rule, so the agent is told the way on now.
+    const cacheHitReason = hit.decision === 'ask'
+      ? t('policyAskReason', { policyId: hit.policyId ?? '', segment: cacheHitSegment })
+      : hit.decision === 'deny' && hit.policyId === 'never_write_to_main' && typeof hit.policyRule === 'string'
+        ? tEnglish('policyDenyMain', { policyId: hit.policyId, rule: hit.policyRule })
+        : hit.reason
     const cacheHitSystemMessage =
       hit.decision === 'deny'
         ? tJudged('policyBlockedLine', { segment: cacheHitSegment, policyId: hit.policyId ?? '' })
@@ -2913,7 +2938,7 @@ async function main(): Promise<void> {
       toolUseId, cwd, command, key, resolved.destinationId,
       { reversible: resolved.axes?.reversible ?? null, external: resolved.axes?.external ?? null, consequence: resolved.axes?.consequence ?? null },
       resolved.axes?.ceiling ?? GATE_CONSEQUENCE_CEILING,
-      jevStopReason, resolved.policyId,
+      jevStopReason, resolved.policyId, resolved.decision,
     )
   }
   // A 'deny'/'ask' reaching here is always a policy verdict (see askJev's

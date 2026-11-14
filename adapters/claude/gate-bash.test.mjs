@@ -694,6 +694,7 @@ test('a command run in a linked sibling worktree is judged with the main checkou
   const lines = readFileSync(approvalsPath(home), 'utf8').trim().split('\n')
   const record = JSON.parse(lines[lines.length - 1])
   assert.equal(record.destinationId, 'client-site-a-frontend', 'the sibling worktree must be judged with its MAIN checkout\'s destination, not left unmatched')
+  assert.equal(record.verdict, 'ask', 'JEVADV-110: a replayed ask is a question waiting on a person')
 })
 
 // ---------------------------------------------------------------------------
@@ -1723,6 +1724,33 @@ test('0.6.24 T1b: untracked work is stashed with -u, and a stash chained to the 
   assert.match(stash, /^git stash push -u -m 'jev-discard-[a-z0-9]+' -- 'notes\.md'$/)
   assert.equal(answerFor(home, `${stash} && git clean -fd`, repo).permissionDecision, 'deny', 'the tree is read before the line runs, so a chained stash cannot be trusted')
   assert.equal(answerFor(home, stash, repo).permissionDecision, 'none')
+})
+
+// JEVADV-110: a discard the check could not read (here, git's output is
+// redirected) is still refused, but the refusal names the safe form -- keep
+// the work, then a plain discard -- so an unattended agent goes on without a
+// person. And the pending row says it was a refusal, not a held question.
+test('JEVADV-110: an unreadable discard is refused with a stash and a plain retry, and recorded as a refusal', () => {
+  const home = makeHome()
+  const { repo } = makeRepo(home, 'repo')
+  writeFileSync(join(repo, 'src', 'x.ts'), 'REAL WORK\n')
+  const refused = answerFor(home, "bash -c 'git reset --hard'", repo)
+  assert.equal(refused.permissionDecision, 'deny')
+  assert.doesNotMatch(refused.reason, /let the person run it/, 'the agent is given a way on, not sent to a person')
+  const stash = /`(git stash push [^`]+)`/.exec(refused.reason)?.[1]
+  assert.ok(stash !== undefined, `the reason carries a stash command: ${refused.reason}`)
+  assert.match(stash, /^git stash push -u -m 'jev-discard-[a-z0-9]+'$/)
+  assert.match(refused.reason, /plain git command/)
+  const lines = readFileSync(approvalsPath(home), 'utf8').trim().split('\n')
+  const record = JSON.parse(lines[lines.length - 1])
+  assert.equal(record.type, 'gate-pending')
+  assert.equal(record.stopReason, 'local-rule')
+  assert.equal(record.verdict, 'deny')
+  assert.equal(answerFor(home, stash, repo).permissionDecision, 'none', 'the stash itself is not a discard')
+  execFileSync('sh', ['-c', stash], { cwd: repo, env: { ...process.env, HOME: home }, stdio: 'ignore' })
+  assert.equal(answerFor(home, 'git reset --hard', repo).permissionDecision, 'none', 'with the work kept, the plain discard goes through')
+  execFileSync('git', ['stash', 'apply', '-q'], { cwd: repo, env: { ...process.env, HOME: home }, stdio: 'ignore' })
+  assert.equal(readFileSync(join(repo, 'src', 'x.ts'), 'utf8'), 'REAL WORK\n', 'the stash brings the work back')
 })
 
 test('0.6.24 T1b: git stash push on its own is never refused by the discard rule', () => {
@@ -2875,6 +2903,41 @@ test('en locale: the same fresh-shaped prohibits cache entry, naming the policy 
   const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-prohibits-fresh-en' }))
   assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny')
   assert.equal(payload.systemMessage, 'jev · blocked `git commit -am "docs: update header"`: forbidden by the policy never_write_to_main')
+})
+
+// JEVADV-110: never_write_to_main's refusal names the safe form -- a feature
+// branch and a pull request -- instead of sending the agent to a person, even
+// for an entry cached with the old text.
+test('JEVADV-110: a never_write_to_main refusal names a feature branch as the way on', () => {
+  const home = makeHome()
+  const command = 'git commit -am "docs: update header"'
+  const key = expectedCacheKey(command, home, home)
+  writeVerdictCacheEntry(home, key, {
+    decision: 'deny',
+    reason: 'REFUSED: forbidden by the team policy never_write_to_main (Never write directly on main.). You cannot run this command. If it genuinely needs to happen, say so and let the person run it themselves in a terminal; they are not blocked. Continue with the rest of the work.',
+    policyId: 'never_write_to_main',
+    policyRule: 'Never write directly on main.',
+    at: Date.now(),
+  })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-main-safe-form' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecision, 'deny', 'still a hard stop')
+  const reason = payload.hookSpecificOutput.permissionDecisionReason
+  assert.match(reason, /^REFUSED: forbidden by the team policy never_write_to_main \(Never write directly on main\.\)/)
+  assert.match(reason, /feature branch \(`git switch -c <branch>`\)/)
+  assert.match(reason, /pull request/)
+  assert.doesNotMatch(reason, /let the person run it/)
+  const lines = readFileSync(approvalsPath(home), 'utf8').trim().split('\n')
+  assert.equal(JSON.parse(lines[lines.length - 1]).verdict, 'deny', 'recorded as a refusal, not a held question')
+})
+
+test('JEVADV-110: other prohibits policies keep their own refusal text', () => {
+  const home = makeHome()
+  const command = 'git commit -am "docs: update header"'
+  const key = expectedCacheKey(command, home, home)
+  const reason = 'REFUSED: forbidden by the team policy production_data (No.). You cannot run this command.'
+  writeVerdictCacheEntry(home, key, { decision: 'deny', reason, policyId: 'production_data', policyRule: 'No.', at: Date.now() })
+  const payload = JSON.parse(run(home, command, { apiKey: 'test-key-unused-on-cache-hit', sessionId: 'session-other-prohibits' }))
+  assert.equal(payload.hookSpecificOutput.permissionDecisionReason, reason)
 })
 
 test('a legacy prohibits cache entry with no policyId at all still never leaks English rule text into the person-facing line', () => {

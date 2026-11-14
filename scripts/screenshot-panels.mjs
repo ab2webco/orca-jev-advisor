@@ -196,7 +196,7 @@ const READY_DAY = {
     rest: { families: 4, total: 70, ask: 3, deny: 1, notRun: 1 },
     quiet: { families: 60, total: 935 },
   },
-  approvals: { asked: 89, approved: 71, rejected: 0, notRun: 9, awaiting: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 37, rejectedCount: 0 } },
+  approvals: { asked: 101, approved: 71, rejected: 0, notRun: 9, awaiting: 9, refused: 12, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 37, rejectedCount: 0 } },
   // Multi-provider P7: a day in Both mode, the owner's volume (about 2,100
   // model calls) against Clef's free allowance. The 2,101 model-judged
   // decisions split into 700 Clef and 1,401 Jev answers; most of Jev's are the
@@ -241,7 +241,7 @@ const READY_ALL = {
     rest: { families: 18, total: 784, ask: 32, deny: 1, notRun: 5 },
     quiet: { families: 69, total: 779 },
   },
-  approvals: { asked: 106, approved: 81, rejected: 1, notRun: 15, awaiting: 9, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 43, rejectedCount: 0 } },
+  approvals: { asked: 106, approved: 81, rejected: 1, notRun: 3, awaiting: 9, refused: 12, ceiling: { highestApproved: 2.65, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 43, rejectedCount: 0 } },
   // Multi-provider: Both mode was turned on today, so everything Clef did is in the day too.
   providers: READY_DAY.providers,
   neurons: READY_DAY.neurons,
@@ -264,7 +264,7 @@ function emptyWindow (key) {
     clefLatency: { sampleCount: 0, medianMs: null, p95Ms: null, maxMs: null },
     interventions: { rows: [], rest: null, quiet: { families: 0, total: 0 } },
     approvals: {
-      asked: 0, approved: 0, rejected: 0, notRun: 0, awaiting: 0,
+      asked: 0, approved: 0, rejected: 0, notRun: 0, awaiting: 0, refused: 0,
       ceiling: { highestApproved: null, lowestRejected: null, band: null, suggestedCeiling: null, approvedCount: 0, rejectedCount: 0 },
     },
     providers: emptyProviderCounts(),
@@ -565,8 +565,9 @@ const READY = {
       asked: 43,
       approved: 27,
       rejected: 1,
-      notRun: 15,
+      notRun: 3,
       awaiting: 0,
+      refused: 12,
       corruptLines: 0,
       ceiling: {
         highestApproved: null,
