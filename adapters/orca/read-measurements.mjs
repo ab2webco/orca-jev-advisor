@@ -461,7 +461,25 @@ const CI_WATCH_WINDOW_MS = 7 * 24 * 3_600_000
  * shows, for one window. A decision whose time does not read counts only
  * where there is no lower bound ("all"), the same rule the gate follows.
  */
-function modSkillsFigures (decisions, observationById, window, now) {
+/**
+ * JEVADV-112: the characters a decision row counts as not sent. The engine
+ * sends its listing once per session, so a decision written since then
+ * (it carries `withholdReason`) counts nothing itself: the `listing` row of
+ * the turn that carried the listing counts instead (listingRowCharsNotSent).
+ * An older row keeps its documented count (JEVADV-4).
+ */
+function decisionCharsNotSent (d) {
+  if ('withholdReason' in d) return null
+  const countsAsNotSent = d.listingWithheld === undefined || d.listingWithheld === true
+  return countsAsNotSent && typeof d.listingChars === 'number' && Number.isFinite(d.listingChars) ? d.listingChars : null
+}
+
+/** JEVADV-112: a `listing` row's characters when it was actually withheld. */
+function listingRowCharsNotSent (row) {
+  return typeof row.withheld === 'string' && typeof row.chars === 'number' && Number.isFinite(row.chars) ? row.chars : null
+}
+
+function modSkillsFigures (decisions, listings, observationById, window, now) {
   let count = 0
   let suggestedCount = 0
   let comparableCount = 0
@@ -473,9 +491,9 @@ function modSkillsFigures (decisions, observationById, window, now) {
     if (ms === null ? window.sinceMs !== null : !isInWindow(ms, window, now)) continue
     count += 1
     if (isRecord(d.decision) && typeof d.decision.name === 'string') suggestedCount += 1
-    const countsAsNotSent = d.listingWithheld === undefined || d.listingWithheld === true
-    if (countsAsNotSent && typeof d.listingChars === 'number' && Number.isFinite(d.listingChars)) {
-      listing += d.listingChars
+    const chars = decisionCharsNotSent(d)
+    if (chars !== null) {
+      listing += chars
       listingSamples += 1
     }
     const observation = d.mode === 'measurement' ? observationById.get(d.id) : undefined
@@ -483,6 +501,15 @@ function modSkillsFigures (decisions, observationById, window, now) {
       comparableCount += 1
       const suggestedName = isRecord(d.decision) ? d.decision.name : null
       if (suggestedName !== null && suggestedName === observation.skill) matchedCount += 1
+    }
+  }
+  for (const row of listings) {
+    const ms = typeof row.at === 'string' ? atMs(row.at) : null
+    if (ms === null ? window.sinceMs !== null : !isInWindow(ms, window, now)) continue
+    const chars = listingRowCharsNotSent(row)
+    if (chars !== null) {
+      listing += chars
+      listingSamples += 1
     }
   }
   return {
@@ -500,6 +527,9 @@ async function aggregateModSkills (windows, now) {
   const decisions = rows.filter((r) => r.type === 'decision')
   const observations = rows.filter((r) => r.type === 'observation')
   const observationById = new Map(observations.map((o) => [o.id, o]))
+  // JEVADV-112: what each session's listing actually was, and the skills loaded after one was left out.
+  const listings = rows.filter((r) => r.type === 'listing')
+  const withheldUses = rows.filter((r) => r.type === 'withheld-use')
 
   const byProject = {}
   let suggested = 0
@@ -534,9 +564,11 @@ async function aggregateModSkills (windows, now) {
     // existed has no way to say either way; the documented choice is to
     // keep counting it, exactly as every record was counted before this
     // field existed at all, rather than silently dropping older history.
-    const countsAsNotSent = d.listingWithheld === undefined || d.listingWithheld === true
-    if (countsAsNotSent && typeof d.listingChars === 'number' && Number.isFinite(d.listingChars)) {
-      listingCharsSum += d.listingChars
+    // JEVADV-112: a decision that carries `withholdReason` counts nothing
+    // here; its turn's `listing` row does, below.
+    const chars = decisionCharsNotSent(d)
+    if (chars !== null) {
+      listingCharsSum += chars
       listingCharsCount += 1
     }
 
@@ -557,6 +589,18 @@ async function aggregateModSkills (windows, now) {
       }
     }
   }
+
+  let listingsWithheld = 0
+  let listingsWithheldNothingFits = 0
+  for (const row of listings) {
+    const chars = listingRowCharsNotSent(row)
+    if (chars === null) continue
+    listingCharsSum += chars
+    listingCharsCount += 1
+    listingsWithheld += 1
+    if (row.withheld === 'nothing-fits') listingsWithheldNothingFits += 1
+  }
+  const usesAfterNothingFits = withheldUses.filter((r) => r.reason === 'nothing-fits').length
 
   const matchRate = comparable > 0 ? matched / comparable : null
   // The activation metric mod-skills' own module note promised but never
@@ -583,12 +627,19 @@ async function aggregateModSkills (windows, now) {
     listingCharsTotal: listingCharsCount > 0 ? listingCharsSum : null,
     listingCharsAvgPerPrompt: listingCharsCount > 0 ? listingCharsSum / listingCharsCount : null,
     listingCharsSampleCount: listingCharsCount,
+    // JEVADV-112: listings the engine asked about, how many were left out
+    // (and of those, because nothing fit), and skills loaded after one was
+    // left out because nothing fit -- the missed-skill count.
+    listingsAsked: listings.length,
+    listingsWithheld,
+    listingsWithheldNothingFits,
+    skillUsesAfterNothingFits: usesAfterNothingFits,
     wideLatencyMeanMs: mean(wideLatencies),
     fitLatencyMeanMs: mean(fitLatencies),
     byProject: topByCount(byProject, 10),
     readiness,
     // The skills log is never pruned: every window speaks for all it asks.
-    windows: perBoardWindow(windows, now, null, (window) => modSkillsFigures(decisions, observationById, window, now)),
+    windows: perBoardWindow(windows, now, null, (window) => modSkillsFigures(decisions, listings, observationById, window, now)),
   }
 }
 

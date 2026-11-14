@@ -79,7 +79,7 @@ test("the tool decision's stage 1 and stage 2 states never carry a secret", () =
 test("the skill and tool measurement records never write a secret to disk", () => {
   const common = { id: "i", at: "2026-09-28T00:00:00.000Z", mode: "active" as const, prompt: PROMPT, candidateCount: 1, listingChars: 1, wide: null, fit: null, decision: { name: null, reason: "r" }, latencyMs: { wide: null, fit: null } };
   assertRedacted(buildToolRecord({ ...common, orcaContext: { worktree: "/wt", project: "p", branch: "b" } }), "tool buildDecisionRecord");
-  assertRedacted(buildSkillRecord({ ...common, orcaContext: { worktree: "/wt", proyecto: "p", rama: "b" }, listingWithheld: false, readiness: null }), "skill buildDecisionRecord");
+  assertRedacted(buildSkillRecord({ ...common, orcaContext: { worktree: "/wt", proyecto: "p", rama: "b" }, listingWithheld: false, withholdReason: null, nothingFitsWellBelow: false, readiness: null }), "skill buildDecisionRecord");
 });
 
 // 0.6.11 T3: the prompt text reads with the same placeholders as the Orca context.

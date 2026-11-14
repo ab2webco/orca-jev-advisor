@@ -1034,6 +1034,143 @@ test("a withheld turn followed by a restored turn: pendingListingWithheld never 
 });
 
 // ---------------------------------------------------------------------------
+// JEVADV-112: withhold the listing when nothing fits well below the bar
+// ---------------------------------------------------------------------------
+
+function allRows(host: FakeHost, path: string): Record<string, unknown>[] {
+  const content = host.files.get(path) ?? "";
+  return content.split("\n").filter((line) => line.length > 0).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/** Stage 1 says a skill may be needed; stage 2 answers `fits` for graft-helper. */
+function queueNothingFits(host: FakeHost, fits: number): void {
+  host.fetchQueue.push(
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+      skill_needed: { type: "noul", noul: 0.8 },
+    }),
+    jevResponse({
+      which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.95 }, confidence: 0.9 },
+      "fits::graft-helper": { type: "noul", noul: fits },
+    }),
+  );
+}
+
+test("JEVADV-112: active mode, every fit well below the bar: the listing is withheld with nothing injected, and the listing row says so", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Read graft_repo_map first.");
+  const { handlers, engine } = loadHooks(host);
+  queueNothingFits(host, 0.04);
+
+  const submitted = await submitPromptCapture(handlers, engine, "rename this variable");
+  const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+
+  assert.equal(attachment.text, null);
+  assert.equal(submitted.context, undefined, "nothing is injected in the listing's place");
+  const record = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal((record.decision as { name: string | null }).name, null);
+  assert.equal(record.listingWithheld, true);
+  assert.equal(record.withholdReason, "nothing-fits");
+  assert.equal(record.nothingFitsWellBelow, true);
+  const listing = allRows(host, SKILL_MEASUREMENTS_PATH).filter((row) => row.type === "listing");
+  assert.deepEqual(listing.map((row) => ({ sessionId: row.sessionId, decisionId: row.decisionId, chars: row.chars, withheld: row.withheld })), [
+    { sessionId: "session-1", decisionId: record.id, chars: REAL_LISTING.length, withheld: "nothing-fits" },
+  ]);
+});
+
+test("JEVADV-112: active mode, best fit near the threshold: nothing suggested and the listing still goes through", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const { handlers, engine } = loadHooks(host);
+  queueNothingFits(host, 0.22);
+
+  await submitPrompt(handlers, engine, "rename this variable");
+  const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+
+  assert.deepEqual(attachment, { text: REAL_LISTING });
+  const record = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(record.listingWithheld, false);
+  assert.equal(record.withholdReason, null);
+  assert.equal(record.nothingFitsWellBelow, false);
+  const listing = allRows(host, SKILL_MEASUREMENTS_PATH).filter((row) => row.type === "listing");
+  assert.deepEqual(listing.map((row) => [row.decisionId, row.withheld]), [[record.id, null]], "a delivered listing is recorded too");
+});
+
+test("JEVADV-112: measurement mode records that active mode would withhold, and changes nothing", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: false, activeTools: false });
+  seedSamplingConfig(host, { enabled: true, sampleRate: 1, dailyPromptCap: 40 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const { handlers, engine } = loadHooks(host);
+  queueNothingFits(host, 0.04);
+
+  await submitPrompt(handlers, engine, "rename this variable");
+  const attachment = await askAttachment(handlers, engine, REAL_LISTING);
+
+  assert.deepEqual(attachment, { text: REAL_LISTING });
+  const record = lastDecisionRecord(host, SKILL_MEASUREMENTS_PATH);
+  assert.equal(record.mode, "measurement");
+  assert.equal(record.withholdReason, null);
+  assert.equal(record.nothingFitsWellBelow, true);
+});
+
+test("JEVADV-112: withholdBelow 0 turns the nothing-fits withhold off", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  register(fakeOn(host) as never, { typesafeApiKey: "test-key", withholdBelow: 0 } as never);
+  const engine = makeFakeEngine(host);
+  queueNothingFits(host, 0.01);
+
+  await submitPrompt(host.handlers, engine, "rename this variable");
+  const attachment = await askAttachment(host.handlers, engine, REAL_LISTING);
+
+  assert.deepEqual(attachment, { text: REAL_LISTING });
+});
+
+test("JEVADV-112: a skill loaded after a withheld listing is recorded as a withheld-use, on every later turn of the session", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const { handlers, engine } = loadHooks(host);
+  queueNothingFits(host, 0.04);
+  await submitPrompt(handlers, engine, "rename this variable");
+  await askAttachment(handlers, engine, REAL_LISTING);
+
+  // A later turn carries no listing (the engine sends it once per session),
+  // so prompt.attachment is not asked again; the session's listing stays out.
+  host.fetchQueue.push(jevResponse({
+    which: { type: "choice", choice: "graft-helper", probabilities: { "graft-helper": 0.9 }, confidence: 0.9 },
+    skill_needed: { type: "noul", noul: 0.05 },
+  }));
+  await submitPrompt(handlers, engine, "now draw the module graph");
+  await fireSkillPrompt(handlers, engine, "graft-helper");
+
+  const uses = allRows(host, SKILL_MEASUREMENTS_PATH).filter((row) => row.type === "withheld-use");
+  assert.deepEqual(uses.map((row) => [row.sessionId, row.skill, row.reason]), [["session-1", "graft-helper", "nothing-fits"]]);
+});
+
+test("JEVADV-112: a skill loaded while the listing went through records no withheld-use", async () => {
+  const host = makeFakeHost();
+  seedModSkillsConfig(host, { active: true, activeTools: false });
+  seedSamplingConfig(host, { enabled: false, sampleRate: 0, dailyPromptCap: 0 });
+  seedProjectSkill(host, "graft-helper", "Explores this codebase with graft.", "Body.");
+  const { handlers, engine } = loadHooks(host);
+  queueNothingFits(host, 0.22);
+  await submitPrompt(handlers, engine, "rename this variable");
+  await askAttachment(handlers, engine, REAL_LISTING);
+  await fireSkillPrompt(handlers, engine, "graft-helper");
+
+  assert.equal(allRows(host, SKILL_MEASUREMENTS_PATH).filter((row) => row.type === "withheld-use").length, 0);
+});
+
+// ---------------------------------------------------------------------------
 // JEV-060 slice 1, T1: turn.step -- a pass-through hook that records per-step
 // token usage to the current hour's own turn-usage-*.jsonl file and never changes the event or the result
 // beneath it. `next` for a streaming event is itself an async generator

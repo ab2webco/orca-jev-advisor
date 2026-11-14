@@ -177,6 +177,29 @@ test('modSkills.listingChars: sums only decisions where listingWithheld === true
   assert.equal(result.modSkills.listingCharsAvgPerPrompt, 100)
 })
 
+// JEVADV-112: the engine sends its listing once per session, so a decision
+// that carries `withholdReason` counts nothing itself; the `listing` row of
+// the turn that carried the listing does.
+test('modSkills.listingChars: JEVADV-112 decisions count only through their listing rows, and the missed-skill count is reported', () => {
+  const home = makeHome()
+  writeModSkillsLog(home, [
+    { ...decisionRow('a', '2026-09-19T00:00:00.000Z'), listingChars: 900, listingWithheld: true, withholdReason: 'nothing-fits', nothingFitsWellBelow: true },
+    { type: 'listing', at: '2026-09-19T00:00:01.000Z', sessionId: 's1', decisionId: 'a', chars: 800, withheld: 'nothing-fits' },
+    { ...decisionRow('b', '2026-09-19T01:00:00.000Z'), listingChars: 900, listingWithheld: true, withholdReason: 'skill', nothingFitsWellBelow: false },
+    { ...decisionRow('c', '2026-09-19T02:00:00.000Z'), listingChars: 900, listingWithheld: false, withholdReason: null, nothingFitsWellBelow: false },
+    { type: 'listing', at: '2026-09-19T02:00:01.000Z', sessionId: 's2', decisionId: 'c', chars: 700, withheld: null },
+    { type: 'withheld-use', at: '2026-09-19T03:00:00.000Z', sessionId: 's1', skill: 'graft', reason: 'nothing-fits' },
+  ])
+  const result = run(home)
+  assert.equal(result.modSkills.listingCharsTotal, 800, 'only the listing actually left out counts, once for its session')
+  assert.equal(result.modSkills.listingCharsSampleCount, 1)
+  assert.equal(result.modSkills.listingsAsked, 2)
+  assert.equal(result.modSkills.listingsWithheld, 1)
+  assert.equal(result.modSkills.listingsWithheldNothingFits, 1)
+  assert.equal(result.modSkills.skillUsesAfterNothingFits, 1)
+  assert.equal(result.modSkills.totalDecisions, 3)
+})
+
 test('modSkills.listingChars: a record from before listingWithheld existed keeps being counted (documented backward-compat choice)', () => {
   const home = makeHome()
   writeModSkillsLog(home, [
