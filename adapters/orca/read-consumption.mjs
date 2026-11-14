@@ -40,6 +40,8 @@
  * `steward` (summarizeStewardDecisions plus verifyStewardSaving and
  * summarizePreCold) and `typing` (summarizeTypingLeadTime) are null while
  * their log has no file at all. `recommendations` stay on the last 24 h.
+ * `longSteps` (JEVADV-109, longStepsByDay) is not windowed: the share of
+ * main steps that re-read more than 200k on each of the last 8 local days.
  */
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -51,6 +53,7 @@ import {
   summarizeTurnUsageForWindow,
   claudeMdSizeTrigger,
   longSessionTrigger,
+  longStepsByDay,
   mcpServerCountTrigger,
   parseQuota,
   subagentShareTrigger,
@@ -245,7 +248,10 @@ async function main () {
             summarizeTypingLeadTime(typingRows, now, spanMs) ?? { typed: 0, injected: 0, p50Ms: null, p90Ms: null }),
         }
 
-    result = { ok: true, usage, quota, recommendations, modelRouter, steward, typing }
+    // JEVADV-109: the logs are kept 8 days, so 8 local days is all there is to show.
+    const longSteps = longStepsByDay(turnUsageRecords, now, 8, -new Date(now).getTimezoneOffset())
+
+    result = { ok: true, usage, quota, recommendations, modelRouter, steward, typing, longSteps }
   } catch (error) {
     result = { ok: false, reason: 'exception', detail: String(error?.message ?? error).slice(0, 300) }
   }

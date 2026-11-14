@@ -847,6 +847,11 @@
           'consumption.stewardColdSaving': 'Ahorro realizado: {{saving}} · desperdicio (nadie volvió, o volvió con la caché aún tibia): {{waste}} (en tokens equivalentes a precio de entrada)',
           'consumption.stewardColdRewrite': 'Reescritura en frío cuando se retomaron las sesiones medidas: {{tokens}} tokens; el modo activo habría evitado la mayor parte.',
           'consumption.stewardVerified': 'Ahorro verificado: {{tokens}} tokens que el agente principal no releyó, un {{share}} de su contexto. Medido sobre el uso real en {{verified}} de {{compactions}} compactaciones.',
+          'consumption.longStepsHeading': 'Pasos del agente principal que releen más de 200k, por día',
+          'consumption.longStepsScope': 'últimos 8 días, no sigue la ventana',
+          'consumption.longStepsDay': '{{share}} · {{above}} de {{steps}}',
+          'consumption.longStepsNone': 'Ningún paso del agente principal releyó más de 200k en estos días.',
+          'consumption.longStepsExcess': 'Últimos 7 días: {{tokens}} tokens releídos por encima de 200k (lo máximo que ahorraría mantener cada paso en 200k).',
         },
         en: {
           'providers.heading': 'Who decides?',
@@ -1135,6 +1140,11 @@
           'consumption.stewardColdSaving': 'Realized saving: {{saving}} · waste (nobody came back, or came back while warm): {{waste}} (input-token equivalents)',
           'consumption.stewardColdRewrite': 'Cold rewrite when the measured sessions came back: {{tokens}} tokens; active mode would have avoided most of it.',
           'consumption.stewardVerified': 'Verified saving: {{tokens}} tokens the main agent did not re-read, {{share}} of its context. Measured on real usage in {{verified}} of {{compactions}} compactions.',
+          'consumption.longStepsHeading': 'Main-agent steps re-reading over 200k, per day',
+          'consumption.longStepsScope': 'last 8 days, not the window',
+          'consumption.longStepsDay': '{{share}} · {{above}} of {{steps}}',
+          'consumption.longStepsNone': 'No main-agent step re-read over 200k on these days.',
+          'consumption.longStepsExcess': 'Last 7 days: {{tokens}} tokens re-read above 200k (the most holding every step at 200k would save).',
         }
       }
       /**
@@ -1545,7 +1555,7 @@
           return '<div class="hrow ' + (cls || 'v1') + '">' +
             '<span class="hl" title="' + esc(r.label) + '">' + esc(r.label) + '</span>' +
             '<span class="htrack"><span class="hfill" style="width:' + share(r.value, max) + '%"></span></span>' +
-            '<span class="hv">' + esc(num(r.value)) + '</span></div>'
+            '<span class="hv">' + esc(r.text !== undefined ? r.text : num(r.value)) + '</span></div>'
         }).join('') + '</div>'
       }
 
@@ -2446,6 +2456,28 @@
       }
 
       /**
+       * JEVADV-109: the share of main-agent steps that re-read more than
+       * 200k on each of the last 8 local days (longStepsByDay,
+       * read-consumption.mjs), oldest first, and the 7 last days' re-read
+       * above 200k. Not windowed. `undefined` (an older worker): nothing.
+       */
+      function consumptionLongStepsBlock (longSteps) {
+        if (!Array.isArray(longSteps) || longSteps.length === 0) return ''
+        var head = '<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.longStepsHeading')) + '</b> · ' + esc(t('consumption.longStepsScope')) + '</p>'
+        var bars = hbars(longSteps.map(function (d) {
+          var pct = d.share === null || d.share === undefined ? null : Math.round(d.share * 100)
+          return {
+            label: String(d.day).slice(5),
+            value: pct === null ? 0 : pct,
+            text: pct === null ? '—' : t('consumption.longStepsDay', { share: percentText(pct), above: num(d.above), steps: num(d.steps) })
+          }
+        }), 'v2')
+        if (!bars) return head + line(t('consumption.longStepsNone'), 'empty-line')
+        var excess = longSteps.slice(-7).reduce(function (acc, d) { return acc + (d.excessAbove || 0) }, 0)
+        return head + bars + line(t('consumption.longStepsExcess', { tokens: num(excess) }))
+      }
+
+      /**
        * Track S (odd/tasks/steward-pre-cold.md): the pre-cold tier in the
        * window (summarizePreCold). Saving and waste only when an applied
        * compaction measured them; the cold rewrite only when a measured
@@ -2556,6 +2588,7 @@
 
         parts.push('<div class="divider"></div><p class="kpi-sub"><b>' + esc(t('consumption.stewardHeading')) + '</b></p>')
         parts.push(consumptionStewardBlock(summary.steward, windowOf(summary.steward)))
+        parts.push(consumptionLongStepsBlock(summary.longSteps))
 
         fill('consumption-body', 'consumption-empty', parts.join(''), '')
       }

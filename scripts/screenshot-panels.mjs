@@ -907,6 +907,11 @@ const ROUTER_READY = {
         preCold: { fired: 3, wouldFire: 5, skipped: 2, returned: 3, returnedEarly: 1, notReturned: 2, pending: 2, coldRewriteOnReturn: 410000, realizedSaving: 250000, waste: 44000, engineIdleCompactions: 0 },
       })),
     },
+    // JEVADV-109: longStepsByDay's shape, the last 8 local days; synthetic figures, falling as the settled tier works.
+    longSteps: [
+      ['2026-11-06', 1180, 541], ['2026-11-07', 960, 430], ['2026-11-08', 0, 0], ['2026-11-09', 1320, 540],
+      ['2026-11-10', 1410, 470], ['2026-11-11', 1250, 350], ['2026-11-12', 1090, 260], ['2026-11-13', 640, 120],
+    ].map(([day, steps, above]) => ({ day, steps, above, share: steps === 0 ? null : above / steps, rereadAbove: above * 290000, excessAbove: above * 90000 })),
   },
 }
 

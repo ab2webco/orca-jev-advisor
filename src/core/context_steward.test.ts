@@ -6,7 +6,10 @@ import {
   buildStewardQuestions,
   buildStewardState,
   collectStewardFacts,
+  SETTLED_LIMIT_TOKENS,
   decideSteward,
+  settledBoundary,
+  settledInstructions,
   formatContextTokens,
   interpretSteward,
   parseStewardMode,
@@ -32,11 +35,11 @@ const ABOVE: StewardGateInput = { mode: "active", isSubagent: false, contextToke
 // ---------------------------------------------------------------------------
 
 test("gate: above the threshold on the main conversation asks Jev", () => {
-  assert.deepEqual(stewardGate(ABOVE), { ask: true, hardLimit: false, softLimit: false });
+  assert.deepEqual(stewardGate(ABOVE), { ask: true, hardLimit: false, softLimit: false, settledLimit: false });
 });
 
 test("gate: measure mode asks too (it logs what it would do)", () => {
-  assert.deepEqual(stewardGate({ ...ABOVE, mode: "measure" }), { ask: true, hardLimit: false, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, mode: "measure" }), { ask: true, hardLimit: false, softLimit: false, settledLimit: false });
 });
 
 test("gate: below the threshold asks nothing", () => {
@@ -57,7 +60,7 @@ test("gate: no usage reading asks nothing", () => {
 });
 
 test("gate: 80% of the window is the hard limit, even under the threshold", () => {
-  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 160_000, mainWindow: 200_000 }), { ask: true, hardLimit: true, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 160_000, mainWindow: 200_000 }), { ask: true, hardLimit: true, softLimit: false, settledLimit: false });
 });
 
 test("gate: never twice within 3 person turns, the hard limit included", () => {
@@ -289,15 +292,15 @@ test("gate: the hard limit is 80% of the session's MAIN window, capped at 600k",
   assert.equal((stewardGate({ ...ABOVE, contextTokens: 600_000 }) as { hardLimit: boolean }).hardLimit, true);
   assert.equal((stewardGate({ ...ABOVE, contextTokens: 599_999 }) as { hardLimit: boolean }).hardLimit, false);
   // The measured defect: a router drop to a 200k model in a 1M session compacted at 160-230k.
-  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 180_000, mainWindow: 1_000_000 }), { ask: true, hardLimit: false, softLimit: false });
-  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 160_000, mainWindow: 200_000 }), { ask: true, hardLimit: true, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 180_000, mainWindow: 1_000_000 }), { ask: true, hardLimit: false, softLimit: false, settledLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 160_000, mainWindow: 200_000 }), { ask: true, hardLimit: true, softLimit: false, settledLimit: false });
   assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 500_000, mainWindow: null }), { ask: false, reason: "below-threshold" });
 });
 
 test("gate: the soft tier runs from 400k up to the hard limit, only where the window is larger", () => {
-  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 400_000 }), { ask: true, hardLimit: false, softLimit: true });
-  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 399_999 }), { ask: true, hardLimit: false, softLimit: false });
-  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 700_000 }), { ask: true, hardLimit: true, softLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 900_000, contextTokens: 400_000 }), { ask: true, hardLimit: false, softLimit: true, settledLimit: true });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 399_999 }), { ask: true, hardLimit: false, softLimit: false, settledLimit: true });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 700_000 }), { ask: true, hardLimit: true, softLimit: false, settledLimit: false });
 });
 
 test("soft tier: fires unless Jev says mid-task with confidence at least 0.8", () => {
@@ -483,4 +486,89 @@ test("pre-cold instructions: say why it compacts now and keep what the turn-end 
   assert.ok(text.includes("feat/steward-pre-cold"));
   assert.ok(text.includes("#54"));
   assert.deepEqual(text.split("\n").slice(1), stewardInstructions(facts).split("\n").slice(1));
+});
+
+// ---------------------------------------------------------------------------
+// JEVADV-109: the settled tier and its boundary rule
+// ---------------------------------------------------------------------------
+
+const TURN_PROMPT: ActivityMessage = { role: "user", text: "fix the flaky test", toolUses: [] };
+function turnStep(...toolUses: ActivityMessage["toolUses"]): ActivityMessage {
+  return { role: "assistant", text: "", toolUses };
+}
+const READ_DONE = { tool_use_id: "r1", tool: "Read", input: { file_path: "src/a.ts" }, text: "export const a = 1" };
+const EDIT_DONE = { tool_use_id: "e1", tool: "Edit", input: { file_path: "src/a.ts" }, text: "The file src/a.ts has been updated." };
+const EDIT_FAILED = { tool_use_id: "e2", tool: "Edit", input: { file_path: "src/a.ts" }, text: "String to replace not found", isError: true as const };
+const TEST_PASSED = { tool_use_id: "t1", tool: "Bash", input: { command: "npm test" }, text: "# pass 12\n# fail 0" };
+const TEST_FAILED = { tool_use_id: "t2", tool: "Bash", input: { command: "npm test" }, text: "✖ a fails\n# fail 1" };
+
+test("gate: the settled tier opens at 200k, never at the hard limit", () => {
+  assert.equal(SETTLED_LIMIT_TOKENS, 200_000);
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 199_999 }), { ask: true, hardLimit: false, softLimit: false, settledLimit: false });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 200_000 }), { ask: true, hardLimit: false, softLimit: false, settledLimit: true });
+  assert.deepEqual(stewardGate({ ...ABOVE, contextTokens: 650_000 }), { ask: true, hardLimit: true, softLimit: false, settledLimit: false });
+  // A threshold above 200k keeps the turn unasked, so the tier stays quiet too.
+  assert.deepEqual(stewardGate({ ...ABOVE, threshold: 300_000, contextTokens: 250_000 }), { ask: false, reason: "below-threshold" });
+});
+
+test("boundary: a turn whose tool calls all came back, with the last edit landed and its tests passing, is settled", () => {
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(READ_DONE, EDIT_DONE), turnStep(TEST_PASSED), { role: "assistant", text: "Fixed.", toolUses: [] }]), { settled: true });
+  assert.deepEqual(settledBoundary([TURN_PROMPT, { role: "assistant", text: "Here is the plan.", toolUses: [] }]), { settled: true });
+});
+
+test("boundary: a tool call with no result yet is never settled", () => {
+  const pending = { tool_use_id: "p1", tool: "Bash", input: { command: "npm run build" } };
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(EDIT_DONE, pending)]), { settled: false, hold: "pending-tool" });
+  // Its result in a later tool_result row counts as an answer.
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(pending), { role: "user", text: "", toolUses: [], toolResults: [{ tool_use_id: "p1", isError: false }] }]), { settled: true });
+});
+
+test("boundary: an edit in flight is never settled: a failed last edit, or tests failing after it", () => {
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(EDIT_DONE, EDIT_FAILED)]), { settled: false, hold: "edit-failed" });
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(EDIT_DONE), turnStep(TEST_FAILED)]), { settled: false, hold: "tests-failing" });
+  // An error only in the tool_result row is still a failed edit.
+  const edit = { tool_use_id: "e3", tool: "Write", input: { file_path: "src/b.ts" } };
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(edit), { role: "user", text: "", toolUses: [], toolResults: [{ tool_use_id: "e3", isError: true }] }]), { settled: false, hold: "edit-failed" });
+});
+
+test("boundary: a failed edit redone, or failing tests fixed and rerun green, is settled again", () => {
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(EDIT_FAILED), turnStep(EDIT_DONE)]), { settled: true });
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(TEST_FAILED), turnStep(EDIT_DONE), turnStep(TEST_PASSED)]), { settled: true });
+});
+
+test("boundary: a call sent to the background is not settled (its result is still to come)", () => {
+  const background = { tool_use_id: "b1", tool: "Bash", input: { command: "npm run dev", run_in_background: true }, text: "Command running in background" };
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(background)]), { settled: false, hold: "background-task" });
+});
+
+test("boundary: only the current turn counts; no prompt at all is a hold", () => {
+  assert.deepEqual(settledBoundary([TURN_PROMPT, turnStep(EDIT_FAILED), { role: "user", text: "never mind, explain it", toolUses: [] }, { role: "assistant", text: "Sure.", toolUses: [] }]), { settled: true });
+  assert.deepEqual(settledBoundary([]), { settled: false, hold: "no-turn" });
+});
+
+test("decision: above 200k a settled turn compacts on mid-task, low confidence and a Jev failure", () => {
+  const settled = { hardLimit: false, settledLimit: true, settled: true } as const;
+  for (const jev of [{ verdict: "mid-task" as const, confidence: 0.95 }, { verdict: "boundary" as const, confidence: 0.4 }, null]) {
+    assert.deepEqual(decideSteward({ ...settled, jev }), { decision: "settled-limit", compact: true, suggestClear: false, confidence: jev?.confidence ?? null });
+  }
+  // A confident boundary keeps its own name.
+  assert.equal(decideSteward({ ...settled, jev: { verdict: "boundary", confidence: 0.9 } }).decision, "boundary");
+});
+
+test("decision: an unsettled turn, or one under 200k, never compacts on the settled tier", () => {
+  const midTask = { verdict: "mid-task" as const, confidence: 0.9 };
+  assert.deepEqual(decideSteward({ jev: midTask, hardLimit: false, settledLimit: true, settled: false }), { decision: "mid-task", compact: false, suggestClear: false, confidence: 0.9 });
+  assert.deepEqual(decideSteward({ jev: midTask, hardLimit: false, settledLimit: false, settled: true }), { decision: "mid-task", compact: false, suggestClear: false, confidence: 0.9 });
+  // The hard limit still compacts whatever the boundary says.
+  assert.equal(decideSteward({ jev: midTask, hardLimit: true, settledLimit: false, settled: false }).decision, "hard-limit");
+});
+
+test("settled tier: tier name, status line, log hold and the keep-list for unfinished work", () => {
+  assert.equal(stewardTier("settled-limit"), "settled-200k");
+  assert.equal(stewardStatusPart("en", { mode: "active", decision: "settled-limit", applied: true, before: 240_000, after: 60_000 }), "context 240k → 60k (over 200k, between two steps)");
+  assert.equal(stewardStatusPart("es", { mode: "measure", decision: "settled-limit", applied: false, before: 240_000, after: null }), "contexto 240k → compactaría (más de 200k, entre dos pasos · solo mide)");
+  const instructions = settledInstructions({ featureDocs: ["odd/tasks/x.md"], branches: ["feat/x"], commits: [], prs: [] });
+  assert.match(instructions, /NOT finished/);
+  assert.match(instructions, /exact next action/);
+  assert.match(instructions, /odd\/tasks\/x\.md/);
 });

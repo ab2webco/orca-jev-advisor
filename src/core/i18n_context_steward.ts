@@ -10,6 +10,7 @@ export type ContextStewardKey =
   | "why.new-topic"
   | "why.hard-limit"
   | "why.soft-limit"
+  | "why.settled-limit"
   | "clearHint";
 
 export const CONTEXT_STEWARD_CATALOG: Catalog<ContextStewardKey> = {
@@ -21,6 +22,7 @@ export const CONTEXT_STEWARD_CATALOG: Catalog<ContextStewardKey> = {
     "why.new-topic": "tema nuevo",
     "why.hard-limit": "límite de contexto",
     "why.soft-limit": "límite suave de 400k",
+    "why.settled-limit": "más de 200k, entre dos pasos",
     clearHint: "tarea cerrada: /clear libera todo el contexto",
   },
   en: {
@@ -31,6 +33,7 @@ export const CONTEXT_STEWARD_CATALOG: Catalog<ContextStewardKey> = {
     "why.new-topic": "new topic",
     "why.hard-limit": "context limit",
     "why.soft-limit": "400k soft limit",
+    "why.settled-limit": "over 200k, between two steps",
     clearHint: "task closed: /clear frees the whole context",
   },
 };
